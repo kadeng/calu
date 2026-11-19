@@ -97,7 +97,11 @@ Decided (do not ask again):
 - **VSCode:** after the server stops, "The calu server stopped" with "Start server" and
   "Retry" instead of "connection lost"/"Attach again", the old transcript greyed with
   "session ended"; the waiting timer counts from when the step started waiting (from the
-  session, survives reattaching); running subagents keep the pulsing dot only.
+  session, survives reattaching); running subagents keep the pulsing dot only. **Done**
+  (not pushed; test plan A13-A17): `ide.link lost` carries a `cause`, `ide.status` counts
+  `servers_running`; the extension shows "The calu server stopped" (Start server, Retry),
+  greys the ended transcript and notices a server that runs again; the timer counts from
+  `opened_at`. Not run over Remote-SSH. The PyCharm plugin does not use `cause` yet.
 - **Web:** Enter in the triage note stays a new line.
 - **Sandbox (D239):** a root setup counts as more privileged; `calu doctor` without `--db`
   stays silent about the sandbox. Both as built.

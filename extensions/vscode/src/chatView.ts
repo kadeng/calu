@@ -12,11 +12,11 @@
 
 import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
+import { decisionsWaiting } from './shared/chatModel';
 import { parseWebviewMessage, type ChatSettings, type HostMessage, type WebviewMessage } from './shared/messages';
 import {
   applyEvent,
   initialViewState,
-  openEscalationCount,
   type ViewEvent,
   type ViewState,
 } from './shared/viewState';
@@ -250,7 +250,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   private updateBadge(): void {
     if (!this.view) return;
-    const open = openEscalationCount(this.viewState);
+    const open = decisionsWaiting(this.viewState);
     this.view.badge = open
       ? { value: open, tooltip: `${open} step(s) wait for your decision` }
       : undefined;

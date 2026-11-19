@@ -73,6 +73,8 @@ export type WebviewMessage =
   | { type: 'detach' }
   /** Open a terminal with the server command (`state.serverHelp.command`). */
   | { type: 'startServer' }
+  /** After "The calu server stopped": look for the server again and attach if it runs. */
+  | { type: 'retryServer' }
   /** Copy the server command to the clipboard. */
   | { type: 'copyServerCommand' }
   /** Install calu (and uv if missing) after a confirmation. */
@@ -198,6 +200,7 @@ const BARE_TYPES = [
   'refreshSessions',
   'detach',
   'startServer',
+  'retryServer',
   'copyServerCommand',
   'install',
   'restartBridge',

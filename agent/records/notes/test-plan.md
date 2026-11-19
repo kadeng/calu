@@ -54,7 +54,7 @@ end that lacks a function by design says so in its own section.)
 | C13 | **Undo** (rewind to before a message) and **fork**: first, middle, last message; fork of a fork; what the new session shows and knows | ok (rewind before the 3rd message, fork from a recorded message, fork of a fork) | ok; open (fork of a rewind) | fixed 602b9be | ok (fork); undo: by design a fork |
 | C14 | Context usage and limits; before the first turn; when unknown | ok ("ctx –" before the first turn, "21% · 42k" after); `nousage` not run | ok | fixed b1f47c4 | fixed 706b3b8 |
 | C15 | Images in a message (where supported): accepted, refused over the limit, shown | - (images not run this round) | fixed c91feae (paste); limits by unit test | n/a here | ok |
-| C16 | Losing the session, the server, the database mid-turn; coming back | fixed 5b76a25 1a348ec (server stopped: the reason in words; bridge killed: Restart reattaches, also after a window reload); database loss not run | fixed 5dfb6b6; database loss not run | fixed b1f47c4 | fixed 706b3b8 |
+| C16 | Losing the session, the server, the database mid-turn; coming back | fixed 5b76a25 1a348ec (server stopped: the reason in words; bridge killed: Restart reattaches, also after a window reload); server stopped: "The calu server stopped", Start server, Retry (A13-A15); database loss not run | fixed 5dfb6b6; database loss not run | fixed b1f47c4 | fixed 706b3b8 |
 | C17 | Narrow and very wide layouts; light and dark; long lines, huge results, long names | fixed b228052 (290 px: chips keep their width; Light Modern and Dark Modern; `edge` long lines) | ok; open (long code line) | fixed 602b9be | fixed 706b3b8 |
 | C18 | Text meant to mislead: control characters, raw HTML, links with scripts | ok (`edge`: raw HTML as text, script link inert); `bidi` not run this round | ok | fixed 900355e b1f47c4 | fixed 706b3b8 |
 | C19 | Checker instructions: read, change, save, a conflict with another editor | ok (save; `calu checker set` meanwhile: refused, Compare shows the diff) | ok | fixed b1f47c4 602b9be | fixed 706b3b8 |
@@ -73,7 +73,8 @@ First and second run: see the reports summarised in `agent/records/HANDOFF.md`; 
 Third round, 2026-11-19, by an agent in the Cua desktop: VSCode 1.147 (Microsoft build) with
 the `.vsix` of each fix, against `uitest/fake_server.py` (local) and the SSH box (remote).
 Screenshots `~/.cache/calu-uitest/share/vscode2/NN.png` (numbers below); a few in
-`agent/records/notes/screenshots/vscode2-*.png`. The V column of the table above holds the
+`agent/records/notes/screenshots/vscode2-*.png`. A13-A17 (2026-11-19, afternoon): `vscode3/NN.png`,
+four of them in `agent/records/notes/screenshots/vscode3-*.png`. The V column of the table above holds the
 results. Regression tests: `extensions/vscode/scripts/test-in-docker.sh` (7 integration tests
 in a real VSCode, `docs/TESTING.md`), vitest for every pure change.
 
@@ -91,6 +92,11 @@ in a real VSCode, `docs/TESTING.md`), vitest for every pure change.
 | A10 | first start in a new profile against the password store (85-100) | fixed b228052: the calu view is behind the "…" of the secondary side bar next to the editor's own chat, so a status bar item was added; `calu.command` given as a string hung at "Starting calu…" for ever |
 | A11 | Install calu with calu removed from `~/.local/bin` (101-104) | ok: card, modal, `uv tool install`, attached |
 | A12 | a window reload right after `calu.command` changed showed "Wrong password" at the first prompt (146) | open: not reproduced (147 shows the plain prompt); possibly a key of the reload command |
+| A13 | the owner's decision of 2026-11-19: the calu server stopped (C-c in tmux `calu-fake`) with three open cards (`escalations`): "The calu server stopped" with Start server and Retry, a notification with the same two actions, no "connection lost" card and no "Attach again"; the transcript greyed under "Session ended", its open cards one line "Session ended" each; status bar "calu: server stopped", no badge on the view (vscode3 07, 10, 15) | built (this round): `ide.link lost` carries `cause`, `ide.status` counts `servers_running`; vitest `serverLoss.test.ts`, integration test "a stopped server" |
+| A14 | Start server: a terminal "calu server" runs `tmux new-session -A -s calu '…/calu serve'` and asks the session password; with the blank password typed the server runs and the chat noticed it by itself within 10 s: the session-list card, the transcript still greyed under "Session ended", "calu: session ended" (13, 14) | ok (the real `calu serve` was stopped again at once; no session was started on it) |
+| A15 | Retry without a server: the card adds "Checked at 11:38:50 AM: no server runs yet." (16); Retry after the server came back with a session of the workspace (`calu start --no-attach`): attached to it, transcript and mark gone (19, 20); a click on a running session in the session list also ends the mark (17, 18) | ok |
+| A16 | the owner's decision: "Waiting for you" counts from the session's `opened_at` of the oldest open step: 6 s, then after a window reload 1m 28s, after `calu ide` was killed and Restart bridge 1m 53s (03-06) | built (this round; the field was already in `escalation.request` and the snapshot); vitest `waitingSince` |
+| A17 | the server stopped, seen over Remote-SSH | - (not run: the SSH box was in use by another agent; the extension's logic is the same there, since the bridge, the server and `ide.status` all run on the box. A difference: the webview's clock is the laptop's, the step's time the box's; a box clock ahead counts as "now", one behind lengthens the timer) |
 
 **Remote (Remote-SSH).** Microsoft's Remote-SSH 0.128.0 installed from the marketplace in the
 desktop's VSCode; "Connect Current Window to Host" `sshbox` (key login, the test key); VS Code
@@ -110,10 +116,10 @@ the sessions run on the box.
 | R8 | stale sessions of the box (after its restart) listed first in the attach card and counted in the badge (140, 144) | fixed 1a348ec |
 | R9 | WSL, Dev Containers | n/a here: Remote-WSL needs a Windows host; the desktop has no Docker socket (by rule), so no dev container |
 
-Judgement calls (not changed): after a lost link because the server stopped, the card
-"connection lost" and the notification's "Attach again" stay although nothing can be attached;
-the "Waiting for you" timer starts again after a reattach; the escalation timer and the
-transcript of the last session stay visible under "No session" (by design so far).
+Judgement calls of the third round, decided by the owner on 2026-11-19 and built (A13-A16):
+"The calu server stopped" with Start server and Retry instead of "connection lost" and
+"Attach again"; the transcript greyed under "Session ended"; the waiting timer from the
+session's time. Unchanged by decision: running subagents keep only the pulsing dot.
 
 ### B. PyCharm plugin
 

@@ -20,7 +20,7 @@
  * as text nodes or through `markdown()` (markdown-it with raw HTML disabled).
  */
 
-import { ACTIVITY_VERBS, FRAME_MS, activityLine, sessionPhase } from '../src/shared/activity';
+import { ACTIVITY_VERBS, FRAME_MS, activityLine, sessionPhase, waitingSince } from '../src/shared/activity';
 import {
   buildFileIndex,
   checkImage,
@@ -41,6 +41,7 @@ import {
   usageMeter,
   waitingElsewhere,
   linkMessage,
+  transcriptEnded,
   type FileIndex,
   type SessionMenuAction,
   type SetupCard,
@@ -142,6 +143,7 @@ const ctx: Ctx = {
   view,
   settings,
   attached: false,
+  ended: false,
   expanded: new Set(),
   openTools: new Set(),
   escDrafts: Object.create(null) as Ctx['escDrafts'],
@@ -192,6 +194,8 @@ let bannerSlot!: HTMLElement;
 let tabsSlot!: HTMLElement;
 let setupSlot!: HTMLElement;
 let transcriptWrap!: HTMLElement;
+/** "Session ended" above the greyed transcript of a session that ended (`transcriptEnded`). */
+let endedBanner!: HTMLElement;
 let list!: HTMLElement;
 let jumpButton!: HTMLButtonElement;
 let stripSlot!: HTMLElement;
@@ -233,7 +237,9 @@ function buildSkeleton(): void {
   jumpButton = actionButton('', 'jump', { class: 'jump', title: 'Jump to latest', 'aria-label': 'Jump to latest' });
   jumpButton.append(icon('arrowDown'), el('span', '', 'Latest'));
   jumpButton.hidden = true;
-  wrap.append(list, jumpButton);
+  endedBanner = el('div', 'ended-banner', 'Session ended', { role: 'status', 'data-testid': 'session-ended' });
+  endedBanner.hidden = true;
+  wrap.append(endedBanner, list, jumpButton);
   transcriptWrap = wrap;
 
   const dock = el('footer', 'dock');
@@ -792,6 +798,8 @@ function renderList(hidden: boolean): void {
     });
   }
   transcriptWrap.hidden = hidden;
+  endedBanner.hidden = !ctx.ended;
+  list.classList.toggle('ended', ctx.ended);
   const items = (own(view.items, ui.tab) ?? []).filter((i) => i.kind !== 'launch' && (settings.showThinking || i.kind !== 'thinking'));
   const wanted: HTMLElement[] = [];
   const headDeps = subagentHeadDeps(ui.tab, ctx);
@@ -1004,6 +1012,7 @@ const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
 /**
  * Update the activity line above the composer from the session state (`shared/activity.ts`).
+ * "Waiting for you" counts from the oldest open escalation's `openedAt` (the session's time).
  * While Claude works a timer redraws it (spinner, verb, elapsed time); with "reduce motion" the
  * spinner stands still and the line is redrawn once per second. A change of its kind (working,
  * waiting for you, done) is announced to screen readers; the line itself is hidden from them
@@ -1024,7 +1033,13 @@ function updateActivity(): void {
   if (!active && activityWasActive) activityLastMs = now - activitySince;
   if (phase === 'starting' || phase === 'stopped' || !connected) activityLastMs = undefined;
   activityWasActive = active;
-  const line = activityLine(connected, state, activitySince, activityLastMs, now, activitySeed);
+  // "Waiting for you" counts from the time the session gives for the oldest open step, so
+  // that a reload or a reattach does not start it again (`waitingSince`).
+  const since =
+    phase === 'waiting'
+      ? waitingSince(Object.values(view.escalations).filter((e) => e.status === 'open').map((e) => e.openedAt), activitySince, now)
+      : activitySince;
+  const line = activityLine(connected, state, since, activityLastMs, now, activitySeed);
   const [iconEl, labelEl, elapsedEl] = Array.from(activityEl.children);
   const glyph = reducedMotion.matches && line.kind === 'busy' ? '✻' : line.icon;
   if (iconEl.textContent !== glyph) iconEl.textContent = glyph;
@@ -1512,6 +1527,7 @@ function render(): void {
   ctx.view = view;
   ctx.settings = settings;
   ctx.attached = isAttached(view);
+  ctx.ended = transcriptEnded(view);
   renderTabs();
   renderHeader();
   const setupOnly = renderSetup();

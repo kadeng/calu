@@ -108,6 +108,11 @@ export interface IdeStatusResult {
   server: {
     /** Number of sessions running on this host. */
     sessions_running: number;
+    /**
+     * Number of `calu serve` processes of this host that are recorded and not known to be
+     * gone; null (or missing, from an older calu) when the bridge cannot tell.
+     */
+    servers_running?: number | null;
   };
   /** True if a protected credential exists and the bridge holds no login; missing means false. */
   locked?: boolean;
@@ -348,13 +353,24 @@ export type BridgeMethod = keyof BridgeRequestParams;
 export interface BridgeNotifications {
   /** One event of the attached session, in order; `params.seq` is included. */
   'session.event': { method: string; params: Record<string, unknown> };
-  /** The connection between the bridge and the session changed. */
-  'ide.link': { state: LinkState; message: string };
+  /**
+   * The connection between the bridge and the session changed. `cause` comes with "lost"
+   * (missing from an older calu): see `LostCause`.
+   */
+  'ide.link': { state: LinkState; message: string; cause?: LostCause; session_id?: string; complete?: boolean };
   'ide.log': { level: 'debug' | 'info' | 'warning' | 'error'; message: string };
 }
 
 /** State of the connection between the bridge and the attached session. */
 export type LinkState = 'attached' | 'reconnecting' | 'lost';
+
+/**
+ * Why the bridge gave up the connection (`ide.link lost` `cause`, set by `calu.ide.link`):
+ * "unreachable" nothing answers at the session's address (its process or its server stopped,
+ * or the network is down); "revoked" the token was revoked; "refused" the session refused the
+ * connection; "closed" the session closed every new connection.
+ */
+export type LostCause = 'unreachable' | 'revoked' | 'refused' | 'closed';
 
 // ------------------------------------------------------------------ session requests
 

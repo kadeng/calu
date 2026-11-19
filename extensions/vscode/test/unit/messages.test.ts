@@ -73,7 +73,7 @@ describe('package.json', () => {
 describe('parseWebviewMessage', () => {
   it('accepts the messages without fields', () => {
     for (const type of [
-      'ready', 'attach', 'newSession', 'refreshSessions', 'detach', 'startServer', 'copyServerCommand', 'install',
+      'ready', 'attach', 'newSession', 'refreshSessions', 'detach', 'startServer', 'retryServer', 'copyServerCommand', 'install',
       'restartBridge', 'openSettings', 'showContext', 'refreshUsage', 'interrupt', 'showLog', 'unlock',
       'forkConversation', 'honestyReview', 'honestyTrust',
     ]) {

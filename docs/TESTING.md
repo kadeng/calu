@@ -115,7 +115,9 @@ no Claude Code, no key. The tests (`extension.test.ts`): activation and the comm
 an attach by address and token (`Sessions.attachEndpoint`); a turn whose escalated step is
 allowed, with the card in the webview and "calu: 1 waiting" in the status bar; `step.held`
 through the shared reducer; `calu ide` killed, then "Restart bridge" attaches to the same
-session again and a second turn goes through.
+session again and a second turn goes through; the session's process ended: "The calu server
+stopped" with Start server and Retry, the transcript kept and marked ended, a Retry without a
+server says when it looked, and an attach to a second scripted session ends the card.
 
 The rest of the extension is tested by hand in the Cua desktop
 (`.claude/skills/ui-testing-with-cua/SKILL.md`, the record in

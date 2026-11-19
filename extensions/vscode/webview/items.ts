@@ -63,6 +63,8 @@ export interface Ctx {
   settings: ChatSettings;
   /** True if requests can be sent to a session (buttons that need one are disabled otherwise). */
   attached: boolean;
+  /** True if the transcript is of a session that ended (`transcriptEnded`). */
+  ended: boolean;
   /** Ids of items (and pseudo ids of head cards) whose full text is shown. */
   expanded: Set<string>;
   /** Tool calls whose details are shown. */
@@ -121,7 +123,7 @@ export function itemDeps(item: Item, ctx: Ctx): unknown[] {
       return [item, tool, agent, ctx.openTools.has(item.toolUseId), expanded, held.tools.has(item.toolUseId), agent ? (held.byAgent[agent.agent_id] ?? 0) : 0];
     }
     case 'escalation':
-      return [item, own(ctx.view.escalations, item.escalationKey), ctx.attached];
+      return [item, own(ctx.view.escalations, item.escalationKey), ctx.attached, ctx.ended];
     case 'user':
       return [item, expanded, ctx.attached, ctx.view.turnBase];
     case 'relay':
@@ -608,7 +610,8 @@ const OUTCOMES: Record<EscalationView['status'], string> = {
  * the card's last child and sticks to the lower edge of the transcript (`.esc-actions` in
  * `chat.css`), so Allow and Deny stay reachable while a card taller than the view scrolls.
  * While the session cannot be reached the card stays open, says "connection lost" and its
- * buttons are disabled. Closed: one line with the outcome that expands to the details.
+ * buttons are disabled. Once the session ended (`ctx.ended`: nothing answers at its address)
+ * an open card is shown as one closed line "Session ended": it can no longer be decided. Closed: one line with the outcome that expands to the details.
  *
  * @param esc The escalation view (`undefined` if the state no longer holds it).
  * @param ctx The render context.
@@ -617,7 +620,7 @@ const OUTCOMES: Record<EscalationView['status'], string> = {
 function renderEscalation(esc: EscalationView | undefined, ctx: Ctx): HTMLElement {
   if (!esc) return el('div', 'item notice info', '(This escalation is no longer in the chat.)');
   const attrs = { 'data-testid': `escalation-${esc.key}`, 'data-esc': esc.key, 'data-status': esc.status };
-  if (esc.status !== 'open') return renderClosedEscalation(esc, attrs);
+  if (esc.status !== 'open' || ctx.ended) return renderClosedEscalation(esc, attrs, ctx.ended);
   const asks = esc.questions.length > 0;
   const card = el('section', `item esc open${esc.pending ? ' pending' : ''}${ctx.attached ? '' : ' offline'}`, undefined, {
     ...attrs,
@@ -753,16 +756,18 @@ function literalDetails(esc: EscalationView): HTMLElement {
  * Build a closed escalation: one line with the outcome, the tool and the start of its input;
  * expanding it shows the reason, the step and the literal input.
  *
- * @param esc The escalation (status not "open").
+ * @param esc The escalation (status not "open", or "open" of a session that ended).
  * @param attrs The data attributes of the card.
+ * @param ended True if the session ended: an open escalation says "Session ended".
  * @returns A `details` element (the caller keeps it expanded across re-renders).
  */
-function renderClosedEscalation(esc: EscalationView, attrs: Record<string, string>): HTMLElement {
+function renderClosedEscalation(esc: EscalationView, attrs: Record<string, string>, ended = false): HTMLElement {
   const card = el('details', `item esc closed ${esc.status}`, undefined, attrs);
+  const outcome = ended && esc.status === 'open' ? 'Session ended' : OUTCOMES[esc.status];
   const summary = el('summary', 'esc-line');
   const first = esc.questions.length > 0 ? esc.questions[0].question : (literalToolInput(esc.toolInput ?? {})[0]?.[1] ?? '');
   summary.append(
-    el('span', `chip decision ${esc.status === 'allow' || esc.status === 'answered' ? 'allow' : esc.status === 'deny' ? 'deny' : 'pending'}`, OUTCOMES[esc.status]),
+    el('span', `chip decision ${esc.status === 'allow' || esc.status === 'answered' ? 'allow' : esc.status === 'deny' ? 'deny' : 'pending'}`, outcome),
     el('span', 'tool-name', esc.questions.length > 0 ? 'Question' : esc.toolName),
     el('span', 'esc-line-text', oneLine(first, 160)),
   );

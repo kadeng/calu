@@ -100,6 +100,27 @@ function activity(icon: string, label: string, elapsed: string, active: boolean,
 }
 
 /**
+ * Find when the waiting began: the time the session gives for the oldest open escalation
+ * (`escalation.request.opened_at`, also in the snapshot of a later attach), so that the
+ * "Waiting for you" timer survives a window reload, a bridge restart and a reattach.
+ *
+ * @param openedAt `openedAt` of each open escalation (ISO times from the session; `null` or an
+ *   unreadable value is skipped).
+ * @param fallback Time (ms) to use when no escalation gives a time (e.g. a session of an older
+ *   calu): the start of the current working period as this view saw it.
+ * @param now Current time (ms). A time after it (the session's clock is ahead) counts as `now`.
+ * @returns Milliseconds since the epoch.
+ *
+ * Example: `waitingSince(['2026-11-19T10:00:00Z', null], 5, Date.parse('2026-11-19T10:03:00Z'))`
+ * is `Date.parse('2026-11-19T10:00:00Z')` (the timer shows "3m 00s").
+ */
+export function waitingSince(openedAt: readonly (string | null | undefined)[], fallback: number, now: number): number {
+  const times = openedAt.map((t) => (typeof t === 'string' ? Date.parse(t) : NaN)).filter((t) => Number.isFinite(t));
+  if (times.length === 0) return fallback;
+  return Math.min(now, Math.min(...times));
+}
+
+/**
  * Compute the activity line.
  *
  * @param connected True if a session is attached.

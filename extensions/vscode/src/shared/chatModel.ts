@@ -20,6 +20,7 @@
 
 import { sessionPhase, type SessionPhase } from './activity';
 import { formatAge } from './sessionPick';
+import { sessionEnded } from './serverLoss';
 import { IMAGE_MEDIA_TYPES, MAX_IMAGE_BASE64, MAX_IMAGES, type ImageMediaType, type WebviewMessage } from './messages';
 import { MAIN, isAgentLaunch, isAttached, openEscalationCount, own, sessionTitle, type IdMap, type SetupHint, type ToolView, type ViewState } from './viewState';
 
@@ -637,7 +638,8 @@ export function hintAction(hint: SetupHint): CardAction | undefined {
  *     bridge "error" / "exited"        -> Restart bridge (secondary: Show log)
  *     bridge "stopped"                 -> Start (restartBridge)
  *     bridge "starting"                -> a line without a button
- *     bridge "running", not attached   -> the host's hints; "no-server" shows the server command
+ *     bridge "running", not attached   -> the host's hints; "server-stopped": Start server
+ *                                         (secondary: Retry); "no-server" shows the server command
  *                                         (Open terminal / Copy command), "no-session" lists the
  *                                         running sessions (secondary: Resume a stored conversation…)
  *     attached                         -> the hints that still apply (e.g. "claude-missing"),
@@ -667,6 +669,11 @@ export function setupCards(state: ViewState, dismissed: readonly string[] = []):
       c.serverHelp = state.serverHelp !== null;
       c.primary = { label: 'Open terminal with this command', message: { type: 'startServer' } };
       c.secondary = [{ label: 'Copy command', message: { type: 'copyServerCommand' } }];
+    }
+    if (hint.id === 'server-stopped') {
+      // Short, so that the ended transcript below keeps its room; the command is in the
+      // terminal that "Start server" opens.
+      c.secondary = [{ label: 'Retry', message: { type: 'retryServer' } }];
     }
     if (hint.id === 'no-session') {
       c.sessionList = true;
@@ -704,11 +711,37 @@ export function setupCards(state: ViewState, dismissed: readonly string[] = []):
         return { ...c, ...(primary ? { primary } : {}), compact: true, ...(h.short ? { short: h.short } : {}) };
       });
   }
-  if (!attached && state.link.status === 'lost') {
+  // A session that nothing answers for ended: the "server-stopped" card or the session list
+  // says what to do, and the transcript is marked "Session ended" (`sessionEnded`).
+  if (!attached && state.link.status === 'lost' && state.link.cause !== 'unreachable') {
     cards.unshift(card('link-lost', 'warning', `The connection to the session was lost${state.link.message ? `: ${state.link.message}` : '.'}`));
   }
   if (state.starting) cards = [startingCard(state.starting), ...cards.filter((c) => c.id !== 'no-session')];
   return cards;
+}
+
+/**
+ * Count the decisions the user can still make: the open escalations, none while the
+ * transcript is of a session that ended (`transcriptEnded`; its cards cannot be decided).
+ * The view's badge counts these.
+ *
+ * @param state The view state.
+ * @returns The number.
+ */
+export function decisionsWaiting(state: ViewState): number {
+  return transcriptEnded(state) ? 0 : openEscalationCount(state);
+}
+
+/**
+ * Tell whether the view shows the transcript of a session that ended (`sessionEnded` in
+ * `serverLoss.ts`): the view greys it under "Session ended", and its open cards say
+ * "session ended" instead of "connection lost".
+ *
+ * @param state The view state.
+ * @returns True if no session is attached and the last link was lost as "unreachable".
+ */
+export function transcriptEnded(state: ViewState): boolean {
+  return sessionEnded({ attached: isAttached(state), link: state.link });
 }
 
 // ------------------------------------------------------------------ usage
@@ -920,6 +953,8 @@ export interface StatusBarEntry {
  *     decisions open            $(shield) calu: 2 waiting          (warning)
  *     session busy / idle       $(shield) calu: working / calu: idle
  *     link reconnecting / lost  $(shield) calu: reconnecting / calu: connection lost
+ *     the server stopped        $(shield) calu: server stopped     (hint "server-stopped")
+ *     nothing answers, server runs  $(shield) calu: session ended
  *
  * @param state The view state.
  * @returns The text, the tooltip and whether it is a warning.
@@ -931,6 +966,13 @@ export function statusBarEntry(state: ViewState): StatusBarEntry {
   }
   const waiting = openEscalationCount(state);
   const name = state.session.sessionId ? sessionTitle(state.sessions.list.find((s) => s.id === state.session.sessionId) ?? { id: state.session.sessionId, name: '', directory: state.session.workspace ?? '' }) : '';
+  // Before the count: the open cards of an ended session can no longer be decided.
+  if (transcriptEnded(state)) {
+    if (state.hints.some((h) => h.id === 'server-stopped')) {
+      return { text: '$(shield) calu: server stopped', tooltip: `The calu server stopped; ${name || 'the session'} ended with it.${open}`, warning: false };
+    }
+    return { text: '$(shield) calu: session ended', tooltip: `${name || 'The session'} no longer answers.${open}`, warning: false };
+  }
   if (waiting > 0) {
     return {
       text: `$(shield) calu: ${waiting} waiting`,

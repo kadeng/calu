@@ -7,12 +7,14 @@
  *     password not given yet    -> "locked"         button: Unlock (asks the one password)
  *     database not reachable    -> "database"       button: Open settings (Setup card)
  *     no session attached and
+ *       the server stopped       -> "server-stopped" buttons: Start server, Retry (serverLoss.ts)
  *       none running / no server -> "no-server"     button: Start calu server
  *       otherwise                -> "no-session"    button: New session
  */
 
 import type { IdeStatusResult } from '../bridgeProtocol';
 import { CLAUDE_DOCS_URL } from './bootstrap';
+import { serverStoppedMessage } from './serverLoss';
 import type { SetupHint } from './viewState';
 
 /** Inputs of `buildHints`. */
@@ -27,6 +29,13 @@ export interface HintInput {
   noServer: boolean;
   /** True if calu's logins need the one password and it was not given yet (default false). */
   locked?: boolean;
+  /**
+   * True while the link was lost because the calu server stopped (`serverStoppedAfterLoss`)
+   * and no server was found since (default false).
+   */
+  serverStopped?: boolean;
+  /** Local time of the last Retry that found no server ("14:02:11"); null or missing before it. */
+  serverRetriedAt?: string | null;
 }
 
 /**
@@ -34,7 +43,8 @@ export interface HintInput {
  *
  * @param input What is known about the machine and the session.
  * @returns The hints. With calu missing, only that hint. While a session is attached, the
- *   "no-server" and "no-session" hints are left out.
+ *   "server-stopped", "no-server" and "no-session" hints are left out; with "server-stopped"
+ *   the other two are left out as well.
  */
 export function buildHints(input: HintInput): SetupHint[] {
   if (input.caluMissing) {
@@ -85,7 +95,15 @@ export function buildHints(input: HintInput): SetupHint[] {
       actionLabel: 'Open settings',
     });
   }
-  if (!input.attached) {
+  if (!input.attached && input.serverStopped) {
+    hints.push({
+      id: 'server-stopped',
+      level: 'warning',
+      message: serverStoppedMessage(input.serverRetriedAt ?? null),
+      action: 'startServer',
+      actionLabel: 'Start server',
+    });
+  } else if (!input.attached) {
     if (input.noServer) {
       hints.push({
         id: 'no-server',

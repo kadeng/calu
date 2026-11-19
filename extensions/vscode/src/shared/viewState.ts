@@ -41,6 +41,7 @@ import { historyEntries, type HistoryEntry } from './history';
 import type { AutoEscalateFlags } from './levels';
 import { MAX_IMAGE_BASE64 } from './messages';
 import type { ServerHelp } from './serverCommand';
+import { lostCause, type LostCause } from './serverLoss';
 
 /** Key of a message list: "main" for the main agent, otherwise the subagent's `agent_id`. */
 export type AgentKey = string;
@@ -382,7 +383,10 @@ export interface SideExchangeView {
  * for a hint without a button.
  */
 export interface SetupHint {
-  /** Stable id: "calu-missing", "claude-missing", "locked", "database", "no-server", "no-session". */
+  /**
+   * Stable id: "calu-missing", "claude-missing", "locked", "database", "server-stopped",
+   * "no-server", "no-session".
+   */
   id: string;
   level: 'info' | 'warning' | 'error';
   /** One or two sentences that say what is missing and what to do. */
@@ -416,8 +420,12 @@ export interface UsageView {
 export interface ViewState {
   /** The bridge process. `version` is calu's version once it runs. */
   bridge: { status: BridgeStatus; message?: string; version?: string };
-  /** The connection between the bridge and the attached session. */
-  link: { status: LinkStatus; message?: string };
+  /**
+   * The connection between the bridge and the attached session. `cause`: why a "lost" link
+   * was given up (`lostCause`); "unreachable" means the session ended for this view
+   * (`sessionEnded` in `serverLoss.ts`).
+   */
+  link: { status: LinkStatus; message?: string; cause?: LostCause };
   /**
    * The attached session. All `null`/"stopped" while `link.status` is "detached"; after a
    * detach the transcript of the last session stays visible until the next attach.
@@ -514,7 +522,8 @@ export interface ViewState {
  *
  * - `bridge.status` `{status: BridgeStatus, message?, version?}`: the bridge process changed
  *   state;
- * - `ui.link` `{state: "attached" | "reconnecting" | "lost", message}`: the bridge's `ide.link`;
+ * - `ui.link` `{state: "attached" | "reconnecting" | "lost", message, cause?}`: the bridge's
+ *   `ide.link` (`cause` only with "lost");
  * - `ui.attached` `{session_id, initialize, snapshot, events, complete, resumed?}`: the result
  *   of `ide.attach` / `ide.start`; replaces the transcript, or with `resumed` continues it
  *   (see `applyAttach`);
@@ -1489,7 +1498,11 @@ function reduce(state: ViewState, method: string, p: Record<string, unknown>): V
     case 'ui.link': {
       const status = p.state === 'attached' || p.state === 'reconnecting' || p.state === 'lost' ? p.state : undefined;
       if (!status) return state;
-      const next: ViewState = { ...state, link: { status, ...(str(p.message) && p.message ? { message: p.message } : {}) } };
+      const cause = status === 'lost' ? lostCause(p.cause, p.message) : undefined;
+      const next: ViewState = {
+        ...state,
+        link: { status, ...(str(p.message) && p.message ? { message: p.message } : {}), ...(cause ? { cause } : {}) },
+      };
       if (status !== 'lost') return next;
       // The session can no longer be reached: nothing is streaming, and nothing can be decided
       // until it is attached again (the cards stay open, see `unpendEscalations`).

@@ -33,6 +33,7 @@ import { SettingsPanel } from './settingsPanel';
 import { CLAUDE_DOCS_URL } from './shared/bootstrap';
 import { statusBarEntry } from './shared/chatModel';
 import { buildHints } from './shared/hints';
+import { lostCause, serverCheck, serverStoppedAfterLoss } from './shared/serverLoss';
 import { flagsForLevel } from './shared/levels';
 import type { ChatSettings, WebviewMessage } from './shared/messages';
 import { rootInstallCommand } from './shared/serverCommand';
@@ -104,6 +105,15 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
   let installOffered = false;
   /** True once the password prompt was opened by itself for the running bridge process. */
   let askedAtStart = false;
+  /**
+   * True from a lost link whose server stopped (`serverStoppedAfterLoss`) until a server is
+   * found again or a session is attached: the chat shows "The calu server stopped".
+   */
+  let serverStopped = false;
+  /** Local time of the last Retry that found no server; null before the first. */
+  let serverRetriedAt: string | null = null;
+  /** True while a look for the stopped server runs (Retry or the timer), so looks do not overlap. */
+  let lookingForServer = false;
 
   // ---------------------------------------------------------------- chat view and sessions
 
@@ -205,6 +215,8 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
    * @returns Nothing.
    */
   function onAttached(result: IdeAttachResult, resumed: boolean): void {
+    serverStopped = false;
+    serverRetriedAt = null;
     for (const event of result.events ?? []) {
       if (event?.method === 'edit.diff') diffs.record(event.params as unknown as EditDiff);
     }
@@ -328,6 +340,8 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
       attached,
       noServer: sessions.noServer,
       locked: bridge.locked && !attached,
+      serverStopped,
+      serverRetriedAt,
     });
     const hintsText = JSON.stringify(hints);
     if (hintsText !== lastHints) {
@@ -753,7 +767,7 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
         onSessionEvent(method, params as Record<string, unknown>);
       } else if (notification.method === 'ide.link') {
         dispatch({ method: 'ui.link', params: notification.params });
-        if (notification.params.state === 'lost') void onLinkLost(String(notification.params.message ?? ''));
+        if (notification.params.state === 'lost') void onLinkLost(String(notification.params.message ?? ''), notification.params.cause);
       } else if (notification.method === 'ide.log') {
         output.appendLine(`[calu ide] ${String(notification.params.level ?? 'info')}: ${String(notification.params.message ?? '')}`);
       }
@@ -783,15 +797,35 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
   }
 
   /**
-   * React to a lost connection to the session: offer to attach again. "Attach again" tries
-   * the same session first (with the events the chat has not seen) and shows the session list
-   * only if that session is gone.
+   * React to a lost connection to the session (`shared/serverLoss.ts`). Nothing answers at the
+   * session's address and no server runs: say "The calu server stopped" with "Start server" and
+   * "Retry" (the chat's card and a notification). Nothing answers but a server runs: the
+   * session ended; the chat shows the session list, no notification. Any other loss: offer to
+   * attach again; "Attach again" tries the same session first (with the events the chat has
+   * not seen) and shows the session list only if that session is gone.
    *
    * @param message The bridge's explanation.
+   * @param cause The bridge's `cause` (untrusted; missing from an older calu).
    * @returns A promise that resolves after the user's choice was handled.
    */
-  async function onLinkLost(message: string): Promise<void> {
+  async function onLinkLost(message: string, cause: unknown): Promise<void> {
     sessions.attachedId = null;
+    const why = lostCause(cause, message);
+    if (why === 'unreachable') {
+      const status = await sessions.refreshStatus();
+      void sessions.refresh();
+      if (!serverStoppedAfterLoss(why, serverCheck(status))) {
+        updateHints();
+        return;
+      }
+      serverStopped = true;
+      serverRetriedAt = null;
+      updateHints();
+      const choice = await vscode.window.showWarningMessage('calu: the calu server stopped; the session ended with it.', 'Start server', 'Retry');
+      if (choice === 'Start server') sessions.startServer();
+      else if (choice === 'Retry') await lookForServer(true);
+      return;
+    }
     updateHints();
     void sessions.refresh();
     const choice = await vscode.window.showWarningMessage(
@@ -801,6 +835,36 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
     if (choice !== 'Attach again') return;
     const same = sessions.lastAttachedId !== null && chat.state.session.sessionId === sessions.lastAttachedId;
     if (!(await sessions.reattach(same ? chat.state.lastSeq : 0))) await sessions.pick();
+  }
+
+  /**
+   * While "The calu server stopped" is shown: ask `ide.status` whether a server runs again; if
+   * one runs, or (for Retry) a session can be attached anyway, attach as at the start
+   * (`connectWorkspace`: the same session, else the workspace's) and drop the card.
+   *
+   * @param retry True for the Retry button: the attach is tried even if the status cannot
+   *   tell, and a failed look is shown with its time on the card.
+   * @returns A promise that resolves when the look is over (never rejects).
+   */
+  async function lookForServer(retry: boolean): Promise<void> {
+    if (!serverStopped || lookingForServer) return;
+    lookingForServer = true;
+    try {
+      const check = serverCheck(await sessions.refreshStatus());
+      if (check === 'running' || (retry && check === 'unknown')) {
+        await connectWorkspace(false);
+        if (check === 'running' || sessions.attachedId !== null) {
+          serverStopped = false;
+          serverRetriedAt = null;
+        }
+      }
+      if (serverStopped && retry) serverRetriedAt = new Date().toLocaleTimeString();
+      updateHints();
+    } catch (error) {
+      output.appendLine(`[calu] looking for the calu server failed: ${errorText(error)}`);
+    } finally {
+      lookingForServer = false;
+    }
   }
 
   // ---------------------------------------------------------------- settings of the editor
@@ -963,6 +1027,9 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
       case 'startServer':
         sessions.startServer();
         return;
+      case 'retryServer':
+        await lookForServer(true);
+        return;
       case 'copyServerCommand':
         await vscode.env.clipboard.writeText(sessions.serverHelp().command);
         void vscode.window.setStatusBarMessage('calu: server command copied.', 3000);
@@ -1094,8 +1161,13 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
       }
     });
 
+  let ticks = 0;
   const timer = setInterval(() => {
+    ticks += 1;
     if (chat.isVisible) void sessions.refresh();
+    // A stopped server is looked for at every tick while the chat is visible, else at every
+    // third: `ide.status` starts a few programs (claude --version, a bwrap test).
+    if (serverStopped && (chat.isVisible || ticks % 3 === 0)) void lookForServer(false);
   }, SESSIONS_REFRESH_MS);
 
   context.subscriptions.push(

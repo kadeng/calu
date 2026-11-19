@@ -13,6 +13,8 @@
 //   held steps      a `step.held` event marks the step in the reducer the webview shares
 //   status bar      "calu: N waiting" while the card is open, "calu: idle" after the turn
 //   bridge restart  `calu ide` killed: the chat says so, Restart attaches again, no prompt
+//   server stopped  the session's process ended: "The calu server stopped" (Start server,
+//                   Retry), the transcript kept under "Session ended"; a new attach ends it
 
 import * as assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -20,7 +22,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { CaluApi } from '../../src/extension';
-import { heldTools, statusBarEntry } from '../../src/shared/chatModel';
+import { decisionsWaiting, heldTools, setupCards, statusBarEntry, transcriptEnded } from '../../src/shared/chatModel';
 import { applyEvent, type ViewState } from '../../src/shared/viewState';
 
 const EXTENSION_ID = 'kadeng.calu';
@@ -82,20 +84,32 @@ suite('calu extension', function () {
   let scripted: ChildProcess | undefined;
   let endpoint: { address: string; token: string };
 
+  /**
+   * Start a scripted session (scripted_session.py) and wait until it listens.
+   *
+   * @param name File name of its endpoint file below the test root.
+   * @returns The process and its address and token.
+   * @throws Error if it does not listen within two minutes.
+   */
+  async function startScripted(name: string): Promise<{ child: ChildProcess; endpoint: { address: string; token: string } }> {
+    const file = path.join(config.root, name);
+    fs.rmSync(file, { force: true });
+    const [program, ...args] = config.python;
+    const child = spawn(program, [...args, config.script, vscode.workspace.workspaceFolders![0].uri.fsPath, file], {
+      cwd: config.cwd,
+      env: { ...process.env, ...config.env },
+      stdio: ['pipe', 'inherit', 'inherit'],
+    });
+    const found = await waitFor('the scripted session', () => (fs.existsSync(file) && fs.statSync(file).size > 0 ? JSON.parse(fs.readFileSync(file, 'utf8')) : undefined), 120000);
+    return { child, endpoint: found };
+  }
+
   suiteSetup(async () => {
     const ext = vscode.extensions.getExtension<CaluApi>(EXTENSION_ID);
     assert.ok(ext, 'extension not found');
     api = await ext.activate();
     config = readTestConfig();
-    const file = path.join(config.root, 'endpoint.json');
-    fs.rmSync(file, { force: true });
-    const [program, ...args] = config.python;
-    scripted = spawn(program, [...args, config.script, vscode.workspace.workspaceFolders![0].uri.fsPath, file], {
-      cwd: config.cwd,
-      env: { ...process.env, ...config.env },
-      stdio: ['pipe', 'inherit', 'inherit'],
-    });
-    endpoint = await waitFor('the scripted session', () => (fs.existsSync(file) && fs.statSync(file).size > 0 ? JSON.parse(fs.readFileSync(file, 'utf8')) : undefined), 120000);
+    ({ child: scripted, endpoint } = await startScripted('endpoint.json'));
   });
 
   suiteTeardown(async () => {
@@ -193,5 +207,42 @@ suite('calu extension', function () {
     // And a second turn goes through the new bridge.
     await api.handleWebviewMessage({ type: 'send', text: 'again', delivery: 'queued', to: 'main', images: [] });
     await waitFor('the echo turn', () => assistantTexts(api.chat.state).includes('Echo.'));
+  });
+
+  test('a stopped server: "The calu server stopped", Retry, the transcript kept until a new attach', async function () {
+    // The bridge tries again for 15 s before it gives up the link.
+    this.timeout(120000);
+    const exited = new Promise<void>((resolve) => scripted?.once('exit', () => resolve()));
+    scripted?.stdin?.end();
+    scripted?.kill('SIGTERM');
+    await exited;
+    const stopped = await waitFor('the server-stopped card', () => (api.chat.state.hints.some((h) => h.id === 'server-stopped') ? api.chat.state : undefined), 60000);
+    assert.equal(stopped.link.status, 'lost');
+    assert.equal(stopped.link.cause, 'unreachable');
+    // The test has no database, so its card ("database") stands next to it.
+    const cards = setupCards(stopped);
+    assert.deepEqual(cards.map((c) => c.id).filter((id) => id !== 'database'), ['server-stopped']);
+    const card = cards.find((c) => c.id === 'server-stopped')!;
+    assert.equal(card.primary?.label, 'Start server');
+    assert.deepEqual(card.secondary.map((a) => a.label), ['Retry']);
+    assert.ok(transcriptEnded(stopped));
+    assert.ok(assistantTexts(stopped).includes('Echo.'), 'the transcript was kept');
+    assert.equal(decisionsWaiting(stopped), 0);
+    assert.equal(statusBarEntry(stopped).text, '$(shield) calu: server stopped');
+    // The webview draws the same state.
+    const rendered = (await api.chat.requestWebviewState(10000)) as { view?: ViewState };
+    assert.equal(rendered.view?.link.cause, 'unreachable');
+
+    // Retry without a server: the card stays and says when it looked.
+    await api.handleWebviewMessage({ type: 'retryServer' });
+    await waitFor('the time of the Retry', () => api.chat.state.hints.find((h) => h.id === 'server-stopped')?.message.includes('Checked at'));
+
+    // A session again: attaching ends the card and the "Session ended" mark.
+    const next = await startScripted('endpoint-2.json');
+    scripted = next.child;
+    await api.sessions.attachEndpoint(next.endpoint.address, next.endpoint.token);
+    const back = await waitFor('attached to the new session', () => (api.chat.state.link.status === 'attached' && !api.chat.state.hints.some((h) => h.id === 'server-stopped') ? api.chat.state : undefined));
+    assert.ok(!transcriptEnded(back));
+    assert.equal(statusBarEntry(back).text, '$(shield) calu: idle');
   });
 });

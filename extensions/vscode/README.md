@@ -52,6 +52,16 @@ closes. Passwords (sudo, calu credentials for the server) are typed into that te
 - **If the bridge (`calu ide`) stops**, open approval cards stay open and say "connection lost"
   (nothing was decided). **Restart bridge** attaches to the same session again and continues
   the transcript; the session list appears only if that session is gone.
+- **If the calu server stops**, the chat says "The calu server stopped" with **Start server**
+  (a terminal with the server command, as "Open terminal with this command") and **Retry**.
+  The last session's transcript stays readable, greyed under "Session ended"; its open cards
+  become one line "Session ended" each, since nothing can decide them any more. When a server
+  runs again (Retry, or the chat's own check every 10 seconds while it is visible, every 30
+  seconds otherwise) the chat attaches as at the start: the same session if it still runs,
+  else the session of the workspace, else it offers a new one. A loss for another reason (a
+  revoked token, a refused connection) keeps "connection lost" with "Attach again".
+- **"Waiting for you"** under the transcript counts from the time the session gives for the
+  oldest open step, so a window reload, a bridge restart or a reattach does not start it again.
 - **Approval cards** keep Allow and Deny at the lower edge of the view while a long card
   scrolls.
 - **Honesty mode**: the menu stores `honesty.mode` in calu's settings; the running session
