@@ -1240,6 +1240,12 @@ adds. Fix an issue when it can really happen and its consequence matters (lost o
 data, a security hole, a wrong result a user relies on). Leave a rare or harmless corner case
 alone, or record it as a known limit, when handling it would add more code than it is worth.
 
+A subagent's verdict also never outranks the user. A reviewer may state with full confidence
+that something is a defect, but it does not know what the user knows. The user may have asked
+for a quick and dirty solution, or may know that the corner case cannot occur in their setup.
+What the user said in the conversation decides; a finding that contradicts it is reported to
+the user and not acted on.
+
 The subagent-result checker reads a subagent's result before the main agent acts on it, so it
 is the place to say this. Example (`calu checker edit subagent-result`):
 
@@ -1256,6 +1262,10 @@ is the place to say this. Example (`calu checker edit subagent-result`):
   not build them.
 - A finding about data loss, security or a wrong result: PASS with a comment that it must
   be fixed.
+- A finding that contradicts what the user asked for or ruled out (the user wanted a quick
+  solution, or said the case cannot occur): PASS with a comment that the user's word wins
+  and the main agent should not act on that finding. If the finding is about data loss or
+  security, the comment says to tell the user about it instead.
 ```
 
 The edit checker can back this up with a rule such as "An edit that adds a check, option or
@@ -1263,7 +1273,8 @@ code path for a case a review reported: DENY when the case is rare and harmless 
 change adds noticeable complexity; say which finding it answers."
 
 Your own instructions to Claude can say the same, for example in `AGENTS.md`: "Treat review
-findings with a grain of salt. Fix what matters; list the rest as known limits."
+findings with a grain of salt. Fix what matters; list the rest as known limits. A reviewer's
+claim never outweighs what I asked for or ruled out."
 
 ### Rules for fixed stops
 
