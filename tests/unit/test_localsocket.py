@@ -277,9 +277,10 @@ def test_the_kernel_names_the_user_that_listens_on_a_socket(short: Path):
     path = localsocket.path_of("s", short / "calu" / "s")
     listener = localsocket.bind(path, owner=ME)
     try:
-        assert cli._server_uid(path) == ME
+        # The pid too: a client asks for it when its connection breaks (D242 (8)).
+        assert cli._server_peer(path) == (os.getpid(), ME)
     finally:
         listener.close()
-    assert cli._server_uid(short / "nothing.sock") is None
+    assert cli._server_peer(short / "nothing.sock") == (None, None)
     # Without a known database the client says why, and reads no store of this user.
     assert StoreAdmin(unavailable="no database known").problem() == "no database known"

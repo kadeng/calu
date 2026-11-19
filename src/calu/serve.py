@@ -16,6 +16,11 @@ A request is a database row written with the operator login (`calu.session_reque
 may start a session is decided by the database's logins, not by who can reach a socket of
 this process. The server prints one line per event of a session's life; the conversation is
 shown by the session's clients.
+
+The server also listens on one relay port for all its sessions (`calu.relay`, D242): it records
+itself in `servers` (`calu.servers`), and a client with a server token reaches every session it
+runs through that one port, and may ask it for a new session (a request row filed through the
+token, `calu.servers.file_request`).
 """
 
 import getpass
@@ -24,24 +29,39 @@ import os
 import signal
 import socket
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import anyio
 import psycopg
 
-from calu import asuser, session_requests
+from calu import asuser, servers, session_requests
 from calu.config import load_secrets
 from calu.credentials import wipe
 from calu.db import SESSION_REQUESTED, ConnectionSource, Db, Dirty, LoginRefused, Notifier
 from calu.launch import RunAs
 from calu.preflight import LoginProtection
-from calu.run import ERRORS, LABEL, RunnerFactory, RunOptions, harden_process, run_from, say
+from calu.protocol.messages import RELAY_PORT, RelayServer, RelayStartParams
+from calu.run import (
+    ERRORS,
+    LABEL,
+    RunnerFactory,
+    RunOptions,
+    harden_process,
+    one_line,
+    run_from,
+    say,
+)
+from calu.servers import Hosted, StartRefused
 from calu.session_requests import SessionRequest
 
 if TYPE_CHECKING:
     from pydantic_ai.models import Model
+
+    from calu.relay import Relay
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +74,17 @@ FINISH_WAIT_S = 5.0
 
 EFFORTS = ("low", "medium", "high", "xhigh", "max", "default")
 """The reasoning efforts a request may name (`RunOptions.effort`)."""
+
+RELAY_START_WAIT_S = 120.0
+"""How long `relay.start` waits for the session it asked for. A request is claimed within a
+minute or never (`calu_claim_session_request`); the rest is the session's start."""
+
+FINISHED_KEPT = 200
+"""How many outcomes of requests the server keeps in memory for `relay.start`."""
+
+
+class RelayPortTaken(Exception):
+    """The relay port named with `--relay-port` cannot be bound; the message says why."""
 
 
 @dataclass(frozen=True)
@@ -75,6 +106,11 @@ class ServeOptions:
     login_protection: LoginProtection | None = None
     """What keeps Claude's commands from calu's logins, passed to every session
     (`RunOptions.login_protection`); None if unknown."""
+    relay_port: int | None = RELAY_PORT
+    """The relay's port on 127.0.0.1 (D242); 0 for any free port; None for no relay."""
+    relay_port_given: bool = False
+    """Whether the port was named (`--relay-port`): then a port that is taken ends the server
+    instead of being replaced by a free one."""
 
 
 def os_user() -> str:
@@ -132,6 +168,17 @@ class Server:
         self.sessions: dict[int, SessionRequest] = {}
         self.listening = anyio.Event()
         """Set once the server is subscribed to new requests and has looked for old ones."""
+        self.running: dict[str, Hosted] = {}
+        """Session row id -> the session as the relay reaches it, for every session that a
+        client can attach to."""
+        self.relay: Relay | None = None
+        """The relay, once it is bound (`_open_relay`); None without one."""
+        self.server_id: str | None = None
+        """Id of this server's `servers` row; None until recorded, or if it could not be."""
+        self._db: Db | None = None
+        self._finished: OrderedDict[int, tuple[str | None, str]] = OrderedDict()
+        """Request id -> (session id or None, message) of the requests this server finished."""
+        self._finished_changed = anyio.Event()
 
     async def run(self) -> None:
         """Answer requests until the caller cancels; then stop every session.
@@ -170,6 +217,8 @@ class Server:
         refused: list[LoginRefused] = []
         notifier.on(SESSION_REQUESTED, lambda _payload: wake.set())
         notifier.on_listening(wake.hint)
+        self._db = db
+        await self._open_relay(db)
         async with anyio.create_task_group() as tg:
 
             def stop(exc: LoginRefused) -> None:
@@ -184,6 +233,8 @@ class Server:
             db.on_refused(stop)
             notifier.on_refused(stop)
             tg.start_soon(notifier.run)
+            if self.relay is not None:
+                tg.start_soon(self.relay.run)
             say(
                 f"[serve] answering session requests for {self.user}@{self.hostname}; start "
                 "one with `calu start` in a project directory"
@@ -206,8 +257,165 @@ class Server:
             finally:
                 if self.sessions:
                     say(f"[serve] stopping {len(self.sessions)} session(s)")
+                if self.server_id is not None:
+                    with anyio.CancelScope(shield=True), anyio.move_on_after(FINISH_WAIT_S):
+                        try:
+                            await servers.record_end(db, self.server_id)
+                        except (psycopg.Error, TimeoutError) as exc:
+                            log.warning("recording the end of the server failed: %s", exc)
         if refused:
             raise refused[0]
+
+    async def _open_relay(self, db: Db) -> None:
+        """Bind the relay port and record this server with its address (D242).
+
+        Side effects: binds a port on 127.0.0.1 (the named one, the default one, or a free one
+        if the default is taken); inserts the `servers` row; prints where the relay listens and
+        how a client on another machine reaches it. Without the table (a schema older than
+        migration 0038) the relay runs, but no server token can be checked.
+
+        Args:
+            db: The server's connection.
+
+        Raises:
+            RelayPortTaken: If the port named with `--relay-port` cannot be bound.
+        """
+        port = self.options.relay_port
+        if port is None:
+            return
+        # Imported here: the relay imports the protocol server and with it the session, which
+        # `calu.cli` must not pay for at its start (`tests/unit/test_startup_imports.py`).
+        from calu.relay import Relay
+
+        async def check(sha: str) -> str | None:
+            """Ask the database about a server token of this server.
+
+            Args:
+                sha: The token's hash.
+
+            Returns:
+                Its label if valid, else None.
+
+            Raises:
+                psycopg.Error: On database errors.
+            """
+            if self.server_id is None:
+                return None
+            return await servers.token_label(db, self.server_id, sha)
+
+        relay = Relay(
+            self,
+            check,
+            RelayServer(hostname=self.hostname, os_user=self.user),
+            insecure=self.options.insecure,
+        )
+        try:
+            await relay.open("127.0.0.1", port)
+        except OSError as exc:
+            if self.options.relay_port_given:
+                raise RelayPortTaken(
+                    f"the relay port {port} cannot be bound ({exc}); name another one with "
+                    "--relay-port, or 0 for any free port"
+                ) from exc
+            say(f"[serve] the relay port {port} is taken ({exc}); taking a free one", error=True)
+            await relay.open("127.0.0.1", 0)
+        try:
+            with anyio.fail_after(FINISH_WAIT_S):
+                self.server_id = await servers.record_start(
+                    db, self.hostname, self.user, relay.address
+                )
+        except (psycopg.Error, TimeoutError) as exc:
+            log.info("recording the server failed", exc_info=True)
+            say(
+                f"[serve] this server could not record itself ({one_line(str(exc))}); its relay "
+                "checks no server token, so only `--insecure` clients of this machine use it. "
+                "`calu setup` brings the database up to date",
+                error=True,
+            )
+        relay.server = RelayServer(
+            server_id=self.server_id, hostname=self.hostname, os_user=self.user
+        )
+        self.relay = relay
+        relay_port = relay.address.rsplit(":", 1)[-1]
+        say(f"[serve] relay for every session of this server: {relay.address}")
+        say(
+            "[serve] from another machine: `calu token mint --server` here prints a token; "
+            f"there: ssh -N -L {relay_port}:127.0.0.1:{relay_port} {self.hostname}, then "
+            f"calu attach ws://127.0.0.1:{relay_port}"
+        )
+
+    def hosted(self) -> list[Hosted]:
+        """List the sessions a relay client can attach to, newest first.
+
+        Returns:
+            The sessions.
+        """
+        return sorted(self.running.values(), key=lambda one: one.started_at, reverse=True)
+
+    async def relay_start(self, sha: str, label: str, params: RelayStartParams) -> str:
+        """Ask this server for a session through a server token, and wait until it runs.
+
+        The request is a `session_requests` row filed through the token
+        (`calu.servers.file_request`), which this server then claims like any other.
+
+        Args:
+            sha: SHA-256 of the client's server token.
+            label: The token's label, for the request's label.
+            params: What to start.
+
+        Returns:
+            The id of the started session's row.
+
+        Raises:
+            StartRefused: If the request cannot be filed, the server refused or failed to
+                start the session, or nothing happened within `RELAY_START_WAIT_S`.
+        """
+        if self._db is None or self.server_id is None:
+            raise StartRefused("this server has no record in the database to file a request with")
+        wanted = SessionRequest(
+            hostname=self.hostname,
+            os_user=self.user,
+            directory=params.directory,
+            kind=params.kind,
+            claude_session_id=params.claude_session_id,
+            fork_before_turn=params.fork_before_turn,
+            prompt=params.prompt,
+            model=params.model,
+            effort=params.effort,
+            project=params.project,
+            label=f"relay: {label}" if label else "relay",
+        )
+        try:
+            with anyio.fail_after(FINISH_WAIT_S):
+                request_id = await servers.file_request(self._db, self.server_id, sha, wanted)
+        except psycopg.errors.InsufficientPrivilege as exc:
+            raise StartRefused("the server token is not valid any more") from exc
+        except (psycopg.Error, TimeoutError) as exc:
+            raise StartRefused(f"the request could not be filed: {one_line(str(exc))}") from exc
+        with anyio.move_on_after(RELAY_START_WAIT_S):
+            while request_id not in self._finished:
+                changed = self._finished_changed
+                await changed.wait()
+        if request_id not in self._finished:
+            raise StartRefused("calu serve did not start the session in time")
+        session_id, message = self._finished[request_id]
+        if session_id is None:
+            raise StartRefused(message or "the session did not start")
+        return session_id
+
+    def _record_outcome(self, request_id: int, session_id: str | None, message: str) -> None:
+        """Remember a request's outcome for a `relay_start` that waits for it.
+
+        Args:
+            request_id: The request.
+            session_id: The started session's row id, or None if it failed.
+            message: The reason of a failure.
+        """
+        self._finished[request_id] = (session_id, message)
+        while len(self._finished) > FINISHED_KEPT:
+            self._finished.popitem(last=False)
+        changed, self._finished_changed = self._finished_changed, anyio.Event()
+        changed.set()
 
     def _options(self, request: SessionRequest) -> RunOptions:
         """Translate a request into what `calu.run` runs, or refuse it.
@@ -290,6 +498,17 @@ class Server:
         ERRORS.set(errors)
         answered = False
         session_scope = anyio.CancelScope()
+        own_token: list[str] = []
+        registered: list[str] = []
+
+        async def serving(_address: str, token: str) -> None:
+            """Keep the session's own client token for the relay (never printed).
+
+            Args:
+                _address: Where the session listens (`ready` gets it again).
+                token: The session's client token.
+            """
+            own_token[:] = [token]
 
         async def ready(session_id: str | None, address: str) -> None:
             """Tell the requester that the session can be attached to, or stop the session.
@@ -306,6 +525,17 @@ class Server:
             if session_id is None:
                 reason = "the session's row could not be written to the database"
             else:
+                if own_token:
+                    # Before "started" is written: a relay client told of the session may
+                    # attach at once.
+                    self.running[session_id] = Hosted(
+                        session_id,
+                        address,
+                        own_token[0],
+                        request.directory,
+                        datetime.now(UTC),
+                    )
+                    registered.append(session_id)
                 answered = await self._finish(db, request.id, "started", session_id)
                 if answered:
                     say(f"[serve] started: session {session_id} in {request.directory}")
@@ -330,6 +560,7 @@ class Server:
                     options,
                     self.runner_factory,
                     self.checker_models,
+                    on_serving=serving,
                     on_ready=ready,
                 )
         except Refused as exc:
@@ -341,17 +572,21 @@ class Server:
             say(f"[serve] failed: {exc}", error=True)
         finally:
             with anyio.CancelScope(shield=True):
+                for session_id in registered:
+                    self.running.pop(session_id, None)
                 if not answered:
                     reason = errors[-1] if errors else "the session ended before it was ready"
                     await self._finish(db, request.id, "failed", None, reason)
                 self.sessions.pop(request.id, None)
                 say("[serve] ended")
 
-    @staticmethod
     async def _finish(
-        db: Db, request_id: int, outcome: str, session_id: str | None, message: str = ""
+        self, db: Db, request_id: int, outcome: str, session_id: str | None, message: str = ""
     ) -> bool:
         """Write a request's outcome; a database that stays away is logged, not waited for.
+
+        Side effect: remembers the outcome for a `relay_start` that waits for it, whether or
+        not it was written.
 
         Args:
             db: The server's connection.
@@ -363,18 +598,23 @@ class Server:
         Returns:
             True if the outcome was written.
         """
+        text = message.removeprefix("calu: ").removeprefix("[serve] ")
+        written = False
         try:
             with anyio.fail_after(FINISH_WAIT_S):
-                return await session_requests.finish(
+                written = await session_requests.finish(
                     db,
                     request_id,
                     outcome,  # type: ignore[arg-type]
                     session_id,
-                    message.removeprefix("calu: ").removeprefix("[serve] "),
+                    text,
                 )
         except (psycopg.Error, TimeoutError) as exc:
             log.warning("recording the outcome of session request %d failed: %s", request_id, exc)
-            return False
+        self._record_outcome(
+            request_id, session_id if written and outcome == "started" else None, text
+        )
+        return written
 
 
 async def serve(
@@ -403,7 +643,8 @@ async def serve(
             with `options.run_as` the name or the number of that user.
 
     Returns:
-        0 after a stop by signal; 1 if the database refused the session login for good.
+        0 after a stop by signal; 1 if the database refused the session login for good, or the
+        relay port named with `--relay-port` cannot be bound.
 
     Raises:
         psycopg.Error: If the database cannot be reached at the start.
@@ -438,6 +679,9 @@ async def serve(
                 "credential was probably replaced by a later `calu setup`. The server stops.",
                 error=True,
             )
+            code = 1
+        except RelayPortTaken as exc:
+            say(f"calu: {exc}", error=True)
             code = 1
         tg.cancel_scope.cancel()
     return code

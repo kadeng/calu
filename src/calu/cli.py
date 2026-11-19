@@ -54,6 +54,7 @@ is read as one line from stdin (for scripts and tests).
 import argparse
 import asyncio
 import contextlib
+import dataclasses
 import functools
 import getpass
 import json
@@ -89,6 +90,8 @@ from calu import (
     herd,
     localsocket,
     logfile,
+    machine,
+    servers,
     session_requests,
 )
 from calu.acp import serve_acp
@@ -134,8 +137,16 @@ from calu.preflight import (
     missing_sandbox_tools,
     sandbox_off_warnings,
 )
-from calu.protocol.client import RequestFailed, probe
+from calu.protocol.client import (
+    RelayTarget,
+    RequestFailed,
+    probe,
+    relay_base,
+    relay_call,
+    relay_session_id,
+)
 from calu.protocol.messages import MAX_FRAME_BYTES
+from calu.protocol.messages import RELAY_PORT as RELAY_DEFAULT_PORT
 from calu.protocol.schema import protocol_schema
 from calu.run import RunOptions, default_socket_path, harden_process, run_session
 from calu.serve import ServeOptions
@@ -2163,13 +2174,14 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
 
     Args:
         args: Parsed arguments (`max_sessions`, `idle_timeout`, `user`, `sudo`, `secure`,
-            `insecure`).
+            `insecure`, `relay_port`, `no_relay`).
         store: The credential store.
 
     Raises:
         CliError: If there is no usable `session` credential, `--max-sessions` is below 1,
-            `--idle-timeout` is not above 0, the user cannot be switched (`_run_as`), or the
-            database refused the session login.
+            `--idle-timeout` is not above 0, `--relay-port` is no port, the user cannot be
+            switched (`_run_as`), the database refused the session login, or the named relay
+            port cannot be bound.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors at the start.
     """
@@ -2180,10 +2192,16 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
         math.isfinite(args.idle_timeout) and args.idle_timeout > 0
     ):
         raise CliError("--idle-timeout takes a number of minutes above 0")
+    if args.relay_port is not None and not 0 <= args.relay_port <= 65535:
+        raise CliError("--relay-port takes a port number from 0 to 65535")
     run_as = _run_as(args)
     url = _session_login(store)
     try:
         options = ServeOptions(
+            relay_port=None
+            if args.no_relay
+            else (RELAY_DEFAULT_PORT if args.relay_port is None else args.relay_port),
+            relay_port_given=args.relay_port is not None,
             max_sessions=args.max_sessions,
             run_as=run_as,
             idle_timeout_s=args.idle_timeout * 60 if args.idle_timeout is not None else None,
@@ -2218,6 +2236,11 @@ def cmd_start(args: argparse.Namespace, store: CredentialStore) -> None:
         KeyboardInterrupt: On Ctrl-C while waiting for the server; the request was withdrawn
             first where no server had claimed it yet.
     """
+    if args.token and not args.relay:
+        raise CliError("--token goes with --relay, the address of a `calu serve` relay")
+    if args.relay:
+        _start_through_relay(args, store)
+        return
     workspace, prompt = _workspace_and_prompt(args)
     _check_conversation_choice(args)
     if args.fork_before_turn is not None and not args.resume:
@@ -2309,6 +2332,81 @@ def cmd_start(args: argparse.Namespace, store: CredentialStore) -> None:
         print(f"[clients] attach with: calu attach --session {endpoint.session_id}", flush=True)
         return
     _attach(endpoint, store, args.plain, 0, args.thinking, run_as)
+
+
+def _start_through_relay(args: argparse.Namespace, store: CredentialStore) -> None:
+    """`calu start --relay ADDRESS DIR`: ask a `calu serve` through its relay (D242).
+
+    The directory is one on the server's machine and is not looked at here; the server
+    refuses one that does not exist. The server token comes from `--token`, `CALU_TOKEN` or
+    the terminal (`_reach`).
+
+    Side effects: the server files a `session_requests` row through the token and starts the
+    session; the client then attaches to it through the relay (unless `--no-attach`).
+
+    Args:
+        args: Parsed arguments (`relay`, `token`, `directory`, `prompt`, `prompt_file`,
+            `resume`, `fork`, `fork_before_turn`, `model`, `effort`, `project`, `no_attach`,
+            `plain`, `thinking`).
+        store: The credential store (only for the client that attaches).
+
+    Raises:
+        CliError: If the directory is not absolute, the options contradict each other, the
+            relay cannot be reached or refuses the token, or the server did not start the
+            session.
+    """
+    _check_conversation_choice(args)
+    if args.fork_before_turn is not None and not args.resume:
+        raise CliError("--fork-before-turn needs --resume <session id>")
+    if not args.directory.startswith("/"):
+        raise CliError(
+            "with --relay the directory is one on the server's machine: give its absolute path"
+        )
+    if args.prompt is not None and args.prompt_file:
+        raise CliError("--prompt and --prompt-file exclude each other; give one of them")
+    prompt = args.prompt
+    if args.prompt_file:
+        try:
+            prompt = Path(args.prompt_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise CliError(f"cannot read {args.prompt_file}: {exc}") from exc
+    checked = _reach(Endpoint(relay_base(args.relay), args.token or ""), pick=False)
+    relay = checked.relay
+    if relay is None:
+        raise CliError(f"{args.relay} is a session's address, not the relay of a `calu serve`")
+    params = {
+        "kind": "resume" if args.resume else "fork" if args.fork else "new",
+        "directory": args.directory,
+        "claude_session_id": args.resume or args.fork,
+        "fork_before_turn": args.fork_before_turn,
+        "prompt": prompt or None,
+        "model": args.model,
+        "effort": args.effort,
+        "project": args.project,
+    }
+    print("[session] asked the server through its relay …", flush=True)
+    try:
+        _hello, started = asyncio.run(
+            relay_call(relay.address, relay.token, "relay.start", params, 150.0)
+        )
+    except RequestFailed as exc:
+        raise CliError(
+            f"the server did not start the session: {exc.error.get('message') or exc}"
+        ) from exc
+    except (OSError, ConnectionError) as exc:
+        raise CliError(f"the relay {relay.address} cannot be reached: {exc}") from exc
+    session_id = str((started or {}).get("calu_session_id") or "")
+    print(f"[session] started: {session_id}", flush=True)
+    if args.no_attach:
+        print(
+            f"[clients] attach with: calu attach {relay.address} --session {session_id}",
+            flush=True,
+        )
+        return
+    endpoint = Endpoint(
+        relay.session_address(session_id), relay.token, None, session_id, relay=relay
+    )
+    _attach(endpoint, store, args.plain, 0, args.thinking, None, True)
 
 
 def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -2514,6 +2612,14 @@ class Endpoint:
     """For a session found through a local socket: the uid of the process that listens on
     it, as the kernel reports it; None otherwise. 0 is a session of root's calu, whose
     database a client that is not root learns from `calu.db.place` (D228)."""
+    relay: RelayTarget | None = None
+    """The `calu serve` relay the address goes through (D242); None for a session's own
+    address. A client then follows `/new`, `/fork` and `/switch` through it."""
+    gone: Callable[[], bool] | None = None
+    """Tells whether the session's process is known to be gone (a session of this machine
+    found in the database or through a local socket); None where that cannot be judged (an
+    address given on the command line). A client whose connection breaks ends at once when
+    it returns True, instead of trying again for minutes."""
 
 
 def _pick_session(rows: list[herd.SessionRow], hint: str | None) -> herd.SessionRow:
@@ -2692,11 +2798,12 @@ def _local_socket_endpoint(hint: str | None) -> Endpoint | None:
         lines = "\n".join(f"    {entry[1]}  {entry[2]}" for entry in chosen)
         raise CliError(f"{len(chosen)} sessions match; name one with --session <id>:\n{lines}")
     path, session_id, _directory = chosen[0]
-    return Endpoint(f"unix:{path}", "", None, session_id, _server_uid(path))
+    pid, uid = _server_peer(path)
+    return Endpoint(f"unix:{path}", "", None, session_id, uid, gone=_pid_gone(pid))
 
 
-def _server_uid(path: Path) -> int | None:
-    """Ask the kernel which user listens on a Unix socket.
+def _server_peer(path: Path) -> tuple[int | None, int | None]:
+    """Ask the kernel which process and user listen on a Unix socket.
 
     Side effect: one connection, opened and closed.
 
@@ -2704,18 +2811,49 @@ def _server_uid(path: Path) -> int | None:
         path: The socket.
 
     Returns:
-        The uid of the process that listens, or None if the socket cannot be connected to
-        or the kernel does not say.
+        The pid and the uid of the process that listens; None for either if the socket
+        cannot be connected to or the kernel does not say.
     """
     probe_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         probe_socket.settimeout(2.0)
         probe_socket.connect(str(path))
-        return localsocket.peer_uid(probe_socket)
+        return localsocket.peer_pid(probe_socket), localsocket.peer_uid(probe_socket)
     except OSError:
-        return None
+        return None, None
     finally:
         probe_socket.close()
+
+
+def _pid_gone(pid: int | None) -> Callable[[], bool] | None:
+    """Make the check a client runs when its connection to a local socket breaks.
+
+    Args:
+        pid: The pid of the process that listened on the socket, as the kernel reported it.
+
+    Returns:
+        A function that returns True once no process has that pid; None without a pid.
+    """
+    if pid is None:
+        return None
+    return lambda: not herd.process_exists(pid)
+
+
+def _row_gone(row: herd.SessionRow) -> Callable[[], bool] | None:
+    """Make the check a client runs when its connection to a session of the database breaks.
+
+    Args:
+        row: The session, with the pid and the process table it recorded.
+
+    Returns:
+        A function that returns True once the session's process is known to be gone
+        (`herd.process_gone`: same process table and no such pid, or this machine rebooted
+        since); None if the row recorded neither.
+    """
+    if row.pid is None or not row.machine:
+        return None
+    pid, recorded, this = row.pid, row.machine, machine.here()
+    return lambda: herd.process_gone(pid, recorded, this)
 
 
 def _hold_password_free(store: CredentialStore) -> None:
@@ -2812,9 +2950,9 @@ def _find_endpoint(
         row = _pick_session(await herd.sessions(db, active_only=True), hint)
         local = _local_endpoint(row.id)
         if local is not None:
-            return local
+            return dataclasses.replace(local, gone=_row_gone(row))
         token_id, token = await herd.mint_token(db, row.id, label)
-        return Endpoint(row.address, token, token_id, row.id)
+        return Endpoint(row.address, token, token_id, row.id, gone=_row_gone(row))
 
     return _herd_value(store, work, may_ask)
 
@@ -3088,6 +3226,10 @@ def _attach(
     database = _with_shared_password(database)
     if given and database is None and admin_problem is None and not _admin_here(store):
         admin_problem = REMOTE_CLIENT
+    if endpoint.relay is not None:
+        # Through a relay the server answers for its sessions (D242); settings changes still
+        # need the database, on the server's machine.
+        admin_problem = admin_problem or RELAY_CLIENT
     try:
         if tui_start.wants_full_screen(plain):
             # On a terminal: the full-screen client (`calu.tui`); it shows thinking by itself.
@@ -3098,25 +3240,43 @@ def _attach(
                     after_seq,
                     database=database,
                     admin_problem=admin_problem,
+                    relay=endpoint.relay,
+                    gone=endpoint.gone,
                 )
                 if ended.switch_to is None:
                     break
-                # `/new` or `/fork` in the client: the session it started is attached next,
-                # with a token of its own; the one of the session that was left is revoked.
+                # `/new`, `/fork` or `/switch` in the client: the session it named is attached
+                # next, with a token of its own; the one of the session that was left is
+                # revoked. Through a relay the server token covers every session.
                 print(f"[session] switching to {ended.switch_to}", flush=True)
-                following = _find_endpoint(store, ended.switch_to, "calu attach")
+                following = _following(store, endpoint, ended.switch_to)
                 if endpoint.token_id is not None:
                     _revoke(store, endpoint.token_id, may_ask=False)
-                endpoint, after_seq, given = following, 0, False
-            again = "calu attach"
-            if given:
-                again = f"calu attach {endpoint.address}"
-                if endpoint.token:
-                    again += " --token=<the same token>"
-            print("\n".join(tui_start.exit_lines(ended, again)))
+                endpoint, after_seq = following, 0
+                given = given and endpoint.relay is not None
+            print("\n".join(tui_start.exit_lines(ended, _again(endpoint, given))))
             code = ended.code
         else:
-            code = asyncio.run(attach(endpoint.address, endpoint.token, after_seq, thinking))
+            while True:
+                switched: list[str] = []
+                code = asyncio.run(
+                    attach(
+                        endpoint.address,
+                        endpoint.token,
+                        after_seq,
+                        thinking,
+                        relay=endpoint.relay,
+                        gone=endpoint.gone,
+                        switch_to=switched,
+                    )
+                )
+                if not switched:
+                    break
+                print(f"[session] switching to {switched[0]}", flush=True)
+                following = _following(store, endpoint, switched[0])
+                if endpoint.token_id is not None:
+                    _revoke(store, endpoint.token_id, may_ask=False)
+                endpoint, after_seq = following, 0
     except (OSError, RequestFailed) as exc:
         raise CliError(_attach_failure(endpoint, exc)) from exc
     finally:
@@ -3125,6 +3285,60 @@ def _attach(
             _revoke(store, endpoint.token_id, may_ask=False)
     if code:
         raise CliError("the client ended with an error")
+
+
+def _following(store: CredentialStore, endpoint: Endpoint, session_id: str) -> Endpoint:
+    """Return the endpoint of the session a client switches to.
+
+    Args:
+        store: The credential store, for a session found in the database.
+        endpoint: The endpoint of the session that is left.
+        session_id: The session to attach to next.
+
+    Returns:
+        Through a relay: that session on the same relay, with the same server token (D242).
+        Otherwise the session as `_find_endpoint` finds it, with a token minted for it.
+
+    Raises:
+        CliError: If the session cannot be found or no database login is there.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+    if endpoint.relay is not None:
+        relay = endpoint.relay
+        return Endpoint(
+            relay.session_address(session_id), relay.token, None, session_id, relay=relay
+        )
+    return _find_endpoint(store, session_id, "calu attach")
+
+
+def _again(endpoint: Endpoint, given: bool) -> str:
+    """Say which command attaches to the same session again, after the client ended.
+
+    Args:
+        endpoint: The session the client showed last.
+        given: Whether the address came from the command line.
+
+    Returns:
+        `calu attach` for a session of this directory; the address (the relay's with
+        `--session`) and a token placeholder for one given on the command line.
+    """
+    if endpoint.relay is not None:
+        again = f"calu attach {endpoint.relay.address} --session {endpoint.session_id}"
+        return again + (" --token=<the same token>" if endpoint.token else "")
+    if not given:
+        return "calu attach"
+    return f"calu attach {endpoint.address}" + (
+        " --token=<the same token>" if endpoint.token else ""
+    )
+
+
+RELAY_CLIENT = (
+    "this client reaches the session through the relay of `calu serve`: /new, /fork, /rewind, "
+    "/running and /switch go through the relay; /rename and saving checker instructions work "
+    "in a client on the server's machine (ssh -t <that host> calu attach)"
+)
+"""Why the full-screen client cannot change settings when it is attached through a relay."""
 
 
 REMOTE_CLIENT = (
@@ -3176,6 +3390,13 @@ def _attach_failure(endpoint: Endpoint, exc: BaseException) -> str:
                 "CALU_TOKEN. A session started with --insecure lets local clients in "
                 "without one"
             )
+        if "server token" in str(exc):
+            return (
+                f"cannot attach to {address}: the relay refused the server token ({exc}). A "
+                "server token belongs to one `calu serve` and ends with it or with `calu token "
+                "revoke --server`: mint a new one on the server's machine with `calu token "
+                "mint --server`"
+            )
         return (
             f"cannot attach to {address}: the session refused the token ({exc}). A token "
             "belongs to one session and ends with it or with `calu token revoke`: mint a new "
@@ -3196,7 +3417,7 @@ TOKEN_TRIES = 3
 """How often `calu attach` asks for a client token on a terminal before it gives up."""
 
 
-def _reach(endpoint: Endpoint) -> Endpoint:
+def _reach(endpoint: Endpoint, hint: str | None = None, pick: bool = True) -> Endpoint:
     """Check an address given on the command line and its token before a client starts.
 
     The token comes from `--token`, else from the environment variable `CALU_TOKEN` (so that
@@ -3205,18 +3426,26 @@ def _reach(endpoint: Endpoint) -> Endpoint:
     `TOKEN_TRIES` times; a blank answer gives up. A session started with `--insecure` lets a
     local client in without a token, so no token is tried first.
 
+    The address may be a `calu serve` relay (D242): its own address, whose session is then
+    chosen from the server's sessions (`_through_relay`), or the address of one session on it
+    (`ws://host:port/session/<id>`). Either way the endpoint names the relay, so that the
+    client can follow `/new`, `/fork` and `/switch`.
+
     Side effects: one short connection to the session (`initialize`, then closed), which the
-    session logs; a prompt on the terminal.
+    session logs; a prompt on the terminal; on a relay, the requests of `_through_relay`.
 
     Args:
         endpoint: The address and the token of the command line.
+        hint: `--session`: on a relay, the id (or its beginning) of the session to attach to.
+        pick: Whether a session is chosen on a relay's own address; False returns the relay
+            itself (`calu start --relay`).
 
     Returns:
         The endpoint with the token the session accepted.
 
     Raises:
-        CliError: If the address cannot be reached or does not answer within 15 seconds, or
-            the session refuses every token given.
+        CliError: If the address cannot be reached or does not answer within 15 seconds, the
+            session refuses every token given, or no single session of a relay is named.
     """
     token = endpoint.token or os.environ.get("CALU_TOKEN", "")
     attempt = 0
@@ -3224,14 +3453,33 @@ def _reach(endpoint: Endpoint) -> Endpoint:
         attempt += 1
         tried = Endpoint(endpoint.address, token, endpoint.token_id, endpoint.session_id)
         try:
-            asyncio.run(probe(endpoint.address, token, "calu attach (checking the token)", 15.0))
+            answer = asyncio.run(
+                probe(endpoint.address, token, "calu attach (checking the token)", 15.0)
+            )
+            if "relay" in answer:
+                if not pick:
+                    return dataclasses.replace(tried, relay=_relay_target(tried, answer))
+                return _through_relay(tried, answer, hint)
+            if relay_session_id(endpoint.address) is not None:
+                hello, _ = asyncio.run(relay_call(endpoint.address, token, "initialize"))
+                server = hello.get("relay") or {}
+                target = RelayTarget(
+                    relay_base(endpoint.address),
+                    token,
+                    str(server.get("hostname") or ""),
+                    str(server.get("os_user") or ""),
+                )
+                found = relay_session_id(endpoint.address) or ""
+                return dataclasses.replace(tried, session_id=found, relay=target)
             return tried
         except RequestFailed as exc:
             if attempt > TOKEN_TRIES or not sys.stdin.isatty():
                 raise CliError(_attach_failure(tried, exc)) from exc
             said = "the session refused that token" if token else "this session wants a token"
             print(
-                f"calu: {said}; `calu token mint <session id>` on the session's machine prints one",
+                f"calu: {said}; on the session's machine `calu token mint <session id>` prints "
+                "one for that session, `calu token mint --server` one for every session of "
+                "its `calu serve` (through its relay port)",
                 file=sys.stderr,
             )
             try:
@@ -3247,6 +3495,104 @@ def _reach(endpoint: Endpoint) -> Endpoint:
                     f"cannot attach to {endpoint.address}: no answer within 15 seconds"
                 ) from exc
             raise CliError(_attach_failure(tried, exc)) from exc
+
+
+def _relay_target(tried: Endpoint, answer: dict[str, Any]) -> RelayTarget:
+    """Describe a relay from its `initialize` result.
+
+    Args:
+        tried: An address on the relay and the server token it accepted.
+        answer: The relay's `initialize` result (`RelayInitializeResult`).
+
+    Returns:
+        The relay's own address, the token, and the server's host and user.
+    """
+    server = answer.get("relay") or {}
+    return RelayTarget(
+        relay_base(tried.address),
+        tried.token,
+        str(server.get("hostname") or ""),
+        str(server.get("os_user") or ""),
+    )
+
+
+def _through_relay(tried: Endpoint, answer: dict[str, Any], hint: str | None) -> Endpoint:
+    """Choose the session a client attaches to through a `calu serve` relay (D242).
+
+        --session given     ──► the one session whose id begins with it
+        one session runs    ──► that one
+        several run         ──► on a terminal: the user picks one from a numbered list;
+                                otherwise an error that lists them
+        none runs           ──► an error that says how to start one
+
+    Side effects: one request to the relay (`relay.sessions`); a prompt on the terminal.
+
+    Args:
+        tried: The relay's address and the server token it accepted.
+        answer: The relay's `initialize` result (`RelayInitializeResult`).
+        hint: `--session`, or None.
+
+    Returns:
+        The endpoint of the chosen session on the relay.
+
+    Raises:
+        CliError: If no single session is chosen, or the relay cannot be asked.
+    """
+    target = _relay_target(tried, answer)
+    who = f"{target.os_user}@{target.hostname}" if target.hostname else "the server"
+    try:
+        _hello, listed = asyncio.run(relay_call(target.address, target.token, "relay.sessions"))
+    except (OSError, RequestFailed, ConnectionError) as exc:
+        raise CliError(f"cannot list the sessions of {target.address}: {exc}") from exc
+    sessions = [entry for entry in (listed or {}).get("sessions") or [] if isinstance(entry, dict)]
+    lines = [
+        f"    {index}. {entry['calu_session_id']}  {entry.get('state')}"
+        + (f" · {entry['open_escalations']} open" if entry.get("open_escalations") else "")
+        + f"  {entry.get('directory')}"
+        for index, entry in enumerate(sessions, 1)
+    ]
+    if hint:
+        chosen = [e for e in sessions if str(e["calu_session_id"]).startswith(hint)]
+        if len(chosen) != 1:
+            what = "no session" if not chosen else f"{len(chosen)} sessions"
+            raise CliError(
+                f"{what} of {who} start with {hint!r}:\n" + ("\n".join(lines) or "    (none)")
+            )
+    elif len(sessions) == 1:
+        chosen = sessions
+    elif not sessions:
+        raise CliError(
+            f"no session runs in the `calu serve` of {who} behind {target.address}. Start "
+            f"one through the relay: calu start <directory on {target.hostname or 'it'}> "
+            f"--relay {target.address}"
+        )
+    elif sys.stdin.isatty():
+        print(f"{len(sessions)} sessions run in the `calu serve` of {who}:", file=sys.stderr)
+        print("\n".join(lines), file=sys.stderr)
+        while True:
+            try:
+                picked = input("Session (number or beginning of its id, Enter gives up): ")
+            except EOFError:
+                picked = ""
+            picked = picked.strip()
+            if not picked:
+                raise CliError("no session chosen: nothing was attached")
+            if picked.isdigit() and 1 <= int(picked) <= len(sessions):
+                chosen = [sessions[int(picked) - 1]]
+                break
+            chosen = [e for e in sessions if str(e["calu_session_id"]).startswith(picked)]
+            if len(chosen) == 1:
+                break
+            print(f"calu: {picked!r} names {len(chosen)} sessions", file=sys.stderr)
+    else:
+        raise CliError(
+            f"{len(sessions)} sessions run in the `calu serve` of {who}; name one with "
+            "--session <id>:\n" + "\n".join(lines)
+        )
+    session_id = str(chosen[0]["calu_session_id"])
+    return Endpoint(
+        target.session_address(session_id), target.token, None, session_id, relay=target
+    )
 
 
 def _with_shared_password(database: Target | None) -> Target | None:
@@ -3301,7 +3647,7 @@ def _endpoint_of(
         # Without `--token` the client tries `CALU_TOKEN`, then none: a session started with
         # `--insecure` lets a local client in (D227); any other refuses, and on a terminal
         # the token is asked for (`_reach`).
-        return _reach(Endpoint(args.address, args.token or ""))
+        return _reach(Endpoint(args.address, args.token or ""), getattr(args, "session", None))
     return _find_endpoint(store, args.session, label, may_ask)
 
 
@@ -4036,8 +4382,10 @@ def cmd_token(args: argparse.Namespace, store: CredentialStore) -> None:
     configuration, and revoking it ends that access. The session accepts a new token at the
     next `initialize`, without being restarted.
 
+    With `--server` the tokens are those of a `calu serve`'s relay (`_server_token`, D242).
+
     Args:
-        args: Parsed arguments (`action`, `session`, `label`, `id`).
+        args: Parsed arguments (`action`, `session`, `label`, `server`).
         store: The credential store.
 
     Raises:
@@ -4059,6 +4407,8 @@ def cmd_token(args: argparse.Namespace, store: CredentialStore) -> None:
         Raises:
             CliError: If an argument is missing or the token or session is unknown.
         """
+        if args.server:
+            return await _server_token(db, args)
         if args.action == "mint":
             if not args.session:
                 raise CliError("calu token mint needs the id of a session (`calu sessions`)")
@@ -4084,9 +4434,102 @@ def cmd_token(args: argparse.Namespace, store: CredentialStore) -> None:
                 raise CliError(f"token {token_id} is unknown or already revoked")
             return f"token {token_id} revoked; a client that is still connected keeps its session"
         rows = await herd.list_tokens(db, args.session)
-        return "\n".join(row.line() for row in rows) if rows else "no client tokens"
+        report = "\n".join(row.line() for row in rows) if rows else "no client tokens"
+        if args.session is None:
+            try:
+                server_rows = await servers.tokens(db)
+            except psycopg.errors.UndefinedTable:
+                server_rows = []  # a schema before migration 0038
+            if server_rows:
+                report += "\n\nserver tokens (`calu token revoke --server <id>`):\n"
+                report += "\n".join(row.line() for row in server_rows)
+        return report
 
     _herd_command(store, work)
+
+
+async def _server_token(db: Db, args: argparse.Namespace) -> str:
+    """Mint, list or revoke the tokens of a `calu serve`'s relay (D242).
+
+    Args:
+        db: The connection (operator or owner).
+        args: Parsed arguments (`action`, `session`: a server id or a token id, `label`).
+
+    Returns:
+        The report; for `mint` it holds the token, printed this once, and the commands that
+        reach the relay from another machine.
+
+    Raises:
+        CliError: If no server or several match, the token is unknown, or the database has
+            no `servers` table yet (`calu setup` adds it).
+    """
+    try:
+        if args.action == "list":
+            rows = await servers.tokens(db)
+            return "\n".join(row.line() for row in rows) if rows else "no server tokens"
+        if args.action == "revoke":
+            try:
+                token_id = int(args.session or "")
+            except ValueError as exc:
+                raise CliError(
+                    "calu token revoke --server needs the id of a server token "
+                    "(`calu token list --server`)"
+                ) from exc
+            if not await servers.revoke(db, token_id):
+                raise CliError(f"server token {token_id} is unknown or already revoked")
+            return (
+                f"server token {token_id} revoked; the relay closes its connections within seconds"
+            )
+        if args.session:
+            row = await servers.server(db, args.session)
+            if row is None or row.ended_at is not None:
+                raise CliError(
+                    f"no running server has an id that starts with {args.session!r} "
+                    "(`calu token list --server` names the servers of the tokens)"
+                )
+        else:
+            here, user = socket.gethostname(), serve_os_user()
+            this = machine.here()
+            running = [
+                row
+                for row in await servers.running(db, here, user)
+                if not herd.process_gone(row.pid, row.machine, this)
+            ]
+            if not running:
+                raise CliError(
+                    f"no `calu serve` runs for {user} on {here}; start one, or name a server's "
+                    "id (`calu token mint --server <id>`)"
+                )
+            if len(running) > 1:
+                lines = "\n".join(f"    {row.line()}" for row in running)
+                raise CliError(f"{len(running)} servers run; name one by its id:\n{lines}")
+            row = running[0]
+        token_id, token = await servers.mint(db, row.id, args.label or "")
+    except psycopg.errors.UndefinedTable as exc:
+        raise CliError(
+            "this database has no server tokens yet; `calu setup` brings it up to date"
+        ) from exc
+    except ValueError as exc:
+        raise CliError(str(exc)) from exc
+    report = (
+        f"server token {token_id} for the `calu serve` of {row.os_user}@{row.hostname} "
+        f"(server {row.id}):\n\n    {token}\n\n"
+        "This is the only copy; calu stores just its hash. It reaches every session of that "
+        "server and lets its holder decide their steps and ask the server for new sessions. "
+        f"It ends with the server or with `calu token revoke --server {token_id}`."
+    )
+    if row.relay_address.startswith("ws://"):
+        port = row.relay_address.rsplit(":", 1)[-1]
+        report += (
+            f"\n\nThe relay listens at {row.relay_address} on {row.hostname}. From another "
+            "machine, forward it once and attach there (the token can also come from the "
+            "environment variable CALU_TOKEN, or `calu attach` asks for it):\n\n"
+            f"    ssh -N -L {port}:127.0.0.1:{port} {row.hostname}\n"
+            f"    calu attach ws://127.0.0.1:{port} --token=<the token above>"
+        )
+    else:
+        report += "\n\nThat server has no relay (it was started with --no-relay)."
+    return report
 
 
 def cmd_evals(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -5395,6 +5838,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--secure", action="store_true", help=SECURE_HELP)
     p.add_argument("--insecure", action="store_true", help=INSECURE_HELP)
+    relay_choice = p.add_mutually_exclusive_group()
+    relay_choice.add_argument(
+        "--relay-port",
+        type=int,
+        metavar="N",
+        help=f"the port on 127.0.0.1 of the relay for every session of this server (default: "
+        f"{RELAY_DEFAULT_PORT}, or a free one if that is taken; 0: any free port). A client on "
+        "another machine needs one SSH forward of it and a token of `calu token mint --server`",
+    )
+    relay_choice.add_argument(
+        "--no-relay", action="store_true", help="no relay: each session only on its own port"
+    )
     p.set_defaults(handler=cmd_serve, log_name="serve")
 
     p = sub.add_parser("start", help="ask the running `calu serve` for a session and attach to it")
@@ -5445,6 +5900,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--user", metavar="NAME|UID[:GID]", help="as root: the user to work for")
     p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument(
+        "--relay",
+        metavar="ADDRESS",
+        help="ask the `calu serve` behind this relay address (e.g. a forwarded "
+        "ws://127.0.0.1:8811) instead of the database; DIRECTORY is then an absolute path on "
+        "the server's machine",
+    )
+    p.add_argument(
+        "--token",
+        help="with --relay: the server token (`calu token mint --server`); else CALU_TOKEN, or "
+        "the client asks for it",
+    )
     p.set_defaults(handler=cmd_start)
 
     p = sub.add_parser("attach", help="terminal client for a running session")
@@ -5619,14 +6086,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--note", help="text for Claude and for the record")
     p.set_defaults(handler=cmd_resolve)
 
-    token = sub.add_parser("token", help="client tokens of a session: mint, list, revoke")
+    token = sub.add_parser(
+        "token", help="client tokens of a session or of a `calu serve`: mint, list, revoke"
+    )
     token.add_argument("action", choices=["mint", "list", "revoke"])
     token.add_argument(
         "session",
         nargs="?",
-        help="session id for mint and list (`calu sessions`), token id for revoke",
+        help="session id for mint and list (`calu sessions`), token id for revoke; with "
+        "--server: the server's id for mint (default: the running server of this user here), "
+        "the server token's id for revoke",
     )
     token.add_argument("--label", default="", help='what the token is for, e.g. "zed on laptop"')
+    token.add_argument(
+        "--server",
+        action="store_true",
+        help="a server token: every session of one `calu serve`, through its relay port",
+    )
     token.set_defaults(handler=cmd_token)
 
     p = sub.add_parser("evals", help="measure how well the configured checkers decide")

@@ -990,14 +990,52 @@ another machine reaches it through SSH. Three ways, from the simplest:
 |---|---|---|
 | The client on the server | `ssh -t the-host`, then `calu attach` in the project | everything, with the server's credentials: `/new`, `/fork`, `/running`, `/switch`, saving checker instructions |
 | The web interface of the server | `ssh -N -L 8800:127.0.0.1:8800 the-host`, then the address `calu web` printed there | every session of that machine, live, through one tunnel |
-| The client on your machine | `ssh -N -L <port>:127.0.0.1:<port> the-host`, then `calu attach ws://127.0.0.1:<port>` with a token | one session; nothing of calu needs to be set up on your machine |
+| The client on your machine, through the relay of `calu serve` | `ssh -N -L 8811:127.0.0.1:8811 the-host`, then `calu attach ws://127.0.0.1:8811` with a server token | every session of that server through one forward: `/running`, `/switch`, `/new`, `/fork`, `/rewind`; nothing of calu needs to be set up on your machine |
+| The client on your machine, one session | `ssh -N -L <port>:127.0.0.1:<port> the-host`, then `calu attach ws://127.0.0.1:<port>` with a token | one session (also one of `calu run`, which has no relay) |
 
 The first is what a user with a headless server usually wants: `ssh -t the-host`, `cd` into
 the project, `calu attach`. Detaching (`ctrl+d`) and closing SSH leave the session running,
 because it runs in `calu serve` (or `calu run`) on the server, not in the client; that process
 has to outlive your SSH login (`tmux`, or a service).
 
-For the third way, `calu sessions` on the server shows each running session's client address
+For the third way, `calu token mint --server` on the server prints a server token for the
+`calu serve` of your user there, together with the two commands to run on your machine:
+
+```bash
+calu token mint --server --label laptop           # on the server; prints the token once
+ssh -N -L 8811:127.0.0.1:8811 the-host            # on your machine; leave it open
+calu attach ws://127.0.0.1:8811 --token=<the token it printed>
+calu attach ws://127.0.0.1:8811 --session 4031fde1    # one session by the beginning of its id
+calu start /home/me/src/other --relay ws://127.0.0.1:8811 -p "run the tests"
+```
+
+With one session running, `calu attach` attaches to it; with several it lists them and asks
+which (number or beginning of the id), and without a terminal it lists them and wants
+`--session`. With none it says so and names `calu start --relay`, whose directory is a path
+on the server. In the full-screen client `/running` lists the server's sessions, `/switch`
+attaches to another one, and `/new`, `/fork` and `/rewind` ask the server for a session and
+switch to it; the line client has `/running`, `/switch`, `/new` and `/fork` through the relay.
+Saving checker instructions, `/honesty off|track|enforce` and `/rename` need the database and
+work in a client on the server.
+
+What a server token allows: attaching to every session of that one server and doing there
+what a client token allows (sending messages, deciding steps, stopping a session), and asking
+that server for new sessions, also in other directories of its machine. It does not reach
+another server or the database. It is valid until `calu token revoke --server <id>` or until
+the server stops; a restarted server needs a new token. `calu token list` lists the server
+tokens below the client tokens, and a revoked one ends its connections within seconds. A
+decision made through the relay is recorded with the client's name and the token's label
+(`client:calu attach via relay (laptop)`). The relay checks the server token and then
+connects to the session with the session's own token, so the session's own checks apply
+unchanged. If the server stopped while you were away, the relay is gone too and the client
+keeps trying for five minutes; a session that ended while the server runs is reported as
+ended at once.
+
+A `calu serve --insecure` lets a connection from the server's loopback interface use the
+relay without a server token, as it does for its sessions (and a forwarded port arrives there);
+asking it for a new session still needs a server token.
+
+For the fourth way, `calu sessions` on the server shows each running session's client address
 (`clients ws://127.0.0.1:41235`), and `calu token mint` prints a token for it together with
 the two commands to run on your machine:
 
@@ -1013,7 +1051,7 @@ either, or when the session refuses the one given, `calu attach` asks for it on 
 A minted token is valid until its session ends or you take it back (`calu token
 list|revoke`). Such a client has no database on your machine: `/new`, `/fork`, `/running`
 and `/switch` say so and name the first way instead, and each new session has a port of its
-own and needs its own forward and token. A session of a `calu serve --insecure` takes every
+own and needs its own forward and token; the relay of the third way avoids that. A session of a `calu serve --insecure` takes every
 connection from the server's loopback interface without a token, and a forwarded port arrives
 there: whoever can log in to the server over SSH attaches without a token.
 
@@ -1022,13 +1060,17 @@ terminal clients try again by themselves for five minutes (after 1, 2, 4, 8, the
 seconds), say so in the status line ("connection lost, try 3: nothing listens at the
 address"), and continue where they were once the address answers again: open the tunnel
 again in another terminal. A session that has ended in the meantime refuses the token, and
-the client says so and stops. The web interface does the same for its own page.
+the client says so and stops. The web interface does the same for its own page. A client
+of a session on its own machine (`calu attach` without an address) does not wait: when the
+session's process is gone, it ends at once with "the session ended: its process is gone".
 
 `calu web` on your own machine works too, against the server's database through a forwarded
 PostgreSQL port and an `operator` credential (`calu web --database operator` asks for the
 admin password of that database): lists, history, escalations, triage and settings work as
-on the server. The live view of a session needs that session's port forwarded as well; the
-page names the `ssh -L` line to use.
+on the server. The live view of a session needs that session's port forwarded as well, or,
+for a session of `calu serve`, the server's relay port (`ssh -N -L 8811:127.0.0.1:8811
+the-host` covers every session of it; `calu web` mints the server token itself, labelled
+"calu web (live view)"); the page names the `ssh -L` line to use.
 
 ## Client tokens
 
@@ -1051,6 +1093,22 @@ For authors of other clients: the session closes a connection with the WebSocket
 that token is refused), and with 4002 when the client fell more than 1000 events behind
 (connect again and subscribe after the last sequence number received). `calu attach` and
 `calu acp` reconnect by themselves after 4002.
+
+A server token belongs to one `calu serve` and reaches all its sessions through its relay
+port ([From another machine](#from-another-machine)):
+
+```bash
+calu token mint --server --label laptop      # the running server of your user on this machine
+calu token mint --server 453e207c            # a server named by the beginning of its id
+calu token list --server
+calu token revoke --server 2
+```
+
+For authors of other clients: the relay speaks the protocol of `calu protocol` (its `relay`
+part). Its own address (`ws://127.0.0.1:8811/`) answers `initialize` with the server token in
+`token`, `relay.sessions` and `relay.start`; `ws://127.0.0.1:8811/session/<session id>` is
+that session's own protocol, with the server token in `initialize`. It closes a connection with
+4003 when the server token was revoked or its server ended.
 
 ## The web interface
 
@@ -1614,6 +1672,13 @@ all work with it, and each has its own address and its own tokens.
 - **Forgotten sessions.** `calu serve --idle-timeout 120` ends a session that has been idle
   for two hours with no client attached; its conversation stays and `calu start --resume`
   continues it. Without the option a session waits until you shut it down.
+- **One relay port for all its sessions.** The server also listens on `ws://127.0.0.1:8811`
+  (`--relay-port N` for another port, `0` for any free one; when 8811 is taken and no port
+  was named, it takes a free one and prints which; `--no-relay` for none). Through that one
+  port a client reaches every session of the server, with one server token (`calu token
+  mint --server`); see [From another machine](#from-another-machine). The relay binds the
+  loopback interface only, like the sessions, and each session keeps its own port and
+  tokens as well. Sessions of `calu run` have no relay.
 
 ## calu as root, Claude Code as another user
 

@@ -19,6 +19,7 @@ method listed in `fail` is refused with that message, which is how a test sees t
 error handling. `drop` closes the connections with a close code.
 """
 
+import socket
 from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import replace
@@ -198,6 +199,22 @@ class FakeAdmin:
             None with a credential, else `adminaccess.NO_CREDENTIAL`.
         """
         return None if self.credential else NO_CREDENTIAL
+
+    def sessions_problem(self) -> str | None:
+        """Say why the sessions cannot be read or asked for: the same as `problem`.
+
+        Returns:
+            What `problem` returns.
+        """
+        return self.problem()
+
+    def session_host(self) -> str:
+        """Name this machine, whose sessions `/switch` attaches to.
+
+        Returns:
+            The host name.
+        """
+        return socket.gethostname()
 
     def needs_password(self) -> bool:
         """Tell whether a password is asked for.

@@ -33,7 +33,14 @@ Commands typed instead of a message:
     /context              print the conversation as the checkers see it
     /sessions             list the stored sessions of this project
     /history [CLAUDE ID]  the recorded conversation of a session, from the database
+    /running              the sessions of the `calu serve` whose relay this client uses
+    /switch ID            attach to another of them
+    /new [TEXT]           ask that server for a new session here, and attach to it
+    /fork [TEXT]          ask it for a fork of this conversation, and attach to it
     /shutdown             stop the session and end the calu process
+
+The four relay commands work only through a relay of `calu serve` (agent/records/PLAN.md
+D242): the full-screen client offers them with the database too.
 
 The events are rendered by `calu.run.format_event`, so an attached terminal shows the same
 lines as the terminal that started the session.
@@ -51,9 +58,11 @@ from anyio.abc import TaskGroup
 from calu.controls import visible
 from calu.protocol.client import (
     ProtocolClient,
+    RelayTarget,
     RequestFailed,
     connect,
     first_set,
+    relay_call,
     single_error,
 )
 from calu.protocol.messages import EVENTS, EscalationRequest, Event, HonestyInfo
@@ -69,7 +78,8 @@ HELP = (
     "/allow <id> [note]  /deny <id> [note]  /answer <id> <text>  "
     "/inject <text>  /to <agent> <text>  /comment <path> <from> <to> <text>  /state  /context  "
     "/checkers  /sessions  /history [id]  /honesty  /trust [commit-or-branch]  "
-    "/trust-file <path>  /honesty-review  /clear-mark <id>  /shutdown"
+    "/trust-file <path>  /honesty-review  /clear-mark <id>  /running  /switch <id>  "
+    "/new [text]  /fork [text]  /shutdown"
 )
 """One line listing the commands, printed on connect and for an unknown command.
 
@@ -186,7 +196,13 @@ def describe_honesty(info: dict[str, Any]) -> str:
 class Console:
     """Turns the lines a user types into requests to the session."""
 
-    def __init__(self, client: ProtocolClient, workspace: Path | None = None) -> None:
+    def __init__(
+        self,
+        client: ProtocolClient,
+        workspace: Path | None = None,
+        relay: RelayTarget | None = None,
+        current: str | None = None,
+    ) -> None:
         """Create the console for a connected client.
 
         Args:
@@ -194,9 +210,16 @@ class Console:
                 connect again.
             workspace: The session's project directory, which `/comment` reads files from;
                 None refuses `/comment`.
+            relay: The `calu serve` relay the client is attached through, which `/running`,
+                `/switch`, `/new` and `/fork` use; None refuses them.
+            current: The id of the attached session's row, if known.
         """
         self.client = client
         self.workspace = workspace
+        self.relay = relay
+        self.current = current
+        self.switch_to: str | None = None
+        """The session `/switch`, `/new` or `/fork` named; the console quits for it."""
         self.quit = anyio.Event()
         self.background: TaskGroup | None = None
         """Where a request that can take minutes runs (`/honesty-review`), so that further
@@ -398,11 +421,82 @@ class Console:
                         f"{session['started_at']}  {session['first_input']}",
                         flush=True,
                     )
+            case "/running" | "/switch" | "/new" | "/fork":
+                await self._relayed(command, rest)
             case "/shutdown":
                 await self.client.request("shutdown")
                 self.quit.set()
             case _:
                 say(f"[error] unknown command {command}. {HELP}", flush=True)
+
+    async def _relayed(self, command: str, rest: str) -> None:
+        """Handle `/running`, `/switch`, `/new` and `/fork` through the relay (D242).
+
+            /running        ──► one line per session of the server, "*" for this one
+            /switch ID      ──► the one session whose id begins with ID: quit for it
+            /new [TEXT]     ──► the server starts a session in this directory: quit for it
+            /fork [TEXT]    ──► the server starts a fork of this conversation: quit for it
+
+        Args:
+            command: The command.
+            rest: Its argument.
+
+        Raises:
+            RequestFailed: If the session refused `state.get`.
+            ConnectionError: If the connection to the session is gone.
+        """
+        relay = self.relay
+        if relay is None:
+            say(
+                f"[error] {command} works through the relay of `calu serve` (calu attach "
+                "ws://127.0.0.1:<relay port>) or in the full-screen client",
+                flush=True,
+            )
+            return
+        try:
+            if command in ("/running", "/switch"):
+                _hello, listed = await relay_call(relay.address, relay.token, "relay.sessions")
+                sessions = (listed or {}).get("sessions") or []
+                if command == "/running":
+                    for entry in sessions:
+                        mark = "*" if entry["calu_session_id"] == self.current else " "
+                        waiting = entry.get("open_escalations") or 0
+                        say(
+                            f"{mark} {entry['calu_session_id']}  {entry.get('state')}"
+                            + (f" · {waiting} open" if waiting else "")
+                            + f"  {entry.get('directory')}",
+                            flush=True,
+                        )
+                    say(f"[running] {len(sessions)} session(s); /switch <id> attaches", flush=True)
+                    return
+                found = [e for e in sessions if str(e["calu_session_id"]).startswith(rest)]
+                if not rest or len(found) != 1:
+                    say(f"[error] /switch needs the beginning of one id ({len(found)} match)")
+                    return
+                self.switch_to = str(found[0]["calu_session_id"])
+                self.quit.set()
+                return
+            snapshot = await self.client.request("state.get")
+            params: dict[str, Any] = {
+                "kind": "new",
+                "directory": snapshot.get("workspace") or str(self.workspace or ""),
+                "prompt": rest or None,
+                "model": snapshot.get("model"),
+                "project": snapshot.get("project"),
+            }
+            if command == "/fork":
+                if not snapshot.get("claude_session_id"):
+                    say("[error] nothing to fork yet: the session has no Claude session id")
+                    return
+                params.update(kind="fork", claude_session_id=snapshot["claude_session_id"])
+            say("[session] asked calu serve for the session …", flush=True)
+            _hello, started = await relay_call(
+                relay.address, relay.token, "relay.start", params, 150.0
+            )
+            self.switch_to = str((started or {}).get("calu_session_id") or "")
+            self.quit.set()
+        except (OSError, TimeoutError) as exc:
+            say(f"[error] the relay {relay.address} cannot be reached: {exc}", flush=True)
 
     async def _comment(self, rest: str) -> None:
         """Send a comment on a range of lines of a project file.
@@ -491,7 +585,15 @@ class Console:
         )
 
 
-async def attach(address: str, token: str, after_seq: int = 0, show_thinking: bool = False) -> int:
+async def attach(
+    address: str,
+    token: str,
+    after_seq: int = 0,
+    show_thinking: bool = False,
+    relay: RelayTarget | None = None,
+    gone: Callable[[], bool] | None = None,
+    switch_to: list[str] | None = None,
+) -> int:
     """Attach to a running session until the user detaches or the session closes.
 
     Side effects: connects to `address`, prints the state and every event, and reads lines
@@ -505,13 +607,20 @@ async def attach(address: str, token: str, after_seq: int = 0, show_thinking: bo
     between. If the connection breaks (`BROKEN_CODES`: a dropped SSH tunnel, a network that went
     away), the client tries again after 1, 2, 4, 8, then every 15 seconds for `REDIAL_FOR_S`
     seconds, says so on every attempt, and continues after the last event it printed; a
-    session that refuses the token at such an attempt has ended, which ends the client.
+    session that refuses the token at such an attempt has ended, which ends the client. A
+    session whose process is known to be gone (`gone`) ends the client at once.
 
     Args:
         address: The WebSocket address that `calu run` printed.
         token: The client token that `calu run` printed.
         after_seq: Sequence number to continue after (0 shows what the buffer still holds).
         show_thinking: Also print Claude's thinking.
+        relay: The `calu serve` relay the address goes through, for `/running`, `/switch`,
+            `/new` and `/fork`; None for a session's own address.
+        gone: Asked when the connection breaks: True if the session's process is known to
+            be gone (a session of this machine). None tries again for `REDIAL_FOR_S`.
+        switch_to: Gets the id of the session `/switch`, `/new` or `/fork` named appended,
+            when the client ends for it; the caller attaches to that one next.
 
     Returns:
         0 when the user detached, the session closed the connection, or a broken connection
@@ -565,8 +674,12 @@ async def attach(address: str, token: str, after_seq: int = 0, show_thinking: bo
                         if console is None:
                             say(f"[attached] {HELP}", flush=True)
                             directory = snapshot.get("workspace")
+                            current = snapshot.get("calu_session_id")
                             console = Console(
-                                client, Path(directory) if isinstance(directory, str) else None
+                                client,
+                                Path(directory) if isinstance(directory, str) else None,
+                                relay,
+                                current if isinstance(current, str) else None,
                             )
                             console.quit = quit_event
                             console.background = tg
@@ -615,6 +728,10 @@ async def attach(address: str, token: str, after_seq: int = 0, show_thinking: bo
                     break
                 if not broken:
                     continue
+                if gone is not None and gone():
+                    say(f"[detached] {ENDED_GONE}", flush=True)
+                    quit_event.set()
+                    break
                 now = anyio.current_time()
                 broken_since = now if broken_since is None else broken_since
                 if now - broken_since >= REDIAL_FOR_S:
@@ -642,6 +759,8 @@ async def attach(address: str, token: str, after_seq: int = 0, show_thinking: bo
         # (a refused token, an unreachable address), as this function's contract says.
         error = single_error(group)
         raise error from None
+    if console is not None and console.switch_to and switch_to is not None:
+        switch_to.append(console.switch_to)
     return 0
 
 
@@ -664,6 +783,10 @@ REDIAL_DELAYS_S = (1.0, 2.0, 4.0, 8.0, 15.0)
 NO_CLOSE_REASON = "no reason given"
 """What `ProtocolClient.describe_close` says of a connection the session closed without a
 reason."""
+
+ENDED_GONE = "the session ended: its process is gone"
+"""Why a client stops at once when its connection broke and the session's process, on this
+machine, is known to be gone (`attach`, `calu.tui.connection.Link`)."""
 
 BROKEN_CODES = frozenset({None, 1006, 1011})
 """Close codes of a connection that broke rather than being closed by the session: none (no

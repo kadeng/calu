@@ -189,6 +189,9 @@ class TuiOptions:
     """Whether the client reads the attached session's name from the database when it has
     attached, if that needs no password (`CaluApp._read_name`). `calu attach` sets it; tests
     and the demo leave it off, so that they open no database connection."""
+    gone: Callable[[], bool] | None = None
+    """Tells whether the session's process is known to be gone; a broken connection then
+    ends the client at once (`Link`). None keeps trying for a few minutes."""
 
 
 @dataclass
@@ -307,6 +310,7 @@ class CaluApp(App[None]):
             clock,
             self.options.after_seq,
             history=self.options.history,
+            gone=self.options.gone,
         )
         self.actions = Actions(self.link, self.model)
         self.palette: Palette = palette_for({})
@@ -444,7 +448,7 @@ class CaluApp(App[None]):
         admin credential, with one that needs a password, or when the database cannot be
         read, the status line shows no name; `/running` and `/rename` read it later.
         """
-        if self.admin.problem() is not None or self.admin.needs_password():
+        if self.admin.sessions_problem() is not None or self.admin.needs_password():
             return
         try:
             self._take_name(await self.admin.sessions(None))
@@ -959,7 +963,7 @@ class CaluApp(App[None]):
                 hints.append((8, "connecting again by itself for a few minutes; ^d leaves"))
             return hints
         if self.model.connection.status == "detached":
-            if self.admin.problem() is not None:
+            if self.admin.sessions_problem() is not None:
                 # No database here (a client given a session's address): /new and /running
                 # could only say so.
                 return [
@@ -1194,7 +1198,7 @@ class CaluApp(App[None]):
             # Nothing can be sent: the keys that would send are not offered, and the two
             # commands that lead to a session are (they read the database, not the session).
             parts = [part for part in parts if part[1] in {"↑↓", "tab", "esc", "j k", "y", "n"}]
-            if self.admin.problem() is None:
+            if self.admin.sessions_problem() is None:
                 parts += [(9, "/new", "session here"), (9, "/running", "other sessions")]
         elif self.model.working():
             parts += [(7, "esc esc", "interrupt"), (3, "tab", "send mode")]
@@ -2988,7 +2992,7 @@ class CaluApp(App[None]):
             then: Called with the sessions; not called when they cannot be read (the reason
                 is shown).
         """
-        problem = self.admin.problem()
+        problem = self.admin.sessions_problem()
         if problem is not None:
             self.flash(f"not read here; use: calu sessions · {problem}", error=True)
             return
@@ -3047,7 +3051,7 @@ class CaluApp(App[None]):
             body: list[Text] = []
             width = max(40, self.size.width - 4)
             for row in listed:
-                refusal = switch_refusal(row, self.model.calu_session_id)
+                refusal = switch_refusal(row, self.model.calu_session_id, self.admin.session_host())
                 why = f"  (no /switch: {refusal})" if refusal else ""
                 if row.id == self.model.calu_session_id:
                     why = "  (shown here)"
@@ -3157,7 +3161,10 @@ class CaluApp(App[None]):
                     f"0 running sessions start with {wanted}; /running lists them", error=True
                 )
                 return
-            refusals = {row.id: switch_refusal(row, self.model.calu_session_id) for row in found}
+            host = self.admin.session_host()
+            refusals = {
+                row.id: switch_refusal(row, self.model.calu_session_id, host) for row in found
+            }
             usable = [row for row in found if not refusals[row.id]]
             if len(usable) > 1:
                 self.flash(
@@ -3260,7 +3267,7 @@ class CaluApp(App[None]):
                 "rewind": f" --resume {claude_id} --fork-before-turn {before_turn}",
             }[kind]
         )
-        problem = self.admin.problem()
+        problem = self.admin.sessions_problem()
         if problem is not None:
             self.flash(f"not started here; use: {command} · {problem}", error=True)
             return
@@ -4742,23 +4749,25 @@ def _question_index(decision: Decision) -> int:
     return decision.current if decision.is_question else 0
 
 
-def switch_refusal(row: herd.SessionRow, current: str | None) -> str:
+def switch_refusal(row: herd.SessionRow, current: str | None, host: str | None = None) -> str:
     """Say why `/switch` cannot attach to a session, by the rules `calu attach` applies.
 
     `calu attach --session <id>` (`cli._pick_session`) only connects to a session of this
     host that is not stale and publishes an address; the client checks the same before it
-    ends, so that a switch never leaves the user at the shell with an error.
+    ends, so that a switch never leaves the user at the shell with an error. Through a relay
+    the host is the relay's server (`AdminAccess.session_host`).
 
     Args:
         row: The session.
         current: The calu session id of the attached session, or None if unknown.
+        host: The host whose sessions can be switched to; None is this machine.
 
     Returns:
         "" if the client can switch to it; else the reason, e.g. "it runs on host other".
     """
     if current is not None and row.id == current:
         return "it is the session this client shows"
-    if row.hostname != socket.gethostname():
+    if row.hostname != (host or socket.gethostname()):
         return f"it runs on host {row.hostname}"
     if row.stale:
         return f"it has been silent for {row.silent_for_s / 60:.0f} min"

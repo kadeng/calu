@@ -1,0 +1,304 @@
+"""The relay of `calu serve` with a scripted session behind it (agent/records/PLAN.md D242).
+
+No database: the server's token check is a dictionary the tests change, and the server's
+sessions are the `served` session of the protocol tests.
+"""
+
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+
+import anyio
+import pytest
+
+from calu.protocol.client import (
+    RelayTarget,
+    RequestFailed,
+    connect,
+    relay_base,
+    relay_call,
+    relay_session_id,
+)
+from calu.protocol.messages import CLOSE_SERVER_TOKEN_REVOKED, Log, RelayServer, RelayStartParams
+from calu.relay import Hosted, Relay, StartRefused
+from calu.tokens import token_hash
+from tests.unit.test_protocol_server import Events, Served, served
+
+pytestmark = pytest.mark.anyio
+
+SESSION_ID = "5e551011-0000-4000-8000-000000000001"
+TOKEN = "the-server-token"
+
+
+@dataclass
+class FakeServer:
+    """The relay's view of `calu serve`: its sessions and its answer to `relay.start`."""
+
+    running: list[Hosted] = field(default_factory=list)
+    started: list[RelayStartParams] = field(default_factory=list)
+    refuse: str = ""
+
+    def hosted(self) -> list[Hosted]:
+        """Return the sessions."""
+        return list(self.running)
+
+    async def relay_start(self, sha: str, label: str, params: RelayStartParams) -> str:
+        """Record the request and name the first session, or refuse."""
+        assert sha == token_hash(TOKEN) and label == "laptop"
+        if self.refuse:
+            raise StartRefused(self.refuse)
+        self.started.append(params)
+        return self.running[0].calu_session_id
+
+
+@dataclass
+class Relayed:
+    """A relay in front of one scripted session."""
+
+    relay: Relay
+    run: Served
+    server: FakeServer
+    valid: dict[str, str]
+
+    @property
+    def target(self) -> RelayTarget:
+        """The relay as a client names it, with the valid token."""
+        return RelayTarget(self.relay.address, TOKEN)
+
+
+@asynccontextmanager
+async def relayed(tmp_path: Path, insecure: bool = False) -> AsyncGenerator[Relayed]:
+    """Run a scripted session and a relay to it on free ports."""
+    valid = {token_hash(TOKEN): "laptop"}
+
+    async def check(sha: str) -> str | None:
+        return valid.get(sha)
+
+    async with served(tmp_path) as run:
+        fake = FakeServer(
+            [Hosted(SESSION_ID, run.address, run.token, str(tmp_path), datetime.now(UTC))]
+        )
+        relay = Relay(
+            fake,
+            check,
+            RelayServer(server_id="srv", hostname="box", os_user="dev"),
+            insecure=insecure,
+            revalidate_s=0.2,
+        )
+        await relay.open("127.0.0.1", 0)
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(relay.run)
+            try:
+                yield Relayed(relay, run, fake, valid)
+            finally:
+                tg.cancel_scope.cancel()
+
+
+async def test_the_relay_lists_the_servers_sessions(tmp_path: Path) -> None:
+    async with relayed(tmp_path) as it:
+        hello, listed = await relay_call(it.relay.address, TOKEN, "relay.sessions")
+        assert hello["relay"] == {"server_id": "srv", "hostname": "box", "os_user": "dev"}
+        [one] = listed["sessions"]
+        assert one["calu_session_id"] == SESSION_ID
+        assert one["directory"] == str(tmp_path)
+        assert one["state"] in {"idle", "starting", "stopped"}
+
+
+async def test_a_wrong_or_missing_server_token_gets_nowhere(tmp_path: Path) -> None:
+    async with relayed(tmp_path) as it:
+        for token in ("wrong", ""):
+            with pytest.raises(RequestFailed) as refused:
+                await relay_call(it.relay.address, token, "relay.sessions")
+            assert refused.value.code == -32001
+            with pytest.raises(RequestFailed):
+                async with connect(it.target.session_address(SESSION_ID), token, "t", Events()):
+                    pass
+        # The session's own token is not a server token either.
+        with pytest.raises(RequestFailed):
+            await relay_call(it.relay.address, it.run.token, "relay.sessions")
+
+
+async def test_a_client_attaches_to_a_session_through_the_relay(tmp_path: Path) -> None:
+    async with relayed(tmp_path) as it:
+        events = Events()
+        address = it.target.session_address(SESSION_ID)
+        async with connect(address, TOKEN, "calu attach", events) as client:
+            assert client.initialize["workspace"] == str(tmp_path)
+            state = await client.request("state.get")
+            assert state["workspace"] == str(tmp_path)
+            await it.run.server.bus.publish(Log(level="info", message="through the relay"))
+            logs = await events.wait_for("log")
+            assert any(params["message"] == "through the relay" for params in logs)
+            # The session sees the relay's connection under the client's name and the label
+            # of its server token, authenticated with the session's own token.
+            names = {c.name for c in it.run.server._clients}
+            assert "calu attach via relay (laptop)" in names
+
+
+async def test_a_session_that_does_not_run_is_refused(tmp_path: Path) -> None:
+    async with relayed(tmp_path) as it:
+        with pytest.raises(RequestFailed) as refused:
+            async with connect(it.target.session_address("0000dead"), TOKEN, "t", Events()):
+                pass
+        assert "no session 0000dead runs on this server" in str(refused.value)
+
+
+async def test_a_revoked_server_token_closes_the_connection(tmp_path: Path) -> None:
+    async with relayed(tmp_path) as it:
+        events = Events()
+        async with connect(it.target.session_address(SESSION_ID), TOKEN, "t", events) as client:
+            await client.request("state.get")
+            it.valid.clear()
+            with pytest.raises((RequestFailed, ConnectionError)):
+                await client.request("chat.send", {"text": "after the revocation"})
+            with anyio.fail_after(5):
+                await client.closed.wait()
+            assert client.close_code == CLOSE_SERVER_TOKEN_REVOKED
+        # Revoked stays revoked, also while the database would say nothing.
+        with pytest.raises(RequestFailed):
+            await relay_call(it.relay.address, TOKEN, "relay.sessions")
+
+
+async def test_the_sweep_closes_an_idle_connection_of_a_revoked_token(tmp_path: Path) -> None:
+    async with relayed(tmp_path) as it:
+        async with connect(it.target.session_address(SESSION_ID), TOKEN, "t", Events()) as client:
+            it.valid.clear()
+            with anyio.fail_after(5):
+                await client.closed.wait()
+            assert client.close_code == CLOSE_SERVER_TOKEN_REVOKED
+
+
+async def test_the_session_closing_the_connection_reaches_the_client(tmp_path: Path) -> None:
+    async with relayed(tmp_path) as it:
+        async with connect(it.target.session_address(SESSION_ID), TOKEN, "t", Events()) as client:
+            await client.request("shutdown")
+            with anyio.fail_after(5):
+                await client.closed.wait()
+            assert client.close_code not in (None, 1006)
+
+
+async def test_relay_start_asks_the_server_and_names_the_session(tmp_path: Path) -> None:
+    async with relayed(tmp_path) as it:
+        params = {"kind": "fork", "directory": "/srv/project", "claude_session_id": "abc"}
+        _hello, result = await relay_call(it.relay.address, TOKEN, "relay.start", params)
+        assert result == {"calu_session_id": SESSION_ID}
+        assert it.server.started[0].directory == "/srv/project"
+        it.server.refuse = "/nowhere is not a directory on box"
+        with pytest.raises(RequestFailed) as refused:
+            await relay_call(it.relay.address, TOKEN, "relay.start", {"directory": "/nowhere"})
+        assert "/nowhere is not a directory on box" in str(refused.value)
+
+
+async def test_insecure_lets_loopback_attach_without_a_token_but_not_ask_for_sessions(
+    tmp_path: Path,
+) -> None:
+    async with relayed(tmp_path, insecure=True) as it:
+        async with connect(it.target.session_address(SESSION_ID), "", "t", Events()) as client:
+            await client.request("state.get")
+        with pytest.raises(RequestFailed) as refused:
+            await relay_call(it.relay.address, "", "relay.start", {"directory": str(tmp_path)})
+        assert "needs a server token" in str(refused.value)
+        assert it.server.started == []
+
+
+async def test_an_unknown_path_is_closed(tmp_path: Path) -> None:
+    async with relayed(tmp_path) as it:
+        with pytest.raises((RequestFailed, ConnectionError, OSError)):
+            async with connect(it.relay.address + "/other", TOKEN, "t", Events()):
+                pass
+
+
+def test_relay_addresses() -> None:
+    assert relay_base("ws://127.0.0.1:8811/session/abc") == "ws://127.0.0.1:8811"
+    assert relay_base("ws://127.0.0.1:8811/") == "ws://127.0.0.1:8811"
+    assert relay_session_id("ws://127.0.0.1:8811/session/abc") == "abc"
+    assert relay_session_id("ws://127.0.0.1:8811") is None
+    target = RelayTarget("ws://127.0.0.1:8811/", "t")
+    assert target.session_address("abc") == "ws://127.0.0.1:8811/session/abc"
+
+
+async def test_the_full_screen_clients_relay_access_lists_and_starts(tmp_path: Path) -> None:
+    """`/running`, `/switch`, `/new` and `/fork` of the full-screen client through the relay."""
+    from calu.session_requests import SessionRequest
+    from calu.tui.adminaccess import AdminFailed, RelayAdmin
+    from calu.tui.app import switch_refusal
+
+    async with relayed(tmp_path) as it:
+        admin = RelayAdmin(RelayTarget(it.relay.address, TOKEN, "box", "dev"), "")
+        assert admin.sessions_problem() is None and admin.problem() is not None
+        assert not admin.needs_password() and admin.session_host() == "box"
+        [row] = await admin.sessions(None)
+        assert row.id == SESSION_ID and row.hostname == "box"
+        assert row.address.endswith(f"/session/{SESSION_ID}")
+        # Through the relay the server's host counts, not this machine's.
+        assert switch_refusal(row, None, admin.session_host()) == ""
+        wanted = SessionRequest(hostname="here", os_user="me", directory="/srv/p", kind="new")
+        assert await admin.request_session(wanted, None) == SESSION_ID
+        assert it.server.started[-1].directory == "/srv/p"
+        it.server.refuse = "this server already runs 10 sessions"
+        with pytest.raises(AdminFailed, match="already runs 10 sessions"):
+            await admin.request_session(wanted, None)
+        with pytest.raises(AdminFailed):
+            await admin.save_instructions("command", "text", None)
+        bad = RelayAdmin(RelayTarget(it.relay.address, "wrong", "box", "dev"), "")
+        with pytest.raises(AdminFailed, match="invalid server token"):
+            await bad.sessions(None)
+
+
+def _listing(*ids: str) -> dict:
+    """A `relay.sessions` result with one idle session per id."""
+    return {
+        "sessions": [
+            {"calu_session_id": one, "directory": f"/srv/{one}", "state": "idle"} for one in ids
+        ]
+    }
+
+
+def test_calu_attach_on_a_relay_picks_the_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    from calu import cli
+
+    answers = {"listed": _listing("aaaa1111", "bbbb2222")}
+
+    async def relay_call(address, token, method, params=None, timeout_s=15.0):
+        assert method == "relay.sessions"
+        return {}, answers["listed"]
+
+    monkeypatch.setattr(cli, "relay_call", relay_call)
+    hello = {"relay": {"server_id": "s", "hostname": "box", "os_user": "dev"}}
+    tried = cli.Endpoint("ws://127.0.0.1:8811", "tok")
+    chosen = cli._through_relay(tried, hello, "bbbb")
+    assert chosen.address == "ws://127.0.0.1:8811/session/bbbb2222"
+    assert chosen.relay is not None and chosen.relay.hostname == "box"
+    assert chosen.token == "tok" and chosen.session_id == "bbbb2222"
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+    with pytest.raises(cli.CliError, match="name one with --session"):
+        cli._through_relay(tried, hello, None)
+    with pytest.raises(cli.CliError, match="no session of dev@box start with 'cccc'"):
+        cli._through_relay(tried, hello, "cccc")
+    answers["listed"] = _listing("aaaa1111")
+    assert cli._through_relay(tried, hello, None).session_id == "aaaa1111"
+    answers["listed"] = _listing()
+    with pytest.raises(cli.CliError, match=r"--relay ws://127\.0\.0\.1:8811"):
+        cli._through_relay(tried, hello, None)
+    # After the client: the command that attaches to the same session again.
+    assert cli._again(chosen, True) == (
+        "calu attach ws://127.0.0.1:8811 --session bbbb2222 --token=<the same token>"
+    )
+    following = cli._following(None, chosen, "aaaa1111")  # type: ignore[arg-type]
+    assert following.address == "ws://127.0.0.1:8811/session/aaaa1111"
+    assert following.relay == chosen.relay
+
+
+def test_calu_serve_takes_the_relay_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    from calu import cli
+
+    parser = cli.build_parser()
+    assert parser.parse_args(["serve"]).relay_port is None
+    assert parser.parse_args(["serve", "--relay-port", "0"]).relay_port == 0
+    assert parser.parse_args(["serve", "--no-relay"]).no_relay
+    with pytest.raises(SystemExit):
+        parser.parse_args(["serve", "--no-relay", "--relay-port", "9"])
+    args = parser.parse_args(["token", "mint", "--server", "--label", "laptop"])
+    assert args.server and args.label == "laptop"

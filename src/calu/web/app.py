@@ -68,9 +68,10 @@ from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from calu import __version__, admin, asuser, herd, localsocket, session_requests
+from calu import __version__, admin, asuser, herd, localsocket, servers, session_requests
 from calu.db import Db
 from calu.protocol.client import RequestFailed, connect
+from calu.protocol.messages import RELAY_SESSION_PATH
 from calu.setup import ADMIN_ROLE
 from calu.web import git
 from calu.web import settings as web_settings
@@ -1018,6 +1019,9 @@ class _State:
         it. A refusal is not an error for the reader: `live_socket` then drops the cached
         token, mints a fresh one and connects again (D110).
         """
+        self.relay_tokens: dict[str, str] = {}
+        """Server id -> the server token this server uses for the live view through that
+        server's relay (D242), minted once per run as `live_tokens` are."""
 
 
 Page = Callable[[Request, _State], Awaitable[Response]]
@@ -1593,8 +1597,81 @@ async def _live(websocket: WebSocket, state: _State, session_id: str) -> None:
                 }
             )
         except (OSError, ConnectionError) as exc:
-            await websocket.send_json({"type": "closed", "message": _unreachable_message(row, exc)})
+            if not await _through_server_relay(websocket, state, row):
+                await websocket.send_json(
+                    {"type": "closed", "message": _unreachable_message(row, exc)}
+                )
         break
+
+
+async def _server_of(state: _State, row: herd.SessionRow) -> servers.ServerRow | None:
+    """Find the running `calu serve` a session belongs to, if it has a relay (D242).
+
+    Args:
+        state: The shared state.
+        row: The session; its host, user and pid name the server.
+
+    Returns:
+        The server's row, or None if the session runs in no recorded server with a relay, or
+        the database has no `servers` table yet.
+
+    Raises:
+        psycopg.OperationalError: If the database cannot be reached.
+    """
+    try:
+        rows = await servers.running(state.db, row.hostname, row.os_user)
+    except psycopg.errors.UndefinedTable:
+        return None
+    for server in rows:
+        if server.pid == row.pid and server.relay_address.startswith("ws://"):
+            return server
+    return None
+
+
+async def _through_server_relay(websocket: WebSocket, state: _State, row: herd.SessionRow) -> bool:
+    """Show a session whose own port cannot be reached through its server's relay, if it has one.
+
+    A `calu web` on another machine then needs one SSH forward of the relay port for every
+    session of that server, instead of one per session. The server token is minted with this
+    server's database login (`servers.mint`) and kept for the run (`_State.relay_tokens`).
+
+    Side effects: may mint a server token; relays like `_relay` while connected.
+
+    Args:
+        websocket: The browser's connection.
+        state: The shared state.
+        row: The session.
+
+    Returns:
+        True if the relay was reached (the live view ran, or the relay said why not, which the
+        browser was told); False if there is no relay or it cannot be reached either.
+
+    Raises:
+        psycopg.OperationalError: If the database cannot be reached.
+    """
+    if row.ended_at is not None:
+        return False
+    server = await _server_of(state, row)
+    if server is None:
+        return False
+    token = state.relay_tokens.get(server.id)
+    if token is None:
+        try:
+            _id, token = await servers.mint(state.db, server.id, "calu web (live view)")
+        except ValueError, psycopg.errors.InsufficientPrivilege:
+            return False
+        state.relay_tokens[server.id] = token
+    address = f"{server.relay_address}{RELAY_SESSION_PATH}{row.id}"
+    try:
+        await _relay(websocket, row, token, address=address)
+    except RequestFailed as exc:
+        state.relay_tokens.pop(server.id, None)
+        await websocket.send_json(
+            {"type": "closed", "message": f"the relay of the session's server refused: {exc}"}
+        )
+    except OSError, ConnectionError:
+        return False
+    return True
 
 
 def _unreachable_message(row: herd.SessionRow, exc: Exception) -> str:
@@ -1623,9 +1700,10 @@ def _unreachable_message(row: herd.SessionRow, exc: Exception) -> str:
         return (
             f"the session runs on {row.hostname}, not on this machine, and listens there at "
             f"{row.address}. Forward that port and try again: `ssh -N -L "
-            f"{port}:127.0.0.1:{port} {row.hostname}`, or open the `calu web` of "
-            f"{row.hostname} through a tunnel. Its decisions can be made here without that, "
-            "on the Escalations page."
+            f"{port}:127.0.0.1:{port} {row.hostname}`; for a session of `calu serve`, one "
+            "forward of its relay port (8811 unless it said otherwise) covers all its "
+            f"sessions. Or open the `calu web` of {row.hostname} through a tunnel. Its "
+            "decisions can be made here without that, on the Escalations page."
         )
     return (
         f"cannot reach {row.address}: {exc}. The session runs on {row.hostname}: if that is "

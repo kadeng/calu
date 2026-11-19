@@ -683,6 +683,98 @@ REQUESTS: dict[str, type[BaseModel]] = {
 """Request method -> model of its params. `shutdown` ends the calu process, so only a client
 that may steer the session may send it (every client with a token may)."""
 
+# ------------------------------------------------------------- the relay of `calu serve` (D242)
+
+CLOSE_SERVER_TOKEN_REVOKED = 4003
+"""WebSocket close code of the relay: the client's server token was revoked, or its server
+ended. Connecting again with it is refused."""
+
+RELAY_PORT = 8811
+"""The relay's port when `calu serve` is given none: fixed, so that an SSH forward written once
+keeps working after the server restarts. If it is taken, the server takes a free port and says
+which."""
+
+RELAY_SESSION_PATH = "/session/"
+"""Path prefix on a relay address that names one session: `ws://127.0.0.1:8811/session/<id>`
+speaks the session protocol above, with the server token in `initialize`. The bare relay
+address (path `/`) speaks `RELAY_REQUESTS`."""
+
+
+class RelayServer(BaseModel):
+    """Which `calu serve` a relay belongs to."""
+
+    server_id: str | None = None
+    """Id of the server's `servers` row; None if the server could not record itself."""
+    hostname: str
+    os_user: str
+
+
+class RelayInitializeResult(BaseModel):
+    """Result of `initialize` on a relay's own address (path `/`).
+
+    A client tells a relay from a session by the `relay` key (a session answers with an
+    `InitializeResult`, which has `workspace` instead).
+    """
+
+    protocol_version: int = PROTOCOL_VERSION
+    core_version: str
+    relay: RelayServer
+
+
+class RelaySession(BaseModel):
+    """One session of a relay's server, as `relay.sessions` lists it."""
+
+    calu_session_id: str
+    """Id of the session's `sessions` row; the relay address of the session is the relay's
+    address followed by `RELAY_SESSION_PATH` and this id."""
+    directory: str
+    state: str
+    """The session's state (`State`), or "unknown" if it did not answer in time."""
+    claude_session_id: str | None = None
+    model: str | None = None
+    open_escalations: int = 0
+    started_at: datetime
+
+
+class RelaySessionsResult(BaseModel):
+    """Result of `relay.sessions`: the server's running sessions, newest first."""
+
+    sessions: list[RelaySession]
+
+
+class RelayStartParams(BaseModel):
+    """Ask the relay's server for a session (`relay.start`), as `calu start` asks (D208).
+
+    `kind` "new" needs no `claude_session_id`; "resume" continues it (with `fork_before_turn`:
+    a branch before that turn); "fork" continues a copy of it. `directory` is a directory on
+    the server's machine. The result is a `RelayStartResult` once the session can be attached
+    to; a refusal or failure of the server is an error (-32000) with its reason.
+    """
+
+    kind: Literal["new", "resume", "fork"] = "new"
+    directory: str = Field(min_length=1, max_length=4096)
+    claude_session_id: str | None = Field(default=None, max_length=100)
+    fork_before_turn: int | None = Field(default=None, ge=2)
+    prompt: str | None = Field(default=None, max_length=100_000)
+    model: str | None = Field(default=None, min_length=1, max_length=100)
+    effort: Literal["low", "medium", "high", "xhigh", "max", "default"] | None = None
+    project: str | None = Field(default=None, max_length=200)
+
+
+class RelayStartResult(BaseModel):
+    """Result of `relay.start`: the started session."""
+
+    calu_session_id: str
+
+
+RELAY_REQUESTS: dict[str, type[BaseModel]] = {
+    "initialize": InitializeParams,
+    "relay.sessions": EmptyParams,
+    "relay.start": RelayStartParams,
+}
+"""Request method -> params of the relay's own address. `initialize` carries the server token
+(`calu token mint --server`) in `token`."""
+
 # ---------------------------------------------------------------------------- events (core -> FE)
 
 

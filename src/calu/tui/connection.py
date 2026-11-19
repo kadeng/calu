@@ -14,7 +14,8 @@ closes the connection because this client fell behind, it connects again after t
 it applied, at most `calu.attach.MAX_RECONNECTS` times in a row without an event in between;
 when the connection breaks (no close frame, a keepalive without answer: a dropped SSH tunnel,
 a network that went away), it tries again after 1, 2, 4, 8, then every 15 seconds, for
-`REDIAL_FOR_S` seconds, and continues after the last event it applied;
+`REDIAL_FOR_S` seconds, and continues after the last event it applied (a session of this
+machine whose process is known to be gone ends the link at once instead, `gone`);
 when the session can no longer replay the missed events, it forgets the session data, loads
 the stored history again, applies the events it did get and takes the rest from a snapshot.
 
@@ -32,6 +33,7 @@ import anyio
 
 from calu.attach import (
     BROKEN_CODES,
+    ENDED_GONE,
     MAX_RECONNECTS,
     REDIAL_DELAYS_S,
     REDIAL_FOR_S,
@@ -158,6 +160,7 @@ class Link:
         clock: Callable[[], float],
         after_seq: int = 0,
         history: bool = True,
+        gone: Callable[[], bool] | None = None,
     ) -> None:
         """Create the link; `run` starts it.
 
@@ -171,8 +174,13 @@ class Link:
             history: Whether the stored history of the session is loaded above the replayed
                 events on the first attach (not with an `after_seq` above 0) and after a
                 rebuild.
+            gone: Tells whether the session's process is known to be gone (a session of this
+                machine); asked when the connection breaks, and a yes ends the link at once
+                with "the session ended". None (an address of another machine) tries again
+                for `REDIAL_FOR_S` seconds.
         """
         self.connector = connector
+        self.gone = gone
         self.model = model
         self.history = history
         model.clock = clock
@@ -442,6 +450,10 @@ class Link:
                 reconnects += 1
                 self.notify(self.model.set_connection("reconnecting", reconnects, MAX_RECONNECTS))
                 continue
+            if broken and self.gone is not None and self.gone():
+                # A session of this machine whose process is gone does not come back: waiting
+                # five minutes for it would only look like a network problem (D242 (8)).
+                broken, reason = False, ENDED_GONE
             if reason == NO_REASON:
                 reason = "the connection broke" if broken else "the session ended"
             if broken:

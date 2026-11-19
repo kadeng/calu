@@ -22,9 +22,11 @@ A save names the version the editor was opened on (`base_version`): if the store
 has another version by then, somebody changed it meanwhile and the save is refused.
 """
 
+import socket
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Protocol
+from datetime import datetime
+from typing import Any, NoReturn, Protocol
 
 import anyio
 import psycopg
@@ -34,6 +36,7 @@ from calu.credentials import CredentialError, CredentialStore, WrongPassword, wi
 from calu.db.connection import Db
 from calu.db.connection import open_stored as connect
 from calu.db.target import PasswordAuth, Target
+from calu.protocol.client import RelayTarget, RequestFailed, relay_call
 from calu.session_requests import SessionRequest
 
 CREDENTIAL = "admin"
@@ -94,6 +97,26 @@ class AdminAccess(Protocol):
 
         Returns:
             None if the credential is there, else the sentence to show.
+        """
+        ...
+
+    def sessions_problem(self) -> str | None:
+        """Say why the running sessions can be neither listed nor asked for from here.
+
+        `/running`, `/switch`, `/new`, `/fork` and `/rewind` depend on this, not on
+        `problem`: through a relay (`RelayAdmin`) they work although settings cannot be
+        changed.
+
+        Returns:
+            None if `sessions` and `request_session` can work, else the sentence to show.
+        """
+        ...
+
+    def session_host(self) -> str:
+        """Name the host whose sessions `/switch` can attach to.
+
+        Returns:
+            This machine's name, or the relay's server for `RelayAdmin`.
         """
         ...
 
@@ -312,6 +335,22 @@ class StoreAdmin:
             return None if CREDENTIAL in self.store else NO_CREDENTIAL
         except CredentialError as error:
             return f"the credential store cannot be read: {error}"
+
+    def sessions_problem(self) -> str | None:
+        """Say why the sessions cannot be read or asked for: the same as `problem`.
+
+        Returns:
+            What `problem` returns.
+        """
+        return self.problem()
+
+    def session_host(self) -> str:
+        """Name this machine, whose sessions `/switch` attaches to.
+
+        Returns:
+            The host name.
+        """
+        return socket.gethostname()
 
     def needs_password(self) -> bool:
         """Tell whether the `admin` credential is protected by a password.
@@ -621,3 +660,194 @@ class StoreAdmin:
             return SavedMode(mode, f"project {scope}" if scope else "global")
 
         return await self._with_db(password, work)
+
+
+RELAY_START_TIMEOUT_S = 150.0
+"""How long `RelayAdmin.request_session` waits for the relay's answer: a little longer than
+the server waits for the session (`calu.serve.RELAY_START_WAIT_S`)."""
+
+
+class RelayAdmin:
+    """The client's database access when it is attached through a `calu serve` relay (D242).
+
+    The relay answers for the server's sessions: `sessions` lists them and `request_session`
+    asks the server for one (`relay.start`), both with the server token. Settings changes
+    (checker instructions, `honesty.mode`, a session's name) need the database and are
+    refused with `unavailable`, which `problem` returns.
+    """
+
+    def __init__(self, relay: RelayTarget, unavailable: str) -> None:
+        """Create the access.
+
+        Args:
+            relay: The relay, with the server token.
+            unavailable: The sentence `problem` returns: why settings cannot be changed here.
+        """
+        self.relay = relay
+        self.unavailable = unavailable or "settings are changed on the server's machine"
+
+    def problem(self) -> str | None:
+        """Say why nothing can be changed from this client.
+
+        Returns:
+            Always the sentence given at creation.
+        """
+        return self.unavailable
+
+    def sessions_problem(self) -> str | None:
+        """Say why the sessions cannot be read or asked for: never through a relay.
+
+        Returns:
+            None.
+        """
+        return None
+
+    def session_host(self) -> str:
+        """Name the relay's server host.
+
+        Returns:
+            The host the relay named, or this machine's name if it named none.
+        """
+        return self.relay.hostname or socket.gethostname()
+
+    def needs_password(self) -> bool:
+        """Tell whether a password is asked for: never, the server token is the access.
+
+        Returns:
+            False.
+        """
+        return False
+
+    async def _call(self, method: str, params: dict[str, Any], timeout_s: float) -> Any:
+        """Send one request to the relay.
+
+        Args:
+            method: The relay request.
+            params: Its params.
+            timeout_s: How long the exchange may take.
+
+        Returns:
+            The result.
+
+        Raises:
+            AdminFailed: If the relay cannot be reached, refuses, or does not answer in time.
+        """
+        try:
+            _hello, result = await relay_call(
+                self.relay.address, self.relay.token, method, params, timeout_s
+            )
+        except RequestFailed as error:
+            raise AdminFailed(str(error.error.get("message") or error)) from error
+        except (OSError, ConnectionError) as error:
+            raise AdminFailed(
+                f"the relay {self.relay.address} cannot be reached: {error}"
+            ) from error
+        return result
+
+    async def sessions(self, password: str | None) -> list[herd.SessionRow]:
+        """List the sessions of the relay's server, newest first.
+
+        Args:
+            password: Ignored; the server token is the access.
+
+        Returns:
+            One row per session, with the relay's address of it as `address`.
+
+        Raises:
+            AdminFailed: If the relay cannot be asked.
+        """
+        result = await self._call("relay.sessions", {}, 15.0)
+        rows = []
+        for entry in (result or {}).get("sessions") or []:
+            started = datetime.fromisoformat(str(entry["started_at"]))
+            session_id = str(entry["calu_session_id"])
+            rows.append(
+                herd.SessionRow(
+                    id=session_id,
+                    hostname=self.session_host(),
+                    os_user=self.relay.os_user,
+                    directory=str(entry.get("directory") or ""),
+                    state=str(entry.get("state") or "unknown"),
+                    state_since=started,
+                    started_at=started,
+                    ended_at=None,
+                    claude_session_id=entry.get("claude_session_id"),
+                    open_escalations=int(entry.get("open_escalations") or 0),
+                    address=self.relay.session_address(session_id),
+                )
+            )
+        return rows
+
+    async def rename_session(self, session_id: str, name: str, password: str | None) -> NoReturn:
+        """Refuse: a name is stored in the database.
+
+        Args:
+            session_id: Ignored.
+            name: Ignored.
+            password: Ignored.
+
+        Raises:
+            AdminFailed: Always, with `unavailable`.
+        """
+        raise AdminFailed(self.unavailable)
+
+    async def request_session(self, wanted: SessionRequest, password: str | None) -> str:
+        """Ask the relay's server for a session and wait until it runs (`relay.start`).
+
+        Side effect: the server files a `session_requests` row through the server token and
+        starts the session.
+
+        Args:
+            wanted: The session; its host and user are the server's own, whatever it says.
+            password: Ignored.
+
+        Returns:
+            The id of the started session's row.
+
+        Raises:
+            AdminFailed: If the server refused or failed to start it (the message is its
+                reason), or the relay cannot be asked.
+        """
+        params = {
+            "kind": wanted.kind,
+            "directory": wanted.directory,
+            "claude_session_id": wanted.claude_session_id,
+            "fork_before_turn": wanted.fork_before_turn,
+            "prompt": wanted.prompt,
+            "model": wanted.model,
+            "effort": wanted.effort,
+            "project": wanted.project,
+        }
+        result = await self._call("relay.start", params, RELAY_START_TIMEOUT_S)
+        return str((result or {}).get("calu_session_id") or "")
+
+    async def save_instructions(
+        self, name: str, text: str, password: str | None, base_version: int | None = None
+    ) -> NoReturn:
+        """Refuse: checker instructions are stored in the database.
+
+        Args:
+            name: Ignored.
+            text: Ignored.
+            password: Ignored.
+            base_version: Ignored.
+
+        Raises:
+            AdminFailed: Always, with `unavailable`.
+        """
+        raise AdminFailed(self.unavailable)
+
+    async def set_honesty_mode(
+        self, mode: str, project: str | None, password: str | None
+    ) -> NoReturn:
+        """Refuse: `honesty.mode` is stored in the database.
+
+        Args:
+            mode: Ignored.
+            project: Ignored.
+            password: Ignored.
+
+        Raises:
+            AdminFailed: Always, with `unavailable`.
+        """
+        raise AdminFailed(self.unavailable)

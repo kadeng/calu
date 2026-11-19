@@ -8,7 +8,7 @@ import importlib.metadata
 import importlib.util
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from calu.db.target import Target
 
 if TYPE_CHECKING:
+    from calu.protocol.client import RelayTarget
     from calu.tui.app import TuiOptions
 
 NOT_INSTALLED = (
@@ -187,6 +188,8 @@ def run_tui(
     show_thinking: bool = True,
     database: Target | None = None,
     admin_problem: str | None = None,
+    relay: RelayTarget | None = None,
+    gone: Callable[[], bool] | None = None,
 ) -> TuiExit:
     """Run the full-screen client until the user detaches or the session closes the connection.
 
@@ -205,6 +208,12 @@ def run_tui(
         admin_problem: Why nothing can be changed from this client, when there is no
             `database` and this machine's `admin` credential is not the session's (D228);
             None otherwise.
+        relay: The `calu serve` relay the address goes through (D242): `/running`,
+            `/switch`, `/new`, `/fork` and `/rewind` then ask the relay instead of the
+            database. None for a session's own address.
+        gone: Tells whether the session's process is known to be gone; the client then ends
+            at once when its connection breaks (`calu.tui.connection.Link`). None tries
+            again for `calu.attach.REDIAL_FOR_S` seconds.
 
     Returns:
         What the client knew when it ended.
@@ -221,13 +230,13 @@ def run_tui(
     options.after_seq = after_seq
     options.show_thinking = options.show_thinking and show_thinking
     options.read_name = True
-    from calu.tui.adminaccess import StoreAdmin
+    options.gone = gone
+    from calu.tui.adminaccess import AdminAccess, RelayAdmin, StoreAdmin
 
-    app = CaluApp(
-        protocol_connector(address, token),
-        options,
-        admin=StoreAdmin(database=database, unavailable=admin_problem),
-    )
+    admin: AdminAccess = StoreAdmin(database=database, unavailable=admin_problem)
+    if relay is not None:
+        admin = RelayAdmin(relay, admin_problem or "")
+    app = CaluApp(protocol_connector(address, token), options, admin=admin)
     app.run()
     if app.link.error is not None:
         raise app.link.error

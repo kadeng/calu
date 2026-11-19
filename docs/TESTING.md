@@ -746,6 +746,16 @@ escalation resolved from the database alone.
    `sudo calu setup` must not, and after `sudo calu setup --no-password` must (the place file
    then publishes the password of `calu_admin`); `calu doctor --db` must show a `sandbox` note or an ok line accordingly. With the
    sandbox off and `bwrap` taken off `PATH`, a session must start. Not run yet.
+38. The relay of `calu serve` from another machine (PLAN D242; the record is
+   `agent/records/notes/test-plan.md` I17-I30). On the server: `calu serve` prints the relay
+   line, two sessions from `calu start --no-attach`, then `calu token mint --server`. On the
+   laptop: the printed `ssh -N -L 8811:127.0.0.1:8811 <host>`, then `calu attach
+   ws://127.0.0.1:8811 --token=<token>` must list both sessions and ask which; in the
+   full-screen client `/running` must list the server's sessions, `/switch`, `/new` and `/fork`
+   must change to the named or new session; killing the forward and opening it again must
+   reattach; `calu token revoke --server <id>` on the server must detach the client within 15
+   seconds. On the server, `calu attach` in a project and then `kill -9` of `calu serve` must
+   end the client at once with "the session ended: its process is gone".
 
 ## Measuring the checkers
 

@@ -168,3 +168,61 @@ def test_every_session_of_the_server_gets_the_login_protection(tmp_path: Path) -
         hostname="h", os_user="u", directory=str(tmp_path), id=7, state="claimed"
     )
     assert server._options(request).login_protection is protection
+
+
+async def test_a_started_session_is_reachable_through_the_relay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`_host` keeps the session's own token for the relay and forgets it at the end (D242)."""
+    server, request = _server_and_request(tmp_path)
+    monkeypatch.setattr(session_requests, "finish", Recorder(True).finish)
+    seen: list[list[str]] = []
+
+    async def run_from(*_args: Any, on_serving: Any, on_ready: Any, **_kwargs: Any) -> None:
+        await on_serving("ws://127.0.0.1:9", "own-token")
+        await on_ready("s-1", "ws://127.0.0.1:9")
+        seen.append([one.token for one in server.hosted()])
+        await anyio.sleep_forever()
+
+    monkeypatch.setattr(serve, "run_from", run_from)
+    with anyio.move_on_after(0.3):
+        await server._host(None, request)  # type: ignore[arg-type]
+    assert seen == [["own-token"]]
+    assert server.hosted() == []
+
+
+async def test_relay_start_files_through_the_token_and_waits_for_the_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from calu import servers
+    from calu.protocol.messages import RelayStartParams
+    from calu.relay import StartRefused
+
+    server = Server(source=None, hidden=set(), hostname="h", user="u")  # type: ignore[arg-type]
+    server._db = object()  # type: ignore[assignment]
+    server.server_id = "srv"
+    filed: list[SessionRequest] = []
+
+    async def file_request(_db: Any, server_id: str, sha: str, wanted: SessionRequest) -> int:
+        assert (server_id, sha) == ("srv", "sha")
+        filed.append(wanted)
+        return 40 + len(filed)
+
+    monkeypatch.setattr(servers, "file_request", file_request)
+    async with anyio.create_task_group() as tg:
+
+        async def finish_later(request_id: int, session_id: str | None, message: str) -> None:
+            await anyio.sleep(0.05)
+            server._record_outcome(request_id, session_id, message)
+
+        tg.start_soon(finish_later, 41, "s-1", "")
+        started = await server.relay_start("sha", "laptop", RelayStartParams(directory="/p"))
+        assert started == "s-1"
+        tg.start_soon(finish_later, 42, None, "/q is not a directory on h")
+        with pytest.raises(StartRefused, match="/q is not a directory"):
+            await server.relay_start("sha", "", RelayStartParams(directory="/q"))
+    # The request names the server's own host and user, and says it came through the relay.
+    assert [(w.hostname, w.os_user, w.label) for w in filed] == [
+        ("h", "u", "relay: laptop"),
+        ("h", "u", "relay"),
+    ]

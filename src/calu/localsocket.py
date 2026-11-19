@@ -260,6 +260,23 @@ def peer_uid(connection: socket.socket) -> int | None:
     return struct.unpack("3i", raw)[1]
 
 
+def peer_pid(connection: socket.socket) -> int | None:
+    """Ask the kernel which process is at the other end of a Unix socket connection (Linux).
+
+    Args:
+        connection: A connected Unix socket.
+
+    Returns:
+        The peer's pid as this process's pid namespace sees it, or None if the kernel does not
+        say or the peer is not visible here (0).
+    """
+    try:
+        raw = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+    except OSError, AttributeError:
+        return None
+    return struct.unpack("3i", raw)[0] or None
+
+
 MAX_SOCKET_PATH = 100
 """Bytes a Unix socket path may have. The kernel's limit is 108 including the terminating zero
 (`sun_path`), and a few bytes of margin keep the message friendlier than `AF_UNIX path too

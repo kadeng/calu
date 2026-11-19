@@ -82,6 +82,10 @@ Decided (do not ask again):
   covers every session and `/new`, `/fork`, `/switch` work from a laptop.
 - **Reconnect:** keep 5 minutes for remote addresses; a local session whose process is gone
   ends the client at once.
+  Both built (PLAN D242, test plan I17-I30, not pushed): `calu serve` listens on one relay
+  port (default 8811) for all its sessions with a server token (`calu token mint --server`,
+  migration 0038); `calu attach ws://127.0.0.1:8811` follows `/new`, `/fork`, `/switch`;
+  `calu start --relay`; `calu web` falls back to the relay for the live view.
 - **Tokens:** `calu start --no-attach`'s token stays valid until the session ends (keep).
 - **PyCharm:** placeholder in the message field when nothing is attached and the setup cards
   in a scrolling area; a resolved conflict's line is marked "resolved" (warning colour

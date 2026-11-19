@@ -641,6 +641,67 @@ export interface RateLimit {
   utilization?: number | null;
 }
 /**
+ * Result of `initialize` on a relay's own address (path `/`).
+ *
+ * A client tells a relay from a session by the `relay` key (a session answers with an
+ * `InitializeResult`, which has `workspace` instead).
+ */
+export interface RelayInitializeResult {
+  core_version: string;
+  protocol_version?: number;
+  relay: RelayServer;
+}
+/**
+ * Which `calu serve` a relay belongs to.
+ */
+export interface RelayServer {
+  hostname: string;
+  os_user: string;
+  server_id?: string | null;
+}
+/**
+ * One session of a relay's server, as `relay.sessions` lists it.
+ */
+export interface RelaySession {
+  calu_session_id: string;
+  claude_session_id?: string | null;
+  directory: string;
+  model?: string | null;
+  open_escalations?: number;
+  started_at: string;
+  state: string;
+}
+/**
+ * Result of `relay.sessions`: the server's running sessions, newest first.
+ */
+export interface RelaySessionsResult {
+  sessions: RelaySession[];
+}
+/**
+ * Ask the relay's server for a session (`relay.start`), as `calu start` asks (D208).
+ *
+ * `kind` "new" needs no `claude_session_id`; "resume" continues it (with `fork_before_turn`:
+ * a branch before that turn); "fork" continues a copy of it. `directory` is a directory on
+ * the server's machine. The result is a `RelayStartResult` once the session can be attached
+ * to; a refusal or failure of the server is an error (-32000) with its reason.
+ */
+export interface RelayStartParams {
+  claude_session_id?: string | null;
+  directory: string;
+  effort?: ("low" | "medium" | "high" | "xhigh" | "max" | "default") | null;
+  fork_before_turn?: number | null;
+  kind?: "new" | "resume" | "fork";
+  model?: string | null;
+  project?: string | null;
+  prompt?: string | null;
+}
+/**
+ * Result of `relay.start`: the started session.
+ */
+export interface RelayStartResult {
+  calu_session_id: string;
+}
+/**
  * `session.history`: the recorded conversation of a session, from the database.
  *
  * A client that connects to a session which started before it (or before calu was restarted)

@@ -671,17 +671,41 @@ host with the session's port forwarded and a token.
 | I15 | `calu web` of the server restarted while a page is open | not run remote; the local case (section D, C16) applies unchanged |
 | I16 | the line client remote | ok for I2-I5 (`[reconnecting] connection lost: …; try 1 in 1 s (/quit or Ctrl-D leaves)`, `[attached again]`) |
 
-Judgement calls for the owner (not decided here):
+Judgement calls of this round, decided by the owner on 2026-11-19 (afternoon) and built in
+PLAN D242 (cases I17-I30 below): one relay port per `calu serve` for all its sessions; five
+minutes of retries for remote addresses, and a local session whose process is gone ends the
+client at once; `calu start --no-attach` keeps its token until the session ends (unchanged).
 
-- A client given an address cannot follow `/new`, `/fork` or `/switch`: every session has its
-  own port, its own forward and its own token. Possible: a `calu attach ssh://host[/dir]` that
-  runs the client's half on the server, or a single relay port per `calu serve` (the web
-  interface has one already).
-- How long a broken connection is tried again (five minutes now) and whether a local session
-  whose process died should end the client at once instead (a refused local connection looks
-  the same as a dropped tunnel).
-- `calu start --no-attach` leaves the token it minted valid until the session ends (it is
-  listed as "never used").
+Relay round (2026-11-19, by an agent; PLAN D242). Server: a copy of the SSH box,
+`calu-sshbox3` on 127.0.0.1:56524 (`CALU_SSHBOX_NAME=calu-sshbox3 CALU_SSHBOX_PORT=56524
+uitest/sshbox/run.sh`), with its two scripted servers (`sshbox-server`). Host: calu from the
+checkout with its directories in a scratch directory and `CALU_PLACE_FILE=/nonexistent`, no
+credential; the relay forwarded with `ssh -N -L 58811:127.0.0.1:8811` (local port other than the
+remote one on purpose); the full-screen client in `tmux -L calurelay` at 140x40. Automated
+cases are named with their test.
+
+| # | Case | Status |
+|---|---|---|
+| I17 | `calu serve` start: the relay line and the forward line; two servers of one user on one machine | ok: `[serve] relay for every session of this server: ws://127.0.0.1:8811` and the `ssh -N -L` / `calu attach` line; the second server says "the relay port 8811 is taken ...; taking a free one" and prints its own port. Which of the two gets 8811 depends on which starts first (seen both ways); `calu token mint --server` prints the right port |
+| I18 | `calu token mint --server --label host-laptop` on the server | ok: token once, the server's id, what it allows, `ssh -N -L 8811:127.0.0.1:8811 calu-sshbox3` and `calu attach ws://127.0.0.1:8811 --token=...`; `calu token list` lists it below the client tokens; `tests/db/test_serve.py::test_calu_token_mint_server_names_the_forward_and_lists_and_revokes` |
+| I19 | `calu attach ws://127.0.0.1:58811` (token in `CALU_TOKEN`) with two sessions and no terminal | ok: "2 sessions run in the `calu serve` of dev@calu-sshbox3; name one with --session <id>" with a numbered list (state, open decisions, directory); one session attaches at once, none names `calu start --relay` (`test_relay.py::test_calu_attach_on_a_relay_picks_the_session`) |
+| I20 | a wrong server token, and a token of the other server's database | fixed: the message said "a token belongs to one session ... `calu token mint <session id>`"; it now says the relay refused the server token and names `calu token mint --server` |
+| I21 | line client through the forward: `/running`, `/switch a4e6`, `/new from the laptop`, `/fork from the laptop` | ok: `*` marks the shown session, "[session] switching to ..." and the new session's events; the requests are rows with `requested_by = relay`, label `relay: host-laptop`, kinds new and fork |
+| I22 | `/allow 1 ok from the laptop` through the relay | ok: recorded as `client:calu attach via relay (host-laptop)` with the note |
+| I23 | full-screen client through the relay: `/running`, `/switch b5fe`, answering a question (2, Enter), `/new from the tui` | ok: `/running` lists the server's 7 sessions with `▸` (host `calu-sshbox3`, not refused as "another host"); the switch, the answer ("ANSWERED ... Hello"), and `/new` switches to the new session ("(shown here)") |
+| I24 | the forward killed while the full-screen client is attached through the relay, then opened again | ok: "connection lost, try 4: nothing listens at the address", then "attached" again with the events in between; `test_remote_attach.py::test_both_clients_follow_a_cut_tunnel_to_the_relay` |
+| I25 | `calu token revoke --server 1` on the server with the client attached | ok: within the 15 s sweep "detached: the server token was revoked, or its server ended"; after ctrl+d the exit lines name `calu attach ws://127.0.0.1:58811 --session <id> --token=<the same token>`; `test_relay.py` (revocation before a request and by the sweep, close code 4003) |
+| I26 | a line client on the server (`calu attach --session b5fe`, found in the database), then the server's process killed with SIGKILL | ok: "[detached] the session ended: its process is gone" at once, no five-minute retry; `test_remote_attach.py::test_a_local_session_whose_process_is_gone_ends_the_client_at_once` (both clients) |
+| I27 | a remote address (no pid known) after the same | unchanged: retried for five minutes (`test_a_remote_session_is_still_tried_again`, I4) |
+| I28 | `--insecure` relay: attaching from loopback without a token; `relay.start` without one | ok as designed: attaching works, asking for a session is refused ("needs a server token") (`test_insecure_lets_loopback_attach_without_a_token_but_not_ask_for_sessions`) |
+| I29 | `calu web` whose session address is not reachable but the server's relay is | ok: the live view goes through the relay with a server token it minted ("calu web (live view)") (`tests/db/test_serve.py::test_the_web_live_view_falls_back_to_the_servers_relay`); not run in a browser over SSH |
+| I30 | `calu start /home/dev/project --relay ws://127.0.0.1:58812 -p ... [--no-attach]`, a relative directory, a missing one | ok: "[session] started: <id>" and the attach line (or the client attached); "with --relay the directory is one on the server's machine: give its absolute path"; "refused: /nowhere is not a directory on calu-sshbox3" |
+
+Seen in this round, not changed: a session's own client token, which the relay uses, shows in
+`calu token list` without a label (it is the token `calu.run` records for every session); the
+detached line says "the session closed the connection" also when the relay closed it; `/running`
+through the relay shows how long a session has run, not how long its state has lasted, and no
+session names (`sessions.name` is not read by the relay).
 
 Fourth round (2026-11-19, the owner's requirement 41: every conflict path resolved, `.git` on
 one side only, remote run and debug). Screenshots `~/.cache/calu-uitest/share/split1/90` onward.

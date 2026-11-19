@@ -154,14 +154,20 @@ def test_cmd_attach_starts_the_chosen_client_and_prints_what_is_left(
     problems: list[str | None] = []
 
     def run_tui(
-        address: str, token: str, after_seq: int = 0, database=None, admin_problem=None
+        address: str,
+        token: str,
+        after_seq: int = 0,
+        database=None,
+        admin_problem=None,
+        relay=None,
+        gone=None,
     ) -> TuiExit:
         """Stand in for the full-screen client."""
         started.append((address, token, after_seq))
         problems.append(admin_problem)
         return TuiExit(0, "escalated", "abc", 2)
 
-    async def attach(address: str, token: str, after_seq: int, thinking: bool) -> int:
+    async def attach(address: str, token: str, after_seq: int, thinking: bool, **_kw) -> int:
         """Stand in for the line client."""
         started.append(("line", address, after_seq))
         return 0

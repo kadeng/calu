@@ -92,6 +92,11 @@ class SessionRow:
     """Whether the reader found the session's process gone: the session ran in the reader's
     process table and no process has its pid, or it ran on the reader's machine before the
     last reboot (`process_gone`). False when that cannot be judged from the reader's side."""
+    pid: int | None = None
+    """The pid of the session's calu process (`calu run` or `calu serve`); None if unknown."""
+    machine: str | None = None
+    """Where that process runs (`sessions.machine`, `calu.machine`); None if not recorded. A
+    client checks both again when its connection breaks (`process_gone`)."""
 
     @property
     def stale(self) -> bool:
@@ -350,7 +355,7 @@ async def sessions(db: Db, active_only: bool = True) -> list[SessionRow]:
     this, host = machine.here(), socket.gethostname()
     listed = []
     for *fields, pid, recorded in rows:
-        row = SessionRow(*fields)
+        row = SessionRow(*fields, pid=pid, machine=recorded)
         if row.ended_at is None and row.hostname == host:
             row = dataclasses.replace(row, gone=process_gone(pid, recorded, this))
         listed.append(row)

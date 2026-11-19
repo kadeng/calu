@@ -46,6 +46,7 @@ async def serving(
     Yields:
         The server, subscribed to new requests.
     """
+    options.setdefault("relay_port", 0)
     server = Server(
         ConnectionSource(session_url),
         set(),
@@ -462,3 +463,153 @@ async def test_an_insecure_server_lets_local_clients_into_its_sessions_without_a
             with pytest.raises(RequestFailed):
                 await probe(row.address, "", "test")
             assert not localsocket.path_of(done.session_id, sockets).exists()
+
+
+async def test_the_relay_reaches_every_session_with_one_server_token(db_url: str, tmp_path: Path):
+    """D242: one port and one token per server; `relay.start`; the token ends with the server."""
+    from calu import servers
+    from calu.protocol.client import RelayTarget, RequestFailed, relay_call
+
+    session_url = await prepare(db_url, tmp_path)
+    first, second = tmp_path / "one", tmp_path / "two"
+    first.mkdir()
+    second.mkdir()
+    async with owner_db(db_url) as db:
+        async with serving(session_url) as server:
+            assert server.relay is not None and server.server_id is not None
+            [row] = await servers.running(db, HOST, USER)
+            assert row.id == server.server_id and row.relay_address == server.relay.address
+            token_id, token = await servers.mint(db, server.server_id, "laptop")
+            relay = RelayTarget(server.relay.address, token)
+            a = await ask(db, request(first))
+            assert a.session_id is not None
+            hello, listed = await relay_call(relay.address, token, "relay.sessions")
+            assert hello["relay"]["server_id"] == server.server_id
+            assert [s["calu_session_id"] for s in listed["sessions"]] == [a.session_id]
+
+            # A second session, asked for through the relay with the server token.
+            _, started = await relay_call(
+                relay.address, token, "relay.start", {"directory": str(second)}, 60
+            )
+            b_id = started["calu_session_id"]
+            filed = await db.all(
+                "SELECT requested_by, label, hostname, os_user, directory FROM session_requests"
+                " WHERE session_id = %s::uuid",
+                (b_id,),
+            )
+            assert filed == [("relay", "relay: laptop", HOST, USER, str(second))]
+            with pytest.raises(RequestFailed, match="is not a directory"):
+                await relay_call(
+                    relay.address, token, "relay.start", {"directory": str(tmp_path / "no")}, 60
+                )
+
+            # Both sessions through the one port; the session sees the relay's client.
+            for session_id, directory in ((a.session_id, first), (b_id, second)):
+                address = relay.session_address(session_id)
+                async with connect_client(address, token, "laptop", _ignore) as client:
+                    snapshot = await client.request("state.get")
+                    assert snapshot["workspace"] == str(directory)
+            used = await db.one("SELECT last_used_at FROM server_tokens WHERE id = %s", (token_id,))
+            assert used is not None and used[0] is not None
+
+            # A revoked token is refused at once.
+            assert await servers.revoke(db, token_id)
+            with pytest.raises(RequestFailed):
+                await relay_call(relay.address, token, "relay.sessions")
+            _, second_token = await servers.mint(db, server.server_id)
+            server_id = server.server_id
+        # The server ended: its row is closed and its tokens are revoked.
+        ended = await db.one("SELECT ended_at IS NOT NULL FROM servers WHERE id = %s", (server_id,))
+        assert ended == (True,)
+        assert await db.all(
+            "SELECT revoked FROM server_tokens WHERE server_id = %s", (server_id,)
+        ) == [(True,), (True,)]
+        assert second_token
+        with pytest.raises(ValueError):
+            await servers.mint(db, server_id)
+
+
+async def test_a_session_login_cannot_read_server_tokens_or_file_without_one(
+    db_url: str, tmp_path: Path
+):
+    from calu import servers
+
+    session_url = await prepare(db_url, tmp_path)
+    conn = await connect(session_url)
+    try:
+        db = Db(conn)
+        server_id = await servers.record_start(db, HOST, USER, "ws://127.0.0.1:1")
+        await conn.commit()
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            await db.all("SELECT token_sha256 FROM server_tokens")
+        await conn.rollback()
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            await servers.file_request(db, server_id, "0" * 64, request(tmp_path))
+        await conn.rollback()
+        assert await servers.token_label(db, server_id, "0" * 64) is None
+        assert await servers.record_end(db, server_id)
+    finally:
+        await conn.close()
+
+
+async def test_calu_token_mint_server_names_the_forward_and_lists_and_revokes(
+    db_url: str, tmp_path: Path
+):
+    import argparse
+
+    from calu import cli
+
+    session_url = await prepare(db_url, tmp_path)
+    here, me = socket.gethostname(), os_user()
+    async with owner_db(db_url) as db, serving(session_url, hostname=here, user=me) as server:
+        assert server.relay is not None
+        port = server.relay.address.rsplit(":", 1)[-1]
+        args = argparse.Namespace(action="mint", session=None, label="laptop", server=True)
+        report = await cli._server_token(db, args)
+        assert f"ssh -N -L {port}:127.0.0.1:{port} {here}" in report
+        assert f"calu attach ws://127.0.0.1:{port} --token=<the token above>" in report
+        listed = await cli._server_token(db, argparse.Namespace(action="list", server=True))
+        assert "valid" in listed and "laptop" in listed and server.relay.address in listed
+        token_id = listed.split()[0]
+        revoked = argparse.Namespace(action="revoke", session=token_id, server=True)
+        assert "revoked" in await cli._server_token(db, revoked)
+        with pytest.raises(cli.CliError, match="unknown or already revoked"):
+            await cli._server_token(db, revoked)
+        assert server.server_id is not None
+        by_id = argparse.Namespace(
+            action="mint", session=server.server_id[:8], label="", server=True
+        )
+        assert "server token" in await cli._server_token(db, by_id)
+    async with owner_db(db_url) as db:
+        args = argparse.Namespace(action="mint", session=None, label="", server=True)
+        with pytest.raises(cli.CliError, match="no `calu serve` runs"):
+            await cli._server_token(db, args)
+
+
+async def test_the_web_live_view_falls_back_to_the_servers_relay(db_url: str, tmp_path: Path):
+    """`calu web` elsewhere: the session's own port is not forwarded, the relay port is."""
+    import json
+
+    from websockets.asyncio.client import connect as ws_connect
+
+    from tests.browser.conftest import serve as serve_web
+
+    session_url = await prepare(db_url, tmp_path)
+    here, me = socket.gethostname(), os_user()
+    async with owner_db(db_url) as db, serving(session_url, hostname=here, user=me):
+        started = await ask(db, SessionRequest(hostname=here, os_user=me, directory=str(tmp_path)))
+        assert started.session_id is not None
+        # Stands for a port that this machine does not reach.
+        await db.execute(
+            "UPDATE sessions SET address = 'ws://127.0.0.1:9' WHERE id = %s::uuid",
+            (started.session_id,),
+        )
+        async with serve_web(create_app(db)) as base:
+            url = base.replace("http://", "ws://") + f"/ws/sessions/{started.session_id}"
+            async with ws_connect(url) as browser:
+                with anyio.fail_after(20):
+                    first = json.loads(await browser.recv())
+                assert first["type"] == "snapshot", first
+                assert first["snapshot"]["workspace"] == str(tmp_path)
+        labels = await db.all("SELECT label FROM server_tokens")
+        assert labels == [("calu web (live view)",)]

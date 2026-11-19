@@ -192,3 +192,125 @@ async def test_the_full_screen_client_comes_back_after_the_tunnel_was_cut(
         "attached",
         "detached",
     ]
+
+
+async def test_both_clients_follow_a_cut_tunnel_to_the_relay(tmp_path, monkeypatch) -> None:
+    """One forward of the relay port (D242): the client comes back after the tunnel is cut."""
+    from tests.unit.test_relay import SESSION_ID, TOKEN, relayed
+
+    monkeypatch.setattr(connection_module, "REDIAL_DELAYS_S", (0.1,))
+    model = SessionModel()
+    async with relayed(tmp_path) as it, anyio.create_task_group() as tg:
+        tunnel = Tunnel(int(it.relay.address.rsplit(":", 1)[1]))
+        await tunnel.open(tg)
+        address = f"{tunnel.address}/session/{SESSION_ID}"
+        link = Link(
+            protocol_connector(address, TOKEN), model, lambda change: None, anyio.current_time
+        )
+        tg.start_soon(link.run)
+        await wait_until(lambda: model.connection.status == "attached")
+        tunnel.cut()
+        await wait_until(lambda: model.connection.status == "reconnecting")
+        await it.run.server.bus.publish(Log(level="info", message="while the forward was down"))
+        await tunnel.open(tg)
+        await wait_until(lambda: model.connection.status == "attached")
+        await wait_until(
+            lambda: any(line.message == "while the forward was down" for line in model.logs)
+        )
+        link.detach()
+        await wait_until(lambda: model.connection.status == "detached")
+        tunnel.cut()
+
+
+async def test_a_local_session_whose_process_is_gone_ends_the_client_at_once(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The owner's rule: a local session that is gone ends the client; a remote one is retried."""
+    monkeypatch.setattr(connection_module, "REDIAL_DELAYS_S", (60.0,))
+    monkeypatch.setattr(attach_module, "REDIAL_DELAYS_S", (60.0,))
+    model = SessionModel()
+    gone = {"now": False}
+    codes: list[int] = []
+    async with anyio.create_task_group() as tg, tunnelled(tmp_path, tg) as (run, tunnel):
+        link = Link(
+            protocol_connector(tunnel.address, run.token),  # type: ignore[attr-defined]
+            model,
+            lambda change: None,
+            anyio.current_time,
+            gone=lambda: gone["now"],
+        )
+        tg.start_soon(link.run)
+        await wait_until(lambda: model.connection.status == "attached")
+        gone["now"] = True
+        tunnel.cut()
+        # No 60-second wait: the link ends at once and says why.
+        await wait_until(lambda: model.connection.status == "detached", timeout=5)
+        assert link.closed_reason == attach_module.ENDED_GONE
+        assert not link.lost
+
+        typed_quit = anyio.Event()
+
+        async def read_lines(send):
+            await typed_quit.wait()
+
+        monkeypatch.setattr(attach_module, "read_lines", read_lines)
+        await tunnel.open(tg)
+        bus = run.server.bus  # type: ignore[attr-defined]
+
+        async def attached() -> None:
+            codes.append(
+                await attach(tunnel.address, run.token, gone=lambda: True)  # type: ignore[attr-defined]
+            )
+
+        tg.start_soon(attached)
+        await wait_until(lambda: bus.clients >= 1)
+        tunnel.cut()
+        await wait_until(lambda: bool(codes), timeout=5)
+        typed_quit.set()
+    assert codes == [0]
+    assert f"[detached] {attach_module.ENDED_GONE}" in capsys.readouterr().out
+
+
+async def test_a_remote_session_is_still_tried_again(tmp_path, monkeypatch) -> None:
+    """Without the check (an address given on the command line) the client keeps trying."""
+    monkeypatch.setattr(connection_module, "REDIAL_DELAYS_S", (0.1,))
+    model = SessionModel()
+    async with anyio.create_task_group() as tg, tunnelled(tmp_path, tg) as (run, tunnel):
+        link = Link(
+            protocol_connector(tunnel.address, run.token),  # type: ignore[attr-defined]
+            model,
+            lambda change: None,
+            anyio.current_time,
+            gone=lambda: False,
+        )
+        tg.start_soon(link.run)
+        await wait_until(lambda: model.connection.status == "attached")
+        tunnel.cut()
+        await wait_until(lambda: model.connection.attempt >= 2)
+        assert model.connection.status == "reconnecting"
+        link.detach()
+        await wait_until(lambda: model.connection.status == "detached")
+
+
+async def test_the_line_client_lists_and_switches_through_the_relay(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    from calu.protocol.client import RelayTarget
+    from tests.unit.test_relay import SESSION_ID, TOKEN, relayed
+
+    async def read_lines(send):
+        await send("/running")
+        await send("/switch 5e55")
+
+    monkeypatch.setattr(attach_module, "read_lines", read_lines)
+    async with relayed(tmp_path) as it:
+        relay = RelayTarget(it.relay.address, TOKEN, "box", "dev")
+        switched: list[str] = []
+        with anyio.fail_after(10):
+            code = await attach(
+                relay.session_address(SESSION_ID), TOKEN, relay=relay, switch_to=switched
+            )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert switched == [SESSION_ID]
+    assert f"{SESSION_ID}  " in out and "[running] 1 session(s)" in out

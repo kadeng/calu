@@ -23,8 +23,10 @@ import json
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import anyio
 from websockets.asyncio.client import ClientConnection, unix_connect
@@ -32,7 +34,7 @@ from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed
 
 from calu import asuser, localsocket
-from calu.protocol.messages import CLOSE_FELL_BEHIND, MAX_FRAME_BYTES
+from calu.protocol.messages import CLOSE_FELL_BEHIND, MAX_FRAME_BYTES, RELAY_SESSION_PATH
 
 log = logging.getLogger(__name__)
 
@@ -388,3 +390,168 @@ async def probe(address: str, token: str, client: str, timeout_s: float = 3.0) -
                 error = single_error(group)
                 raise error from None
     return answer
+
+
+async def snapshot(address: str, token: str, client: str, timeout_s: float = 3.0) -> dict[str, Any]:
+    """Ask a session for its state (`state.get`), without subscribing to its events.
+
+    Side effects: opens a connection, sends `initialize` and `state.get` and closes the
+    connection again. The session logs the client's connection.
+
+    Args:
+        address: `ws://host:port` or `unix:<path>`.
+        token: The client token.
+        client: Name of this client, for the session's log.
+        timeout_s: How long the whole exchange may take.
+
+    Returns:
+        The `state.get` result (`calu.protocol.messages.SessionSnapshot` as a dict).
+
+    Raises:
+        OSError: If the address cannot be reached.
+        RequestFailed: If the session refuses the token or the request.
+        ConnectionError: If the session closes the connection before it answers.
+        TimeoutError: If the session does not answer within `timeout_s`.
+    """
+
+    async def ignore(_method: str, _params: dict[str, Any]) -> None:
+        """Drop events; none are subscribed to.
+
+        Args:
+            _method: The event's method.
+            _params: Its parameters.
+        """
+
+    answer: dict[str, Any] = {}
+    with anyio.fail_after(timeout_s):
+        async with _open(address) as connection:
+            protocol = ProtocolClient(connection, ignore)
+            try:
+                async with anyio.create_task_group() as tg:
+                    tg.start_soon(protocol._read)
+                    try:
+                        await protocol.request(
+                            "initialize", {"client": client, "client_version": "", "token": token}
+                        )
+                        answer = await protocol.request("state.get")
+                    finally:
+                        tg.cancel_scope.cancel()
+            except BaseExceptionGroup as group:
+                error = single_error(group)
+                raise error from None
+    return answer
+
+
+@dataclass(frozen=True)
+class RelayTarget:
+    """A `calu serve` relay a client reaches its sessions through (agent/records/PLAN.md D242)."""
+
+    address: str
+    """The relay's own address, `ws://127.0.0.1:8811` (no path)."""
+    token: str
+    """The server token (`calu token mint --server`), or "" for an `--insecure` relay."""
+    hostname: str = ""
+    """The server's host, as the relay said in `initialize`."""
+    os_user: str = ""
+
+    def session_address(self, session_id: str) -> str:
+        """Return the address of one of the server's sessions on this relay.
+
+        Args:
+            session_id: The session's row id.
+
+        Returns:
+            `<relay address>/session/<id>`.
+        """
+        return f"{self.address.rstrip('/')}{RELAY_SESSION_PATH}{session_id}"
+
+
+def relay_base(address: str) -> str:
+    """Return the relay's own address for an address on a relay.
+
+    Args:
+        address: `ws://host:port`, `ws://host:port/`, or `ws://host:port/session/<id>`.
+
+    Returns:
+        `ws://host:port`, without a path.
+    """
+    parts = urlsplit(address)
+    return urlunsplit((parts.scheme, parts.netloc, "", "", ""))
+
+
+def relay_session_id(address: str) -> str | None:
+    """Return the session id an address on a relay names, if it names one.
+
+    Args:
+        address: An address as `calu attach` takes it.
+
+    Returns:
+        The id after `/session/`, or None for any other address.
+    """
+    path = urlsplit(address).path
+    if not path.startswith(RELAY_SESSION_PATH):
+        return None
+    return path[len(RELAY_SESSION_PATH) :].strip("/") or None
+
+
+async def relay_call(
+    address: str,
+    token: str,
+    method: str,
+    params: dict[str, Any] | None = None,
+    timeout_s: float = 15.0,
+) -> tuple[dict[str, Any], Any]:
+    """Send one request to a relay's own address (`relay.sessions`, `relay.start`).
+
+    Side effects: opens a connection to the relay, sends `initialize` with the server token and
+    the request, and closes the connection again; `relay.start` makes the server start a
+    session.
+
+    Args:
+        address: The relay's address (`relay_base` is applied).
+        token: The server token, or "".
+        method: The request, or "initialize" for the `initialize` result alone.
+        params: Its params.
+        timeout_s: How long the whole exchange may take.
+
+    Returns:
+        The `initialize` result (`RelayInitializeResult`) and the request's result (None for
+        "initialize").
+
+    Raises:
+        OSError: If the relay cannot be reached.
+        RequestFailed: If the relay refuses the token or the request (a server that refused
+            to start a session: code -32000 with the server's reason).
+        ConnectionError: If the relay closes the connection before it answers.
+        TimeoutError: If there is no answer within `timeout_s`.
+    """
+
+    async def ignore(_method: str, _params: dict[str, Any]) -> None:
+        """Drop notifications; the relay sends none.
+
+        Args:
+            _method: The notification's method.
+            _params: Its parameters.
+        """
+
+    hello: dict[str, Any] = {}
+    result: Any = None
+    with anyio.fail_after(timeout_s):
+        async with _open(relay_base(address) + "/") as connection:
+            protocol = ProtocolClient(connection, ignore)
+            try:
+                async with anyio.create_task_group() as tg:
+                    tg.start_soon(protocol._read)
+                    try:
+                        hello = await protocol.request(
+                            "initialize",
+                            {"client": "calu attach", "client_version": "", "token": token},
+                        )
+                        if method != "initialize":
+                            result = await protocol.request(method, params or {})
+                    finally:
+                        tg.cancel_scope.cancel()
+            except BaseExceptionGroup as group:
+                error = single_error(group)
+                raise error from None
+    return hello, result

@@ -1,7 +1,8 @@
 """JSON Schema export of the calu client protocol, used to generate client types (e.g. in TS).
 
-The document has three maps: `requests` (method -> params schema), `events` (method -> params
-schema) and `results` (method -> result schema, only for requests whose result is a model).
+The document has four maps: `requests` (method -> params schema), `events` (method -> params
+schema) and `results` (method -> result schema, only for requests whose result is a model), and
+`relay` with the `requests` and `results` of a `calu serve` relay's own address (D242).
 All schemas are `$ref`s into `$defs`.
 """
 
@@ -13,6 +14,7 @@ from pydantic.json_schema import models_json_schema
 from calu.protocol.messages import (
     EVENTS,
     PROTOCOL_VERSION,
+    RELAY_REQUESTS,
     REQUESTS,
     CheckerContextResult,
     CheckerListResult,
@@ -24,6 +26,9 @@ from calu.protocol.messages import (
     HonestyReviewResult,
     HonestyTrustResult,
     InitializeResult,
+    RelayInitializeResult,
+    RelaySessionsResult,
+    RelayStartResult,
     SessionHistoryResult,
     SessionListResult,
     SessionSnapshot,
@@ -39,10 +44,11 @@ def protocol_schema() -> dict[str, Any]:
 
     Returns:
         A JSON-serializable dict with "$schema", "title", "version", "requests", "events",
-        "results" and "$defs".
+        "results", "relay" and "$defs".
     """
     models: list[type[BaseModel]] = [
         *REQUESTS.values(),
+        *RELAY_REQUESTS.values(),
         *EVENTS,
         InitializeResult,
         CommentAddResult,
@@ -59,6 +65,9 @@ def protocol_schema() -> dict[str, Any]:
         SideAskResult,
         UsageResult,
         ContextUsage,
+        RelayInitializeResult,
+        RelaySessionsResult,
+        RelayStartResult,
     ]
     refs, defs = models_json_schema(
         [(m, "validation") for m in models], ref_template="#/$defs/{model}"
@@ -84,6 +93,14 @@ def protocol_schema() -> dict[str, Any]:
             "files.user_edit": refs[FilesUserEditResult, "validation"],
             "side.ask": refs[SideAskResult, "validation"],
             "usage.get": refs[UsageResult, "validation"],
+        },
+        "relay": {
+            "requests": {name: refs[model, "validation"] for name, model in RELAY_REQUESTS.items()},
+            "results": {
+                "initialize": refs[RelayInitializeResult, "validation"],
+                "relay.sessions": refs[RelaySessionsResult, "validation"],
+                "relay.start": refs[RelayStartResult, "validation"],
+            },
         },
         "$defs": defs.get("$defs", {}),
     }
