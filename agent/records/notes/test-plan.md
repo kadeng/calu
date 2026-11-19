@@ -53,7 +53,7 @@ end that lacks a function by design says so in its own section.)
 | C12 | **Many sessions** (10+ running, 30+ stored): the list, switching, names, finding one | fixed 5b76a25 1a348ec (15 running, 14 stored: start time and id per row, actions stay visible, stale ones last) | ok (10 running: the server's limit) | fixed b1f47c4 026bc78 | fixed 706b3b8 |
 | C13 | **Undo** (rewind to before a message) and **fork**: first, middle, last message; fork of a fork; what the new session shows and knows | ok (rewind before the 3rd message, fork from a recorded message, fork of a fork) | ok; open (fork of a rewind) | fixed 602b9be | ok (fork); undo: by design a fork |
 | C14 | Context usage and limits; before the first turn; when unknown | ok ("ctx –" before the first turn, "21% · 42k" after); `nousage` not run | ok | fixed b1f47c4 | fixed 706b3b8 |
-| C15 | Images in a message (where supported): accepted, refused over the limit, shown | - (images not run this round) | fixed c91feae (paste); limits by unit test | n/a here | ok |
+| C15 | Images in a message (where supported): accepted, refused over the limit, shown | ok (section J, J-I1: attached, refused over 5 MB, thumbnail, a real Haiku named the colour) | fixed c91feae (paste); limits by unit test | n/a here | ok |
 | C16 | Losing the session, the server, the database mid-turn; coming back | fixed 5b76a25 1a348ec (server stopped: the reason in words; bridge killed: Restart reattaches, also after a window reload); server stopped: "The calu server stopped", Start server, Retry (A13-A15); database loss not run | fixed 5dfb6b6; database loss not run | fixed b1f47c4 | fixed 706b3b8 |
 | C17 | Narrow and very wide layouts; light and dark; long lines, huge results, long names | fixed b228052 (290 px: chips keep their width; Light Modern and Dark Modern; `edge` long lines) | ok; open (long code line) | fixed 602b9be | fixed 706b3b8 |
 | C18 | Text meant to mislead: control characters, raw HTML, links with scripts | ok (`edge`: raw HTML as text, script link inert); `bidi` not run this round | ok | fixed 900355e b1f47c4 | fixed 706b3b8 |
@@ -96,7 +96,7 @@ in a real VSCode, `docs/TESTING.md`), vitest for every pure change.
 | A14 | Start server: a terminal "calu server" runs `tmux new-session -A -s calu '…/calu serve'` and asks the session password; with the blank password typed the server runs and the chat noticed it by itself within 10 s: the session-list card, the transcript still greyed under "Session ended", "calu: session ended" (13, 14) | ok (the real `calu serve` was stopped again at once; no session was started on it) |
 | A15 | Retry without a server: the card adds "Checked at 11:38:50 AM: no server runs yet." (16); Retry after the server came back with a session of the workspace (`calu start --no-attach`): attached to it, transcript and mark gone (19, 20); a click on a running session in the session list also ends the mark (17, 18) | ok |
 | A16 | the owner's decision: "Waiting for you" counts from the session's `opened_at` of the oldest open step: 6 s, then after a window reload 1m 28s, after `calu ide` was killed and Restart bridge 1m 53s (03-06) | built (this round; the field was already in `escalation.request` and the snapshot); vitest `waitingSince` |
-| A17 | the server stopped, seen over Remote-SSH | - (not run: the SSH box was in use by another agent; the extension's logic is the same there, since the bridge, the server and `ide.status` all run on the box. A difference: the webview's clock is the laptop's, the step's time the box's; a box clock ahead counts as "now", one behind lengthens the timer) |
+| A17 | the server stopped, seen over Remote-SSH | fixed 4e0eb4c (section J, J-V3); before that: - (not run: the SSH box was in use by another agent; the extension's logic is the same there, since the bridge, the server and `ide.status` all run on the box. A difference: the webview's clock is the laptop's, the step's time the box's; a box clock ahead counts as "now", one behind lengthens the timer) |
 
 **Remote (Remote-SSH).** Microsoft's Remote-SSH 0.128.0 installed from the marketplace in the
 desktop's VSCode; "Connect Current Window to Host" `sshbox` (key login, the test key); VS Code
@@ -205,7 +205,7 @@ Screenshots `~/.cache/calu-uitest/share/pycharm-stop/NN.png`; three in
 | B15 | Start server: a terminal tab "calu server" runs `tmux new-session -A -s calu '/home/cua/.local/bin/calu serve --projects /home/cua/work'` (the folder that holds `~/work/demo`, `projectsDirFor`; the server command's note names it) and asks the session password (07); with the blank password typed the server answered for `/home/cua/work`, and the plugin noticed it by itself within 10 s: the session list card, the transcript still under "Session ended", status bar "calu: session ended", the notification gone (08). The real `calu serve` was stopped again at once, no session started on it | ok |
 | B16 | Retry with the server back and a session of the project (`calu start --no-attach`): attached to it, mark, card and notification gone (11). The same with the tool window hidden: attached by the 30 s check within about 40 s, status bar empty again (12-14) | ok |
 | B17 | the waiting count: "calu: 3 waiting" before the stop (03), none after it (status bar, tab chips, the strip of other tabs, the activity line); escalation notifications of the ended session are expired | ok |
-| B18 | the same over SSH (mode 3) | - (not run: the SSH box was left to the other agents; the logic is the bridge's and the plugin's own, the same in every mode, and `--projects` is the remote directory's parent there) |
+| B18 | the same over SSH (mode 3) | ok (section J, J-P4); before that: - (not run: the SSH box was left to the other agents; the logic is the bridge's and the plugin's own, the same in every mode, and `--projects` is the remote directory's parent there) |
 
 ### C. Full-screen client and line client (`calu attach`)
 
@@ -770,4 +770,109 @@ over the composer and the footer (`split1/76`, "effort: default" drawn over the 
 `29`); the chat keeps the line "greeter.py was changed here and on sshbox … choose Merge" after
 the conflict is resolved (it is a log line of the transcript); in the plugin settings page the
 SSH fields stay editable when the mode is "Automatic".
+
+### J. Final acceptance round 2026-11-19
+
+Run 2026-11-19 (13:40 to 18:45, with two pauses while the host slept) by the lead and one
+agent. The lead used the Cua desktop (`calu-uitest`), the SSH box `calu-sshbox` and the real
+Claude Code on Haiku (the owner's key in the desktop, about $0.02 in all). The agent used the
+terminal clients and the web interface, on the host and through the second box
+`calu-sshbox2`. calu was installed in both containers from an exported `HEAD` (`git archive`,
+so that the other agents' uncommitted work stayed out), and both boxes were migrated to 0040.
+Screenshots: `~/.cache/calu-uitest/share/final/` (`p`/`m` PyCharm, `v` VSCode, `r` real
+Claude Code, `i` images, `sq`/`ps` side questions, `u`/`pu` `/usage`, `wi` web images,
+`tui/` and `web/` from the agent); a selection in
+`agent/records/notes/screenshots/final-*.png|txt`.
+
+**Front ends × local/remote**
+
+| # | Case | Status |
+|---|---|---|
+| J-P1 | PyCharm: the waiting timer counts from the session's `opened_at` (port of VSCode's `waitingSince`) | fixed b75049c: right after attaching to `escalations` whose steps had waited 30 s it showed 30 s; after `pkill calu ide` and Restart bridge 1m 12s (p03-p05). Unit test `ActivityTest` |
+| J-P2 | PyCharm mode 1 (local): `escalations`, `swarm`, held chips, Allow | ok |
+| J-P3 | PyCharm mode 2 (JetBrains remote development, backend on the box): Connect to Remote, `dev@sshbox`, `/home/dev/project`, the new plugin on both sides; New Session, `swarm` (held chips on nine subagents, "8 steps held until you decide"); the box's server stopped | ok (m05-m09): "The calu server stopped; the session ended with it." with Start server and Retry, the transcript under "Session ended", status bar "calu: server stopped", the notification with the same two actions. The backend setup of the fourth round still existed. PyCharm's own "New Session" button in the main toolbar opens JetBrains' agent chat (Junie, "Accept and Install"), not calu's; it was closed without accepting anything |
+| J-P4 | PyCharm mode 3 (local copy, calu on the box), the server stopped (B18) | ok (p10-p14): the same card and status; Start server opened the terminal "calu server" with `tmux new-session -A -s calu calu serve --projects /home/dev` on the box; after the blank session password the plugin noticed the server by itself. The SSH interpreter of H32 was still the project's |
+| J-V1 | VSCode local: `swarm` with ten subagents, two Allows, the server stopped | ok (v02-v08) |
+| J-V2 | VSCode over Remote-SSH (the extension installed on the box's VS Code Server): unlock with the box's admin password (one prompt; again after a window reload), New session, `swarm` with held chips and "9 steps held until you decide" | ok (v10-v15) |
+| J-V3 | VSCode over Remote-SSH: the server stopped during `swarm` (A17) | fixed 4e0eb4c: the card "The calu server stopped" and "Session ended" came, but "9 steps held until you decide", the held chips and a waiting badge on a subagent tab stayed, and the subagents still counted as running (v16). Now an ended transcript holds no step, counts no decision in its tabs and shows running subagents as stopped (v19); PyCharm's `heldTools` and tab status got the same rule. vitest `heldSteps`, Kotlin `ServerLossTest`. The timer over Remote-SSH was not watched separately |
+| J-T1 | terminal clients local and remote, the relay with one forward, `/running`, `/switch`, `/new`, `/fork`, a refused directory, a killed server and another taking over (TESTING items 38-40) | ok with fixes (the agent's round): ae84797 (a client follows a session started again under a new row; the line client lost the first line after `/switch`; `#id` in `/allow`; plural of the held line), 826c96b, 5c067de, 9a0cd46. Captures `final-tui-*.txt` |
+| J-W1 | web local and through one `ssh -L`: sign-in, live view, Allow, Deny with a note (Enter does not decide), held steps, settings, 390 px, dark and light | ok with fixes: 54fed71 (a denial's line showed the session's sentence), 37f192f (the session page scrolled sideways on a phone). The live view's fallback to the relay (I29) could not be arranged remote (open point W2 below) |
+
+**A real Claude Code on Haiku, one short pass per front end** (shipped checker instructions with their test triggers `calu:test-escalate`, `calu:test-deny`; auto mode)
+
+| # | Case | Status |
+|---|---|---|
+| J-R1 | PyCharm: `git log` (PASS), `echo … # calu:test-escalate`: the card with the checker's reason, Allow, the output in Claude's answer | ok (r02-r05). Found: the desktop's database still held the long command instructions of an earlier round (version 12), so the trigger passed; `calu checker set command --instructions-file` with the shipped file (v13) fixed it. The setup scripts never update stored instructions (by design: an operator's edit wins) |
+| J-R2 | VSCode: an Edit of `greeter.py` (PASS, diff), `ls # calu:test-deny` (DENY with the reason; Claude reported the denial and did not try around it) | ok (r11, r12) |
+| J-R3 | full-screen client on the same session: the turns, thinking, `date # calu:test-escalate`, the card, `a a`, ALLOWED and the output | ok (r20-r22). fixed 1bc3aeb: every cost read `$0.00` (Haiku turns cost fractions of a cent); amounts below half a cent now have four decimals |
+| J-R4 | web: a message from the live view, `whoami # calu:test-escalate`, the card, Allow with the note "ok from the web" | ok (r30-r36): Claude received the note in the running turn |
+
+**`calu setup` on a fresh database (desktop, a cluster of its own on port 5434)**
+
+| # | Case | Status |
+|---|---|---|
+| J-S1 | first setup: owner password, admin password twice, session password twice, the sandbox question (two lines, "both are installed", default `(on)`), answered `off` | ok: "migrations applied: 40", "Claude Code's sandbox: off (stored)"; no recommendation, because both logins have passwords (D239) |
+| J-S2 | `calu setup --no-password` afterwards | ok: "Stored now: off." and the default `(off)`; both WARNINGs, the second the D239 recommendation naming `calu setup --set-passwords` |
+| J-S3 | `calu doctor --db` | fixed 952dcfa: the note "self-approval" read "admin, calu_admin has no password" and advised `calu credential set operator`, an entry this store did not have; it now names `calu setup --set-passwords` for `admin`, `session`, `calu_admin` and `calu credential set NAME` for any other (also in the session start-up warning). The `sandbox: off` note is there as specified |
+
+**Permission mode** (the owner's addition)
+
+| # | Case | Status |
+|---|---|---|
+| J-M1 | changing the mode during a session | n/a today: no front end offers it (the full-screen client's capability list says "the session names the mode in its log only"; VSCode, PyCharm and the web have no control). Another agent builds it (not part of this round) |
+| J-M2 | `claude.permission_mode default` set with `calu config`, a new session in VSCode, a real turn with an Edit and a command | ok: the session's log line said "Claude Code runs in the permission mode "default": auto mode's classifier is off, so a step the checkers pass runs on their approval alone"; the Edit and the command passed on the checkers alone. The earlier session kept "auto" (the mode is chosen at start). Unset again afterwards |
+| J-M3 | which mode the clients show | the mode appears only as that log line (line client, web stream); neither IDE nor the full-screen status line shows it |
+
+**Images** (the owner's addition)
+
+| # | Case | Status |
+|---|---|---|
+| J-I1 | VSCode: a 32x32 red PNG through the attach button (file dialog), then "What colour …" | ok (i08, i09): a thumbnail in the composer with a remove button, the thumbnail in the transcript, Haiku answered "Red". A 6 MB PNG: "The image is too large: 6.0 MB; a message takes images of at most 5 MB. Nothing was attached." (i10). Count and type limits: unit tests only |
+| J-I2 | PyCharm: paste with `xdotool ctrl+v` from `xclip` | open (not reproduced as a defect): the paste did not attach in this run (in the fifth round it did, c91feae); the focus may have been elsewhere. "Add image" (the IDE's file chooser) attached the blue PNG, the thumbnail showed, Haiku answered "Blue" (pi05-pi07). The recorded turn shows "[1 image(s) attached to this message; calu does not show images to the checkers]" |
+| J-I3 | web: paste into the message field | ok (wi02-wi04): the thumbnail with × beside the file field; sent; the image shown in the stream; Haiku identified it as blue |
+| J-I4 | terminal clients | by design no images; not tried this round |
+
+**Side questions with the real Claude Code** (the owner's addition)
+
+| # | Case | Status |
+|---|---|---|
+| J-Q1 | VSCode while idle: "Which line did I ask you to append, and to which file?" | ok (sq02): "You asked me to append the line "# checked" to README.md." in the side panel, nothing in the transcript |
+| J-Q2 | VSCode during a running turn (a 25 s command) | ok (sq06, sq07): the answer named the running command; the turn went on and ended with "done"; no message reached the main agent. Found and fixed 789df7a: the Interrupt button appeared between the side-question button and Send while Claude worked, so a click where the side-question button had been stopped the turn (seen once: "turn interrupted"); Interrupt now comes first in the row |
+| J-Q3 | full-screen client: `/btw` while idle, then a follow-up during a running 20 s turn that uses the history | ok: the side panel shows both; the follow-up corrected the earlier answer from the conversation ("That was wrong. "slept" came from the earlier 25-second run"); the main turn ended with "ok" |
+| J-Q4 | PyCharm dialog: two questions, the second using the first | ok (ps02): "First image: red. Second image: blue." and "The red image came first." |
+| J-Q5 | how it works | `runner.side_question` sends the CLI's control request `side_question` with the earlier pairs as `history`; Claude Code answers from a fork of the conversation without tools and calls SubagentStop for it, which calu does not review. Nothing is recorded and the checkers see nothing (no step, no `checker_runs` row). The failure case (no session) was not run by hand; it is covered by `SideQuestionFailed` tests |
+
+**`/usage`, `/cost` and the context chip** (the owner's addition)
+
+| # | Case | Status |
+|---|---|---|
+| J-U1 | VSCode and PyCharm: `/usage` typed in the chat | ok: passed to Claude Code as chat text. Claude Code runs it without the model: a "turn" with $0.0000 cost and the text "Estimated cost, Total duration (API/wall), Total code changes, Usage by model, Prompt cache", shown as a preformatted block (u01, pu01); recorded as a turn of the session; no checker sees it. The same text as `/cost` |
+| J-U2 | web: `/usage` in the message field | ok (wi03): the same text in the stream |
+| J-U3 | full-screen client: `/usage` | handled by calu, not passed on: the usage screen with cost, context fill and "quota: no limit reported". `/cost` there is "no command /cost (/help lists them)": the client has no way to send Claude Code's own slash commands |
+| J-U4 | the context chip | PyCharm: a menu with "Context: 17,012 of 1,000,000 tokens (2%)", "Cost $0.0043 (Claude Code, whole session)" and "Ask Again" (pu02); VSCode: not clicked this round; the full-screen client: `/usage`; the web: a line under the controls |
+| J-U5 | subscription limits | not shown by `/usage` in headless mode: Claude Code's text above has no five-hour or weekly percentage (an API key here; a subscription was not available to measure). The limits reach calu only as `rate_limit_event` messages of the stream (`RateLimitInfo`: `rate_limit_type` five_hour, seven_day, seven_day_opus, seven_day_sonnet, overage; `utilization` 0-1; `resets_at`), which `sdk_runner` turns into `UsageUpdate`, and every client shows as "usage limits"/"quota". With the API key no such event came ("no limit reported"). So a subscription user sees the percentages in calu's own usage displays once Claude Code has sent such an event, not through `/usage`. Unverified: whether the CLI sends them for every subscription and at what utilization |
+
+**Open points of this round, not changed**
+
+- O1: after the host slept, every session printed "clock: the wall clock moved backwards by
+  2.3 s" as an **error** (red) next to the expected warning about the forward jump (VSCode,
+  PyCharm, web). A small backward correction after a sleep looks alarming as an error.
+- O2: PyCharm's own toolbar button "New Session" (JetBrains' agent chat) sits next to calu's
+  tool window and is easy to mistake for calu's.
+- O3: the web live view shows Claude's thinking of a real session in the same style as its
+  text in places (wi04).
+- O4: the full-screen client cannot send Claude Code's slash commands (`/cost`, `/compact`,
+  `/context` collide with calu's own `/context`).
+- O5 (agent): `calu web --database operator` against a `--no-password` server asks for an admin
+  password nobody chose; a blank answer ends with an OperationalError. The line client's
+  `/running` through a relay shows no names and no time in state; a reconnecting full-screen
+  client still offers `a,a allow`; the web counts "10 running, 1 waiting" overlapping; the
+  live view lists the running first turn under "Recorded turns"; a local `calu start` refusal
+  has "refused:" twice; `/running` rows misalign with a long state.
+- O6: PyCharm image paste by `xdotool` did not attach (J-I2).
+
+README screenshots replaced (same names, 16:10): `docs/assets/vscode-subagents.png` (`swarm`
+in `~/work/demo`, held chips, the approval card, "9 steps held until you decide"; no "finished
+banana") and `docs/assets/web-live-subagents.png` (the box's live view of `swarm`, no host name
+in view; the card still shows `/home/dev/work/demo` and the scripted reason).
 
