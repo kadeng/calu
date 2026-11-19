@@ -17,6 +17,7 @@ from calu.credentials import CredentialStore
 from calu.db import Db, connect
 from calu.db.target import PasswordAuth, Target
 from calu.setup import enable_admin_login, enable_operator_login
+from calu.store import DatabaseSessionStore, SessionIdentity
 from tests.db.test_run import prepare
 from tests.db.test_serve import owner_db, serving
 from tests.unit.ide_helpers import Failed, bridged
@@ -175,6 +176,21 @@ async def test_one_model_for_every_role_and_the_default(
         assert unknown.value.code == -32602
         async with owner_db(db_url) as db:
             assert (await admin.settings(db))["context"]["narrator_model"] == "claude:haiku"
+            names = {row.name for row in await admin.checkers(db)}
+
+        # A checker's model by its role key; an unknown name is refused and creates nothing.
+        assert (
+            await editor.request(
+                "ide.models.set", {"role": "checker:command", "model": "claude:sonnet"}
+            )
+            == {}
+        )
+        with pytest.raises(Failed) as no_checker:
+            await editor.request("ide.models.set", {"role": "checker:nosuch", "model": "x:y"})
+        assert "nosuch" in no_checker.value.message
+        async with owner_db(db_url) as db:
+            rows = {row.name: row for row in await admin.checkers(db)}
+            assert set(rows) == names and rows["command"].model == "claude:sonnet"
 
         # "default" stores no model, as `calu config models default` does.
         await editor.request("ide.models.set_all", {"model": "default"})
@@ -353,6 +369,33 @@ async def test_a_session_is_started_named_listed_renamed_and_attached_again(
         await session.close()
 
 
+async def test_a_start_the_server_refuses_says_why_and_an_unnamed_start_has_no_name(
+    db_url: str, tmp_path: Path, store: CredentialStore
+):
+    session_url = await prepare(db_url, tmp_path)
+    store.save("operator", await operator_login(db_url), None)
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    async with serving(session_url, hostname=socket.gethostname(), user=USER):
+        async with bridged(workspace, store, user=USER) as editor:
+            with pytest.raises(Failed) as refused:
+                await editor.request(
+                    "ide.start", {"kind": "resume", "claude_session_id": "not-a-uuid"}
+                )
+            assert refused.value.code == -32014
+            assert "no Claude session id" in refused.value.message
+
+            started = await editor.request("ide.start", {"kind": "new"})
+            assert started["attached"] is True
+            (row,) = (await editor.request("ide.sessions"))["running"]
+            assert (row["id"], row["name"]) == (started["session_id"], "")
+    async with owner_db(db_url) as db:
+        assert sorted(state for (state,) in await db.all("SELECT state FROM session_requests")) == [
+            "failed",
+            "started",
+        ]
+
+
 async def test_without_a_server_the_start_says_which_command_to_run(
     db_url: str, tmp_path: Path, store: CredentialStore
 ):
@@ -434,6 +477,46 @@ async def test_a_cancel_after_the_server_started_the_session_does_not_abort_the_
                 assert await editor.request("ide.start.cancel") == {"cancelled": 0}
                 go.set()
             assert started[0]["attached"] is True
+
+
+async def test_status_sessions_and_attach_close_the_escalations_of_ended_sessions(
+    db_url: str, tmp_path: Path, store: CredentialStore
+):
+    """An editor's look at the herd closes the questions nobody waits for any more, as `calu
+    sessions` does (`herd.close_gone`): a session that ended keeps no open escalation."""
+    await prepare(db_url, tmp_path)
+    store.save("admin", db_url, None)
+    async with owner_db(db_url) as db:
+
+        async def ended_with_a_question() -> int:
+            """Store a session with an open escalation, then end it without closing it."""
+            recorder = DatabaseSessionStore(db)
+            identity = SessionIdentity(hostname="elsewhere", os_user="u", directory="/w", pid=7)
+            session_id = await recorder.start(identity)
+            escalation = await recorder.open_escalation("why", {"rendered": "$ x"})
+            await db.execute(
+                "UPDATE sessions SET ended_at = now() WHERE id = %s::uuid", (session_id,)
+            )
+            return escalation
+
+        async def state(escalation: int) -> str:
+            return str(
+                await db.scalar("SELECT state FROM escalations WHERE id = %s", (escalation,))
+            )
+
+        async with bridged(tmp_path, store) as editor:
+            for method, params in (
+                ("ide.status", {}),
+                ("ide.sessions", {}),
+                ("ide.attach", {"session": "ffffffff"}),
+            ):
+                escalation = await ended_with_a_question()
+                assert await state(escalation) == "open"
+                try:
+                    await editor.request(method, params)
+                except Failed as refused:
+                    assert method == "ide.attach" and refused.code == -32011  # no such session
+                assert await state(escalation) == "cancelled", method
 
 
 async def test_a_protected_credential_is_asked_for_and_never_prompted(
