@@ -20,6 +20,7 @@ uid without a home directory) lives below `STATE_ROOT`, in directories owned by 
 """
 
 import ctypes
+import errno
 import os
 import pwd
 import stat
@@ -129,17 +130,20 @@ def prepare(run_as: RunAs, state_root: Path = STATE_ROOT) -> None:
     """Create the directories calu provides for a user. Needs root; call before `enter`.
 
     Side effects: creates `state_home(run_as)` and, for a uid without a name, its home; both
-    owned by the user, mode 0700. An existing directory keeps its content and gets owner and
-    mode set again. Missing directories above them (`state_root` and its `state/` and
-    `claude/`) are created as root's, with the umask's mode.
+    owned by the user, mode 0700. An existing directory keeps its content (whose owners are
+    not changed) and gets owner and mode set again. A symbolic link in the place of one of
+    the two is refused and not followed: following it would give the user the link's target.
+    Missing directories above them (`state_root` and its `state/` and `claude/`) are created
+    as root's, with the umask's mode. A named user's own home is not changed.
 
     Args:
         run_as: The user.
         state_root: The root of calu's state.
 
     Raises:
-        UserError: If a named user's home directory does not exist, or a directory cannot be
-            created.
+        UserError: If a named user's home directory does not exist, a directory cannot be
+            created, or one of the two is something other than a directory (a symbolic link
+            included); a directory handled before the failing one may already be the user's.
     """
     wanted = [state_home(run_as, state_root)]
     if run_as.user is None:
@@ -151,11 +155,23 @@ def prepare(run_as: RunAs, state_root: Path = STATE_ROOT) -> None:
         )
     for directory in wanted:
         try:
-            directory.mkdir(parents=True, exist_ok=True)
-            os.chown(directory, run_as.uid, run_as.gid)
-            directory.chmod(0o700)
+            directory.parent.mkdir(parents=True, exist_ok=True)
+            if not directory.is_symlink():
+                directory.mkdir(exist_ok=True)
+            # Owner and mode are set through a descriptor opened without following a link,
+            # so they reach the directory that was checked and nothing a link points to.
+            descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError as exc:
+            if isinstance(exc, NotADirectoryError) or exc.errno == errno.ELOOP:
+                raise UserError(f"cannot prepare {directory}: it is not a directory") from exc
+            raise UserError(f"cannot prepare {directory}: {exc}") from exc
+        try:
+            os.fchown(descriptor, run_as.uid, run_as.gid)
+            os.fchmod(descriptor, 0o700)
         except OSError as exc:
             raise UserError(f"cannot prepare {directory}: {exc}") from exc
+        finally:
+            os.close(descriptor)
 
 
 def fs_identity(uid: int, gid: int, groups: tuple[int, ...]) -> None:

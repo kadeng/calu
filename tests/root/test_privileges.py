@@ -322,3 +322,109 @@ def test_a_socket_of_the_session_user_is_private_to_that_user(shared_dir: Path) 
         check=False,
     )
     assert done.stdout.split() == [str(OTHER_UID), "0o600", "0o700", str(OTHER_UID)], done.stderr
+
+
+def test_prepare_takes_over_existing_directories_and_keeps_their_content(
+    shared_dir: Path,
+) -> None:
+    """`asuser.prepare` on directories a former run or somebody else left behind.
+
+    A state home of root's (0755) and a home of a third user (0777) both become the user's,
+    0700, and keep what is in them; the files inside keep their owners. A named user's own
+    home is not changed at all. Side effects: only below `shared_dir`.
+    """
+    state_root = shared_dir / "lib"
+    bare = asuser.resolve(f"{OTHER_UID}:{OTHER_UID}", state_root)
+    state, home = asuser.state_home(bare, state_root), Path(bare.home)
+    for directory, owner, mode in ((state, 0, 0o755), (home, THIRD_UID, 0o777)):
+        directory.mkdir(parents=True)
+        (directory / "kept.txt").write_text("earlier run\n")
+        os.chown(directory, owner, owner)
+        directory.chmod(mode)
+    asuser.prepare(bare, state_root)
+    for directory in (state, home):
+        status = directory.stat()
+        assert (status.st_uid, status.st_gid, stat.S_IMODE(status.st_mode)) == (
+            OTHER_UID,
+            OTHER_UID,
+            0o700,
+        )
+        assert (directory / "kept.txt").read_text() == "earlier run\n"
+        assert (directory / "kept.txt").stat().st_uid == 0
+    # Done again on what it left: nothing changes, nothing is refused.
+    asuser.prepare(bare, state_root)
+    assert stat.S_IMODE(state.stat().st_mode) == 0o700 and state.stat().st_uid == OTHER_UID
+    # A named user keeps its home exactly as it is; only calu's state home is created.
+    own_home = shared_dir / "home-of-a-name"
+    own_home.mkdir()
+    own_home.chmod(0o751)
+    named = launch.RunAs(
+        uid=OTHER_UID, gid=OTHER_UID, home=str(own_home), user="somebody", groups=()
+    )
+    asuser.prepare(named, state_root)
+    assert own_home.stat().st_uid == 0 and stat.S_IMODE(own_home.stat().st_mode) == 0o751
+
+
+def test_prepare_never_follows_a_link_where_a_directory_of_the_user_belongs(
+    shared_dir: Path,
+) -> None:
+    """A symbolic link in place of the state home or a bare uid's home is refused.
+
+    Following it would hand the link's target to the user (owner and mode 0700): with a link
+    to a directory of root's, the user would own that directory afterwards.
+    """
+    state_root = shared_dir / "lib"
+    bare = asuser.resolve(f"{OTHER_UID}:{OTHER_UID}", state_root)
+    target = shared_dir / "roots-own"
+    target.mkdir()
+    target.chmod(0o755)
+    for spot in (asuser.state_home(bare, state_root), Path(bare.home)):
+        spot.parent.mkdir(parents=True, exist_ok=True)
+        spot.symlink_to(target)
+        with pytest.raises(asuser.UserError, match="is not a directory"):
+            asuser.prepare(bare, state_root)
+        status = target.stat()
+        assert (status.st_uid, stat.S_IMODE(status.st_mode)) == (0, 0o755)
+        spot.unlink()
+        spot.mkdir()  # the next place is reached only once this one is a real directory
+
+
+@pytest.mark.parametrize(
+    ("uid", "gid", "groups"),
+    [
+        # The C library reads -1 (and its unsigned twin) as "leave it unchanged".
+        (-1, -1, ()),
+        (2**32 - 1, 2**32 - 1, ()),
+        (OTHER_UID, -1, ()),
+        (OTHER_UID, 2**32 - 1, ()),
+        (OTHER_UID, OTHER_UID, (-1,)),
+    ],
+)
+def test_the_launcher_as_root_refuses_a_record_whose_identity_cannot_be_taken(
+    shared_dir: Path, uid: int, gid: int, groups: tuple[int, ...]
+) -> None:
+    """`launch.become` as real root: an identity the kernel does not give is never run.
+
+    Each record names an id the system calls read as "unchanged", so a launcher that only
+    trusted the calls would start Claude Code as root, or with root's group. The launcher must
+    refuse (exit status `REFUSED`, one line on stderr) and start nothing.
+    """
+    started = shared_dir / "started"
+    program = shared_dir / "claude"
+    program.write_text(f"#!/bin/sh\nid >{started}\n")
+    program.chmod(0o755)
+    spec = launch.LaunchSpec(
+        uid=uid, gid=gid, groups=groups, home="/var/empty", claude=str(program)
+    ).dump()
+    done = subprocess.run(
+        [str(launch.launcher_path())],
+        env={"PATH": os.environ["PATH"], launch.LAUNCH_ENV: spec},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert done.returncode == launch.REFUSED, done.stdout + done.stderr
+    assert done.stderr.startswith(f"{launch.SCRIPT}: "), done.stderr
+    assert len(done.stderr.splitlines()) == 1
+    assert not started.exists(), started.read_text()
