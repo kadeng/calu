@@ -81,17 +81,21 @@ Their reports arrive in the session that started them; if that context is gone, 
    `asuser.prepare` on an existing directory, `launch.become` refusing a wrong identity,
    `_after_setup` writing the place file as real root, `serve.serve` with `run_as`
    (tests/root/, in the root box).
-3. **VSCode extension, remaining** (needs the desktop, so after agent 2): the corner cases
+3. **Open defects the core-defect agent left** (PLAN D235 has what it fixed): the
+   full-screen client does not show the `held` badge for a step held after its approval was
+   recorded (needs a protocol signal); a decision made in the web interface still records
+   only the role, not `operator:<user>@<host>` as `calu resolve` now does (schema 37).
+4. **VSCode extension, remaining** (needs the desktop, so after agent 2): the corner cases
    C5, C6, C11, C12 at scale (done for web, terminal and PyCharm); a look at the new honesty
    chip in a real VSCode; integration tests (`@vscode/test-cli`, as stay-in-the-loop has
    them in `extensions/vscode/test/integration` with `scripts/test-in-docker.sh`) in the
    regression suite; an "Open session trace" action in both plugins (offered to the owner,
    not answered); `/clear` against a real Claude Code. `extensions/vscode/calu.vsix` (not in
    git) predates the honesty chip: rebuild with `npm run package` before the owner's test.
-4. **Final screenshots** from the Cua desktop for the README (`docs/assets/`): a tidy project
+5. **Final screenshots** from the Cua desktop for the README (`docs/assets/`): a tidy project
    path (the web one shows a scratch path with host and user name), a cleaner subagent shot
    than the one ending in "finished banana"; all 16:10 so rows line up.
-5. Remote development of the PyCharm plugin needs the owner: the JetBrains CLIENT shows a
+6. Remote development of the PyCharm plugin needs the owner: the JetBrains CLIENT shows a
    "JetBrains Team Tools User Agreement" that only he may accept (viewer link:
    `uv run --no-project --with cua python uitest/desktop.py viewer-url`), then
    `uitest/pycharm-split.sh`.
@@ -184,6 +188,11 @@ serve`'s process test keeps its log in `tmp_path` instead of the tester's state 
   agents work (it sweeps their half-done files in); a committed `HANDOFF.md` must agree with
   the committed parser (`tests/unit/test_handoff_counts.py`); database tests never with
   `-n`, and never two runs on one test server.
+- **The place file reaches the owner's real database.** `cli.main` run outside the test
+  suite with only the XDG variables redirected still reads `/var/lib/calu/database.json`
+  and connects to his database (it happened on 2026-11-19: `calu sessions`, `escalations`,
+  `token list` read, and a `resolve 1 allow` was refused, so nothing changed). Set
+  `CALU_PLACE_FILE=/nonexistent` as well as the XDG variables in anything run by hand.
 - **The owner's API key** (budget-limited, Haiku only; he revokes it) is inside
   `calu-uitest` in two files of user `cua`; `uitest/setup-real.sh --remove-key` deletes
   them. Never print it, never put any part of it on a command line (an agent once passed a
@@ -205,7 +214,8 @@ session's scratchpad (`git worktree prune` removes a stale entry), virtual envir
 (`run1`, `run2`, `real1`, `pycharm1`, `pycharm-ssh1`, `lightcycles`).
 
 The owner's machine: he reinstalls the root calu from GitHub after a push and runs
-`sudo calu setup --no-password` (needed again for migration 0036 and D230).
+`sudo calu setup --no-password` (needed again for migration 0037, the four-argument
+`calu_resolve_escalation`, and for D230).
 
 ### The VSCode extension and the PyCharm plugin: what the owner wants
 
@@ -602,7 +612,7 @@ inside a container). No phase has unbuilt work in it.
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
 **2031 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. about 470 commits, ~83k lines of Python in `src` (~88k with the SQL, templates and
-default instructions), ~49k of tests, 36 migrations, 27 CLI commands (26 in `calu --help` and the hidden easter egg
+default instructions), ~49k of tests, 37 migrations, 27 CLI commands (26 in `calu --help` and the hidden easter egg
 `calu lightcycles`), 23 protocol requests,
 19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
