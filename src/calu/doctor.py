@@ -293,10 +293,12 @@ def self_approval_findings(store: CredentialStore) -> list[Finding]:
         Finding(
             "self-approval",
             False,
-            f"{', '.join(unprotected)} has no password and the sandbox cannot run here ({why})",
-            "Any program Claude runs could read it and resolve its own escalations. Make "
-            "the sandbox work (bubblewrap and socat, and the right to create user "
-            "namespaces), or put a password back (`calu credential set operator`).",
+            f"{', '.join(unprotected)} {'has' if len(unprotected) == 1 else 'have'} no password "
+            f"and the sandbox cannot run here ({why})",
+            "Any program Claude runs could read "
+            f"{'it' if len(unprotected) == 1 else 'them'} and resolve its own escalations. "
+            "Make the sandbox work (bubblewrap and socat, and the right to create user "
+            f"namespaces), or put passwords back ({preflight.password_commands(unprotected)}).",
         )
     ]
 

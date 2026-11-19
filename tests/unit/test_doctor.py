@@ -294,6 +294,11 @@ def test_a_password_free_credential_where_no_sandbox_can_run_is_a_finding(
     monkeypatch.setattr(doctor, "namespace_findings", lambda: refused)
     (finding,) = doctor.self_approval_findings(store)
     assert "cannot create a sandbox" in finding.detail
+    # The advice names the entries that have no password, not always `operator`.
+    store.save("admin", "postgresql://owner@localhost/calu", None)
+    (finding,) = doctor.self_approval_findings(store)
+    assert finding.detail.startswith("admin, operator have no password")
+    assert "(`calu setup --set-passwords`, `calu credential set operator`)" in finding.advice
     # A store only root can read is out of reach of Claude Code's user.
     monkeypatch.setattr(doctor.asuser, "only_root_writes", lambda path: True)
     assert doctor.self_approval_findings(store) == []

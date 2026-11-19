@@ -10,7 +10,7 @@ session at all (`calu.claude.sdk_runner.SdkRunner.run`).
 import json
 import os
 import shutil
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -449,8 +449,28 @@ def self_approval_warnings(config: Config, store: CredentialStore | None = None)
         f"Without a working sandbox, the credential(s) {', '.join(unprotected)} stored without a "
         "password are kept from the programs Claude runs only by the checkers' judgement, and "
         "such a credential can resolve escalations. Switch the sandbox on, or put a password "
-        "back on them (`calu credential set operator`)."
+        f"back on them ({password_commands(unprotected)})."
     ]
+
+
+def password_commands(unprotected: Sequence[str]) -> str:
+    """Name the commands that put passwords back on credentials stored without one.
+
+    `calu setup --set-passwords` encrypts the logins of `calu setup` (`admin`, `session`, and
+    it drops the password-free `calu_admin`); any other entry, such as `operator`, gets its
+    password from `calu credential set NAME`.
+
+    Args:
+        unprotected: Names of the entries stored without a password.
+
+    Returns:
+        A text in backticks, e.g. "`calu setup --set-passwords`" or "`calu setup
+        --set-passwords`, `calu credential set operator`".
+    """
+    setup = {"admin", "session", "calu_admin"}
+    parts = ["`calu setup --set-passwords`"] if any(n in setup for n in unprotected) else []
+    parts += [f"`calu credential set {n}`" for n in unprotected if n not in setup]
+    return ", ".join(parts)
 
 
 SANDBOX_PACKAGES = "bubblewrap socat"
