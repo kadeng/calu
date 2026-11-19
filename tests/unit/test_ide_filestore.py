@@ -392,6 +392,26 @@ def test_a_rename_never_replaces_an_existing_target(root: Path, tree: Tree):
     assert (root / "taken.txt").read_bytes() == b"t"
 
 
+def test_without_hard_links_a_rename_checks_the_target_and_then_renames(
+    root: Path, tree: Tree, monkeypatch: pytest.MonkeyPatch
+):
+    """A file system without hard links: a target that exists is still never replaced."""
+
+    def no_links(*_args: Any, **_kwargs: Any) -> None:
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(os, "link", no_links)
+    (root / "a.txt").write_bytes(b"a")
+    (root / "taken.txt").write_bytes(b"t")
+    with pytest.raises(RpcError) as exists:
+        tree.rename("a.txt", "taken.txt", sha(b"a"))
+    assert code_of(exists) == files.TARGET_EXISTS
+    assert (root / "taken.txt").read_bytes() == b"t" and (root / "a.txt").exists()
+    moved = tree.rename("a.txt", "b.txt", sha(b"a"))
+    assert moved.sha256 == sha(b"a")
+    assert (root / "b.txt").read_bytes() == b"a" and not (root / "a.txt").exists()
+
+
 # ---------------------------------------------------------------------------- manifest
 
 
