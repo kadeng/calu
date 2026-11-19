@@ -73,7 +73,7 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -594,7 +594,8 @@ def _new_admin_password(no_password: bool, protects: str) -> bytearray | None:
         The password (the caller wipes it), or None with `no_password`.
 
     Raises:
-        CliError: If the passwords are empty or do not match.
+        CliError: If the passwords do not match or the input ended (Ctrl-D); a blank password
+            is accepted.
     """
     if no_password:
         return None
@@ -622,7 +623,8 @@ def _first_start_local(
         The owner login.
 
     Raises:
-        CliError: If the passwords are empty or do not match.
+        CliError: If the passwords do not match or the input ended (Ctrl-D); a blank password
+            is accepted.
         local_db.DockerError: If docker fails.
     """
     password = _new_admin_password(no_password, "the database owner login")
@@ -1309,6 +1311,13 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
     `calu_admin` the new admin password: the way back from `--no-password`, and the way to
     change a password. The logins themselves stay as they are, so running sessions go on.
 
+    Every run may change the password of the role `calu_admin`: with `--no-password` to a new
+    generated one (kept in the store; as root also in the place file, which every user can
+    read, `_after_setup`); otherwise to the admin password typed in this run, or, if an
+    earlier `--no-password` setup had published one, to a new generated one kept in the store
+    only. A blank or untyped admin password leaves the role as it is. A long-running client
+    that logged in as `calu_admin` notices the change when its connection drops.
+
     Args:
         args: Parsed arguments (`checker_model`, `database` and the options of its variants,
             `renew_session`, `session_auth`, `no_password`, `set_passwords`).
@@ -1664,7 +1673,7 @@ def cmd_credential(args: argparse.Namespace, store: CredentialStore) -> None:
         store: The credential store.
 
     Raises:
-        CliError: If `name` is missing or unknown, a password is empty or mismatched, `new`
+        CliError: If `name` is missing or unknown, a password confirmation does not match or the input ended, `new`
             was asked for something other than the operator, or `set` of a login entry
             (`LOGIN_ENTRIES`) was given a secret that is no database login (`Target.parse`).
         CredentialError: On a wrong password.
@@ -1863,10 +1872,13 @@ def _run_again_through_sudo(args: argparse.Namespace) -> None:
     """Replace this process by `sudo calu ... --user <the invoking user>` (requirement 26).
 
     calu then runs as root and Claude Code as the user who typed the command. sudo asks for
-    its password on the terminal. Refused when the invoking user could change the calu that
-    would run as root: elevation would hand that user root.
+    its password on the terminal. Refused when somebody other than root can change the
+    `calu` script, the Python executable or calu's package directory, or one of their
+    parents: elevation would hand that user root. (Other installed packages inside a
+    root-owned directory are not checked one by one.)
 
-    Side effect: on success the process image is replaced; this function does not return.
+    Side effects: prints a note to stderr naming the checker-key variables sudo will not
+    pass on; on success the process image is replaced and this function does not return.
 
     Args:
         args: Parsed arguments (`user`).
@@ -2967,7 +2979,11 @@ def _endpoint_of(
 
 
 def claude_login_command(
-    action: str, method: str | None, run_as: RunAs | None, environ: Mapping[str, str]
+    action: str,
+    method: str | None,
+    run_as: RunAs | None,
+    environ: Mapping[str, str],
+    hidden: Collection[str] | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     """Build the command line and environment of Claude Code's own login for `calu login`.
 
@@ -2983,9 +2999,12 @@ def claude_login_command(
             or None for Claude Code's default (a Claude subscription).
         run_as: The user Claude Code runs as, or None for calu's own user.
         environ: calu's environment.
+        hidden: Names of variables Claude Code must not see; None takes `PROVIDER_KEYS` and
+            the names defined in calu's env file (`user_env_file`), which `main` loaded.
 
     Returns:
-        The command line and the environment to start it with.
+        The command line and the environment to start it with: `environ` without the
+        `hidden` variables (the checker keys), as a session starts Claude Code.
 
     Raises:
         LaunchError: If no Claude Code executable is found, or (with `run_as`) this
@@ -2997,7 +3016,15 @@ def claude_login_command(
         arguments.append(f"--{method}")
     if action == "status":
         arguments.append("--text")
-    environment = dict(environ)
+    if hidden is None:
+        from dotenv import dotenv_values
+
+        from calu.config import PROVIDER_KEYS, user_env_file
+
+        hidden = set(PROVIDER_KEYS)
+        if user_env_file().is_file():
+            hidden |= set(dotenv_values(user_env_file()))
+    environment = {name: value for name, value in environ.items() if name not in hidden}
     if run_as is None:
         return [claude, *arguments], environment
     environment[LAUNCH_ENV] = run_as.spec(claude).dump()
@@ -5410,7 +5437,9 @@ def main(
     then sees the same checker keys a session sees: only `calu run` used to read the file, so
     `calu doctor` reported "none of the known providers has a key" with a key in it, and
     `calu evals` ran its checkers without one (PLAN.md D131). The keys stay hidden from Claude
-    Code, which only `calu run` starts and which removes them (`SdkRunner.hidden_env`).
+    Code: a session (`calu run`, `calu serve`) removes them (`SdkRunner.hidden_env`), and
+    `calu login` starts `claude auth` without them (`claude_login_command`). Other programs
+    calu starts may inherit them (the browser of `calu lightcycles`, for one).
 
     `calu run` and `calu serve` run through `_logged`: tracebacks go to their log file and
     stderr gets one line per error (D225).

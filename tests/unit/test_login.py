@@ -61,3 +61,28 @@ def test_a_failed_login_is_reported(monkeypatch, capsys):
     assert calls == [["/opt/claude", "auth", "status", "--text"]]
     with pytest.raises(CliError, match="claude auth login for you ended with exit code 3"):
         cli.cmd_login(build_parser().parse_args(["login"]), None)  # type: ignore[arg-type]
+
+
+def test_the_login_environment_leaves_out_the_checker_keys(monkeypatch, tmp_path):
+    """`claude auth` gets calu's environment without the provider keys and the env file's names.
+
+    Side effects: none outside `tmp_path` (`XDG_CONFIG_HOME` points at it, so calu's env file
+    there is the one read).
+    """
+    monkeypatch.setattr(cli, "claude_path", lambda configured: "/opt/claude")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    from calu.config import user_env_file
+
+    user_env_file().parent.mkdir(parents=True, exist_ok=True)
+    user_env_file().write_text("MY_OTHER_KEY=x\n", encoding="utf-8")
+    environ = {
+        "PATH": "/bin",
+        "MISTRAL_API_KEY": "m",
+        "MY_OTHER_KEY": "x",
+        "ANTHROPIC_API_KEY": "a",
+    }
+    _command, env = claude_login_command("login", None, None, environ)
+    assert env == {"PATH": "/bin", "ANTHROPIC_API_KEY": "a"}
+    run_as = RunAs(uid=1000, gid=1000, home="/var/lib/calu/claude/1000")
+    _command, env = claude_login_command("login", None, run_as, environ)
+    assert "MISTRAL_API_KEY" not in env and "MY_OTHER_KEY" not in env
