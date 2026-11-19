@@ -139,15 +139,30 @@ def test_the_lazy_names_of_the_packages_still_resolve() -> None:
 
 @pytest.mark.slow
 def test_calu_version_answers_quickly() -> None:
-    """Best of three, under a bound that the imports of the checkers alone used to exceed."""
+    """`calu --version` is faster than a process that only imports what it used to import.
+
+    Before the imports were made lazy, `calu --version` imported Pydantic AI with the Mistral
+    and Bedrock models and the Agent SDK (1.9 s on the machine that now needs 0.5 s; those
+    imports alone take 1.5 s there). The comparison holds on a slow or busy machine, where a
+    bound in seconds alone would not; the runs alternate, best of three.
+    """
     calu = Path(sys.executable).parent / "calu"
-    command = [str(calu), "--version"] if calu.exists() else [sys.executable, "-m", "calu"]
+    version = [str(calu), "--version"] if calu.exists() else [sys.executable, "-m", "calu"]
     if not calu.exists():
-        command.append("--version")
-    best = float("inf")
+        version.append("--version")
+    checkers = [
+        sys.executable,
+        "-c",
+        "import pydantic_ai, pydantic_ai.models.bedrock, pydantic_ai.models.mistral, "
+        "claude_agent_sdk",
+    ]
+    best = {"version": float("inf"), "checkers": float("inf")}
     for _ in range(3):
-        started = time.perf_counter()
-        done = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
-        best = min(best, time.perf_counter() - started)
-        assert done.returncode == 0 and done.stdout.startswith("calu ")
-    assert best < 1.5, f"`calu --version` took {best:.2f} s"
+        for name, command in (("version", version), ("checkers", checkers)):
+            started = time.perf_counter()
+            done = subprocess.run(command, capture_output=True, text=True, timeout=120, check=False)
+            best[name] = min(best[name], time.perf_counter() - started)
+            assert done.returncode == 0, done.stderr
+            assert name != "version" or done.stdout.startswith("calu ")
+    assert best["version"] < best["checkers"], best
+    assert best["version"] < 5.0, f"`calu --version` took {best['version']:.2f} s"
