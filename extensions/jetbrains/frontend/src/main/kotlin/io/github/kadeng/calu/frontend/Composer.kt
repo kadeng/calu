@@ -144,9 +144,11 @@ class Composer(private val project: Project, private val host: ComposerHost) {
     private val attach = ActionLink("Add image") { chooseImages() }.apply {
         toolTipText = "Attach an image (PNG, JPEG, GIF or WebP; up to 5 MiB; $MAX_IMAGES per message). Paste attaches an image from the clipboard."
     }
-    private val stop = JButton("Stop", AllIcons.Actions.Suspend).apply { toolTipText = "Interrupt Claude's running turn" }
-    private val inject = JButton("Send Now").apply { toolTipText = "Send into the running turn: Claude reads it after the running tool calls (Ctrl+Enter)" }
-    private val send = JButton("Send")
+    // None of the three takes the keyboard focus: while the text field is disabled (a finished
+    // subagent's tab) the focus would move to "Stop", and a typed space would interrupt the turn.
+    private val stop = JButton("Stop", AllIcons.Actions.Suspend).apply { toolTipText = "Interrupt Claude's running turn"; isFocusable = false }
+    private val inject = JButton("Send Now").apply { toolTipText = "Send into the running turn: Claude reads it after the running tool calls (Ctrl+Enter)"; isFocusable = false }
+    private val send = JButton("Send").apply { isFocusable = false }
     private var suppressCompletion = false
     private var canSend = false
     private var working = false

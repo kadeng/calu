@@ -531,6 +531,9 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
             renderTabs()
             renderAttention()
             composer.render(state, active)
+            // The user chose the tab to write there: the text field gets the keyboard (if the
+            // tab takes messages), so that typing never reaches another control.
+            composer.focus()
         }
     }
 

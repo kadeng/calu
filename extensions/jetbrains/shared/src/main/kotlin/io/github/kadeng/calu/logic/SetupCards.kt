@@ -103,7 +103,7 @@ fun hintAction(hint: SetupHint): CardAction? {
 /**
  * Decide what the chat shows while it cannot work: one card per problem, most important first.
  *
- *     bridge "missing"                 -> Install calu
+ *     bridge "missing"                 -> Install calu (secondary: the hint's button, Open settings)
  *     bridge "error" / "exited"        -> Restart bridge (secondary: Show log)
  *     bridge "stopped"                 -> Start (restartBridge)
  *     bridge "starting"                -> a line without a button
@@ -135,11 +135,12 @@ fun setupCards(state: ViewState, dismissed: Collection<String> = emptyList()): L
     val text = bridge.message?.takeIf { it.isNotEmpty() }
     when (bridge.status) {
         BridgeStatus.MISSING -> {
+            // calu is missing on this machine (only the local launcher reports that): the card
+            // offers the installation; the hint's own button (the settings, for a calu that is
+            // installed elsewhere) comes second.
             val hint = state.hints.firstOrNull { it.id == "calu-missing" }
-            return listOf(
-                if (hint != null) fromHint(hint)
-                else SetupCard("calu-missing", "error", text ?: "calu is not installed on this machine.", CardAction("Install calu", "install")),
-            )
+            val card = if (hint != null) fromHint(hint) else SetupCard("calu-missing", "error", text ?: "calu is not installed on this machine.")
+            return listOf(card.copy(primary = CardAction("Install calu", "install"), secondary = listOfNotNull(card.primary?.takeIf { it.action != "install" })))
         }
         BridgeStatus.ERROR, BridgeStatus.EXITED -> return listOf(
             SetupCard(

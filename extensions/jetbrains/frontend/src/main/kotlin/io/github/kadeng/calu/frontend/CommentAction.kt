@@ -57,7 +57,10 @@ class CommentAction : DumbAwareAction() {
         }
         val base = project.basePath.orEmpty()
         val file = FileDocumentManager.getInstance().getFile(document) ?: sides.firstNotNullOfOrNull { it.highlightFile }
+        // The diff of an edit is titled with the file's path on this machine (absolute, or as
+        // calu named it); calu takes a comment's path relative to the project directory.
         val titled = request?.title?.takeIf { it.startsWith(CALU_DIFF_TITLE_PREFIX) }?.removePrefix(CALU_DIFF_TITLE_PREFIX)
+            ?.let { shown -> runCatching { relativePathWithin(base, shown) }.getOrDefault(shown) }
         val path = titled ?: file?.takeIf { it.isInLocalFileSystem }?.let { runCatching { relativePathWithin(base, it.path) }.getOrNull() }
         if (path.isNullOrEmpty()) {
             Messages.showInfoMessage(project, "This editor shows no file of the project, so calu cannot name the commented lines.", "calu: Add Comment for Claude")
