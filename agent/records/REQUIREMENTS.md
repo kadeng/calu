@@ -326,6 +326,14 @@ broken down or extended. Derived requirements and design decisions belong in
     redaction should ensure that requirements that entered the chat ( or were proposed by the
     LLM and accepted by the user ) are accurately reflected, while possibly redacting aspects
     that users find personal." (stated 2026-11-19)
+45. "The final trace redaction does not happen per step, I would say, it happens before the
+    file is committed. Can we handle it that way? Otherwise, summaries will have content
+    summarized and folded into summaries that are folded into summaries." Asked whether to keep
+    the per-block redaction of the live file and add a final pass at commit: "Both, but try to
+    summarize only what was added since last commit. The final diff to be committed needs
+    redaction. We don't want the previous committed summary folded into the next." On a
+    removed message's turn heading: "Whatever the custom prompt says. By default it should all
+    be kept, unless the prompt says so. It's not important." (stated 2026-11-19)
 ## Soft goals and priorities
 
 1. Simple requirements first: calu should become functional before anything else; a port to Go

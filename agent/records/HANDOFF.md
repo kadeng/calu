@@ -149,6 +149,33 @@ the VSCode and PyCharm checker pickers, a conflict check in `ide.settings.set`, 
 check `docs/TESTING.md` item 41 with a real model (the new prompt is not yet measured on
 Haiku or Nemotron).
 
+#### Claude Code as a whole inside namespaces (backlog, owner 2026-11-19)
+
+Today only Claude's Bash commands run in Claude Code's sandbox; Claude Code itself (Read,
+Edit, MCP servers, hooks) runs unsandboxed as the user. Idea: calu starts the whole Claude
+Code process in namespaces, as hardening without root next to `--sudo` (which stays the strong
+option, because only a different kernel uid makes the kernel itself the boundary):
+- a user namespace mapping the user's own uid (no new identity: to the kernel it is still the
+  same uid, so files are protected only by what the mount namespace hides);
+- a mount namespace that hides calu's directories (`$XDG_CONFIG_HOME/calu`,
+  `$XDG_STATE_HOME/calu`, the `--insecure` sockets) and the agent sockets under
+  `/run/user/<uid>` (D-Bus, ssh-agent, gpg-agent, IDE sockets) except what is needed;
+- a pid namespace with its own `/proc` (calu's process invisible and unsignalled);
+- no capabilities, `no_new_privs`. Calu's memory is protected already by `PR_SET_DUMPABLE 0`
+  and Yama, not by the namespace.
+Known gaps to measure, not assume: inherited file descriptors, abstract Unix sockets (shared
+unless the network namespace is separate, and Claude needs the network), calu's own socket
+still reports the same uid (tokens stay required).
+**Spikes first:** (1) Claude Code runs normally inside (login, settings, MCP, hooks, the IDE
+links); (2) nesting: Claude Code's own Bash sandbox (bubblewrap) inside the namespaces, and
+Docker used from inside (needed for projects that run containers; note that access to the
+Docker socket is equivalent to root on the host, so how Docker is reached from inside must be
+a deliberate, documented choice, e.g. rootless Docker or a proxy); Ubuntu 24.04's AppArmor
+limit on unprivileged user namespaces; (3) what an escape attempt from inside can actually
+reach. A third option to compare in the spike: subordinate uids (`/etc/subuid`, `newuidmap`,
+as rootless Podman), a truly different kernel uid without sudo per start, at the cost of
+project files owned by two uids (ACLs or a shared group).
+
 #### macOS support (backlog, owner 2026-11-19)
 
 Not started; the owner put it on the backlog. What ties calu to Linux today:
