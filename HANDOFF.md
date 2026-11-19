@@ -55,6 +55,24 @@ Three agents started at about 07:00 (none pushes; the lead pushes):
 3. **Terminal client and web, remote**: an own copy of the SSH box (`calu-sshbox2`), `calu
    attach` over TCP, over an SSH tunnel and over `ssh -t`, `calu web` remote and local
    against a remote server.
+**Planned move of the system of records (owner, 2026-11-19), to be done by the lead only
+while no agent runs:** every document written only for and maintained by the coding agents,
+except `AGENTS.md`, moves to `.agent/records/` (the name of `.agent/` matches the session
+traces' `.agent/traces/`). Moves, with `git mv` so history follows: `HANDOFF.md`, `PLAN.md`,
+`REQUIREMENTS.md`, and all of `docs/notes/` (specs, research, test plan, reports, honesty
+evaluations, screenshots) to `.agent/records/notes/`. Stay where they are (written for
+people): `README.md`, `CALU_GUIDE.md`, `LICENSE*`, `docs/CONFIGURATION.md`,
+`docs/TESTING.md`, `docs/assets/`, the extensions' READMEs; `.claude/skills/` (Claude Code
+reads it there). Then rewrite every reference (about 170 files: `PLAN.md D…` in code
+comments, Kotlin, TypeScript, tests such as `test_handoff_counts.py` and
+`test_documentation_links.py`, `.github/workflows/`, `scripts/`, the extensions' READMEs,
+README, CALU_GUIDE, docs/TESTING.md, the skills, AGENTS.md above all), taking care not to
+touch references to the parent project's `docs/PLAN.md`; regenerate
+`extensions/vscode/src/protocol.generated.ts` with `npm run gen:protocol`; check that no
+packaging step (release workflow, `scripts/build-binary.sh`, `.vsix`, plugin zip) ships or
+needs the moved files; update the memory notes that name the paths; full pre-push run;
+push.
+
 After agent 1: **VSCode in the desktop**, locally and over Remote-SSH to the SSH box, C5,
 C6, C11, C12 at scale, integration tests. Results go into `docs/notes/test-plan.md`.
 
