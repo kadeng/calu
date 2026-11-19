@@ -1,4 +1,4 @@
-# calu
+# Calu
 
 [![checks](https://github.com/kadeng/calu/actions/workflows/checks.yml/badge.svg)](https://github.com/kadeng/calu/actions/workflows/checks.yml)
 
@@ -19,8 +19,8 @@
 **The problem.** A coding agent produces steps faster than a person can read them. Left
 unwatched it drifts from the task, and a wrong step costs more the later it is caught.
 
-**What calu does.** It runs [Claude Code](https://claude.com/claude-code) and puts **independent 
-agents** (checker agents) in charge that need to approve (and can comment to claude about) every command and
+**What Calu does.** It runs [Claude Code](https://claude.com/claude-code) and puts **independent 
+agents** (checker agents) in charge that need to approve (and can comment to Claude about) every command and
 every edit: small models that follow instructions you write and interpret them in the context
 of your chat session.
 
@@ -28,18 +28,25 @@ These checker agents focus on a much narrower task than your main coding agent. 
 and decide, never act or write on their own. They are much better at keeping your instructions
 in mind at all times.
 
-What that gives us is much more control over what happens. These agents are faster than
+What that gives you is much more control over what happens. These agents are faster than
 your coding agent, and they look at what happens from multiple angles.
 
-- **Security and Confidentiality** You can give your own standing instructions about which commands
+- **Security and Confidentiality.** You can give your own standing instructions about which commands
 should be approved automatically, what is off limits, and what needs your approval. The
-regular claude auto mode is very generic in this sense.
-- **Honesty enforcement** calu (optionally) tracks incrementally whether names and documentation say what the
-  code does, and can keep code where documentation and code disagree from being executed. This
+regular Claude auto mode is very generic in this sense; Calu leaves general safety to it, so
+  switch it on (Getting started below). Your instructions, the settings and the record of every
+  step are in a database the session cannot write; the checkers can only read, and only inside
+  the project. Claude's own words reach them only retold by a narrator, so an instruction
+  planted in a web page arrives as a report that someone wrote it. With `--sudo`, Claude Code
+  runs as a different user than Calu and cannot approve its own steps.
+- **Honesty enforcement.** Calu (optionally) tracks incrementally whether names and documentation say what the
+  code does, and can keep code that is not verified yet from being run or committed. This
 prevents an agent sneakily avoiding supervision by placing things that you don't want to happen
-in harmless appearing code sections. ( Sounds far-fetched? I saw DeepSeek V4 do this and hide it's
-tracks afterwards. Even well aligned SOTA models can misunderstand conflicting goals, fail to remember rules
-or misunderstand priorities )
+in harmless-looking code sections. *(Sounds far-fetched? I saw DeepSeek V4 do this and hide its
+tracks afterwards. Even well-aligned SOTA models can misunderstand conflicting goals, fail to remember rules
+or misunderstand priorities.)*
+
+<img src="docs/assets/vscode-approval.png" width="720" alt="An approval card in the VSCode extension: Claude Code asked to edit a shell profile, the checker's remark is above, Allow and Deny below">
 
 > **Flynn:** "Who's that guy?"
 >
@@ -47,9 +54,9 @@ or misunderstand priorities )
 >
 > — *Tron* (1982)
 
-Steer while it happens with your instructions, modifiable at any time, via a friendly UI right in your IDE, Terminal or Browser.
+Steer while it happens with your instructions, modifiable at any time, via a friendly UI right in your IDE, terminal or browser.
 
-- **Keep it readable by humans** stop bad agentic writing styles before they take hold.
+- **Keep it readable by humans.** Stop bad agentic writing styles before they take hold.
 - **Stop overengineering right there.** A checker sees a change before it lands and can send
   it back: an abstraction nobody asked for, work beyond the task, a test weakened to pass.
 - **Your repo, your rules.** You have custom confidentiality rules or writing style that you want
@@ -58,11 +65,11 @@ maintained at all times? Don't let violations happen.
   something you always approve, tell a checker to allow it, and the step runs without a
   prompt. If auto mode lets something through that you want to see first, tell a checker to
   ask, and the session waits for you.
-- **Keep your data and secrets confidential**: You have certain data or secrets that may not be mishandled, and
+- **Keep your data and secrets confidential.** You have certain data or secrets that may not be mishandled, and
 the coding agent has a hard time remembering the specifics with all the other things it does? Have
 additional eyes watch this.
 
-### Participate actively in the Coding Process, delegate micromanagement.
+### Participate actively in the coding process, delegate micromanagement
 
 > **Dr. Walter Gibbs:** "Computers and programs will start thinking, and the people will stop."
 >
@@ -70,12 +77,12 @@ additional eyes watch this.
 
 - **You are not a bystander. Contribute and modify your instructions whenever you like, review and contribute
 at every level of detail you want.** Having checker agents help with the micromanagement
-frees your attention to actually look at what is really happening. Which in turn allows you to 
+frees your attention to actually look at what is really happening, which in turn allows you to
 engage intellectually with what matters, not with micromanagement and babysitting a coding agent.
 - **Version control and review the redacted LLM chat history along with the code changes.** A session
   can be written step by step as Markdown into the project, with secrets and personal data
-  replaced, and committed and reviewed with the change it produced. The chat log is more and more
-going to be the highest level description of the specifications that went into a project. They,
+  replaced, and committed and reviewed with the change it produced. Chat logs are more and more
+going to be the highest-level description of the specifications that went into a project. They,
 just like source code, may need review.
 - **Run a herd of agents and stay in control of it.** The web interface lists every session
   on every machine, those that wait for a decision first, with each one's history, diffs and
@@ -97,11 +104,11 @@ MCP servers, skills and subagents work as your project configures them.
 
 <img src="docs/assets/vscode-subagents.png" width="560" alt="Subagents as tabs in the VSCode extension">
 
-## Frontends - Terminal UI, Web UI, IDE extensions 
+## Frontends - Terminal UI, Web UI, IDE extensions
 
 Calu wraps Claude Code. For convenience, it replaces most of the user interface you are used to. But
-don't worry, it has what you expect from a full fledged coding assistant. And it does not
-replace the proven claude code coding harness itself, it sits on top of it.
+don't worry, it has what you expect from a full-fledged coding assistant. And it does not
+replace the proven Claude Code harness itself, it sits on top of it.
 
 Claude Code sessions run independently of the frontend. You can detach and attach to sessions
 and switch user interfaces or even use multiple of them in parallel.
@@ -109,14 +116,17 @@ and switch user interfaces or even use multiple of them in parallel.
 - **VSCode extension** ([extensions/vscode](extensions/vscode)): the chat on the right;
   checker instructions, checker context and honesty one click away; a click on an edit opens
   its diff, a click on a file name opens the file at the line; a settings dialog with one
-  model for every role. Runs where the workspace is: WSL, SSH, a dev container.
+  model for every role. Meant to run where the workspace is (WSL, SSH, a dev container).
 - **PyCharm plugin** ([extensions/jetbrains](extensions/jetbrains)), for PyCharm 2026.3: the
-  same chat as a native tool window. It runs in a local IDE; JetBrains' remote development
-  and the mode for a local IDE that reaches the server over SSH and syncs files through calu
-  are built and not yet verified.
+  same chat as a native tool window, in three modes: everything local; JetBrains'
+  remote development with the IDE backend on the server; a local IDE on a copy that Calu keeps
+  in sync with the server over SSH, with run and debug through PyCharm's SSH interpreter
+  ([guide](CALU_GUIDE.md#pycharm-the-three-ways-to-work)).
 - **Web interface** (`calu web`): all sessions of all machines, history, diffs, a live view,
-  settings.
-- **Terminal** (`calu attach`): a full-screen client, and a line client for pipes.
+  settings, herd management.
+- **Terminal** (`calu attach`): a full-screen client, and a line client for pipes. It and the
+  web interface also work from another machine through SSH
+  ([guide](CALU_GUIDE.md#from-another-machine)).
 - **ACP editors** (`calu acp`): Zed, Neovim, JetBrains' agent chat.
 - **Command line on the database**: `calu sessions`, `calu escalations`,
   `calu resolve 12 allow`.
@@ -131,7 +141,7 @@ and switch user interfaces or even use multiple of them in parallel.
 ## Getting started
 
 You need Linux where Claude Code runs (clients may be anywhere), Python 3.14 with
-[uv](https://docs.astral.sh/uv/), Claude Code set up for your project, PostgreSQL (calu can
+[uv](https://docs.astral.sh/uv/), Claude Code set up for your project, PostgreSQL (Calu can
 start one in Docker, or use a server or RDS you have), credentials for the checker models, and
 `bubblewrap` and `socat` for the sandbox.
 
@@ -174,13 +184,13 @@ cd extensions/vscode && npm ci && npm run package   # writes calu.vsix
 ```
 
 Then "Extensions: Install from VSIX…" in VSCode 1.106 or newer. It finds `calu` itself, offers
-to install uv and calu where they are missing, tells you how to start a server if none
+to install uv and Calu where they are missing, tells you how to start a server if none
 answers, and checks that Claude Code is there (it does not install it).
 
-**Running the agent as a user that cannot touch calu.** With `--sudo`, calu runs as root and
-Claude Code as you, so nothing the agent starts can read calu's credentials or approve its own
+**Running the agent as a user that cannot touch Calu.** With `--sudo`, Calu runs as root and
+Claude Code as you, so nothing the agent starts can read Calu's credentials or approve its own
 steps: `calu serve --sudo`, `calu attach --sudo`.
-([calu as root](CALU_GUIDE.md#calu-as-root-claude-code-as-another-user)) If you would rather
+([Calu as root](CALU_GUIDE.md#calu-as-root-claude-code-as-another-user)) If you would rather
 have no passwords at all on a machine that is yours alone, `sudo calu setup --no-password`
 does that, and says plainly what it gives up.
 
@@ -196,24 +206,24 @@ calu evals                   # the checkers against the built-in cases
 [CALU_GUIDE.md](CALU_GUIDE.md) is the documentation: every command, credentials, the sandbox
 and network policy, remote access, the front ends, checkers and rules. Every setting with its
 type and default is in [docs/CONFIGURATION.md](docs/CONFIGURATION.md). The decisions behind it
-all are in [PLAN.md](PLAN.md); how it is tested, including the tests driven by screenshot
+all are in [agent/records/PLAN.md](agent/records/PLAN.md); how it is tested, including the tests driven by screenshot
 in a container, in [docs/TESTING.md](docs/TESTING.md) and
-[docs/notes/test-plan.md](docs/notes/test-plan.md). Contributing starts at
+[agent/records/notes/test-plan.md](agent/records/notes/test-plan.md). Contributing starts at
 [AGENTS.md](AGENTS.md).
 
-## GPL Licensed - but safely usable in commercial / closed environments.
+## Free software under the GPL licence, usable in any project, including commercial or closed source
 
-GPL-2.0 ([LICENSE](LICENSE)), for **calu itself**: it is free software and stays free
+GPL-2.0 ([LICENSE](LICENSE)), for **Calu itself**: it is free software and stays free
 software, and a fork you distribute stays GPL-2.0 too.
 
-It says nothing about what you build with calu. It is a tool you run, like a compiler: your
-repository can be closed, commercial or under any licence, and code written with calu's help
-is yours. Your checker instructions and rules are your own text, and what calu produces as it
+It says nothing about what you build with Calu. It is a tool you run, like a compiler: your
+repository can be closed, commercial or under any licence, and code written with Calu's help
+is yours. Your checker instructions and rules are your own text, and what Calu produces as it
 runs carries no licence condition.
 
-The checker instructions **shipped with calu** are not under the GPL: they are prompts, meant
+The checker instructions **shipped with Calu** are not under the GPL: they are prompts, meant
 to be copied and rewritten, and are placed in the public domain as far as the law allows.
 [LICENSE.md](LICENSE.md) has the wording.
 
-calu comes with **no warranty of any kind**. A checker is a language model reading a step,
+Calu comes with **no warranty of any kind**. A checker is a language model reading a step,
 not a promise that nothing bad gets through.
