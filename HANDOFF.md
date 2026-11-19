@@ -1,72 +1,156 @@
 # Handoff
 
 State on 2026-11-19, in a session that began on 2026-11-18 and is still going. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-38; 26-38 are from the last days) and `PLAN.md` (decisions D1-D234, open
+(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D234, open
 questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here
 
-### State of the repository (updated 2026-11-19, about 01:00)
+### State of the repository (updated 2026-11-19, about 02:30; written before a compaction)
 
-**Read `PLAN.md` D233 first** (what the test campaign changed, and the decisions that wait
-for the owner), then D234 (the server and setup side in the root box).
-`docs/notes/test-plan.md` is the record of the cases; the skill
-`.claude/skills/ui-testing-with-cua/SKILL.md` is how the IDE tests are run.
+**Read first:** `PLAN.md` D233 (what the test campaign changed and the decisions that wait
+for the owner) and D234 (server and setup side); `docs/notes/test-plan.md` (the record of
+the cases, sections A-H and the table C1-C23); the skill
+`.claude/skills/ui-testing-with-cua/SKILL.md` (how the IDE tests are run). The owner's words
+are in `REQUIREMENTS.md` 34-40.
 
-- **Pushed to `origin/main`** (`git log origin/main -1`): everything of the test campaign
-  that was finished: the VSCode extension (two scripted runs, one run against a real Claude
-  Code on Haiku; a new session starts without asking anything; `extensions/vscode/calu.vsix`
-  is ready for the owner's manual test), the web interface (23 fixes), the terminal clients
-  (held steps shown, `/rename`, `/rewind`), the server and setup side (run for real as root,
-  through sudo and as three users in `uitest/rootbox/`; three security fixes; the root test
-  layer `tests/root/`; `calu setup --set-passwords`), the short checker instructions with
-  test triggers, D224, the measured honesty instructions, session traces, `calu ide` with
-  file sync, the PyCharm plugin's first round.
-- **Agents running when this was written** (they commit their own paths locally):
-  (1) the **PyCharm plugin's first real run** in the desktop (`extensions/jetbrains/`,
-  target 2026.3 only, screenshots in `~/.cache/calu-uitest/share/pycharm1/`, test plan
-  section B and column P); (2) the **easter egg** `calu lightcycles` (requirement 40): a
-  port of the mechanics of the owner's own game MetaTron, played in a web browser from a
-  small local server (`src/calu/lightcycles/`, hidden from `calu --help`; no music, no title
-  image, the water effect of the intro re-implemented; the reference source is unpacked in
-  the session's scratchpad and is not in the repository). Their reports exist only in that
-  session.
-- **Next, in this order:** (a) collect those two; (b) the README rework (requirement 39):
-  open with the Flynn / Program exchange about Tron, Alan Bradley's description where the
-  checkers are explained, close with Dr. Gibbs's line (the owner's wording; IMDb could not
-  be fetched to check it), lead with the new features, shorten the old sections, keep
-  ALLOW/DENY/ESCALATE to one sentence, and embed fresh screenshots from the Cua desktop in
-  `docs/assets/`; (c) the headless SSH server container (from the root box's image) and the
-  PyCharm plugin's SSH mode against it; (d) rendering the honesty checker's per-file result
-  in the four clients; (e) the open defects listed below.
-- **Open defects worth doing first:** held steps turn into escalations when one of them
-  escalates after a decision (order-dependent; `gate.StepGate.last_look`); `calu config`,
-  `calu checker` and `calu rules` prefer the user's own `admin` entry over `operator` and
-  may change another database without saying which; `calu` needs about 3 s to start
-  (imports of the checker and Agent SDK packages for every command); a changed `traces`
-  setting starts an empty file for every running session; a flaky unit test
-  (`test_protocol_server.py::test_a_revoked_token_is_refused_every_request_that_changes_the_session`
-  fails about one run in ten under `-n 8`).
-- **Waiting for the owner** (D233): the auto mode default with the short checker
-  instructions; whether an open decision holds every agent or only the one concerned; the
-  session-traces questions; the PyCharm plugin questions (bridge start, password in remote
-  mode, uploads during a turn, plugin id).
-- **The owner's API key** (budget-limited, Haiku only; he revokes it himself) is inside the
-  container `calu-uitest` in two files of user `cua`; `uitest/setup-real.sh --remove-key`
-  deletes them. Never print it or put any part of it on a command line.
-- **Before a push:** run both test layers on a clean copy of the committed state with a
-  database server of its own, because agents leave uncommitted work in the tree and share
-  the test server: `git worktree add --detach <dir> HEAD`, a throwaway `postgres:18`
-  container (the session used `calu-prepush-pg` on 127.0.0.1:55490) with
-  `CALU_TEST_DSN=postgresql://calu_owner:calu-dev@127.0.0.1:55490/calu`, then
-  `uv run pytest -q -n 8` and `uv run pytest -q -m 'db and not live'`; push the commit that
-  was tested (`git push origin <commit>:main`). The owner: "Push whenever you have reached a
-  milestone"; he does not want the full suite after every step.
-- Containers this session left: `calu-uitest` (the desktop, running), `calu-rootbox`
-  (stopped; `uitest/rootbox/run.sh` starts it), `calu-prepush-pg`, `calu-dev-caludb-1` (the
-  test suite's server), and the owner's `calu-db-postgres-1`, which nothing here touches.
-- The owner's machine: he reinstalls the root calu from GitHub after a push and runs
-  `sudo calu setup --no-password`. PyCharm's agreement in the desktop was accepted by him.
+#### What is on GitHub (`origin/main`, `e8adb9f` when this was written)
+
+- Everything of the test campaign that was finished: VSCode extension (two scripted runs,
+  one run against a real Claude Code on Haiku; `extensions/vscode/calu.vsix` is ready for
+  the owner's manual test), web interface (23 fixes), terminal clients, server and setup
+  side (run for real as root, through sudo, as three users; `tests/root/`), short checker
+  instructions with test triggers, D224 built, measured honesty instructions, session traces,
+  `calu ide` with file sync, the PyCharm plugin (runs in PyCharm 2026.3 in local mode; 418
+  tests), the easter egg `calu lightcycles` (a port of the owner's own game MetaTron for the
+  browser), and the rewritten README.
+- **CI is red.** (1) It was red because `ruff format --check .` and `ruff check .` in CI
+  cover the whole repository and one Python file under `extensions/jetbrains/` was
+  unformatted: fixed (`f81d806`). (2) One browser test fails since the gate fix `91ed9bd`:
+  `tests/browser/test_web_live_agents.py::test_subagents_are_told_apart_and_two_open_cards_are_answered_on_their_own`
+  (it expects two approval cards open at once; the gate now holds approved steps again
+  instead of escalating them). The agent that made the gate change has the failure and must
+  either fix the gate (two steps that each escalate on their own merit must both get a card)
+  or adapt the test. No CI run has finished since: every README push cancelled the run in
+  progress. **Do not report CI as green until a run on the tip has completed.**
+
+#### Agents that were running when this was written
+
+Their reports arrive in the session that started them; if that context is gone, read
+`git log origin/main..HEAD`, `git status`, and the test plan sections they fill in.
+
+1. **Core defect fixes** (Python; one commit per item; a database container of its own,
+   `calu-fix-pg` on 127.0.0.1:55491): held steps turning into escalations (done: `91ed9bd`,
+   see CI above); `calu config`/`checker`/`rules` saying which database they change and
+   refusing to guess between two stored logins (done: `930d665`); start-up time (lazy imports
+   in `calu.cli`: it had many files of `src/calu/` open and uncommitted when this was
+   written); empty trace files on a settings change; the flaky test
+   `test_protocol_server.py::test_a_revoked_token_is_refused_every_request_that_changes_the_session`;
+   two honesty workflow points (corrected file after a denied commit, a mark cleared by hand
+   not surviving a restart); seven smaller ones (web messages after `--no-password`,
+   `/history`, input of an unfinished first turn, who decided in `calu resolve`, conversation
+   titles, the browser layer's marker in the docs). It was asked NOT to change which steps
+   are held and to write the options for the owner.
+2. **PyCharm plugin, SSH mode** (`extensions/jetbrains/`, `uitest/sshbox/`; drives the
+   desktop container): a headless SSH server container `calu-sshbox` (key login with a key
+   pair made for the tests in `~/.cache/calu-uitest/ssh/`, never the owner's keys; on the
+   Docker network `calu-uitest-net` with the desktop), the plugin's I/O half of file sync
+   (clone from server, both directions, conflicts with the merge dialog, offline queue), a
+   walk through it in PyCharm (test plan section H), the plugin's open defects (fork of a
+   rewound session missing a turn, cut code lines, dead sessions in the list, missing side
+   questions / file links / setup page, the honesty checker's per-file result), and one more
+   look at remote development.
+
+#### Next, in this order
+
+1. Collect those two agents; make CI green (above); push only what was tested.
+2. **Coverage and honest code** (the owner: "ensure test coverage is good, the code is
+   honest itself and CI is green"): measure coverage of the code written since 2026-11-17
+   (`src/calu/ide/`, `traces/`, `lightcycles/`, `logfile.py`, `db/place.py`, `localsocket.py`,
+   `asuser.py`, `launch.py`, `serve.py`, the cli parts) and add tests where behaviour with
+   consequences is untested; run the project's own honest-code rule
+   (`.claude/skills/honest-code/SKILL.md`) over that code: names and docstrings must say what
+   the code does, tests must describe their side effects. Start it only after agent 1 is
+   done (same files).
+3. **The honesty checker's per-file result in the clients** (`check.result.honesty`,
+   `honesty_escalation`): VSCode extension, terminal client, web live view (PyCharm: in
+   agent 2's brief). Never as a PASS chip.
+4. **VSCode extension, remaining:** the corner cases C5, C6, C11, C12 at scale in the
+   desktop (done for web, terminal and PyCharm); integration tests (`@vscode/test-cli`) in
+   the regression suite; an "Open session trace" action in both plugins (offered to the
+   owner, not answered); `/clear` against a real Claude Code.
+5. **Final screenshots** from the Cua desktop for the README (`docs/assets/`): a tidy project
+   path (the web one shows a scratch path with host and user name), a cleaner subagent shot
+   than the one ending in "finished banana"; all 16:10 so rows line up.
+6. Remote development of the PyCharm plugin needs the owner: the JetBrains CLIENT shows a
+   "JetBrains Team Tools User Agreement" that only he may accept (viewer link:
+   `uv run --no-project --with cua python uitest/desktop.py viewer-url`), then
+   `uitest/pycharm-split.sh`.
+
+#### Decisions that wait for the owner (ask once, do not decide for him)
+
+- **Auto mode default** with the short checker instructions: a fresh setup has no general
+  safety judgement unless auto mode is on; today only a start-up warning says so. Options:
+  keep the warning, `claude.permission_mode = auto` by default, or
+  `claude.require_auto_mode = true` by default (the lead recommended the last).
+- **The hold while a decision is open:** calu holds every other checked step of every agent
+  (a step held 300 s raises its own decision). He described "halts one but not other
+  subagents". Keep, or hold only the agent concerned? (A change of the safety argument.)
+- **Session traces:** thinking in plain mode (left out now), redaction per block (now) or
+  per turn, an export of past sessions (not built).
+- **PyCharm plugin:** start the bridge at project open (now) or with the tool window; the
+  password over the IDE's own link in remote mode; hold or upload a local save while Claude
+  edits the file; the plugin id `io.github.kadeng.calu`.
+- **Web:** Enter in the triage note no longer allows a step (changed during the tests; it had
+  been tested behaviour).
+- **README:** the three Tron quotes use his wording and were not checked against a source
+  (IMDb refused the fetch); the MetaTron assets (bitmaps, sounds, music) are not in the
+  repository.
+
+#### Rules learned in this session (they cost time or caused damage)
+
+- **Pushing.** "Push whenever you have reached a milestone"; README-only changes are pushed
+  at once without waiting for anything ("can be done in isolation"). But `git push origin
+  <commit>:main` pushes every ancestor: check `git log origin/main..HEAD` first. Twice a
+  README push carried agents' unverified commits; once that put a failing browser test on
+  `main`. When agents have local commits, make the README commit in a separate worktree
+  based on `origin/main`, or wait.
+- **Before a code push:** run on a clean copy of the committed state with a database server
+  of its own (`git worktree add --detach <dir> HEAD`; the session used the container
+  `calu-prepush-pg` on 127.0.0.1:55490 and
+  `CALU_TEST_DSN=postgresql://calu_owner:calu-dev@127.0.0.1:55490/calu`):
+  `uv run ruff format --check . && uv run ruff check . && uv run pyright`,
+  `uv run pytest -q -n 8`, `uv run pytest -q -m browser`,
+  `uv run pytest -q -m 'db and not live'`. Repo-wide lint, because CI is repo-wide. Then
+  push the tested commit. Each push cancels the CI run in progress.
+- The owner does not want the full suite after every step (memory note
+  `calu-selective-tests`); it is for milestones.
+- Agents share the checkout: each commits its own paths only; never `git add -A` while
+  agents work (it sweeps their half-done files in); a committed `HANDOFF.md` must agree with
+  the committed parser (`tests/unit/test_handoff_counts.py`); database tests never with
+  `-n`, and never two runs on one test server.
+- **The owner's API key** (budget-limited, Haiku only; he revokes it) is inside
+  `calu-uitest` in two files of user `cua`; `uitest/setup-real.sh --remove-key` deletes
+  them. Never print it, never put any part of it on a command line (an agent once passed a
+  prefix to `grep`).
+- In the desktop: no sign-ins, no agreements accepted for the owner. He accepted PyCharm's
+  user agreement himself (a trial runs; he has a Pro subscription).
+- The owner's rulings on wording: no first person and no origin story in the README, facts
+  not opinion, nothing that sounds like selling, do not quote his own messages in documents.
+
+#### Containers and directories this session left
+
+`calu-uitest` (the Cua desktop; running), `calu-sshbox` (SSH test server; agent 2 leaves it
+stopped), `calu-rootbox` (stopped; `uitest/rootbox/run.sh`), `calu-prepush-pg`, `calu-fix-pg`
+(agent 1 removes it), `calu-dev-caludb-1` (the test suite's server), and the owner's
+`calu-db-postgres-1`, which nothing here touches. A worktree for pre-push runs under the
+session's scratchpad (`git worktree prune` removes a stale entry), virtual environments
+`~/.cache/calu-venv-push` and `~/.cache/calu-venv-timing`, a JDK 21 and 25 under
+`~/.cache/calu-jdk/`, screenshots of every run under `~/.cache/calu-uitest/share/`
+(`run1`, `run2`, `real1`, `pycharm1`, `pycharm-ssh1`, `lightcycles`).
+
+The owner's machine: he reinstalls the root calu from GitHub after a push and runs
+`sudo calu setup --no-password` (needed again for migration 0036 and D230).
 
 ### The VSCode extension and the PyCharm plugin: what the owner wants
 
