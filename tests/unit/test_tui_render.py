@@ -314,6 +314,8 @@ def test_small_formats() -> None:
     assert render.clock_text(42) == "0:42" and render.clock_text(3725) == "1:02:05"
     assert render.duration_text(0.24) == "0.2s" and render.duration_text(72) == "1m12s"
     assert render.cost_text(0.836) == "$0.84" and render.cost_text(None) == ""
+    # A fraction of a cent is not shown as free.
+    assert render.cost_text(0.0042) == "$0.0042" and render.cost_text(0.0) == "$0.00"
     assert render.tool_label("AskUserQuestion") == "Ask"
     assert render.tool_label("mcp__github__create_issue") == "creat…"
     assert render.cut("a  b\nc", 10) == "a b c" and render.cut("abcdef", 4) == "abc…"

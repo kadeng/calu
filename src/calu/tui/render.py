@@ -205,15 +205,21 @@ def duration_text(seconds: float) -> str:
 
 
 def cost_text(cost: float | None) -> str:
-    """Format a cost in dollars.
+    """Format a cost in dollars: in cents, or with four decimals where cents would show `$0.00`.
+
+    A turn of a small model often costs a fraction of a cent, which two decimals would show
+    as `$0.00`, as if it were free (the editor plugins show four decimals throughout).
 
     Args:
         cost: The amount, or None.
 
     Returns:
-        `$0.84`, or "" for None.
+        `$0.84`, `$0.0042` for an amount above zero and below half a cent, `$0.00` for
+        zero, or "" for None.
     """
-    return "" if cost is None else f"${cost:.2f}"
+    if cost is None:
+        return ""
+    return f"${cost:.4f}" if 0 < cost < 0.005 else f"${cost:.2f}"
 
 
 def cut(text: str, width: int) -> str:
