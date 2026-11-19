@@ -123,6 +123,11 @@ Decided (do not ask again):
   greys the ended transcript and notices a server that runs again; the timer counts from
   `opened_at`. Not run over Remote-SSH. The PyCharm plugin does not use `cause` yet.
 - **Web:** Enter in the triage note stays a new line.
+- **Traces (later the same day):** a removed message keeps its turn heading by default,
+  unless the redaction instructions say otherwise ("It's not important"); the redaction
+  instructions are edited in the IDEs' settings dialogs only, no extra picker entry;
+  the final redaction pass before a commit covers only what was added since the last commit
+  (requirement 45, in work).
 - **Sandbox (D239):** a root setup counts as more privileged; `calu doctor` without `--db`
   stays silent about the sandbox. Both as built.
 
