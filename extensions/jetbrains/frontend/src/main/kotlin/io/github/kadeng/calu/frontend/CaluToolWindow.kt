@@ -36,6 +36,13 @@ class CaluToolWindowFactory : ToolWindowFactory, DumbAware {
                 action("Models: Use One Model for Everything", AllIcons.Actions.Lightning) { showCaluSettings(project, service, SettingsPages.MODELS) },
                 action("calu Settings (All)", AllIcons.General.Settings) { showCaluSettings(project, service) },
                 action("Plugin Settings: How calu Is Reached", AllIcons.General.GearPlain) { ShowSettingsUtil.getInstance().showSettingsDialog(project, "calu") },
+                object : DumbAwareAction("Sync Now (SSH Mode): Compare This Copy with the Server", null, AllIcons.Actions.Refresh) {
+                    override fun actionPerformed(e: AnActionEvent) = service.act("syncNow")
+                    override fun update(e: AnActionEvent) {
+                        e.presentation.isEnabledAndVisible = service.state.value.sync != null
+                    }
+                    override fun getActionUpdateThread() = com.intellij.openapi.actionSystem.ActionUpdateThread.BGT
+                },
             ),
         )
         service.start()

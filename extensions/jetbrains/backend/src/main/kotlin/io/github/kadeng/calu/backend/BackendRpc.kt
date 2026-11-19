@@ -81,6 +81,10 @@ class BackendCaluRemoteApi : CaluRemoteApi {
             "showLog" -> editor.showLog()
             "install" -> Installer(project).install()
             "setHonesty" -> setHonesty(c, a.str("mode") ?: return false)
+            "syncNow" -> CaluProjectService.of(project).wiring().sync?.let { it.syncNow(); true } ?: false
+            "syncResolve" -> CaluProjectService.of(project).wiring().sync?.let { it.resolve(a.str("path")); true } ?: false
+            "syncUploadNow" -> CaluProjectService.of(project).wiring().sync?.let { it.uploadHeldNow(); true } ?: false
+            "syncShowSkipped" -> CaluProjectService.of(project).wiring().sync?.let { it.showSkipped(); true } ?: false
             else -> false
         }
     }

@@ -15,7 +15,7 @@ class LaunchersTest {
         val argv = sshArgv(SshSettings("build-box", "/srv/my project", listOf("-p", "2222")))
         assertEquals(
             listOf(
-                "ssh", "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
+                "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
                 "-p", "2222", "build-box", "calu ide --cwd '/srv/my project'",
             ),
             argv,

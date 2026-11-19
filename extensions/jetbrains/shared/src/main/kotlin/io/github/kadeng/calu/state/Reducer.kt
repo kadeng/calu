@@ -29,6 +29,7 @@ import io.github.kadeng.calu.json.num
 import io.github.kadeng.calu.json.obj
 import io.github.kadeng.calu.json.objOrEmpty
 import io.github.kadeng.calu.json.str
+import io.github.kadeng.calu.json.strings
 import kotlinx.serialization.json.JsonObject
 
 /**
@@ -130,6 +131,11 @@ private fun reduceUi(state: ViewState, method: String, p: JsonObject): ViewState
         val text = textOrEmpty(p["text"])
         appendItem(state, MAIN) { id -> NoticeItem(id, level, text) }
     }
+    "ui.sync" -> state.copy(
+        sync = p.str("phase")?.let { phase ->
+            SyncView(phase, p.str("text").orEmpty(), nonEmptyStr(p, "message"), p.strings("conflicts"), p.strings("held"), p.strings("notes"), p.int("queued") ?: 0)
+        },
+    )
     "ui.clear" -> clearTranscript(state)
     "ui.decisionPending" -> p.str("escalation_key")?.let { setPending(state, it, true, p.str("answer")) } ?: state
     "ui.decisionFailed" -> p.str("escalation_key")?.let { setPending(state, it, false) } ?: state

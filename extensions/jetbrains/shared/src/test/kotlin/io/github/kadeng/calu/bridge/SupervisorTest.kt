@@ -126,7 +126,7 @@ class SupervisorTest {
         val init = s.ensureStarted()
         assertEquals("/srv/my project", init.str("workspace"))
         val args = record.readLines()
-        assertEquals(listOf("-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "build-box"), args.take(8))
+        assertEquals(listOf("-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "build-box"), args.take(10))
         s.stop()
     }
 

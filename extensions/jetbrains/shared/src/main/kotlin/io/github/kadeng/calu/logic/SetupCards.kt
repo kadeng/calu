@@ -148,7 +148,7 @@ fun setupCards(state: ViewState, dismissed: Collection<String> = emptyList()): L
             ),
         )
         BridgeStatus.STOPPED -> return listOf(SetupCard("bridge", "info", text ?: "The calu bridge is not running.", CardAction("Start", "restartBridge")))
-        BridgeStatus.STARTING -> return listOf(SetupCard("starting", "info", "Starting calu…"))
+        BridgeStatus.STARTING -> return listOf(SetupCard("starting", "info", text ?: "Starting calu…", busy = true))
     }
     val attached = isAttached(state)
     var cards = if (attached) {
@@ -165,5 +165,63 @@ fun setupCards(state: ViewState, dismissed: Collection<String> = emptyList()): L
         cards = listOf(SetupCard("link-lost", "warning", "The connection to the session was lost$why")) + cards
     }
     state.starting?.let { cards = listOf(startingCard(it)) + cards.filter { c -> c.id != "no-session" } }
-    return cards
+    return syncCards(state.sync, dismissed) + cards
+}
+
+/**
+ * The cards of the file synchronisation (SSH mode): what waits for the user there.
+ *
+ *     refused (no "fs" capability)   -> the reason, "Plugin settings"
+ *     waiting (first plan, a clone)  -> the reason, "Clone from server" / "Sync now"
+ *     failed                         -> the reason, "Sync now"
+ *     conflicts                      -> the paths, "Merge <first path>…"
+ *     held files                     -> one line, "Upload now" (dismissible)
+ *     skipped paths                  -> one line, "Show" (dismissible)
+ *
+ * @param sync The synchronisation's status; `null` if it is off.
+ * @param dismissed Ids of compact cards the user dismissed.
+ * @return The cards, most urgent first; empty if nothing waits.
+ */
+fun syncCards(sync: io.github.kadeng.calu.state.SyncView?, dismissed: Collection<String> = emptyList()): List<SetupCard> {
+    if (sync == null) return emptyList()
+    val out = ArrayList<SetupCard>()
+    when (sync.phase) {
+        "refused" -> out.add(SetupCard("sync-refused", "error", sync.message ?: "File synchronisation is not available.", CardAction("Plugin settings", "openSettings")))
+        "waiting" -> out.add(
+            SetupCard(
+                "sync-waiting", "info", "calu sync: " + (sync.message ?: "a plan waits for your confirmation."),
+                CardAction(if (sync.message.orEmpty().contains("cloned")) "Clone from server" else "Sync now", "syncNow"),
+            ),
+        )
+        "failed" -> out.add(SetupCard("sync-failed", "warning", "calu sync failed: " + (sync.message ?: "unknown reason"), CardAction("Sync now", "syncNow")))
+    }
+    if (sync.conflicts.isNotEmpty()) {
+        val more = if (sync.conflicts.size > 1) " (and ${sync.conflicts.size - 1} more: ${sync.conflicts.drop(1).take(5).joinToString(", ")})" else ""
+        out.add(
+            SetupCard(
+                "sync-conflict", "warning",
+                "calu sync: ${sync.conflicts[0]} was changed here and on the server$more. Neither side is overwritten until you decide.",
+                CardAction("Merge ${sync.conflicts[0].substringAfterLast('/')}…", "syncResolve"),
+            ),
+        )
+    }
+    if (sync.held.isNotEmpty() && sync.phase != "offline" && "sync-held" !in dismissed) {
+        val n = sync.held.size
+        out.add(
+            SetupCard(
+                "sync-held", "info", "calu sync: ${sync.held.joinToString(", ")} ${if (n == 1) "waits" else "wait"} until the agent's turn ends, because the agent is editing ${if (n == 1) "it" else "them"}.",
+                CardAction("Upload now", "syncUploadNow"), compact = true, short = "$n ${if (n == 1) "file" else "files"} held until the turn ends",
+            ),
+        )
+    }
+    if (sync.notes.isNotEmpty() && "sync-notes" !in dismissed) {
+        val n = sync.notes.size
+        out.add(
+            SetupCard(
+                "sync-notes", "info", sync.notes.joinToString("\n"), CardAction("Show", "syncShowSkipped"),
+                compact = true, short = "calu sync: $n ${if (n == 1) "path is" else "paths are"} not synchronised",
+            ),
+        )
+    }
+    return out
 }

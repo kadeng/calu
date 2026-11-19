@@ -21,6 +21,15 @@ const val STATUS_WIDGET_ID: String = "calu.decisions"
  */
 fun statusText(open: Int): String = if (open <= 0) "" else "calu: $open waiting"
 
+/**
+ * Build the widget's whole text: the open decisions and, in SSH mode, the file synchronisation.
+ *
+ * @param open Number of steps that wait for a decision.
+ * @param sync The synchronisation's line ("calu sync: in sync"); "" or `null` if it is off.
+ * @return The parts that are not empty, joined by " · ".
+ */
+fun statusLine(open: Int, sync: String?): String = listOf(statusText(open), sync.orEmpty()).filter { it.isNotEmpty() }.joinToString(" · ")
+
 /** Registers the status bar widget that counts the open decisions. */
 class CaluStatusBarWidgetFactory : StatusBarWidgetFactory {
     override fun getId(): String = STATUS_WIDGET_ID
@@ -40,8 +49,10 @@ class CaluStatusBarWidget(private val project: Project) : StatusBarWidget, Statu
     override fun getPresentation(): StatusBarWidget.WidgetPresentation = this
     override fun install(statusBar: StatusBar) {}
     override fun dispose() {}
-    override fun getText(): String = statusText(openEscalationCount(CaluFrontendService.of(project).state.value))
+    override fun getText(): String = CaluFrontendService.of(project).state.value.let { statusLine(openEscalationCount(it), it.sync?.text) }
     override fun getAlignment(): Float = Component.CENTER_ALIGNMENT
-    override fun getTooltipText(): String = "Steps of Claude that wait for your decision in calu. Click to open the chat."
+    override fun getTooltipText(): String = CaluFrontendService.of(project).state.value.sync?.let { s ->
+        (listOfNotNull(s.message) + s.conflicts.map { "conflict: $it" } + s.held.map { "held: $it" } + s.notes.map { "not synchronised: $it" }).take(12).joinToString("<br>").ifEmpty { s.text } + "<br>Click to open the chat."
+    } ?: "Steps of Claude that wait for your decision in calu. Click to open the chat."
     override fun getClickConsumer(): Consumer<MouseEvent> = Consumer { ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID)?.activate(null) }
 }

@@ -62,7 +62,7 @@ class CaluPasswords {
 @Service(Service.Level.PROJECT)
 class CaluProjectService(private val project: Project, private val scope: CoroutineScope) : Disposable {
     /** The parts that are rebuilt when the settings change how calu is reached. */
-    class Wiring(val choice: LauncherChoice, val supervisor: BridgeSupervisor, val controller: ChatController)
+    class Wiring(val choice: LauncherChoice, val supervisor: BridgeSupervisor, val controller: ChatController, val sync: CaluSync? = null)
 
     private val log = Logger.getInstance(CaluProjectService::class.java)
     private val lock = Any()
@@ -81,7 +81,7 @@ class CaluProjectService(private val project: Project, private val scope: Corout
      * @return Launcher choice, supervisor and controller.
      */
     fun wiring(): Wiring = synchronized(lock) {
-        wiring ?: build().also { wiring = it; it.controller.start() }
+        wiring ?: build().also { wiring = it; it.sync?.start(); it.controller.start() }
     }
 
     /** The chat controller of the project (creates the wiring if needed). */
@@ -99,9 +99,10 @@ class CaluProjectService(private val project: Project, private val scope: Corout
         settings.update(dto)
         val after = settings.toDto()
         val same = before.mode == after.mode && before.caluCommand == after.caluCommand && before.sshHost == after.sshHost &&
-            before.sshDirectory == after.sshDirectory && before.sshOptions == after.sshOptions
+            before.sshDirectory == after.sshDirectory && before.sshOptions == after.sshOptions && before.syncMode == after.syncMode
         val old = synchronized(lock) { if (same) null else wiring.also { wiring = null } }
         if (old != null) {
+            old.sync?.dispose()
             old.supervisor.dispose()
             wiring()
             restarted.value += 1
@@ -149,7 +150,14 @@ class CaluProjectService(private val project: Project, private val scope: Corout
             val s = CaluSettings.of(project).toDto()
             ServerSettings(serverCalu(choice.mode, splitArgs(s.caluCommand)), s.serverSudo, s.serverInsecure, splitArgs(s.serverExtraArgs))
         }, log = { log.info(it) })
-        return Wiring(choice, supervisor, controller)
+        // SSH mode with "Sync: through calu": the local copy is kept equal to the server's
+        // directory through the same bridge. With "none" no ide.fs.* request is ever sent.
+        val sync = if (choice.mode == "ssh" && settings.syncMode == "calu" && project.basePath != null) {
+            CaluSync(project, supervisor, controller, settings.sshHost.trim(), settings.sshDirectory.trim(), scope) { log.info(it) }
+        } else {
+            null
+        }
+        return Wiring(choice, supervisor, controller, sync)
     }
 
     /**
@@ -171,6 +179,7 @@ class CaluProjectService(private val project: Project, private val scope: Corout
     }
 
     override fun dispose() {
+        synchronized(lock) { wiring }?.sync?.dispose()
         synchronized(lock) { wiring }?.supervisor?.dispose()
     }
 

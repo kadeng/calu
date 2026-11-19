@@ -8,6 +8,7 @@
     <extensions defaultExtensionNs="com.intellij">
         <platform.rpc.backend.remoteApiProvider implementation="io.github.kadeng.calu.backend.BackendRpcApiProvider"/>
         <editorNotificationProvider implementation="io.github.kadeng.calu.backend.CheckerBannerProvider"/>
+        <pathMacroFilter implementation="io.github.kadeng.calu.backend.CaluPathMacroFilter"/>
         <fileDocumentManagerListener implementation="io.github.kadeng.calu.backend.CheckerSaveListener"/>
     </extensions>
 </idea-plugin>

@@ -87,7 +87,13 @@ class EditorActions(private val project: Project) {
         val remote = absoluteRemotePath(path, wiring.controller.state.session.workspace)
         return when (wiring.choice.mode) {
             "wsl" -> if (remote.startsWith("/")) wslToWindowsPath(wiring.choice.wslDistro, remote) else remote
-            "ssh" -> sshLocalPath(remote, CaluSettings.of(project).toDto().sshDirectory, project.basePath ?: return null)
+            "ssh" -> {
+                // The server names resolved paths; the setting may name the same directory
+                // through a link. Both roots map to the local copy.
+                val base = project.basePath ?: return null
+                val roots = listOfNotNull(wiring.sync?.sync?.remotePaths?.root, CaluSettings.of(project).toDto().sshDirectory)
+                roots.firstNotNullOfOrNull { sshLocalPath(remote, it, base) }
+            }
             else -> remote
         }
     }
@@ -141,7 +147,7 @@ class EditorActions(private val project: Project) {
         val type = FileTypeManager.getInstance().getFileTypeByFileName(diff.path.substringAfterLast('/'))
         val factory = DiffContentFactory.getInstance()
         val request = SimpleDiffRequest(
-            "calu: ${diff.path}",
+            "calu: ${localPath(diff.path) ?: diff.path}",
             factory.create(project, diff.before, type),
             factory.create(project, diff.after, type),
             "Before the edit",

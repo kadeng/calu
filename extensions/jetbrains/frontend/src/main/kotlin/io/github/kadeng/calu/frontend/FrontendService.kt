@@ -227,7 +227,7 @@ class CaluFrontendService(private val project: Project, private val scope: Corou
      * @param next The state after it.
      */
     private suspend fun onStateChanged(before: ViewState, next: ViewState) {
-        if (openEscalationCount(before) != openEscalationCount(next)) {
+        if (openEscalationCount(before) != openEscalationCount(next) || before.sync != next.sync) {
             withContext(Dispatchers.EDT) { WindowManager.getInstance().getStatusBar(project)?.updateWidget(STATUS_WIDGET_ID) }
         }
         // A notification whose escalation is decided (here, in another client, or by a cancel) goes away.

@@ -90,6 +90,13 @@ interface BridgeLauncher {
      * @return The diagnosis, or `null` if this launcher has nothing to add to "exited with code N".
      */
     fun diagnose(exitCode: Int, stderrTail: String): Diagnosis? = null
+
+    /**
+     * What the user reads while the bridge starts.
+     *
+     * @return The sentence, or `null` for the default "Starting calu…".
+     */
+    fun startingText(): String? = null
 }
 
 /**
@@ -260,17 +267,21 @@ data class SshSettings(
     val sshExecutable: String = "ssh",
 )
 
+/** Seconds `ssh` waits for the server to accept the connection. */
+const val SSH_CONNECT_TIMEOUT_S: Int = 15
+
 /**
  * Build the command line of the SSH mode.
  *
  * `-T`: no terminal, the streams carry the protocol. `BatchMode=yes`: ssh never asks for a
  * passphrase or password on the protocol streams; it fails instead, and `SshLauncher.diagnose`
- * says what to do. The two `ServerAlive` options end a dead connection after about 45 seconds,
+ * says what to do. `ConnectTimeout`: a host that does not answer fails after
+ * [SSH_CONNECT_TIMEOUT_S] seconds instead of the system's two minutes. The two `ServerAlive` options end a dead connection after about 45 seconds,
  * so that the supervisor can connect again. The user's `~/.ssh/config` applies as for any `ssh`.
  * The remote command is one argument, quoted for the server's POSIX shell.
  *
  * @param s The settings.
- * @return `[ssh, "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o",
+ * @return `[ssh, "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", "-o",
  *   "ServerAliveCountMax=3", ...extraOptions, host, "<calu> ide --cwd <remoteDir>"]`.
  * @throws IllegalArgumentException if the host is empty or starts with "-", or the directory is empty.
  */
@@ -281,7 +292,7 @@ fun sshArgv(s: SshSettings): List<String> {
     require(s.remoteDir.trim().isNotEmpty()) { "The remote project directory is not set (Settings | Tools | calu)." }
     val calu = s.calu.filter { it.isNotEmpty() }.ifEmpty { listOf("calu") }
     val remote = shellJoin(buildIdeArgv(calu) + listOf("--cwd", s.remoteDir.trim()))
-    return listOf(s.sshExecutable, "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3") +
+    return listOf(s.sshExecutable, "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=$SSH_CONNECT_TIMEOUT_S", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3") +
         s.extraOptions.filter { it.isNotEmpty() } + listOf(host, remote)
 }
 
@@ -310,7 +321,7 @@ fun diagnoseSsh(host: String, exitCode: Int, stderrTail: String): Diagnosis? {
             false,
         )
         "could not resolve hostname" in t -> Diagnosis("SSH could not resolve the host name $host. Check the SSH host in Settings | Tools | calu and your network.", true)
-        "connection refused" in t || "connection timed out" in t || "no route to host" in t || "network is unreachable" in t ->
+        "connection refused" in t || "connection timed out" in t || "operation timed out" in t || "no route to host" in t || "network is unreachable" in t ->
             Diagnosis("SSH could not connect to $host (${stderrTail.trim().lines().lastOrNull().orEmpty()}).", true)
         exitCode == 127 || "command not found" in t -> Diagnosis(
             "calu was not found on $host. Install it there with `uv tool install`, or set the calu command " +
@@ -352,6 +363,8 @@ class SshLauncher(private val settings: SshSettings) : BridgeLauncher {
     }
 
     override fun diagnose(exitCode: Int, stderrTail: String): Diagnosis? = diagnoseSsh(settings.host, exitCode, stderrTail)
+
+    override fun startingText(): String = "Connecting to ${settings.host.trim()} over SSH…"
 }
 
 /**

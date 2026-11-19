@@ -25,8 +25,8 @@ val MODE_CHOICES: List<Pair<String, String>> = listOf(
 
 /** The choices of "Sync": stored value and label. */
 val SYNC_CHOICES: List<Pair<String, String>> = listOf(
-    "calu" to "Through calu (over the same SSH connection)",
-    "none" to "None (I sync myself, e.g. with Deployment, rsync or Mutagen)",
+    "calu" to "Through calu",
+    "none" to "None (I sync myself)",
 )
 
 /**
@@ -62,7 +62,7 @@ class CaluConfigurable(private val project: Project) : Configurable {
         .addLabeledComponent("Remote project directory:", sshDirectory)
         .addLabeledComponent("Extra ssh options:", sshOptions)
         .addLabeledComponent("Sync (SSH mode):", sync)
-        .addComponent(note("SSH uses the system's OpenSSH client with BatchMode: the key must be in your SSH agent. Sync through calu is not wired in the plugin yet: choose \"None\" and synchronise the copy yourself."))
+        .addComponent(note("SSH uses the system's OpenSSH client with BatchMode: it never asks for a passphrase, so the key must be in your SSH agent or have none. \"Through calu\": this project folder is kept equal to the remote directory (an empty folder is cloned from the server after a confirmation; nothing local is overwritten without one). \"None\": only the chat is remote and you keep the copy equal yourself (the IDE's Deployment, rsync, Mutagen); file links open the local file of the same relative path."))
         .addSeparator()
         .addComponent(notifications)
         .addComponent(sudo)

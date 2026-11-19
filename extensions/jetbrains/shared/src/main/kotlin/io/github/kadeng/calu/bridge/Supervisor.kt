@@ -160,6 +160,13 @@ class BridgeSupervisor(
     /** Called on the reader thread for every notification of the bridge, in arrival order. */
     @Volatile var onNotification: (RpcEvent) -> Unit = {}
 
+    /**
+     * Further receivers of every notification, called on the reader thread after
+     * `onNotification` in the order they were added (the file synchronisation listens here for
+     * `ide.fs.changed`, after the chat has applied a session event).
+     */
+    val notificationListeners: MutableList<(RpcEvent) -> Unit> = java.util.concurrent.CopyOnWriteArrayList()
+
     /** Called with the new value when `locked` changes. */
     @Volatile var onLockedChange: (Boolean) -> Unit = {}
 
@@ -340,7 +347,7 @@ class BridgeSupervisor(
      * @throws LaunchException see `ensureStarted`.
      */
     private suspend fun startProcess(): JsonObject {
-        setStatus(BridgeStatusInfo(BridgeStatus.STARTING))
+        setStatus(BridgeStatusInfo(BridgeStatus.STARTING, launcher.startingText()))
         log("[calu] starting the bridge (${launcher.kind}): ${launcher.describe()}")
         val process = try {
             withContext(Dispatchers.IO) { launcher.launch() }
@@ -392,7 +399,12 @@ class BridgeSupervisor(
         lateinit var r: Running
         val rpc = RpcClient(
             write = { line -> synchronized(writeLock) { out.write(line.toByteArray(Charsets.UTF_8)); out.flush() } },
-            onEvent = { event -> if (running === r) onNotification(event) },
+            onEvent = { event ->
+                if (running === r) {
+                    onNotification(event)
+                    for (listener in notificationListeners) listener(event)
+                }
+            },
             onProtocolError = { message -> log("[calu] protocol: $message") },
         )
         r = Running(process, rpc)

@@ -134,7 +134,8 @@ interface CaluRemoteApi : RemoteApi<Unit> {
      *     setLevel {level}             rename {session_id, name}    restartBridge {}
      *     unlock {}                    openDiff {tool_use_id}       openFile {path, line?}
      *     editChecker {name}           showContext {escalation_id?} 
-     *     setHonesty {mode}
+     *     setHonesty {mode}            syncNow {}                   syncResolve {path?}
+     *     syncUploadNow {}             syncShowSkipped {}
      *
      * @param projectId The project.
      * @param action The action's name.

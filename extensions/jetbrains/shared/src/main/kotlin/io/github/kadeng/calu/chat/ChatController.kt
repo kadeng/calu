@@ -72,6 +72,9 @@ const val SLOW_START_MS: Long = 3000
 /** Steps asked from `session.history` after an attach. */
 const val HISTORY_STEPS: Int = 300
 
+/** Milliseconds between two requests for the running sessions while no session is attached. */
+const val SESSION_LIST_REFRESH_MS: Long = 15_000
+
 /**
  * The editor-side settings that the server command needs.
  *
@@ -191,6 +194,14 @@ class ChatController(
             }
         }
         scope.launch { ensureBridge() }
+        // While no session is attached the list of running sessions is what the chat shows:
+        // keep it current (a server that stopped takes its sessions with it).
+        scope.launch {
+            while (true) {
+                delay(SESSION_LIST_REFRESH_MS)
+                if (supervisor.status.value.status == BridgeStatus.RUNNING && !isAttached(state)) refreshSessions(false)
+            }
+        }
     }
 
     /**
@@ -250,6 +261,13 @@ class ChatController(
                     scope.launch { attach(state.session.sessionId, interactive = false) }
                 }
                 updateHints()
+                // The session may have ended, or its server: ask for the list now and once more
+                // after the server had time to record the end.
+                scope.launch {
+                    refreshSessions(false)
+                    delay(2000)
+                    refreshSessions(false)
+                }
             }
             "ide.log" -> log("[calu] bridge: ${event.params.str("message").orEmpty()}")
         }

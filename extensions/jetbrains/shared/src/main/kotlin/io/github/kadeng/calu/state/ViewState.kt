@@ -842,6 +842,29 @@ data class SetupHint(
 )
 
 /**
+ * The file synchronisation of the SSH mode, as the chat and the status bar show it.
+ *
+ * @property phase "connecting", "refused", "waiting", "syncing", "idle", "offline" or "failed"
+ *   (the lower-case names of `SyncPhase`).
+ * @property text The status bar's line, e.g. "calu sync: in sync".
+ * @property message Detail of the phase (why refused or failed, what waits); `null` if none.
+ * @property conflicts Relative paths that need the user's decision.
+ * @property held Relative paths whose local change waits for the agent's turn to end.
+ * @property notes Paths that are not synchronised, each as "path: reason".
+ * @property queued Number of queued local changes.
+ */
+@Serializable
+data class SyncView(
+    val phase: String,
+    val text: String,
+    val message: String? = null,
+    val conflicts: List<String> = emptyList(),
+    val held: List<String> = emptyList(),
+    val notes: List<String> = emptyList(),
+    val queued: Int = 0,
+)
+
+/**
  * The context window of the main agent.
  *
  * @property tokens Tokens in the context.
@@ -983,6 +1006,8 @@ data class FocusRequest(val tab: String, val seq: Int)
  *   is known, a user message with `turn` 1 is the first message of the conversation: nothing is
  *   before it, so the view offers no rewind or fork there.
  * @property lastSeq Sequence number of the last session event applied (0 before the first).
+ * @property sync The file synchronisation of the SSH mode; `null` in every other mode and with
+ *   "Sync: none".
  * @property nextId Next free item id.
  */
 @Serializable
@@ -1006,6 +1031,7 @@ data class ViewState(
     val tools: Map<String, ToolView> = emptyMap(),
     val escalations: Map<String, EscalationView> = emptyMap(),
     val side: List<SideExchangeView> = emptyList(),
+    val sync: SyncView? = null,
     val turnCount: Int = 0,
     val turnBase: Int? = null,
     val lastSeq: Int = 0,
@@ -1039,6 +1065,8 @@ data class ViewState(
  *   side questions;
  * - `ui.decisionPending` `{escalation_key, answer?}` / `ui.decisionFailed` `{escalation_key}`:
  *   the user's decision was sent / could not be sent;
+ * - `ui.sync` `{phase, text, message?, conflicts, held, notes, queued}` or `{}`: the file
+ *   synchronisation's status changed / is off (see `SyncView`);
  * - `ui.sideAsk` `{id, question}` / `ui.sideAnswer` `{id, answer}` or `{id, error}`: a side
  *   question was sent / answered.
  *

@@ -449,7 +449,7 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
      */
     private fun compactCard(card: SetupCard): JComponent {
         val line = JPanel(WrapLayout(8, 0)).apply { isOpaque = false }
-        line.add(JBLabel(card.short ?: card.message, if (card.level == "error") AllIcons.General.Error else AllIcons.General.Warning, JBLabel.LEADING).apply { toolTipText = card.message })
+        line.add(JBLabel(card.short ?: card.message, when (card.level) { "error" -> AllIcons.General.Error; "info" -> AllIcons.General.Information; else -> AllIcons.General.Warning }, JBLabel.LEADING).apply { toolTipText = card.message })
         card.primary?.let { a -> line.add(ActionLink(a.label) { cardAction(a) }) }
         line.add(ActionLink("Dismiss") { dismissed.add(card.id); cardsShown = emptyList(); renderCards() })
         return line

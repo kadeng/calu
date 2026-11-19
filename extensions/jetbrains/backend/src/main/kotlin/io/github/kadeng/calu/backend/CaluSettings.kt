@@ -9,6 +9,22 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import io.github.kadeng.calu.remote.PluginSettingsDto
 
+/**
+ * Keeps the IDE from rewriting the settings' texts as paths of this machine.
+ *
+ * The IDE replaces every stored text that starts with the project directory or the home
+ * directory by a macro (`$PROJECT_DIR$/../../dev/project` for `/home/dev/project`) and expands
+ * it at the next start without normalising it. The remote project directory, the calu command
+ * and the option texts name things on the server (or are command lines), so they are stored
+ * as typed.
+ */
+class CaluPathMacroFilter : com.intellij.openapi.application.PathMacroFilter() {
+    override fun skipPathMacros(attribute: org.jdom.Attribute): Boolean {
+        val option = attribute.parent ?: return false
+        return attribute.name == "value" && option.name == "option" && option.parentElement?.getAttributeValue("name") == "CaluSettings"
+    }
+}
+
 /** The stored form of the editor-side settings (see `PluginSettingsDto` for each field). */
 class CaluSettingsState : BaseState() {
     var mode by string("auto")
