@@ -46,6 +46,10 @@ ALTER TABLE servers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE server_tokens ENABLE ROW LEVEL SECURITY;
 CREATE POLICY operator_reads ON servers FOR SELECT TO calu_operator USING (true);
 CREATE POLICY operator_tokens ON server_tokens TO calu_operator USING (true) WITH CHECK (true);
+-- The database owner's login (D213) sees and changes everything, as on every table with
+-- row-level security (migration 0033).
+CREATE POLICY admin_all ON servers TO calu_admin USING (true) WITH CHECK (true);
+CREATE POLICY admin_all ON server_tokens TO calu_admin USING (true) WITH CHECK (true);
 GRANT SELECT ON servers TO calu_operator;
 GRANT SELECT, INSERT ON server_tokens TO calu_operator;
 GRANT UPDATE (revoked) ON server_tokens TO calu_operator;
