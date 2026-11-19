@@ -53,11 +53,12 @@ interpreter), test plan sections B and H; the core defects (PLAN D237); the term
 and the web interface used remotely through SSH (test plan section I).
 
 **The system of records moved to `agent/records/`** (PLAN D238, about 11:00): done, with the
-traces' default `agent/traces/`. Two links in `README.md` (to `HANDOFF.md` and
-`docs/notes/test-plan.md`) still point at the old places, because the owner was editing the
-README by hand and asked that nobody touch it until he is done; `test_documentation_links`
-fails on README until they are changed to `agent/records/HANDOFF.md` and
-`agent/records/notes/test-plan.md`.
+traces' default `agent/traces/`; the records keep their files and structure, only placed out
+of the users' view (the owner, 2026-11-19). **Still to do, by the lead while no agent runs:**
+rename `CALU_GUIDE.md` to `DOCUMENTATION.md` (the owner, same day) with `git mv` and update
+every reference (16 files: README, AGENTS.md, docs/, the records, `src/calu/config.py`,
+`src/calu/checkers/result_checker.py`, `src/calu/defaults/checkers/README.md`, the
+extensions' `serverCommand.ts` and `ServerCommand.kt`, tests), anchors unchanged.
 
 Next: **VSCode in the desktop**, locally and over Remote-SSH to the SSH box, C5, C6, C11,
 C12 at scale, integration tests, and whether VSCode and PyCharm show the new `step.held`
