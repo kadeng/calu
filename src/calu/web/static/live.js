@@ -710,15 +710,16 @@
     box.appendChild(summary);
     const note = document.createElement("p");
     note.className = "muted";
-    note.textContent = "As stored in the database, finished turns only: your messages, one line " +
-      "per tool call and Claude's answer. The stream below shows what arrives now.";
+    note.textContent = "As stored in the database: your messages, one line per tool call and " +
+      "Claude's answer; a turn that has not ended holds your messages only. The stream below " +
+      "shows what arrives now.";
     box.appendChild(note);
     for (const turn of turns) {
       const block = document.createElement("div");
       block.className = "earlier-turn";
       const head = document.createElement("p");
       head.className = "muted";
-      head.textContent = `Turn ${turn.index}`;
+      head.textContent = turn.ended_at ? `Turn ${turn.index}` : `Turn ${turn.index} (not ended)`;
       block.appendChild(head);
       for (const text of turn.user_inputs || []) {
         const said = document.createElement("p");

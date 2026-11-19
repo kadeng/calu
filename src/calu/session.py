@@ -2293,6 +2293,11 @@ class Session:
             claude_session_id: Which session; None is the one that runs now.
             limit: Maximum number of steps returned (the newest ones).
 
+        The turns include one that has not ended, with its inputs and its prompt uuid only
+        (`SessionHistoryResult`): the running turn, so that a client tells the replayed events
+        of that turn from the record by the prompt uuid, and a turn a fork inherited while it
+        waited on a decision.
+
         Returns:
             The turns, the steps and the chat summary; empty fields if the database cannot be
             read (the error is logged).
@@ -3707,6 +3712,13 @@ class Session:
         covering the turns before the fork point only, so that the turns the fork runs are
         read back when it is resumed.
 
+        A turn the fork copies that has not ended (it waited on a decision when the fork was
+        made, or its session was cut off) is copied with its inputs and its prompt uuid,
+        without steps and answer (its row holds none before it ends), and with `ended_at` set
+        to now: Claude Code's copy of the transcript holds its prompt, and the fork never
+        continues that turn, its own first input starts the next one. Its steps stay with
+        the session that ran them (a fork inherits no `steps` rows, D65).
+
         A conversation the store knows nothing about was started without calu: it gets one
         turn that reports what Claude Code's transcript says the user wrote (`_unwitnessed`).
 
@@ -3755,6 +3767,14 @@ class Session:
                     self.store.save_summary(summary, before - 1),
                 )
             turns = [turn for turn in turns if turn.index < before]
+        if fork is not None:
+            forked_at = datetime.now(UTC)
+            turns = [
+                turn
+                if turn.ended_at is not None
+                else turn.model_copy(update={"ended_at": forked_at})
+                for turn in turns
+            ]
         self.context.restore(turns, next_index=before)
         self.context.summary = summary or EMPTY_CHAT_SUMMARY
         return turns if fork is not None or unknown_to_store else []

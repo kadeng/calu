@@ -22,7 +22,7 @@ pytestmark = [pytest.mark.db, pytest.mark.anyio]
 def finished(**fields: object) -> TurnRecord:
     """Build a turn that has ended, as the session stores it at the end of a turn.
 
-    (A turn is also stored when it starts, without an end; a history leaves that row out.)
+    (A turn is also stored when it starts, without an end; a history includes that row.)
     """
     return TurnRecord(**{"ended_at": datetime.now(UTC), **fields})  # type: ignore[arg-type]
 
@@ -732,6 +732,32 @@ async def test_the_history_of_a_fork_holds_the_turns_it_inherited(db_url: str) -
             (3, "another way"),
         ]
         assert [(s.turn, s.tool_input["command"]) for s in after.steps] == [(3, "new")]
+    finally:
+        await conn.close()
+
+
+async def test_a_fork_inherits_a_turn_that_waits_on_a_decision(db_url: str) -> None:
+    """A fork made while a turn of the original has not ended (it waits on a decision): the
+    turn's row holds its input and prompt uuid only, and both the fork's context
+    (`load_previous`) and the original's history must hold it, as Claude Code's copy of the
+    transcript does. Before, a row without end, steps and answer was left out."""
+    store, conn = await session_store(db_url)
+    try:
+        await store.start(IDENTITY)
+        await store.set_claude_session("claude-waiting")
+        await store.save_turn(finished(index=1, user_inputs=["first"], prompt_uuid="u1"))
+        await store.save_turn(TurnRecord(index=2, user_inputs=["delete it"], prompt_uuid="u2"))
+
+        history = await store.load_history()
+        assert [(t.index, t.prompt_uuid, t.ended_at is None) for t in history.turns] == [
+            (1, "u1", False),
+            (2, "u2", True),
+        ]
+
+        fork = DatabaseSessionStore(Db(conn))
+        await fork.start(IDENTITY)
+        turns, _ = await fork.load_previous("claude-waiting")
+        assert [(t.index, t.user_inputs) for t in turns] == [(1, ["first"]), (2, ["delete it"])]
     finally:
         await conn.close()
 

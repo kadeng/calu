@@ -429,7 +429,11 @@ class SessionHistoryResult(BaseModel):
 
     `turns` is the condensed conversation as the checkers see it (user inputs verbatim, one
     record per step, the narrated answer); `steps` adds the tool input and the result of each
-    call. Both are oldest first. `turns` is empty for a session that has not finished a turn.
+    call. Both are oldest first. `turns` includes a turn that has not ended (`ended_at` is
+    None): the running turn of a live session, a turn that waited on a decision when a fork
+    copied the conversation, a turn whose session was cut off. Such a turn holds its inputs and
+    `prompt_uuid` only, no steps and no answer; a client that also replays the session's events
+    tells the running turn from them by `prompt_uuid`.
     """
 
     calu_session_id: str | None = None

@@ -470,6 +470,28 @@ export interface FileLink {
   raw: string;
 }
 /**
+ * `files.user_edit`: the user is about to write these files through an editor.
+ *
+ * `calu ide` sends it immediately before it replaces, deletes or renames a file for the
+ * editor's file synchronisation (`docs/notes/jetbrains-sync-spec.md`). Such a write is the
+ * user's own edit, not a step of Claude: no checker judges it. The session leaves the paths
+ * out of the write set of a command that runs at that moment and watches the files for the
+ * code honesty state, where they count as unreviewed like any change made outside calu.
+ * With an empty list nothing is recorded and only the result is of use.
+ */
+export interface FilesUserEditParams {
+  /**
+   * @maxItems 1000
+   */
+  paths?: string[];
+}
+/**
+ * Result of `files.user_edit`.
+ */
+export interface FilesUserEditResult {
+  excluded?: string[];
+}
+/**
  * `honesty.clear`: close one open mark of the session's honesty state by hand.
  *
  * The marks are in the session's memory, so this is how a person overrides a checker's mark
@@ -632,7 +654,11 @@ export interface SessionHistoryParams {
  *
  * `turns` is the condensed conversation as the checkers see it (user inputs verbatim, one
  * record per step, the narrated answer); `steps` adds the tool input and the result of each
- * call. Both are oldest first. `turns` is empty for a session that has not finished a turn.
+ * call. Both are oldest first. `turns` includes a turn that has not ended (`ended_at` is
+ * None): the running turn of a live session, a turn that waited on a decision when a fork
+ * copied the conversation, a turn whose session was cut off. Such a turn holds its inputs and
+ * `prompt_uuid` only, no steps and no answer; a client that also replays the session's events
+ * tells the running turn from them by `prompt_uuid`.
  */
 export interface SessionHistoryResult {
   calu_session_id?: string | null;
@@ -1100,6 +1126,7 @@ export interface RequestParams {
   'escalation.context': EscalationContextParams;
   'escalation.decide': EscalationDecideParams;
   'events.subscribe': EventsSubscribeParams;
+  'files.user_edit': FilesUserEditParams;
   'honesty.clear': HonestyClearParams;
   'honesty.review': EmptyParams;
   'honesty.trust': HonestyTrustParams;
@@ -1123,6 +1150,7 @@ export interface RequestResults {
   'context.get': CheckerContextResult;
   'escalation.context': EscalationContextResult;
   'events.subscribe': EventsSubscribeResult;
+  'files.user_edit': FilesUserEditResult;
   'honesty.review': HonestyReviewResult;
   'honesty.trust': HonestyTrustResult;
   'initialize': InitializeResult;

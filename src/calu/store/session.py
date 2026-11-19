@@ -1317,19 +1317,23 @@ class DatabaseSessionStore:
                 for a replay to a person (`load_history`).
 
         Returns:
-            The turns that have ended, oldest first, each with its transcript uuids where
-            they were recorded: a client finds the turn of a message by `prompt_uuid` (to fork
-            before it). The row of a turn that only started (`save_turn` at its first input)
-            is left out.
+            Every stored turn, oldest first, each with its transcript uuids where they were
+            recorded: a client finds the turn of a message by `prompt_uuid` (to fork before
+            it). A turn that has not ended is included with `ended_at` None and what its row
+            holds: the inputs and `prompt_uuid` stored when it started (`save_turn` at its
+            first input), no steps and no answer. That is the running turn of a live session
+            (a client tells it from the replayed events by `prompt_uuid`), a turn that waits
+            on a decision while a fork copies the conversation (Claude Code's copy of the
+            transcript holds its prompt, so the fork's record must hold it too), and a turn
+            whose session was cut off.
 
         Raises:
             psycopg.Error: On database errors.
         """
         condition = b"" if above is None else b" AND NOT t.folded AND t.number > %s"
         # A turn is stored when it starts (its input, nothing else) and again when it ends.
-        # The row of a turn that has not ended is for the lists of conversations only: the
-        # running turn reaches a client as events, and a turn that was cut off has no answer.
-        condition += b" AND NOT (t.ended_at IS NULL AND t.steps = '[]'::jsonb AND t.answer = '')"
+        # The row of a turn that has not ended is part of the conversation: Claude Code's
+        # transcript holds its prompt, and a fork made while it runs copies that prompt.
         cur = await conn.execute(
             b"SELECT DISTINCT ON (t.number)"
             b" t.number, t.user_inputs, t.steps, t.answer, t.narrated_answer, t.narrated,"

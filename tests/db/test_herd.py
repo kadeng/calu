@@ -403,7 +403,8 @@ async def test_the_conversations_of_a_directory_are_listed_freshest_first(db_url
 async def test_a_conversation_stopped_in_its_first_turn_is_listed_with_its_input(
     db_url: str,
 ) -> None:
-    """The turn's row is written at its start; a list shows it, a history does not."""
+    """The turn's row is written at its start; a list shows it, and a history holds it as a
+    turn that has not ended (its input only)."""
     owner = await connect(db_url)
     db = Db(owner)
     try:
@@ -422,7 +423,8 @@ async def test_a_conversation_stopped_in_its_first_turn_is_listed_with_its_input
         )
         (summary,) = await store.recent_sessions("/w")
         assert summary.first_input == "look into the parser"
-        assert (await store.load_history()).turns == []
+        (cut,) = (await store.load_history()).turns
+        assert cut.user_inputs == ["look into the parser"] and cut.ended_at is None
 
         # The same turn, finished: one row, complete, and part of the history.
         started.answer = "The parser splits on commas."

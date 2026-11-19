@@ -1,6 +1,7 @@
 """The session orchestrator: turns, checked tool calls, escalations, state and store records."""
 
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import anyio
@@ -217,9 +218,11 @@ async def test_the_input_of_a_turn_is_stored_when_the_turn_starts(tmp_path: Path
                 await anyio.sleep(0.01)
         started = store.turns[1]
         assert started.user_inputs == ["look into the parser"] and started.ended_at is None
-        # What a client reads as history holds finished turns only: the running turn
-        # reaches it as events.
-        assert (await store.load_history()).turns == []
+        # The history holds the running turn with its input: a client tells it from the
+        # replayed events by its prompt uuid, and a fork made now inherits it.
+        assert [t.user_inputs for t in (await store.load_history()).turns] == [
+            ["look into the parser"]
+        ]
         await session.stop()
     assert store.turns[1].user_inputs == ["look into the parser"]
     assert store.turns[1].ended_at is None and store.turns[1].answer == ""
@@ -917,6 +920,27 @@ async def test_a_fork_of_a_whole_conversation_keeps_its_turns_under_its_own_id(t
         await session.stop()
         tg.cancel_scope.cancel()
     assert sorted(store.turns) == [1, 2, 3], "the fork's own turn continues the numbers"
+
+
+async def test_a_fork_ends_the_inherited_turn_that_had_not_ended(tmp_path: Path):
+    """A fork made while a turn of the original waits on a decision: Claude Code's copy holds
+    that turn's prompt, so the fork's record holds it too, ended at the fork (the fork never
+    continues it), and the fork's own input starts the next turn."""
+    session, rec, store = make_session(tmp_path, [[{"text": "done"}]])
+    waiting = TurnRecord(index=2, user_inputs=["delete the cache"], prompt_uuid="u2")
+    finished = _turn(1, "first").model_copy(update={"ended_at": datetime(2026, 11, 1, tzinfo=UTC)})
+    store.previous["claude-1"] = ([finished, waiting], "")
+    async with anyio.create_task_group() as tg:
+        await session.start(tg, resume_id="claude-1", fork=Fork(), session_id="chosen-id")
+        copied = store.turns[2]
+        assert copied.user_inputs == ["delete the cache"] and copied.prompt_uuid == "u2"
+        assert copied.ended_at is not None and copied.steps == [] and copied.answer == ""
+        assert store.turns[1].ended_at == datetime(2026, 11, 1, tzinfo=UTC)
+        await session.send_chat(ChatSendParams(text="go on"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+        tg.cancel_scope.cancel()
+    assert store.turns[3].user_inputs == ["go on"]
 
 
 async def test_a_fork_that_does_not_start_leaves_no_conversation_behind(tmp_path: Path):
