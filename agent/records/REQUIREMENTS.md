@@ -315,6 +315,11 @@ broken down or extended. Derived requirements and design decisions belong in
     session and db and/or use --sudo so calu itself runs as a more privileged process than
     claude." (stated 2026-11-19)
 
+43. On where a remote client may start sessions through `calu serve`'s relay port: they
+    "must be subdirectories of a projects directory served by calu serve ( current dir by
+    default ). Err out on start of calu serve if it's a hidden dir or subdir of a hidden
+    directory or within a critical system dir on Linux or MacOS ( /etc, /proc /dev /sbin
+    /var/lib /usr/lib /usr/bin /var/log etc... )" (stated 2026-11-19)
 ## Soft goals and priorities
 
 1. Simple requirements first: calu should become functional before anything else; a port to Go

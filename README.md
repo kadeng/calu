@@ -176,7 +176,7 @@ Claude Haiku on the Anthropic API:
 ```bash
 echo 'ANTHROPIC_API_KEY=sk-ant-...' >> ~/.config/calu/.env
 calu config models auto                          # or pick one model for every role
-calu config set claude.require_auto_mode true    # the checkers rely on auto mode
+calu config set claude.require_auto_mode true    # optional: refuse to start without auto mode
 ```
 
 Register the project and start working:
