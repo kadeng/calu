@@ -402,6 +402,34 @@ async def test_running_names_the_projects_directory_of_each_server() -> None:
         assert "calu serve of" not in page.text and "aaaa1111" in page.text
 
 
+async def test_running_offers_rename_only_where_a_session_can_be_renamed() -> None:
+    class ThroughRelay(FakeAdmin):
+        """Lists sessions (the relay answers) but changes nothing (no admin credential)."""
+
+        def problem(self) -> str | None:
+            return "through a relay /running and /switch go through the relay"
+
+        def sessions_problem(self) -> str | None:
+            return None
+
+    session = FakeSession()
+    access = ThroughRelay(session)
+    access.running = [row("aaaa1111-0000", "/w/one")]
+    async with running("simple_turn", session=session, admin=access) as run:
+        await command(run, "/running")
+        page = run.app.screen
+        assert isinstance(page, TextScreen)
+        assert "/switch" in page.text and "/rename" not in page.text
+    session = FakeSession()
+    access = FakeAdmin(session)
+    access.running = [row("aaaa1111-0000", "/w/one")]
+    async with running("simple_turn", session=session, admin=access) as run:
+        await command(run, "/running")
+        page = run.app.screen
+        assert isinstance(page, TextScreen)
+        assert "/rename <name> names the session this client shows" in page.text
+
+
 def test_a_session_row_is_cut_at_the_start_of_its_directory() -> None:
     from calu.tui.app import session_row_text
 

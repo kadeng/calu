@@ -3130,11 +3130,16 @@ class CaluApp(App[None]):
             for server in served:
                 body.append(Text(server.line(), self.palette.muted))
             count = f"{len(listed)} of {len(rows)} running sessions" if wanted else ""
+            # `/rename` needs this machine's admin credential (not there through a relay).
+            rename = (
+                " · /rename <name> names the session this client shows"
+                if self.admin.problem() is None
+                else ""
+            )
             for hint in (
                 count,
                 "/switch <beginning of an id or of a name> attaches to a session marked ▸",
-                "/running <text> lists only the sessions with that text · /rename <name> "
-                "names the session this client shows",
+                "/running <text> lists only the sessions with that text" + rename,
             ):
                 if hint:
                     body.append(Text(hint, self.palette.muted))
