@@ -101,7 +101,11 @@ Decided (do not ask again):
   --server`, `calu web`'s relay fallback and `ide.status` ignore such servers. `/running`
   lists "calu serve of user@host serves DIR"; through a relay it shows session names and the
   time in the current state (`relay.sessions` gained `name`, `state_since`). The owner's
-  machine needs `sudo calu setup` again for migration 0040.
+  machine needs `sudo calu setup` again for migration 0040. Follow-up (not pushed): `calu
+  token list` shows such a server's unrevoked tokens as `server silent for N min` or
+  `server gone` instead of `valid`, the served session's own token as `relay of server
+  <id>`, and the clients (line client, full-screen client, web live view) say that the
+  relay closed the connection on close code 4003, not the session.
 - **Tokens:** `calu start --no-attach`'s token stays valid until the session ends (keep).
 - **PyCharm:** placeholder in the message field when nothing is attached and the setup cards
   in a scrolling area; a resolved conflict's line is marked "resolved" (warning colour
@@ -250,8 +254,12 @@ repository as he asked.
   `CALU_TEST_DSN=postgresql://calu_owner:calu-dev@127.0.0.1:55490/calu`):
   `uv run ruff format --check . && uv run ruff check . && uv run pyright`,
   `uv run pytest -q -n 8`, `uv run pytest -q -m browser`,
-  `uv run pytest -q -m 'db and not live'`. Repo-wide lint, because CI is repo-wide. Then
-  push the tested commit. Each push cancels the CI run in progress.
+  `uv run pytest -q -m 'db and not live'`. Repo-wide lint, because CI is repo-wide. At a
+  milestone also CI's own form, `uv run pytest -m 'not live and not browser' -q` (unit and
+  database tests in ONE process, about 5.5 min): on 2026-11-19 module state of `calu.cli`
+  leaking between tests failed only there, CI was red for hours while the split runs passed.
+  Then push the tested commit, and check `gh run list` afterwards. Each push cancels the CI
+  run in progress.
 - When `origin/main` moved ahead of a shared local `main` (a push from another worktree),
   the stand-in cherry-picked the local commits onto it in the pre-push worktree and moved
   `main` with `git reset --soft <new tip>` plus `git checkout <new tip> -- <the files the
