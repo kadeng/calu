@@ -4,6 +4,8 @@
  *     backend ──CaluRemoteApi.updates()──► snapshot, then events ──applyEvent──► state (StateFlow)
  *     UI ──act(name, args)──► CaluRemoteApi.act          (from a coroutine, never from the EDT)
  *     backend ──passwordRequests()──► password dialog (EDT) ──answerPassword──► backend
+ *     "The calu server stopped" shown ──every 10 s (tool window visible) / 30 s (hidden)──►
+ *                                       act("lookForServer")
  *
  * The flows are collected inside `durable {}`: after a lost connection of the thin client the
  * collection starts again and the first message is a fresh snapshot.
@@ -29,6 +31,10 @@ import io.github.kadeng.calu.json.CaluJson
 import io.github.kadeng.calu.json.EMPTY_OBJECT
 import io.github.kadeng.calu.json.parseObjectOrNull
 import io.github.kadeng.calu.logic.PROMPT_TITLE
+import io.github.kadeng.calu.logic.SERVER_CHECK_VISIBLE_S
+import io.github.kadeng.calu.logic.SERVER_STOPPED_HINT
+import io.github.kadeng.calu.logic.serverCheckInterval
+import io.github.kadeng.calu.logic.transcriptEnded
 import io.github.kadeng.calu.remote.CallResultDto
 import io.github.kadeng.calu.remote.CaluRemoteApi
 import io.github.kadeng.calu.remote.PluginSettingsDto
@@ -37,9 +43,9 @@ import io.github.kadeng.calu.state.ViewEvent
 import io.github.kadeng.calu.state.ViewState
 import io.github.kadeng.calu.state.applyEvent
 import io.github.kadeng.calu.state.initialViewState
-import io.github.kadeng.calu.state.openEscalationCount
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -106,6 +112,10 @@ class CaluFrontendService(private val project: Project, private val scope: Corou
     private val notified = HashSet<String>()
     private val shownNotifications = java.util.concurrent.ConcurrentHashMap<String, Notification>()
     private var started = false
+
+    /** The notification "the calu server stopped" while it is shown; `null` otherwise. */
+    @Volatile
+    private var serverNotification: Notification? = null
     private val uiListeners = java.util.concurrent.CopyOnWriteArrayList<(String, JsonObject) -> Unit>()
 
     @Volatile
@@ -151,6 +161,32 @@ class CaluFrontendService(private val project: Project, private val scope: Corou
             }
         }
         scope.launch { settings = loadSettings() }
+        scope.launch { watchStoppedServer() }
+    }
+
+    /**
+     * While the chat says "The calu server stopped", ask the backend to look for the server
+     * (`lookForServer`): every `SERVER_CHECK_VISIBLE_S` seconds while the tool window is
+     * visible, every `SERVER_CHECK_HIDDEN_S` while it is hidden (`ide.status` starts a few
+     * programs on the project's machine). Runs until the service's scope ends.
+     */
+    private suspend fun watchStoppedServer() {
+        var waited = 0
+        while (true) {
+            delay(SERVER_CHECK_VISIBLE_S * 1000L)
+            waited += SERVER_CHECK_VISIBLE_S
+            if (stateFlow.value.hints.none { it.id == SERVER_STOPPED_HINT }) {
+                waited = 0
+                continue
+            }
+            val visible = withContext(Dispatchers.EDT) {
+                !project.isDisposed && ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID)?.isVisible == true
+            }
+            if (waited >= serverCheckInterval(visible)) {
+                waited = 0
+                act("lookForServer")
+            }
+        }
     }
 
     override fun act(action: String, args: JsonObject) {
@@ -227,16 +263,20 @@ class CaluFrontendService(private val project: Project, private val scope: Corou
      * @param next The state after it.
      */
     private suspend fun onStateChanged(before: ViewState, next: ViewState) {
-        if (openEscalationCount(before) != openEscalationCount(next) || before.sync != next.sync) {
+        if (statusLine(before) != statusLine(next)) {
             withContext(Dispatchers.EDT) { WindowManager.getInstance().getStatusBar(project)?.updateWidget(STATUS_WIDGET_ID) }
         }
-        // A notification whose escalation is decided (here, in another client, or by a cancel) goes away.
-        val closed = shownNotifications.keys.filter { key -> next.escalations[key]?.status != EscalationStatus.OPEN }
+        onServerStopped(before, next)
+        // A notification whose escalation is decided (here, in another client, or by a cancel),
+        // or whose session ended, goes away.
+        val ended = transcriptEnded(next)
+        val closed = shownNotifications.keys.filter { key -> ended || next.escalations[key]?.status != EscalationStatus.OPEN }
         if (closed.isNotEmpty()) {
             val gone = closed.mapNotNull { shownNotifications.remove(it) }
             withContext(Dispatchers.EDT) { for (n in gone) n.expire() }
         }
         if (!settings.notifications) return
+        if (ended) return
         val fresh = next.escalations.values.filter { it.status == EscalationStatus.OPEN && it.key !in before.escalations && notified.add(it.key) }
         if (fresh.isEmpty()) return
         withContext(Dispatchers.EDT) {
@@ -257,6 +297,30 @@ class CaluFrontendService(private val project: Project, private val scope: Corou
                 shownNotifications[e.key] = n
                 n.notify(project)
             }
+        }
+    }
+
+    /**
+     * Show the notification "the calu server stopped" with "Start server" and "Retry" when the
+     * chat begins to say so (the hint "server-stopped" appears), whether the tool window is
+     * visible or not; expire it when the hint goes (a server was found, a session attached).
+     *
+     * @param before The state before the update.
+     * @param next The state after it.
+     */
+    private suspend fun onServerStopped(before: ViewState, next: ViewState) {
+        val was = before.hints.any { it.id == SERVER_STOPPED_HINT }
+        val now = next.hints.any { it.id == SERVER_STOPPED_HINT }
+        if (was == now) return
+        withContext(Dispatchers.EDT) {
+            serverNotification?.expire()
+            serverNotification = null
+            if (!now || project.isDisposed) return@withContext
+            val n = Notification(NOTIFICATION_GROUP, "calu: the calu server stopped", "The session ended with it.", NotificationType.WARNING)
+            n.addAction(NotificationAction.createSimpleExpiring("Start server") { openServerTerminal() })
+            n.addAction(NotificationAction.createSimpleExpiring("Retry") { act("retryServer") })
+            serverNotification = n
+            n.notify(project)
         }
     }
 

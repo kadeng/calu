@@ -6,7 +6,8 @@ import com.intellij.openapi.wm.StatusBarWidget
 import com.intellij.openapi.wm.StatusBarWidgetFactory
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.util.Consumer
-import io.github.kadeng.calu.state.openEscalationCount
+import io.github.kadeng.calu.logic.decisionsStatus
+import io.github.kadeng.calu.state.ViewState
 import java.awt.Component
 import java.awt.event.MouseEvent
 
@@ -22,13 +23,13 @@ const val STATUS_WIDGET_ID: String = "calu.decisions"
 fun statusText(open: Int): String = if (open <= 0) "" else "calu: $open waiting"
 
 /**
- * Build the widget's whole text: the open decisions and, in SSH mode, the file synchronisation.
+ * Build the widget's whole text: the open decisions (or "server stopped" / "session ended",
+ * `decisionsStatus`) and, in SSH mode, the file synchronisation.
  *
- * @param open Number of steps that wait for a decision.
- * @param sync The synchronisation's line ("calu sync: in sync"); "" or `null` if it is off.
+ * @param state The view state.
  * @return The parts that are not empty, joined by " · ".
  */
-fun statusLine(open: Int, sync: String?): String = listOf(statusText(open), sync.orEmpty()).filter { it.isNotEmpty() }.joinToString(" · ")
+fun statusLine(state: ViewState): String = listOf(decisionsStatus(state), state.sync?.text.orEmpty()).filter { it.isNotEmpty() }.joinToString(" · ")
 
 /** Registers the status bar widget that counts the open decisions. */
 class CaluStatusBarWidgetFactory : StatusBarWidgetFactory {
@@ -49,10 +50,14 @@ class CaluStatusBarWidget(private val project: Project) : StatusBarWidget, Statu
     override fun getPresentation(): StatusBarWidget.WidgetPresentation = this
     override fun install(statusBar: StatusBar) {}
     override fun dispose() {}
-    override fun getText(): String = CaluFrontendService.of(project).state.value.let { statusLine(openEscalationCount(it), it.sync?.text) }
+    override fun getText(): String = statusLine(CaluFrontendService.of(project).state.value)
     override fun getAlignment(): Float = Component.CENTER_ALIGNMENT
     override fun getTooltipText(): String = CaluFrontendService.of(project).state.value.sync?.let { s ->
         (listOfNotNull(s.message) + s.conflicts.map { "conflict: $it" } + s.held.map { "held: $it" } + s.notes.map { "not synchronised: $it" }).take(12).joinToString("<br>").ifEmpty { s.text } + "<br>Click to open the chat."
-    } ?: "Steps of Claude that wait for your decision in calu. Click to open the chat."
+    } ?: if (decisionsStatus(CaluFrontendService.of(project).state.value) == "calu: server stopped") {
+        "The calu server stopped; the session ended with it. Click to open the chat."
+    } else {
+        "Steps of Claude that wait for your decision in calu. Click to open the chat."
+    }
     override fun getClickConsumer(): Consumer<MouseEvent> = Consumer { ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID)?.activate(null) }
 }

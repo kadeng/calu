@@ -9,6 +9,8 @@
 Options: `--cwd DIR` (reported as the workspace), `--locked` (requests that read the database
 answer -32010 until `ide.unlock {password: "secret"}`), `--no-session` (`ide.attach` answers
 -32011 and `ide.start` -32013), `--exit-after N` (exit with code 3 after N answered requests).
+Two requests play the calu server: `fake.serverStops` (the link is lost as "unreachable",
+`ide.status` counts no server, `ide.attach` answers -32011) and `fake.serverStarts` (as before).
 Not part of calu: it implements only what the tests ask.
 """
 
@@ -33,6 +35,7 @@ def main() -> None:
         "answered": 0,
         "events": [],
         "open": None,
+        "server_stopped": False,
         "checker": {
             "name": "command-default",
             "route": "command",
@@ -157,7 +160,10 @@ def main() -> None:
                     {"name": "tmux", "ok": True, "level": "ok", "message": "", "advice": ""}
                 ],
                 "database": {"reachable": True, "place": "fake", "problem": ""},
-                "server": {"sessions_running": 0 if args.no_session else 1},
+                "server": {
+                    "sessions_running": 0 if args.no_session or state["server_stopped"] else 1,
+                    "servers_running": 0 if state["server_stopped"] else 1,
+                },
                 "locked": args.locked and not state["unlocked"],
                 "unlocked": state["unlocked"],
             }
@@ -189,8 +195,24 @@ def main() -> None:
                 ]
             )
             return {"running": running, "stored": []}
+        if method == "fake.serverStops":
+            state["server_stopped"] = True
+            message = (
+                "nothing answers at the session's address: the session or its calu server stopped"
+            )
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "ide.link",
+                    "params": {"state": "lost", "message": message, "cause": "unreachable"},
+                }
+            )
+            return {}
+        if method == "fake.serverStarts":
+            state["server_stopped"] = False
+            return {}
         if method == "ide.attach":
-            if args.no_session:
+            if args.no_session or state["server_stopped"]:
                 raise RpcError(-32011, "no session runs in this directory")
             after = int(params.get("after_seq") or 0)
             events = [e for e in state["events"] if e["params"]["seq"] > after]

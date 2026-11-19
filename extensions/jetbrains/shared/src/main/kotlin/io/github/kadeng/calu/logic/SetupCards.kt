@@ -9,6 +9,7 @@
  *     restartBridge        `act("restartBridge")`
  *     showLog              open the plugin's log
  *     startServer          open a terminal with `ViewState.serverHelp.command`
+ *     retryServer          `act("retryServer")`: look for the stopped server again
  *     copyServerCommand    copy `ViewState.serverHelp.command`
  *     attach               open the session picker (resume a stored conversation)
  *     newSession           `act("start", {kind: "new"})`
@@ -107,7 +108,8 @@ fun hintAction(hint: SetupHint): CardAction? {
  *     bridge "error" / "exited"        -> Restart bridge (secondary: Show log)
  *     bridge "stopped"                 -> Start (restartBridge)
  *     bridge "starting"                -> a line without a button
- *     bridge "running", not attached   -> the host's hints; "no-server" shows the server command
+ *     bridge "running", not attached   -> the host's hints; "server-stopped": Start server
+ *                                         (secondary: Retry); "no-server" shows the server command
  *                                         (Open terminal / Copy command), "no-session" lists the
  *                                         running sessions (secondary: Resume a stored conversation…)
  *     attached                         -> the hints that still apply (e.g. "claude-missing"),
@@ -128,6 +130,9 @@ fun setupCards(state: ViewState, dismissed: Collection<String> = emptyList()): L
                 primary = CardAction("Open terminal with this command", "startServer"),
                 secondary = listOf(CardAction("Copy command", "copyServerCommand")),
             )
+            // Short, so that the ended transcript below keeps its room; the command is in the
+            // terminal that "Start server" opens.
+            SERVER_STOPPED_HINT -> c.copy(secondary = listOf(CardAction("Retry", "retryServer")))
             "no-session" -> c.copy(sessionList = true, secondary = listOf(CardAction("Resume a stored conversation…", "attach")))
             else -> c
         }
@@ -161,7 +166,9 @@ fun setupCards(state: ViewState, dismissed: Collection<String> = emptyList()): L
     } else {
         state.hints.map(::fromHint)
     }
-    if (!attached && state.link.status == LinkStatus.LOST) {
+    // A session that nothing answers for ended: the "server-stopped" card or the session list
+    // says what to do, and the transcript is marked "Session ended" (`sessionEnded`).
+    if (!attached && state.link.status == LinkStatus.LOST && state.link.cause != LostCause.UNREACHABLE) {
         val why = state.link.message?.takeIf { it.isNotEmpty() }?.let { ": $it" } ?: "."
         cards = listOf(SetupCard("link-lost", "warning", "The connection to the session was lost$why")) + cards
     }

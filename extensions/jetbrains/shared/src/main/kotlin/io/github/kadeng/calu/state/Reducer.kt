@@ -214,14 +214,17 @@ private fun onBridgeStatus(state: ViewState, p: JsonObject): ViewState {
  * decided until it is attached again (the cards stay open, see `unpendEscalations`).
  *
  * @param state The current state (not modified).
- * @param p The params `{state: "attached" | "reconnecting" | "lost", message}` (untrusted).
+ * The cause of a loss (`cause`, see `lostCause`) is kept in `link.cause`.
+ *
+ * @param p The params `{state: "attached" | "reconnecting" | "lost", message, cause?}` (untrusted).
  * @return The new state; unchanged for another `state` value.
  */
 private fun onLink(state: ViewState, p: JsonObject): ViewState {
     val status = p.str("state")
         ?.takeIf { it == LinkStatus.ATTACHED || it == LinkStatus.RECONNECTING || it == LinkStatus.LOST }
         ?: return state
-    val next = state.copy(link = LinkView(status = status, message = nonEmptyStr(p, "message")))
+    val cause = if (status == LinkStatus.LOST) io.github.kadeng.calu.logic.lostCause(p["cause"], p["message"]) else null
+    val next = state.copy(link = LinkView(status = status, message = nonEmptyStr(p, "message"), cause = cause))
     if (status != LinkStatus.LOST) return next
     return finishStreaming(unpendEscalations(next)).copy(
         sessions = next.sessions.copy(attachedId = null),

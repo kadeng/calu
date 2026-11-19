@@ -16,6 +16,11 @@
  *                            attach again to the session shown before (events after lastSeq), else
  *                            attach to the session of the project directory if one runs
  *
+ *     ide.link lost, cause "unreachable" ──► ide.status ──► no server known to run?
+ *        yes: "The calu server stopped" (hint "server-stopped", `ServerLoss.kt`) until
+ *             `lookForServer` finds one (Retry, or the surface's timer) and attaches as at the start
+ *        no:  the session ended; the session list is shown
+ *
  * Every action catches the failures of its requests and reports them as a notice in the chat;
  * no action throws for a refused or failed request. No IntelliJ Platform dependency.
  */
@@ -32,6 +37,12 @@ import io.github.kadeng.calu.json.bool
 import io.github.kadeng.calu.json.obj
 import io.github.kadeng.calu.json.str
 import io.github.kadeng.calu.logic.HintInput
+import io.github.kadeng.calu.logic.LostCause
+import io.github.kadeng.calu.logic.ServerCheck
+import io.github.kadeng.calu.logic.lostCause
+import io.github.kadeng.calu.logic.projectsDirFor
+import io.github.kadeng.calu.logic.serverCheck
+import io.github.kadeng.calu.logic.serverStoppedAfterLoss
 import io.github.kadeng.calu.logic.OutgoingImage
 import io.github.kadeng.calu.logic.ServerCommandInput
 import io.github.kadeng.calu.logic.buildHints
@@ -130,6 +141,21 @@ class ChatController(
     private var noServer = false
     private var lastHints: List<SetupHint>? = null
     private var started = false
+
+    /**
+     * True from a lost link whose server stopped (`serverStoppedAfterLoss`) until a server is
+     * found again or a session is attached: the chat shows "The calu server stopped".
+     */
+    private var serverStopped = false
+
+    /** Local time of the last Retry that found no server; `null` before the first. */
+    private var serverRetriedAt: String? = null
+
+    /** True while a look for the stopped server runs, so that looks do not overlap. */
+    private val lookingForServer = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** True while the chat says "The calu server stopped" (for the surface's timer and tests). */
+    val serverStoppedShown: Boolean get() = synchronized(lock) { serverStopped }
 
     /** Source of the ids of side questions (`ui.sideAsk`); see `sideAsk` in `ChatActions.kt`. */
     internal val sideIds = java.util.concurrent.atomic.AtomicInteger(1)
@@ -260,6 +286,9 @@ class ChatController(
                 if (event.params.str("state") == "attached" && event.params["complete"] == JsonPrimitive(false)) {
                     scope.launch { attach(state.session.sessionId, interactive = false) }
                 }
+                if (event.params.str("state") == "lost" && lostCause(event.params["cause"], event.params["message"]) == LostCause.UNREACHABLE) {
+                    scope.launch { onUnreachable() }
+                }
                 updateHints()
                 // The session may have ended, or its server: ask for the list now and once more
                 // after the server had time to record the end.
@@ -270,6 +299,61 @@ class ChatController(
                 }
             }
             "ide.log" -> log("[calu] bridge: ${event.params.str("message").orEmpty()}")
+        }
+    }
+
+    /**
+     * After a link was lost because nothing answers at the session's address: ask `ide.status`
+     * whether a calu server still runs; if none is known to run, the chat says "The calu server
+     * stopped" (`serverStoppedAfterLoss`). Never throws.
+     */
+    private suspend fun onUnreachable() {
+        refreshStatus()
+        val check = serverCheck(synchronized(lock) { lastStatus })
+        if (serverStoppedAfterLoss(LostCause.UNREACHABLE, check) && !isAttached(state)) {
+            synchronized(lock) {
+                serverStopped = true
+                serverRetriedAt = null
+            }
+            log("[calu] the session is unreachable and no calu server runs: the server stopped")
+        }
+        updateHints()
+    }
+
+    /**
+     * While "The calu server stopped" is shown: ask `ide.status` whether a server runs again;
+     * if one runs, or (for Retry) a session can be attached anyway, attach as at the start
+     * (`connectWorkspace`: the same session, else the project's) and drop the card. Does
+     * nothing while the chat does not say so, or while another look runs. Never throws.
+     *
+     * @param retry True for the Retry button: the attach is tried even if the status cannot
+     *   tell, and a look that finds no server is shown with its time on the card.
+     */
+    suspend fun lookForServer(retry: Boolean) {
+        if (!serverStoppedShown || !lookingForServer.compareAndSet(false, true)) return
+        try {
+            refreshStatus()
+            val check = serverCheck(synchronized(lock) { lastStatus })
+            if (check == ServerCheck.RUNNING || (retry && check == ServerCheck.UNKNOWN)) {
+                connectWorkspace()
+                if (check == ServerCheck.RUNNING || isAttached(state)) {
+                    synchronized(lock) {
+                        serverStopped = false
+                        serverRetriedAt = null
+                    }
+                }
+            }
+            if (retry) {
+                val now = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"))
+                synchronized(lock) { if (serverStopped) serverRetriedAt = now }
+            }
+            updateHints()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            log("[calu] looking for the calu server failed: ${errorText(error)}")
+        } finally {
+            lookingForServer.set(false)
         }
     }
 
@@ -368,7 +452,11 @@ class ChatController(
             val event = e.asObj() ?: continue
             if (event.str("method") == "edit.diff") diffs.record(event.obj("params") ?: continue)
         }
-        synchronized(lock) { noServer = false }
+        synchronized(lock) {
+            noServer = false
+            serverStopped = false
+            serverRetriedAt = null
+        }
         dispatch("ui.attached", JsonObject(result + ("resumed" to JsonPrimitive(resumed))))
         updateHints()
         val sessionId = result.str("session_id") ?: return
@@ -670,15 +758,17 @@ class ChatController(
     fun noticeResolved(key: String) = dispatch("ui.noticeResolved", buildJsonObject { put("key", JsonPrimitive(key)) })
 
     /**
-     * Build the command that starts `calu serve`, from the editor-side settings and from what
-     * `ide.status` found installed (tmux, screen).
+     * Build the command that starts `calu serve`, from the editor-side settings, from what
+     * `ide.status` found installed (tmux, screen), and from the bridge's `workspace`: the
+     * folder that holds it is named with `--projects` (`projectsDirFor`).
      *
      * @return The command with its explanation.
      */
     fun serverHelp(): io.github.kadeng.calu.state.ServerHelp {
         val s = serverSettings()
         val status = synchronized(lock) { lastStatus }
-        return buildServerHelp(ServerCommandInput(s.calu, s.sudo, s.insecure, s.extraArgs, findingOk(status, "tmux"), findingOk(status, "screen")))
+        val projects = projectsDirFor(supervisor.initializeResult?.str("workspace"))
+        return buildServerHelp(ServerCommandInput(s.calu, s.sudo, s.insecure, s.extraArgs, findingOk(status, "tmux"), findingOk(status, "screen"), projects))
     }
 
     /** Recompute the setup hints and the server command, and put them into the state if they changed. */
@@ -687,7 +777,8 @@ class ChatController(
         val attached = s.sessions.attachedId != null
         val running = s.bridge.status == BridgeStatus.RUNNING
         val (status, none) = synchronized(lock) { lastStatus to noServer }
-        val hints = buildHints(HintInput(s.bridge.status == BridgeStatus.MISSING, status, attached, none, supervisor.locked && !attached))
+        val (stopped, retriedAt) = synchronized(lock) { serverStopped to serverRetriedAt }
+        val hints = buildHints(HintInput(s.bridge.status == BridgeStatus.MISSING, status, attached, none, supervisor.locked && !attached, stopped, retriedAt))
             .filter { running || it.id == "calu-missing" }
         val changed = synchronized(lock) { (hints != lastHints).also { lastHints = hints } }
         if (changed) {

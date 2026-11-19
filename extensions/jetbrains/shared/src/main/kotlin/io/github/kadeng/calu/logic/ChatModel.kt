@@ -327,11 +327,13 @@ data class TabView(
  * @param state The view state.
  * @param active Key of the visible tab.
  * @param seen Per tab the id of the newest item the user has seen (missing = nothing).
- * @return The tabs in display order. `attention` is never set for the active tab.
+ * @return The tabs in display order. `attention` is never set for the active tab. The open
+ *   escalations of a session that ended (`transcriptEnded`) are not counted.
  */
 fun tabList(state: ViewState, active: String, seen: Map<String, Int>): List<TabView> {
     val open = HashMap<String, Int>()
-    for (e in state.escalations.values) if (e.status == EscalationStatus.OPEN) open[e.agentKey] = (open[e.agentKey] ?: 0) + 1
+    val ended = transcriptEnded(state)
+    for (e in state.escalations.values) if (!ended && e.status == EscalationStatus.OPEN) open[e.agentKey] = (open[e.agentKey] ?: 0) + 1
     fun tab(key: String, label: String, status: String, background: Boolean): TabView {
         val newest = own(state.items, key)?.lastOrNull()?.id ?: 0
         val escalations = open[key] ?: 0
@@ -367,11 +369,13 @@ data class StripEntry(val key: String, val tab: String, val label: String)
  *
  * @param state The view state.
  * @param active Key of the visible tab.
- * @return One entry per open escalation outside `active`, oldest first.
+ * @return One entry per open escalation outside `active`, oldest first; none while the
+ *   transcript is of a session that ended (`transcriptEnded`).
  */
 fun otherOpenEscalations(state: ViewState, active: String): List<StripEntry> {
     fun name(tab: String): String =
         if (tab == MAIN) "Main" else state.agents.firstOrNull { it.agentId == tab }?.description?.takeIf { it.isNotEmpty() } ?: tab.takeLast(6)
+    if (transcriptEnded(state)) return emptyList()
     return state.escalations.values
         .filter { it.status == EscalationStatus.OPEN && it.agentKey != active }
         .map { StripEntry(it.key, it.agentKey, "${name(it.agentKey)}: ${if (it.questions.isNotEmpty()) "question" else it.toolName}") }

@@ -85,6 +85,36 @@ class ChatControllerTest {
     }
 
     @Test
+    fun `the server stops - server stopped with Retry, the transcript ended, the server back attaches again`() = runBlocking {
+        val c = controller()
+        c.start()
+        waitUntil("attached") { c.state.link.status == LinkStatus.ATTACHED }
+        assertTrue(c.send("run the tests", inject = false, tab = MAIN))
+        waitUntil("the escalation card") { openEscalationCount(c.state) == 1 }
+
+        c.call("fake.serverStops", io.github.kadeng.calu.json.EMPTY_OBJECT, session = false)
+        waitUntil("the server-stopped hint") { c.state.hints.any { it.id == "server-stopped" } }
+        assertTrue(c.serverStoppedShown)
+        assertTrue(io.github.kadeng.calu.logic.transcriptEnded(c.state))
+        assertEquals(0, io.github.kadeng.calu.logic.decisionsWaiting(c.state))
+        assertEquals("calu: server stopped", io.github.kadeng.calu.logic.decisionsStatus(c.state))
+        assertEquals(listOf("server-stopped"), io.github.kadeng.calu.logic.setupCards(c.state).map { it.id })
+
+        // Retry while no server runs: the card says when it looked.
+        assertEquals(true, c.act("retryServer"))
+        assertTrue(c.state.hints.single { it.id == "server-stopped" }.message.contains("no server runs yet"))
+        assertTrue(io.github.kadeng.calu.logic.transcriptEnded(c.state))
+
+        // The server is back: the timer's look attaches as at the start.
+        c.call("fake.serverStarts", io.github.kadeng.calu.json.EMPTY_OBJECT, session = false)
+        assertEquals(true, c.act("lookForServer"))
+        waitUntil("attached again") { c.state.link.status == LinkStatus.ATTACHED }
+        assertFalse(c.serverStoppedShown)
+        assertTrue(c.state.hints.none { it.id == "server-stopped" })
+        assertFalse(io.github.kadeng.calu.logic.transcriptEnded(c.state))
+    }
+
+    @Test
     fun `a subscriber gets the snapshot first and then every event, and rebuilds the same state`() = runBlocking {
         val c = controller()
         val mirror = AtomicReference<ViewState?>(null)
@@ -115,7 +145,9 @@ class ChatControllerTest {
         val help = c.state.serverHelp
         assertNotNull(help)
         assertEquals("tmux", help!!.tool)
-        assertEquals("tmux new-session -A -s calu 'calu serve --sudo'", help.command)
+        // The fake bridge's workspace is a directory directly in /tmp: too wide a parent, so the
+        // project's own folder is the projects directory (projectsDirFor).
+        assertEquals("tmux new-session -A -s calu 'calu serve --sudo --projects $tmp'", help.command)
         assertEquals(null, c.state.starting)
     }
 

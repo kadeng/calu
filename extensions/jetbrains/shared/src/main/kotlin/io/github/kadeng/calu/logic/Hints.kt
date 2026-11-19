@@ -8,6 +8,7 @@
  *     password not given yet    -> "locked"         button: Unlock (asks the one password)
  *     database not reachable    -> "database"       button: Open settings (Setup card)
  *     no session attached and
+ *       the server stopped       -> "server-stopped" buttons: Start server, Retry (ServerLoss.kt)
  *       none running / no server -> "no-server"     button: Start calu server
  *       otherwise                -> "no-session"    button: New session
  *
@@ -38,6 +39,10 @@ const val CLAUDE_DOCS_URL: String = "https://docs.anthropic.com/en/docs/claude-c
  * @property attached True if a session is attached.
  * @property noServer True if `ide.start` last failed because no server answered (error -32013).
  * @property locked True if calu's logins need the one password and it was not given yet.
+ * @property serverStopped True while the link was lost because the calu server stopped
+ *   (`serverStoppedAfterLoss`) and no server was found since.
+ * @property serverRetriedAt Local time of the last Retry that found no server ("14:02:11");
+ *   `null` before it.
  */
 data class HintInput(
     val caluMissing: Boolean,
@@ -45,6 +50,8 @@ data class HintInput(
     val attached: Boolean,
     val noServer: Boolean,
     val locked: Boolean = false,
+    val serverStopped: Boolean = false,
+    val serverRetriedAt: String? = null,
 )
 
 /**
@@ -52,7 +59,8 @@ data class HintInput(
  *
  * @param input What is known about the machine and the session.
  * @return The hints. With calu missing, only that hint. While a session is attached, the
- *   "no-server" and "no-session" hints are left out. The "database" hint needs a status whose
+ *   "server-stopped", "no-server" and "no-session" hints are left out; with "server-stopped"
+ *   the other two are left out as well. The "database" hint needs a status whose
  *   `database` member is an object with `reachable` not true, and is left out while `locked`.
  */
 fun buildHints(input: HintInput): List<SetupHint> {
@@ -113,7 +121,17 @@ fun buildHints(input: HintInput): List<SetupHint> {
             ),
         )
     }
-    if (!input.attached) {
+    if (!input.attached && input.serverStopped) {
+        hints.add(
+            SetupHint(
+                id = SERVER_STOPPED_HINT,
+                level = "warning",
+                message = serverStoppedMessage(input.serverRetriedAt),
+                action = "startServer",
+                actionLabel = "Start server",
+            ),
+        )
+    } else if (!input.attached) {
         if (input.noServer) {
             hints.add(
                 SetupHint(

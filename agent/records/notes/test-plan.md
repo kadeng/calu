@@ -192,6 +192,21 @@ against the SSH box, mode 3 with "Sync: through calu". Screenshots
 | B11 | plugin settings page: SSH fields disabled unless "On a server, over SSH" | ok (27 to 29): "On this machine" greys SSH host, remote directory, extra ssh options and Sync with their values kept; back to SSH they are editable with the same values; "Automatic" and WSL also disable them. A note above the fields says when they are used |
 | B12 | the offer of an SSH interpreter in mode 3 | ok: see H30 to H35 |
 
+Sixth round (2026-11-19, afternoon): the owner's decision on a stopped server, as built for
+VSCode in A13-A15 (79b4215), in PyCharm 2026.3, mode 1 (local) against `uitest/fake_server.py`.
+Screenshots `~/.cache/calu-uitest/share/pycharm-stop/NN.png`; three in
+`agent/records/notes/screenshots/pycharm-stop-*.png`. Unit tests `ServerLossTest`, and
+`ChatControllerTest` "the server stops" against the scripted bridge (`fake.serverStops`).
+
+| # | Case | Status |
+|---|---|---|
+| B13 | the server stopped (C-c in tmux `calu-fake`) with three open cards (`escalations`): the card "The calu server stopped; the session ended with it." with Start server and Retry, no "connection lost" card; header "No session · Session ended"; the transcript faded under "Session ended", each open card one line "Bash SESSION ENDED ./deploy.sh region-2 …"; status bar "calu: server stopped"; a notification "calu: the calu server stopped" / "The session ended with it." with Start server and Retry (05, 10) | built (this round) |
+| B14 | Retry with no server: "Checked at 12:31:43: no server runs yet." (06) | ok |
+| B15 | Start server: a terminal tab "calu server" runs `tmux new-session -A -s calu '/home/cua/.local/bin/calu serve --projects /home/cua/work'` (the folder that holds `~/work/demo`, `projectsDirFor`; the server command's note names it) and asks the session password (07); with the blank password typed the server answered for `/home/cua/work`, and the plugin noticed it by itself within 10 s: the session list card, the transcript still under "Session ended", status bar "calu: session ended", the notification gone (08). The real `calu serve` was stopped again at once, no session started on it | ok |
+| B16 | Retry with the server back and a session of the project (`calu start --no-attach`): attached to it, mark, card and notification gone (11). The same with the tool window hidden: attached by the 30 s check within about 40 s, status bar empty again (12-14) | ok |
+| B17 | the waiting count: "calu: 3 waiting" before the stop (03), none after it (status bar, tab chips, the strip of other tabs, the activity line); escalation notifications of the ended session are expired | ok |
+| B18 | the same over SSH (mode 3) | - (not run: the SSH box was left to the other agents; the logic is the bridge's and the plugin's own, the same in every mode, and `--projects` is the remote directory's parent there) |
+
 ### C. Full-screen client and line client (`calu attach`)
 
 Run 2026-11-18 by an agent in a private tmux server (`tmux -L calutest`) on the host: the

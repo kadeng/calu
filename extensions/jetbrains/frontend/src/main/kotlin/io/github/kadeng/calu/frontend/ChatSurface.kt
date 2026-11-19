@@ -71,7 +71,6 @@ import io.github.kadeng.calu.logic.tabList
 import io.github.kadeng.calu.logic.usageCostLine
 import io.github.kadeng.calu.logic.usageMeter
 import io.github.kadeng.calu.logic.validateSessionName
-import io.github.kadeng.calu.state.EscalationStatus
 import io.github.kadeng.calu.state.LEVELS
 import io.github.kadeng.calu.state.LinkStatus
 import io.github.kadeng.calu.state.MAIN
@@ -400,9 +399,11 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
         // except while the session waits for the user, where it is the time waited.
         val since = if (s.session.state == "escalated") phaseSince else turnSince
         val a = activityLine(attached, s.session.state, since, lastDuration, System.currentTimeMillis(), seed)
-        val open = s.escalations.values.count { it.status == EscalationStatus.OPEN }
+        val open = io.github.kadeng.calu.logic.decisionsWaiting(s)
+        val ended = io.github.kadeng.calu.logic.transcriptEnded(s)
         activity.text = when {
             s.link.status == LinkStatus.RECONNECTING -> "Reconnecting to the session…"
+            ended -> "Session ended"
             s.link.status == LinkStatus.LOST -> "The session's connection is lost"
             !attached -> ""
             open > 0 -> "$open waiting for you · ${a.elapsed}"
@@ -411,6 +412,7 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
         }
         activity.icon = if (attached && a.kind == "busy") AnimatedIcon.Default() else null
         activity.foreground = when {
+            ended -> UiStyle.dim
             s.link.status == LinkStatus.LOST -> UiStyle.chipColor("error")
             attached && open > 0 -> UiStyle.chipColor("warning")
             else -> UiStyle.dim

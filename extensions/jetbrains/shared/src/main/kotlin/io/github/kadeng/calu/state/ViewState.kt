@@ -858,8 +858,8 @@ data class SideExchangeView(
 /**
  * Something the user should do before the chat can work, with the button that does it.
  *
- * @property id Stable id: "calu-missing", "claude-missing", "locked", "database", "no-server",
- *   "no-session".
+ * @property id Stable id: "calu-missing", "claude-missing", "locked", "database",
+ *   "server-stopped", "no-server", "no-session".
  * @property level "info", "warning" or "error".
  * @property message One or two sentences that say what is missing and what to do.
  * @property action Names a view action without fields ("install", "startServer", "newSession",
@@ -961,9 +961,12 @@ data class BridgeView(val status: String, val message: String? = null, val versi
  *
  * @property status One of `LinkStatus`.
  * @property message A text for the user about the connection; `null` if none.
+ * @property cause With "lost": why the bridge gave the connection up (one of
+ *   `io.github.kadeng.calu.logic.LostCause`, from `lostCause`); "unreachable" means the session
+ *   ended for this view (`sessionEnded`). `null` otherwise, or from an older calu that names none.
  */
 @Serializable
-data class LinkView(val status: String, val message: String? = null)
+data class LinkView(val status: String, val message: String? = null, val cause: String? = null)
 
 /**
  * The attached session. All `null`/"stopped" while `link.status` is "detached"; after a detach
@@ -1103,7 +1106,8 @@ data class ViewState(
  *
  * - `bridge.status` `{status: BridgeStatus, message?, version?}`: the bridge process changed
  *   state;
- * - `ui.link` `{state: "attached" | "reconnecting" | "lost", message}`: the bridge's `ide.link`;
+ * - `ui.link` `{state: "attached" | "reconnecting" | "lost", message, cause?}`: the bridge's
+ *   `ide.link` (`cause` only with "lost");
  * - `ui.attached` `{session_id, initialize, snapshot, events, complete, resumed?}`: the result
  *   of `ide.attach` / `ide.start`; replaces the transcript, or with `resumed` continues it
  *   (see `applyAttach`);

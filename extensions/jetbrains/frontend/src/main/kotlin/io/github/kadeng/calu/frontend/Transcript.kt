@@ -9,6 +9,9 @@
  *       items dropped at the start (the 1,000-item bound) ─► those rows removed
  *       any other change of order                         ─► the list is filled again (views reused)
  *
+ * The transcript of a session that ended (`transcriptEnded`: the server stopped) stays readable,
+ * drawn faded under a line "Session ended"; its open cards are one line each.
+ *
  * The reducer copies on write, so "unchanged" is an identity comparison per item: a session of
  * a thousand items costs a thousand reference comparisons per event and one changed row.
  * Components are created once and changed in place; a streamed text changes one text pane.
@@ -34,6 +37,7 @@ import io.github.kadeng.calu.logic.linkFiles
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import io.github.kadeng.calu.logic.markdownToHtml
+import io.github.kadeng.calu.logic.transcriptEnded
 import io.github.kadeng.calu.logic.menuFor
 import io.github.kadeng.calu.logic.neutraliseBidi
 import io.github.kadeng.calu.logic.userMessageMenu
@@ -44,7 +48,10 @@ import io.github.kadeng.calu.state.ToolItem
 import io.github.kadeng.calu.state.UserItem
 import io.github.kadeng.calu.state.ViewState
 import io.github.kadeng.calu.state.isAttached
+import java.awt.AlphaComposite
 import java.awt.BorderLayout
+import java.awt.Graphics
+import java.awt.Graphics2D
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Image
@@ -57,10 +64,12 @@ import javax.imageio.ImageIO
 import javax.swing.ImageIcon
 import javax.swing.JComponent
 import javax.swing.JEditorPane
+import javax.swing.JLayer
 import javax.swing.JPanel
 import javax.swing.JSeparator
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
+import javax.swing.plaf.LayerUI
 
 /** Longest detail text a row shows when expanded; the rest is reachable through "Copy details". */
 const val MAX_DETAIL_CHARS: Int = 20_000
@@ -168,7 +177,7 @@ class RowView(private val host: RowHost) : JPanel(BorderLayout()) {
             ItemKind.USER -> add(userBubble(m), BorderLayout.CENTER)
             ItemKind.ESCALATION -> {
                 border = JBUI.Borders.empty(4, 10)
-                add(EscalationCard(host) { isAttached(host.current) }.also { escalationCard = it; it.update(m) }, BorderLayout.CENTER)
+                add(EscalationCard(host, { isAttached(host.current) }, { transcriptEnded(host.current) }).also { escalationCard = it; it.update(m) }, BorderLayout.CENTER)
             }
             ItemKind.TURN, ItemKind.DIVIDER -> add(separatorLine(m), BorderLayout.CENTER)
             ItemKind.NOTICE -> add(notice(m), BorderLayout.CENTER)
@@ -485,7 +494,30 @@ fun thumbnail(bytes: ByteArray?, size: Int): JBLabel? {
  */
 class TranscriptView(private val host: RowHost) {
     /** What a row was last drawn from; all compared by identity except the two flags. */
-    private class Drawn(val item: Item, val tool: Any?, val escalation: Any?, val held: Boolean, val attached: Boolean)
+    private class Drawn(val item: Item, val tool: Any?, val escalation: Any?, val held: Boolean, val attached: Boolean, val ended: Boolean)
+
+    /** Paints the transcript faded while `faded` is true (the session ended); events pass through. */
+    private class FadeUi : LayerUI<JComponent>() {
+        /** True to paint the view at reduced opacity. */
+        var faded = false
+
+        /**
+         * Paint the view, faded if `faded`.
+         *
+         * @param g The graphics.
+         * @param c The layer.
+         */
+        override fun paint(g: Graphics, c: JComponent) {
+            if (!faded) return super.paint(g, c)
+            val g2 = g.create() as Graphics2D
+            try {
+                g2.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.5f)
+                super.paint(g2, c)
+            } finally {
+                g2.dispose()
+            }
+        }
+    }
 
     private val list = WidthTrackingPanel(VerticalLayout(JBUI.scale(UiStyle.GAP))).apply {
         border = JBUI.Borders.empty(6, 0)
@@ -498,14 +530,27 @@ class TranscriptView(private val host: RowHost) {
     private var lastTools: Any? = null
     private var lastEscalations: Any? = null
     private var lastAttached = false
+    private var lastEnded = false
     private var stick = true
     private val scroll = JBScrollPane(list).apply { border = JBUI.Borders.empty() }
     private val jump = ActionLink("↓ Jump to latest") { toEnd() }
     private val jumpBar = JPanel(FlowLayout(FlowLayout.CENTER, 0, JBUI.scale(2))).apply { isVisible = false; add(jump) }
 
-    /** The component to show: the scroll pane with the jump bar below it. */
+    private val fade = FadeUi()
+
+    /** "Session ended" above the faded transcript of a session that ended; hidden otherwise. */
+    val endedBanner: JBLabel = JBLabel("Session ended").apply {
+        isVisible = false
+        font = JBFont.label().asBold()
+        foreground = UiStyle.dim
+        border = JBUI.Borders.compound(JBUI.Borders.customLineBottom(UiStyle.outline), JBUI.Borders.empty(3, 10))
+        toolTipText = "The session no longer runs; its transcript stays readable until another session is attached."
+    }
+
+    /** The component to show: the banner, the scroll pane, and the jump bar below it. */
     val component: JComponent = JPanel(BorderLayout()).apply {
-        add(scroll, BorderLayout.CENTER)
+        add(endedBanner, BorderLayout.NORTH)
+        add(JLayer(scroll, fade), BorderLayout.CENTER)
         add(jumpBar, BorderLayout.SOUTH)
     }
 
@@ -574,12 +619,20 @@ class TranscriptView(private val host: RowHost) {
     fun update(state: ViewState, tab: String) {
         val items = state.items[tab].orEmpty()
         val attached = isAttached(state)
+        val ended = transcriptEnded(state)
         lastChanged = 0
-        if (items === lastItems && state.tools === lastTools && state.escalations === lastEscalations && attached == lastAttached) return
+        if (items === lastItems && state.tools === lastTools && state.escalations === lastEscalations && attached == lastAttached && ended == lastEnded) return
         lastItems = items
         lastTools = state.tools
         lastEscalations = state.escalations
         lastAttached = attached
+        if (ended != lastEnded) {
+            lastEnded = ended
+            endedBanner.isVisible = ended
+            fade.faded = ended
+            component.revalidate()
+            component.repaint()
+        }
         val held = heldTools(state)
         val ids = items.map { it.id }
         var structure = false
@@ -609,9 +662,9 @@ class TranscriptView(private val host: RowHost) {
             val before = drawn[item.id]
             val userMenuChanged = item is UserItem && before?.attached != attached
             if (before != null && before.item === item && before.tool === tool && before.escalation === escalation && before.held == isHeld &&
-                !userMenuChanged && (escalation == null || before.attached == attached)
+                !userMenuChanged && (escalation == null || (before.attached == attached && before.ended == ended))
             ) continue
-            drawn[item.id] = Drawn(item, tool, escalation, isHeld, attached)
+            drawn[item.id] = Drawn(item, tool, escalation, isHeld, attached, ended)
             views[item.id]!!.update(rowOf(state, item), item, isHeld)
             lastChanged++
         }

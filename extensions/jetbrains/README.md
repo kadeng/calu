@@ -22,7 +22,20 @@ interpreter running and debugging the code on the server.
 In every mode the plugin speaks the protocol of `calu ide` (JSON-RPC over newline-delimited
 JSON) and nothing else: it opens no socket and no database. It assumes a running `calu serve`
 and never calls sudo; when no server answers it shows the tmux or screen command and can open a
-terminal with it.
+terminal with it. That command names a projects directory (`calu serve --projects`, which
+starts sessions only in that directory and below it): the folder that holds the project
+(`~/work` for `~/work/demo`), or the project's own folder when that parent has a single
+component (`/home`, `/srv`, `/tmp`), is hidden or is a system directory. A `--projects` among
+the server's extra arguments in the plugin settings wins. The card shows the directory.
+
+If the calu server stops, the chat says "The calu server stopped; the session ended with it."
+with **Start server** (the terminal with the server command) and **Retry**, and a notification
+offers the same two. The last transcript stays readable, faded under "Session ended"; its open
+cards become one line each and no longer count as waiting (status bar "calu: server stopped").
+When a server runs again (Retry, or a check every 10 s while the tool window is visible, every
+30 s while it is hidden) the plugin attaches as at start-up: the same session if it still
+runs, else the project's, else it shows the session list. A loss for another reason (a revoked
+token, a refused connection) keeps "connection lost".
 
 Mode C needs the system's OpenSSH client and a key that needs no passphrase at that moment
 (in the SSH agent, or without one): the plugin never types a passphrase (`BatchMode`) and says
@@ -303,6 +316,7 @@ found, with the buttons of the chat's setup cards).
 | One password per IDE start (blank, wrong, right; kept over a bridge restart) | seen, also over SSH |
 | Notifications (Allow on a notification clicked), status bar widget, plugin settings page, calu settings dialog with the Setup page | seen |
 | Open terminal with the server command (Reworked Terminal API) | seen |
+| The calu server stopped: card, Start server, Retry, the ended transcript, attaching again | seen locally (test plan B13-B17); not over SSH |
 | Slash commands, images (paste, enlarge built), rewind and fork from a message, Add Comment for Claude (editor and diff) | seen |
 | Side-question dialog, code blocks that wrap, a decision made in another client, a background subagent | seen |
 | File links in Claude's text, the session list for several matching sessions (-32012), the honesty checker's status per file | built and unit-tested; not seen (the scripted server produces none of the three) |
@@ -315,7 +329,9 @@ found, with the buttons of the chat's setup cards).
 
 Known gaps: thinking text is shown only when its row is expanded; with ten subagents the tab
 chips can take most of a narrow tool window's height; a step that waits in a session whose
-connection is lost still counts in "calu: N waiting".
+connection is lost for another reason than a stopped session or server (revoked, refused)
+still counts in "calu: N waiting"; the "waiting for you" time counts from the plugin's own
+start of the wait, not from the session's `opened_at` as in VSCode.
 
 ## Licence notes
 

@@ -76,6 +76,8 @@ interface CardActions {
  *                     ┃ [Allow] [Deny]  Why?
  *     open question   ┃ ? Claude asks ... options (one choice: radio buttons, several: check boxes) ... [Answer]
  *     decided         one dim line: "Bash: allowed · note" and the reason
+ *     open, but the   one dim line: "Bash  SESSION ENDED  git push origin main" (the session
+ *     session ended   that waited for it no longer runs; nothing can decide it)
  *
  * The buttons stay below a long step, because the step's text is cut. No button is the default
  * button or takes the keyboard focus by itself, so typing in the composer never decides a step.
@@ -84,11 +86,13 @@ interface CardActions {
  *
  * @param actions Receives the user's choices.
  * @param attached Says whether a session is attached now (decisions need one).
+ * @param ended Says whether the transcript is of a session that ended (`transcriptEnded`).
  */
-class EscalationCard(private val actions: CardActions, private val attached: () -> Boolean) :
+class EscalationCard(private val actions: CardActions, private val attached: () -> Boolean, private val ended: () -> Boolean = { false }) :
     RoundedPanel(VerticalLayout(JBUI.scale(6)), fill = UiStyle.cardBackground) {
     private var shown: EscalationView? = null
     private var shownAttached = false
+    private var shownEnded = false
     private var showAll = false
     private val note = JBTextField().apply { emptyText.text = "Note for Claude (optional)" }
     private val answerField = JBTextField().apply { emptyText.text = "Your answer, or an addition to the chosen options" }
@@ -111,12 +115,14 @@ class EscalationCard(private val actions: CardActions, private val attached: () 
     fun update(row: RowModel) {
         val e = row.escalation
         val nowAttached = attached()
-        if (e == shown && nowAttached == shownAttached) return
+        val nowEnded = ended()
+        if (e == shown && nowAttached == shownAttached && nowEnded == shownEnded) return
         val sameOpen = e != null && shown?.key == e.key && shown?.status == EscalationStatus.OPEN && e.status == EscalationStatus.OPEN && choices.size == e.questions.size
         if (!sameOpen) showAll = false
         shown = e
         shownAttached = nowAttached
-        build(e, nowAttached, sameOpen)
+        shownEnded = nowEnded
+        if (e != null && nowEnded && e.status == EscalationStatus.OPEN) endedLine(e) else build(e, nowAttached, sameOpen)
     }
 
     /**
@@ -224,6 +230,34 @@ class EscalationCard(private val actions: CardActions, private val attached: () 
         if (!nowAttached) buttons.add(JBLabel("connection lost").apply { foreground = UiStyle.chipColor("error") })
         for (b in buttons.components) (b as? JButton)?.isDefaultCapable = false
         add(buttons)
+        revalidate()
+        repaint()
+    }
+
+    /**
+     * Draw an open escalation of a session that ended as one dim line: the tool (or "Claude's
+     * question"), the chip "SESSION ENDED" and the first line of the step, cut.
+     *
+     * @param e The escalation (status "open").
+     */
+    private fun endedLine(e: EscalationView) {
+        removeAll()
+        allowButton = null
+        denyButton = null
+        fill = null
+        line = UiStyle.outline
+        stripe = null
+        border = JBUI.Borders.empty(3, 10)
+        val question = e.questions.isNotEmpty()
+        val first = if (question) e.questions[0].question else literalToolInput(e.toolInput).firstOrNull()?.second.orEmpty()
+        val text = neutraliseBidi(first.lineSequence().firstOrNull().orEmpty()).let { if (it.length > 120) it.take(119) + "…" else it }
+        val head = JPanel(BorderLayout(JBUI.scale(8), 0)).apply { isOpaque = false }
+        val left = JPanel(WrapLayout(6, 0)).apply { isOpaque = false }
+        left.add(JBLabel(if (question) "Claude's question" else neutraliseBidi(e.toolName)).apply { foreground = UiStyle.dim })
+        left.add(Chip("SESSION ENDED", "").apply { toolTipText = "The session that waited for this decision no longer runs." })
+        head.add(left, BorderLayout.WEST)
+        head.add(JBLabel(text).apply { foreground = UiStyle.dim; font = UiStyle.mono; toolTipText = neutraliseBidi(first).take(500).ifEmpty { null } }, BorderLayout.CENTER)
+        add(head)
         revalidate()
         repaint()
     }
