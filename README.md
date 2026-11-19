@@ -28,9 +28,7 @@ These checker agents focus on a much narrower task than your main coding agent. 
 and decide, never act or write on their own. They are much better at keeping your instructions
 in mind at all times.
 
->
-> Is this not just what "Auto" approval mode does? 
->
+**Is this not just what "Auto" approval mode does?**
 
 *Yes and no. Auto-approval is very generic and stops generally unsafe actions. While it adapts a bit to your
 stated intent ( e.g. to what you write in the LLM chat), it will not remember your custom instructions over
@@ -38,7 +36,10 @@ longer timespans or sessions. It will stop generally unsafe actions like uploadi
 remote server. It won't stop your agent from writing "load-bearing" in every third sentence, it won't steer your
 coding model to behave like you want it to. And it can be tricked by deception (dishonest code).*
 
-What this gives you is much more control over what happens. These agents are faster than
+***Why this can be important***
+
+
+What this gives you is much more control over what happens. The checker agents are even faster than
 your coding agent, and they look at what happens from multiple angles.
 
 - **Security and Confidentiality.** You can give your own standing instructions about which commands
@@ -56,15 +57,14 @@ in harmless-looking code sections. *(Sounds far-fetched? I saw DeepSeek V4 do th
 tracks afterwards. Even well-aligned SOTA models can misunderstand conflicting goals, fail to remember rules
 or misunderstand priorities.)*
 
-<img src="docs/assets/vscode-approval.png" width="720" alt="An approval card in the VSCode extension: Claude Code asked to edit a shell profile, the checker's remark is above, Allow and Deny below">
-
 > **Flynn:** "Who's that guy?"
 >
 > **Program:** "That's Tron. He fights for the Users."
 >
 > — *Tron* (1982)
 
-Steer while it happens with your instructions, modifiable at any time, via a friendly UI right in your IDE, terminal or browser.
+This allows to steer the coding session while it happens with your instructions, modifiable at any time,
+via a friendly UI right in your IDE, terminal or browser.
 
 - **Keep it readable by humans.** Stop bad agentic writing styles before they take hold.
 - **Stop overengineering right there.** A checker sees a change before it lands and can send
