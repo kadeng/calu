@@ -1,6 +1,6 @@
-# calu documentation
+# Calu documentation
 
-calu runs [Claude Code](https://claude.com/claude-code) and puts independent **checker
+Calu runs [Claude Code](https://claude.com/claude-code) and puts independent **checker
 agents** in front of every command, every edit, every commit and every subagent result. The
 checkers follow instructions you write. A step they object to is refused, or it waits until a
 person decides.
@@ -12,7 +12,7 @@ This file is the user documentation. It does not assume that you have read
 
 | Part | Sections | Read it when |
 |---|---|---|
-| 1. Concepts | [calu in brief](#calu-in-brief) to [The decision about a step](#the-decision-about-a-step) | you are new, or a term is unclear |
+| 1. Concepts | [Calu in brief](#calu-in-brief) to [The decision about a step](#the-decision-about-a-step) | you are new, or a term is unclear |
 | 2. Tasks | [Install and set up](#install-and-set-up) to [Troubleshooting](#troubleshooting) | you want to do something; the sections follow the order in which a user meets them |
 | 3. Reference | [Commands](#commands) to [Configuration reference](#configuration-reference) | you look something up |
 
@@ -28,13 +28,13 @@ the code; this file names settings and links there.
 | The database variant "AWS RDS with IAM authentication" | not yet run against a real RDS instance; not together with `--user` |
 | The single-file binary (`scripts/build-binary.sh`) | can be built, is not published |
 | The VSCode extension | a first version; not on the marketplace, installed from a `.vsix` file |
-| The server side on macOS | not supported yet; Claude Code and calu's sessions run on Linux (clients may run anywhere) |
+| The server side on macOS | not supported yet; Claude Code and Calu's sessions run on Linux (clients may run anywhere) |
 
 ## Contents
 
 **Part 1: Concepts**
 
-- [calu in brief](#calu-in-brief)
+- [Calu in brief](#calu-in-brief)
 - [The parts and how they connect](#the-parts-and-how-they-connect)
 - [Glossary](#glossary)
 - [The decision about a step](#the-decision-about-a-step)
@@ -51,7 +51,7 @@ the code; this file names settings and links there.
 - [Resuming, forking and rewinding a conversation](#resuming-forking-and-rewinding-a-conversation)
 - [Several sessions and the herd](#several-sessions-and-the-herd)
 - [From another machine](#from-another-machine)
-- [calu as root, Claude Code as another user](#calu-as-root-claude-code-as-another-user)
+- [Calu as root, Claude Code as another user](#calu-as-root-claude-code-as-another-user)
 - [Troubleshooting](#troubleshooting)
 
 **Part 3: Reference**
@@ -73,36 +73,36 @@ the code; this file names settings and links there.
 
 # Part 1: Concepts
 
-## calu in brief
+## Calu in brief
 
-This section states calu's purpose, the parts it leaves to Claude Code, and its cost. Read it
+This section states Calu's purpose, the parts it leaves to Claude Code, and its cost. Read it
 first.
 
 **The problem.** A coding agent produces steps faster than a person can read them. Rules that
 a person repeats in the chat ("no network calls in helpers", "do not widen the task") are
 forgotten over a long session.
 
-**calu's approach.**
+**Calu's approach.**
 
 - It starts the real Claude Code, headless, and intercepts every tool call before it runs.
 - It gives each tool call (a *step*) to one or more **checkers**: language models with a
   narrow task and your written instructions. A checker answers PASS, ALLOW, DENY or ESCALATE
   and may add a comment for Claude.
-- On ESCALATE the step waits for a person. While it waits, calu approves no other checked
+- On ESCALATE the step waits for a person. While it waits, Calu approves no other checked
   step of that session.
 - It records every step, with the checker's one-line summary and decision, in a PostgreSQL
   database that Claude cannot write. One person can watch and unblock many sessions from
   there.
 
-**Claude Code stays unchanged.** calu is a layer on top of Claude Code:
+**Claude Code stays unchanged.** Calu is a layer on top of Claude Code:
 
 | Stays as it is | Detail |
 |---|---|
-| Models, tools, skills, subagents, slash commands | calu runs the real `claude` |
-| Plugins and MCP servers | what the project configures works in a calu session |
+| Models, tools, skills, subagents, slash commands | Calu runs the real `claude` |
+| Plugins and MCP servers | what the project configures works in a Calu session |
 | Settings files | `~/.claude/settings.json`, the project's `.claude/settings.json` and `.claude/settings.local.json`, `CLAUDE.md`: read as a plain `claude` reads them |
 | Permission rules and auto mode | unchanged; a checker's PASS leaves Claude Code's own decision where it was |
-| The Bash sandbox | Claude Code's own; calu switches it on and configures it ([the sandbox](#the-sandbox-and-the-network-policy)) |
+| The Bash sandbox | Claude Code's own; Calu switches it on and configures it ([the sandbox](#the-sandbox-and-the-network-policy)) |
 | The account | Claude Code runs on whatever the machine is signed in with ([models and keys](#models-and-keys)) |
 
 To make a session ignore your personal settings files (the same behaviour on every machine;
@@ -114,22 +114,22 @@ calu config set claude.setting_sources '["project"]'
 ```
 
 The one exception to "unchanged" is the sandbox: a session does not start while a settings
-file holds a sandbox entry that goes beyond calu's configuration
+file holds a sandbox entry that goes beyond Calu's configuration
 ([the sandbox](#the-sandbox-and-the-network-policy)).
 
-**Cost.** calu makes one checker model call per step that an allow rule does not cover, and the
+**Cost.** Calu makes one checker model call per step that an allow rule does not cover, and the
 latency of that call. The checkers use an API key or account of their own
 ([models and keys](#models-and-keys)).
 
 **The difference from Claude Code's auto mode.** Auto mode's classifier judges general
 safety (destructive commands, secrets, data leaving the machine). It does not know your
-project's rules. calu's shipped checker instructions therefore contain no safety rules: they
+project's rules. Calu's shipped checker instructions therefore contain no safety rules: they
 hold **your** rules, and a session runs in auto mode by default so that a step needs the
 classifier *and* the checkers.
 
 ## The parts and how they connect
 
-This section names the processes of a calu installation and their connections. Read it to
+This section names the processes of a Calu installation and their connections. Read it to
 locate a problem or to learn on which machine a command belongs.
 
 ```
@@ -172,7 +172,7 @@ This section defines the terms the rest of the document uses, in alphabetical or
 | Term | Meaning |
 |---|---|
 | **Admin, operator, session (credentials)** | The three database logins. `session`: what a running session uses; reads the configuration, writes its own history. `operator`: reads everything, resolves escalations, mints tokens. `admin`: changes settings, checker instructions and rules. See [credentials and tokens](#credentials-and-tokens). |
-| **Auto mode** | A permission mode of Claude Code in which its own classifier approves or refuses each step. calu starts sessions in it by default. |
+| **Auto mode** | A permission mode of Claude Code in which its own classifier approves or refuses each step. Calu starts sessions in it by default. |
 | **Baseline** | Code honesty: the nearest trusted commit among the ancestors of `HEAD`. File changes are measured against it. |
 | **Changeset checker** | The checker that reads the whole diff of a `git commit` before the commit runs. |
 | **Chat summary** | The folded description of a session's older turns, which checkers read in place of those turns. Every 30 unfolded turns, the oldest 20 are folded into it. |
@@ -184,25 +184,25 @@ This section defines the terms the rest of the document uses, in alphabetical or
 | **Escalation** | A step that waits for a person, with a numeric id (`#12`). Also called an *auto-pause*. |
 | **Herd** | All sessions of all machines that write to one database. |
 | **Held step** | A step that waits because another step of the same session is escalated. |
-| **Honesty (code honesty)** | The property that every function, class, module and tool says in its name and API documentation what it does. calu can track and enforce it ([code honesty](#code-honesty)). |
+| **Honesty (code honesty)** | The property that every function, class, module and tool says in its name and API documentation what it does. Calu can track and enforce it ([code honesty](#code-honesty)). |
 | **Mark** | Code honesty: a recorded finding that a function, class or file is dishonest, with a reason. |
 | **Narrator** | A model that retells Claude's text and thinking in indirect speech ("Claude stated that ...") before a checker reads them. |
-| **Permission mode** | Claude Code's own setting for what it approves by itself: `auto`, `default`, `acceptEdits` (and others that calu refuses). |
+| **Permission mode** | Claude Code's own setting for what it approves by itself: `auto`, `default`, `acceptEdits` (and others that Calu refuses). |
 | **Project** | A row in the database, created with `calu project add`, that carries a directory's own settings and network policy. |
 | **Projects directory** | The directory a `calu serve` serves. It starts sessions only in it and below it. |
 | **Relay** | One port of a `calu serve` through which a client reaches every session of that server. |
-| **Route** | Which checker a tool call goes to: `command`, `edit`, `changeset`, `subagent`, or a fixed outcome (`allow`, `deny`, `escalate`, `question`). |
+| **Route** | The checker a tool call goes to: `command`, `edit`, `changeset`, `subagent`, or a fixed outcome (`allow`, `deny`, `escalate`, `question`). |
 | **Rule (allow and deny lists)** | A regular expression that overrides the checkers: a deny match asks a person without asking a checker; an allow match skips the checkers. All lists start empty. |
 | **Server token** | The secret a client shows to the relay of one `calu serve`. It reaches every session of that server. |
-| **Session** | One Claude Code conversation run by calu, with its process, its row in the database and its clients. |
+| **Session** | One Claude Code conversation run by Calu, with its process, its row in the database and its clients. |
 | **Side question** | A question to Claude that is answered beside the running work and does not become part of the conversation. |
 | **Step** | One tool call of Claude: a command, an edit, a read, a subagent start, a question. |
 | **Subagent** | An agent that Claude Code's main agent starts for a sub-task. Its steps are checked like the main agent's, and its final result is checked too. |
-| **Supervision level** | Which kinds of step always wait for a person, whatever the checkers said: `checkers` (none), `edits`, `writes` (edits and commands), `everything` (also subagent results). Stored as the three `auto_escalate` switches. |
-| **Trace** | A Markdown file inside the project to which calu appends a session's steps, redacted, for review with the code ([session traces](#session-traces)). |
-| **Trusted commit** | Code honesty: a commit that a person or calu certified as honest. |
+| **Supervision level** | The kinds of step that always wait for a person, whatever the checkers said: `checkers` (none), `edits`, `writes` (edits and commands), `everything` (also subagent results). Stored as the three `auto_escalate` switches. |
+| **Trace** | A Markdown file inside the project to which Calu appends a session's steps, redacted, for review with the code ([session traces](#session-traces)). |
+| **Trusted commit** | Code honesty: a commit that a person or Calu certified as honest. |
 | **Turn** | One message of the user and everything Claude does until it stops. |
-| **Write set** | The files a command actually wrote, measured by calu with snapshots (optional, `changes.snapshot`). |
+| **Write set** | The files a command actually wrote, measured by Calu with snapshots (optional, `changes.snapshot`). |
 
 ## The decision about a step
 
@@ -215,7 +215,7 @@ you want to know the reason a step ran, was refused or waits.
  Claude wants to run a tool call (a step)
         │
         ▼
- hook in Claude Code hands the step to calu
+ hook in Claude Code hands the step to Calu
         │
         ▼
  rules ── deny rule matches ───────────────────────────────► ESCALATE (no checker is asked)
@@ -235,7 +235,7 @@ you want to know the reason a step ran, was refused or waits.
         ├─ DENY ──────► the step does not run; Claude gets the reason
         ├─ ESCALATE ──► the step waits for a person ──► allow / deny (+ note for Claude)
         ├─ ALLOW ─────► the step runs
-        └─ PASS ──────► Claude Code decides as it would without calu
+        └─ PASS ──────► Claude Code decides as it would without Calu
                          (in auto mode: its classifier; in other modes: the step runs)
 ```
 
@@ -265,9 +265,9 @@ executes project code and to a commit; that section has them.
 
 ### The four decisions
 
-| Decision | Meaning | What Claude sees |
+| Decision | Meaning | Claude sees |
 |---|---|---|
-| **PASS** | The checker has no objection. Claude Code decides as without calu. This is the normal answer. | nothing, or the checker's comment |
+| **PASS** | The checker has no objection. Claude Code decides as without Calu. This is the normal answer. | nothing, or the checker's comment |
 | **ALLOW** | The step runs, whatever auto mode would have said. A deliberate exception. | nothing, or the comment |
 | **DENY** | The step does not run. | the reason |
 | **ESCALATE** | The step waits for a person. | after the decision: allowed, or denied with the person's note |
@@ -297,7 +297,7 @@ Two more models work for the checkers and decide nothing:
 ### The checker's input
 
 ```
- fixed part (calu):   the task, the tools, the form of the answer
+ fixed part (Calu):   the task, the tools, the form of the answer
  your instructions:   what to PASS, DENY, ESCALATE, ALLOW          calu checker edit <name>
  chat summary:        the older turns, folded                      calu summary <session id>
  recent turns:        your messages verbatim; Claude's words narrated; each step with its
@@ -331,7 +331,7 @@ saw" in the web interface show this material.
 
 ### Rules: allow and deny lists
 
-Rules are regular expressions that override the checkers. calu ships none: every list starts
+Rules are regular expressions that override the checkers. Calu ships none: every list starts
 empty and every step goes to a checker.
 
 | A match in | Effect |
@@ -343,14 +343,14 @@ An allow rule matches a command by its text, whatever program that text starts, 
 projects are better off without allow rules. [Writing checker
 instructions](#rules-for-fixed-stops) describes the lists and two ready-made sets.
 
-Independent of any list, calu protects itself: Claude may not read calu's own configuration,
-run `calu`, or reach calu's database container without a person being asked.
+Independent of any list, Calu protects itself: Claude may not read Calu's own configuration,
+run `calu`, or reach Calu's database container without a person being asked.
 
 ### An escalation holds the session
 
 - The escalated step waits until a person allows or denies it, or until
   `escalation_timeout_s` (8 hours by default) has passed; then the session stops.
-- While an escalation is open or being opened, calu approves **no other step that needs a
+- While an escalation is open or being opened, Calu approves **no other step that needs a
   check**. Such steps are *held*, also when Claude started several calls at once or when
   subagents work in parallel. Claude therefore cannot retry, rephrase or probe while a person
   decides.
@@ -368,13 +368,13 @@ The permission mode decides what happens to a step the checkers PASS.
 | `default` | runs on the checkers' approval alone |
 | `acceptEdits` | as in `default`: the checkers decide every call, also every edit |
 
-An escalation waits for a person in all three. calu refuses the other modes, with the reason:
+An escalation waits for a person in all three. Calu refuses the other modes, with the reason:
 
-| Mode | Why it is refused |
+| Mode | Reason for the refusal |
 |---|---|
-| `plan` | Claude Code writes its plan to a file under `~/.claude/plans`, outside the project, and calu does not present leaving plan mode as a decision yet |
+| `plan` | Claude Code writes its plan to a file under `~/.claude/plans`, outside the project, and Calu does not present leaving plan mode as a decision yet |
 | `dontAsk` | an escalation would become a denial without anybody being asked |
-| `bypassPermissions` | Claude Code accepts it only in a session started with `--dangerously-skip-permissions`, which calu never does |
+| `bypassPermissions` | Claude Code accepts it only in a session started with `--dangerously-skip-permissions`, which Calu never does |
 
 **The start mode of a session:**
 
@@ -393,7 +393,7 @@ calu config unset claude.permission_mode        # back to auto mode (or the sett
 
 - These settings apply from the next session start.
 - A session names the mode in effect when it starts and whenever the mode changes. It warns
-  only when Claude Code did not take the auto mode calu asked for (a model without auto mode,
+  only when Claude Code did not take the auto mode Calu asked for (a model without auto mode,
   for example).
 - `calu doctor` names the mode a session would start in and where that comes from.
 - With `claude.require_auto_mode` on, every mode but `auto` is refused, and a passed step
@@ -441,12 +441,12 @@ once per machine.
 |---|---|
 | Linux on the machine where Claude Code runs | WSL2, a container or an SSH host count; clients may run anywhere |
 | [uv](https://docs.astral.sh/uv/) | it downloads Python 3.14 if the machine has none |
-| Claude Code, working in the project | run `claude` once in a terminal in the project folder: sign in, trust the folder. calu neither checks nor changes that setup |
-| PostgreSQL | a server you have, or Docker on this machine for a local one that calu manages |
+| Claude Code, working in the project | run `claude` once in a terminal in the project folder: sign in, trust the folder. Calu neither checks nor changes that setup |
+| PostgreSQL | a server you have, or Docker on this machine for a local one that Calu manages |
 | Credentials for the checker models | an API key (Anthropic by default), AWS credentials for Bedrock, or the machine's own Claude Code account ([models and keys](#models-and-keys)) |
 | `bubblewrap` and `socat` | only for Claude Code's sandbox, which is optional (Debian/Ubuntu: `sudo apt install bubblewrap socat`) |
 
-**Step 1: install calu.** calu is one package. It contains every command, the web interface
+**Step 1: install Calu.** Calu is one package. It contains every command, the web interface
 and the full-screen terminal client.
 
 ```bash
@@ -507,7 +507,7 @@ A session started without a registered project reaches nothing on the network
   ```
 
   With Remote-SSH, WSL or a dev container, install it on the remote side: the extension runs
-  where the workspace is. It finds `calu` itself, offers to install uv and calu where they are
+  where the workspace is. It finds `calu` itself, offers to install uv and Calu where they are
   missing, and checks that Claude Code is there (it does not install it).
 - **PyCharm** (2026.3): see [extensions/jetbrains](extensions/jetbrains) and
   [PyCharm: the three ways to work](#pycharm-the-three-ways-to-work).
@@ -526,7 +526,7 @@ credentials stored without a password.
 ## The first session
 
 This section starts one session, shows its output, and provokes each checker decision on
-purpose. Read it after the setup, to see calu work before you write any rule.
+purpose. Read it after the setup, to see Calu work before you write any rule.
 
 **Two ways to start a session**
 
@@ -611,8 +611,8 @@ subsection of the client you use.
 
 | Client | Start it with | Good for |
 |---|---|---|
-| VSCode extension | the **calu** view in the secondary side bar | chat next to the code, diffs, comments on lines |
-| PyCharm plugin | the calu tool window | the same in PyCharm, also with the project on a server |
+| VSCode extension | the **Calu** view in the secondary side bar | chat next to the code, diffs, comments on lines |
+| PyCharm plugin | the Calu tool window | the same in PyCharm, also with the project on a server |
 | Full-screen terminal client | `calu attach` | a terminal or SSH session; every function by keyboard |
 | Line client | `calu attach --plain` | pipes, scripts, `TERM=dumb` |
 | Web interface | `calu web` | all sessions of all machines, history, settings |
@@ -635,7 +635,7 @@ subsection of the client you use.
 | `Fix the failing test in tests/test_cart.py. Do not change the test.` | an ordinary turn; the checkers read the second sentence verbatim and can hold Claude to it |
 | (into the running turn) `Stop refactoring cart.py, only fix the rounding.` | reaches Claude after its running tool calls |
 | `/btw which file defines the tax rate?` | a side question: answered beside the work, not part of the conversation, not seen by the checkers |
-| `/compact keep the decisions about the API` | Claude Code's own command; calu passes it on |
+| `/compact keep the decisions about the API` | Claude Code's own command; Calu passes it on |
 | a comment on selected lines of a diff: `This loop reads the file twice.` | reaches Claude at once with the path, the lines and the text before and after the change |
 
 ### In VSCode
@@ -644,7 +644,7 @@ The view **calu** opens in the secondary side bar (on the right by default); **c
 Chat** shows it. The status bar item "calu" shows the session's state and "calu: 2 waiting"
 while decisions wait.
 
-<img src="docs/assets/doc/vscode-decision-card.png" width="560" alt="The calu chat in VSCode with numbered marks on the header row, a step's decision chip, the approval card's buttons, the note field and the model selectors">
+<img src="docs/assets/doc/vscode-decision-card.png" width="560" alt="The Calu chat in VSCode with numbered marks on the header row, a step's decision chip, the approval card's buttons, the note field and the model selectors">
 
 | Mark | Element |
 |---|---|
@@ -655,7 +655,7 @@ while decisions wait.
 | 5 | Claude's model and effort for the session |
 
 - **Sessions run in `calu serve`.** The extension starts only the bridge `calu ide`. **calu:
-  Start calu Server** opens a terminal with the server command; you type passwords there.
+  Start Calu Server** opens a terminal with the server command; you type passwords there.
 - **Remote workspaces.** With Remote-SSH, WSL or a dev container everything runs on the
   remote machine: the extension host, `calu ide`, the server and the sessions.
 - **Subagents** are tabs. A message written in a subagent's tab goes to that subagent.
@@ -674,23 +674,23 @@ while decisions wait.
 The PyCharm plugin (PyCharm 2026.3) shows the same chat as a tool window. It works in three
 arrangements:
 
-| Mode | The IDE runs | The files, calu and Claude are | Setup |
+| Mode | The IDE runs | The files, Calu and Claude are | Setup |
 |---|---|---|---|
 | 1. Local | on this machine | on this machine | open the project; the plugin starts `calu ide` |
 | 2. Remote development | JetBrains Client here, IDE backend on the server | on the server | File, Remote Development, SSH: `user@host`, the project directory. Install the plugin in the client (`~/.local/share/JetBrains/<IDE>/frontend/`) and on the server (`~/.local/share/JetBrains/<IDE>/`) |
-| 3. Local copy over SSH | on this machine, on a local copy | on the server; calu keeps the copy equal through `calu ide` | Settings, Tools, calu: "On a server, over SSH", host, remote directory, Sync "through calu" |
+| 3. Local copy over SSH | on this machine, on a local copy | on the server; Calu keeps the copy equal through `calu ide` | Settings, Tools, calu: "On a server, over SSH", host, remote directory, Sync "through Calu" |
 
 **Mode 2.** Everything the plugin opens (diffs, files, checker instructions, the terminal
 with `calu serve`) belongs to the server. The client only shows it.
 
 **Mode 3: both copies can change.** Claude edits on the server and you edit locally.
 
-- calu merges changes to different lines and never overwrites a change silently.
+- Calu merges changes to different lines and never overwrites a change silently.
 - A file is a **conflict** when both sides changed the same lines, or one side deleted a file
   the other changed. PyCharm marks it red in the project view and names it in the status bar
   and on a card in the chat. "Merge…" opens the IDE's three-way dialog (for a deletion or a
   binary file: a choice of side). A conflict survives a restart of the IDE.
-- The server's git repository is the only one. calu never copies `.git` in either direction.
+- The server's git repository is the only one. Calu never copies `.git` in either direction.
   The plugin explains a `.git` that appears in the local copy (`git init`, "Enable Version
   Control Integration"). Run git on the server, in a terminal or through Claude.
 - Uploads from the editor are your own edits: no checker judges them
@@ -709,17 +709,17 @@ with `calu serve`) belongs to the server. The client only shows it.
 
 - "Not now" hides the card until the IDE restarts.
 - PyCharm may show its own notice "SSH interpreter has changed" with "Auto-upload files".
-  Leave it: calu already puts every saved file on the server.
+  Leave it: Calu already puts every saved file on the server.
 - By hand: Python Interpreter, Add Interpreter, On SSH, for the same host, with the sync
   folder `<Project root>` → the remote project directory, and **without** "Automatically
   upload project files to the server".
 - Breakpoints and line numbers match because both copies hold the same text.
 - The plugin warns ("two writers") when PyCharm's Deployment also uploads changed files into
   the same directory. Turn one of the two off.
-- With Sync "None", PyCharm's Deployment (or rsync) is the only writer and calu only shows the
+- With Sync "None", PyCharm's Deployment (or rsync) is the only writer and Calu only shows the
   chat. Claude's edits then reach the local copy only through the download you use.
 
-### In a terminal: calu attach
+### In a terminal: Calu attach
 
 `calu attach` in the project directory starts the full-screen client for the session that
 runs there. `calu attach --plain`, a pipe or `TERM=dumb` give the line client. Detaching
@@ -774,14 +774,14 @@ With more agent tabs than fit, the row shows those around the selected one, and 
 each cut end counts the rest (`◂3`, `7▸!`). The `!` says that one of them waits for you; a
 click on the marker goes there.
 
-**Claude Code's own commands.** A slash command that calu does not know goes to Claude Code as
+**Claude Code's own commands.** A slash command that Calu does not know goes to Claude Code as
 typed: `/compact [what to keep]`, `/clear`, `/context`, `/cost`, a skill, a command of the
 project. The slash list marks those with "Claude Code:".
 
 [Commands inside the terminal clients](#commands-inside-the-terminal-clients) lists every
 slash command and key of both terminal clients.
 
-### In a browser: calu web
+### In a browser: Calu web
 
 The web interface shows every session of every machine that uses the database. Use it to
 watch a herd, read a session's history, decide escalations and change settings.
@@ -793,7 +793,7 @@ calu web --sudo   # the same as root, for you: Claude Code cannot reach the proc
 
 **Signing in**
 
-- The page asks for the admin password. The database checks it; calu stores it nowhere. Each
+- The page asks for the admin password. The database checks it; Calu stores it nowhere. Each
   wrong password makes the next answer wait longer; the count starts again after a minute
   without a wrong one.
 - On a database where `calu setup` has not given the admin role a password yet, `calu web`
@@ -901,7 +901,7 @@ An editor on Windows with the project inside WSL starts the adapter inside WSL:
   a password (`calu credential set operator --no-password`). With a password on it, the
   adapter says so and stops.
 - **One session.** The adapter offers the session of that directory. An editor that opens
-  several chats gets one ACP session id per chat; all show the same calu session.
+  several chats gets one ACP session id per chat; all show the same Calu session.
 - **Escalations** appear as the editor's permission question, with the command or the file.
   An editor that attaches while escalations are open gets a dialog for each. With several
   chats, each one asks and the first answer counts.
@@ -935,7 +935,7 @@ status line, a click on the usage line in the web live view) shows:
 - Claude Code's own `/usage` text (cost, durations, tokens by model);
 - cost and context fill.
 
-calu reads the `/usage` text with a request of Claude Code's control protocol. That request
+Calu reads the `/usage` text with a request of Claude Code's control protocol. That request
 makes no model call and no turn, records nothing, and is invisible to the checkers. `/usage`
 sent to Claude as chat text would be a turn of its own.
 
@@ -1027,7 +1027,7 @@ calu resolve 14 cancel "the session is gone"    # clears one nobody is waiting f
   question with its options, the step as the checker rendered it, the file before an edit,
   and the conversation as the checkers see it.
 - The waiting session picks the answer up within a second.
-- calu records who decided. `operator:kai@buildbox` means the database role `calu_operator`,
+- Calu records who decided. `operator:kai@buildbox` means the database role `calu_operator`,
   used by the OS user `kai` on the host `buildbox` (`admin:` for `calu_admin`). For the web
   interface it is the user and host `calu web` runs as. A decision through the relay is
   recorded with the client's name and the token's label (`client:calu attach via relay
@@ -1041,12 +1041,12 @@ calu resolve 14 cancel "the session is gone"    # clears one nobody is waiting f
 - Several cards can be open at once, for example one per subagent. Each names its agent and
   its place ("Decision 1 of 2"). You answer them separately and in any order; a note typed
   into one card stays while you answer another.
-- calu approves no other checked step of the session while a decision is open. The clients
+- Calu approves no other checked step of the session while a decision is open. The clients
   show the held steps: the full-screen client with the badge `held`, the line "calu approves
   no step while decision #12 is open" and the heading "NEEDS YOU (1)  7 steps held"; the web
   live view with "held" in the subagent list.
-- When one of the held steps needs a decision itself after the first is made, the others
-  wait again.
+- The other held steps wait again if one of them needs a decision itself after the first
+  decision is made.
 - A step held for five minutes in all asks for a decision of its own. A decision left open in
   a session with many subagents therefore becomes several cards.
 - A question of the agent holds nothing. A call with several questions, or with a question
@@ -1054,8 +1054,8 @@ calu resolve 14 cancel "the session is gone"    # clears one nobody is waiting f
 
 ### Claude's own questions
 
-When Claude uses its question tool, calu holds the call and shows you the question with the
-options Claude offered: buttons in the browser and the IDEs, a line in the terminal. Your
+Calu holds a call of Claude's question tool and shows you the question with the options
+Claude offered: buttons in the browser and the IDEs, a line in the terminal. Your
 answer returns to Claude as the result of that call. An unattended session that asks a
 question waits like any escalation.
 
@@ -1088,9 +1088,9 @@ Every client has an equivalent of Claude Code's Shift+Tab:
 - Each client shows the mode Claude Code reports, also after a change made in another client
   or by Claude Code itself. A tool call that enters plan mode is shown as `plan`; the selector
   leads out of it again.
-- calu writes the change to the session's audit log with the client that asked (`calu
+- Calu writes the change to the session's audit log with the client that asked (`calu
   sessions` and the session's page in the web interface list it).
-- Later starts in the same calu process (a resume, a fork, a new conversation) keep the
+- Later starts in the same Calu process (a resume, a fork, a new conversation) keep the
   switched mode. The setting `claude.permission_mode` is not changed.
 - A client with a server token may switch the mode through the relay like any other client.
 
@@ -1101,7 +1101,7 @@ Every client has an equivalent of Claude Code's Shift+Tab:
 This section shows how to write the rules your checkers enforce, how to test them, and how to
 measure the checkers. Read it after the first session.
 
-A checker's prompt has two parts. calu's fixed part states the role, the tools, the possible
+A checker's prompt has two parts. Calu's fixed part states the role, the tools, the possible
 answers and the summary. Your instructions state only the rules: when to PASS, DENY, ESCALATE
 or ALLOW. Both parts together are about 300 words per checker as shipped, because the shipped
 instructions hold no rules for commands and edits. General safety is left to Claude Code's
@@ -1123,7 +1123,7 @@ admin password or the `admin` credential: a session cannot change the rules that
 A running session uses changed instructions from its next step.
 
 The shipped instructions are a starting point for you to rewrite. They are in the public
-domain and not under calu's licence ([LICENSE.md](LICENSE.md)).
+domain and not under Calu's licence ([LICENSE.md](LICENSE.md)).
 
 ### Rules a checker can enforce
 
@@ -1279,17 +1279,17 @@ calu summary <session id> --edit      # correct it in $EDITOR
 The changeset checker reviews a whole change before it is committed.
 
 - The command checkers judge a line with `git commit` like every other command.
-- When the line is one plain `git commit` (`-a`, `--amend` and the message options are
-  allowed), calu also holds it and gives the complete diff to the changeset checker.
+- Calu also holds a line that is one plain `git commit` (`-a`, `--amend` and the message
+  options are allowed) and gives the complete diff to the changeset checker.
 - The changeset checker judges completeness (a renamed function with callers left behind),
   work nobody asked for, a test weakened to pass, and whether the message describes the
   change. The most restrictive answer wins.
 - A denial undoes nothing. It stops the commit and tells Claude what to fix first.
-- calu reads the diff before the line runs. A line that combines the commit with other
+- Calu reads the diff before the line runs. A line that combines the commit with other
   commands or names paths (`git add ... && git commit`, `cd dir && git commit`, `git commit
   file.py`) is therefore refused without a model call. Claude is told to run the rest first
   and then `git commit` alone.
-- A diff that calu cannot read is escalated. For a `git commit -a` that changes a file with a
+- A diff that Calu cannot read is escalated. For a `git commit -a` that changes a file with a
   content filter (Git LFS), Claude is told to stage the change and commit without `-a`.
 
 ### Reviewing the files a command wrote (optional)
@@ -1300,19 +1300,19 @@ the checker reads only the command line.
 
 | Setting | Effect |
 |---|---|
-| `changes.snapshot` | calu snapshots the project directory around every command (git plumbing in a directory of its own, outside your repository), records the changed paths, and reports a command that wrote files its summary never mentioned |
-| `changes.review` (needs `snapshot`) | a checker reads the actual patch after the command ran, while Claude waits. On a refusal calu puts the files back and tells Claude what was undone and why |
+| `changes.snapshot` | Calu snapshots the project directory around every command (git plumbing in a directory of its own, outside your repository), records the changed paths, and reports a command that wrote files its summary never mentioned |
+| `changes.review` (needs `snapshot`) | a checker reads the actual patch after the command ran, while Claude waits. On a refusal Calu puts the files back and tells Claude what was undone and why |
 
-- Only a denial by the checker or by a person puts files back. When nobody decided (the
-  session stopped, the escalation timed out), the files stay and Claude is told that the
-  change is unreviewed.
-- A change that calu cannot read completely goes to a person.
+- Only a denial by the checker or by a person puts files back. The files stay if
+  nobody decided (the session stopped, the escalation timed out), and Claude is told that
+  the change is unreviewed.
+- A change that Calu cannot read completely goes to a person.
 
 ### Updates of the shipped instructions
 
-calu knows every version of the instructions it ever shipped.
+Calu knows every version of the instructions it ever shipped.
 
-| Your stored text | calu's behaviour |
+| Your stored text | Calu's behaviour |
 |---|---|
 | equals an older shipped version (also with the test triggers removed) | reported as out of date by `calu setup`, `calu doctor --db`, `calu checker show` and `edit`, and the checker's pane in the web settings |
 | edited by you | never replaced; reported as your own |
@@ -1345,7 +1345,7 @@ calu config set claude.model opus     # Claude's model, for the next session
 
 ## Code honesty
 
-This section describes calu's optional tracking and enforcement of *honest* code. Read it
+This section describes Calu's optional tracking and enforcement of *honest* code. Read it
 when you want to rely on names and documentation during review, or want to keep an agent
 from hiding behaviour behind a harmless name.
 
@@ -1371,11 +1371,11 @@ def hello_world(name: str) -> str:
   reviewer is to make code look like something else. The function above is dishonest, and the
   honesty checker that reads the edit records that.
 - **The reverse holds too.** Judging a call site by names and documentation is sound only for
-  code that was verified. calu therefore tracks which code is verified and tells every checker
+  code that was verified. Calu therefore tracks which code is verified and tells every checker
   which code is not.
 
 Edits come in steps, and a change of any size makes code dishonest for a while on purpose: a
-signature changes in one step, its callers and documentation follow in the next five. calu
+signature changes in one step, its callers and documentation follow in the next five. Calu
 therefore never blocks an edit for honesty. With enforcement on, it requires a clean state at
 two points: before a command **runs** project code, and before a **commit**.
 
@@ -1391,7 +1391,7 @@ calu config set honesty.mode off        # the default
 | Mode | Effect |
 |---|---|
 | `off` | nothing of this runs |
-| `track` | calu keeps and shows the state, tells the checkers which code is not verified, and certifies a commit made in a clean state. Nothing is blocked or escalated because of the state |
+| `track` | Calu keeps and shows the state, tells the checkers which code is not verified, and certifies a commit made in a clean state. Nothing is blocked or escalated because of the state |
 | `enforce` | additionally, a command that executes project code and a `git commit` need a clean state |
 
 **Recommended order**
@@ -1409,8 +1409,8 @@ a review or a person verifies it, and a start-up warning says so.
 
 ### The state of a session
 
-**Trusted commits and the baseline.** A *trusted commit* is a commit that a person or calu
-certified as honest; calu stores them in its database. The *baseline* of a session is the
+**Trusted commits and the baseline.** A *trusted commit* is a commit that a person or Calu
+certified as honest; Calu stores them in its database. The *baseline* of a session is the
 nearest trusted ancestor of `HEAD` (`HEAD` included, searched over the last 5000 commits). A
 commit also counts as trusted when the tree it records is certified, so a reworded or rebased
 commit with the same content keeps its trust.
@@ -1433,7 +1433,7 @@ failed edit changes nothing.
 **The honesty checker's answer.** For every file a step changes it answers HONEST or
 DISHONEST, with a short reason for DISHONEST and the functions concerned.
 
-- DISHONEST never stops the edit. calu records a mark and tells Claude. A later edit that
+- DISHONEST never stops the edit. Calu records a mark and tells Claude. A later edit that
   puts name, comment and behaviour back in agreement is answered HONEST, which clears the
   file.
 - The checker escalates only edits that look deliberate: a backdoor, hidden behaviour, a
@@ -1477,18 +1477,18 @@ may read other files. A file it finds honest is verified at the content it was s
 findings become that file's marks. A change of only trailing whitespace, line endings or
 blank lines is verified without a model.
 
-| Question | Answer |
+| Aspect | Detail |
 |---|---|
-| When does it run? | By itself under `enforce`, when a step needs a clean state and the only problem is unreviewed files or a required review. On request with `/honesty-review` or "Review now", in `track` and `enforce` mode |
-| How often? | One review at a time. calu starts none by itself while nothing changed since the last, and none within 60 seconds after a failed one. `/honesty-review` always runs one |
-| How long does a step wait? | At most about seven minutes less the time its checkers took. A longer review continues; the step waits for a person meanwhile, and the result is there at the next attempt |
-| When does the step go to a person? | The review fails; more files than `honesty.review_max_files` (300); files the review cannot judge |
-| Which files can it not judge? | A file over 2,000,000 bytes; a file whose text for the reviewer is over 200,000 bytes; a file that is not UTF-8 text; a symbolic link; a submodule. A person certifies those |
-| Which model? | `honesty.reviewer_model` (blank: the checkers' default). The other limits are the `honesty.review*` settings ([configuration reference](docs/CONFIGURATION.md)) |
+| Start | By itself under `enforce`, when a step needs a clean state and the only problem is unreviewed files or a required review. On request with `/honesty-review` or "Review now", in `track` and `enforce` mode |
+| Frequency | One review at a time. Calu starts none by itself while nothing changed since the last, and none within 60 seconds after a failed one. `/honesty-review` always runs one |
+| A step's waiting time | At most about seven minutes less the time its checkers took. A longer review continues; the step waits for a person meanwhile, and the result is there at the next attempt |
+| The step goes to a person | The review fails; more files than `honesty.review_max_files` (300); files the review cannot judge |
+| Files it cannot judge | A file over 2,000,000 bytes; a file whose text for the reviewer is over 200,000 bytes; a file that is not UTF-8 text; a symbolic link; a submodule. A person certifies those |
+| Model | `honesty.reviewer_model` (blank: the checkers' default). The other limits are the `honesty.review*` settings ([configuration reference](docs/CONFIGURATION.md)) |
 
 **A repository without a trusted commit.** A review that a person asks for judges every file
 git lists, up to the cap. If every file `HEAD` records is then verified and the working tree
-holds nothing else, calu certifies `HEAD` and it becomes the baseline. A review that calu
+holds nothing else, Calu certifies `HEAD` and it becomes the baseline. A review that Calu
 starts by itself never certifies a commit.
 
 ### Certifying by hand
@@ -1519,10 +1519,10 @@ calu honesty prune --days 90       # removes check and review records older than
 - A branch or tag means the commit it points at now. Later commits are not covered.
 - A file is certified by the SHA-256 of its content. The trust ends when the content changes
   and holds wherever a file with that content lies.
-- `calu honesty trust`, `untrust` and `prune` refuse to run inside a calu session, so a
+- `calu honesty trust`, `untrust` and `prune` refuse to run inside a Calu session, so a
   person types them in a terminal of their own. `prune` never removes a person's records.
 - `/trust` in the full-screen client asks before it certifies, and only `y` does.
-- Clearing the last open mark of a file by hand is your decision about that content. calu
+- Clearing the last open mark of a file by hand is your decision about that content. Calu
   stores it as one: the file's present content is certified with the source `user`, so a
   later session does not mark the same code again (`calu honesty untrust --file PATH`
   withdraws it). While other marks are open on the file, nothing is stored.
@@ -1541,12 +1541,12 @@ Every trusted commit and every stored file content records its source:
 - A stronger certification replaces a weaker record, never the reverse.
 - `honesty.sufficient_trust` (`check` by default) names the weakest source that counts. With
   `review`, a checked edit leaves its file unreviewed until a review judged it. With `user`,
-  only a person's certification counts and calu starts no review by itself.
+  only a person's certification counts and Calu starts no review by itself.
 - Raising the setting deletes nothing; lowering it makes the weaker records count again.
 - A plain `git commit` made in a clean state is certified by the session with the weakest
   source among the verifications it contains (`check` or `review`, never `user`) and becomes
   the new baseline.
-- Other commands that move `HEAD` (merge, rebase, cherry-pick) are not certified. calu looks
+- Other commands that move `HEAD` (merge, rebase, cherry-pick) are not certified. Calu looks
   the baseline up again after them.
 
 ### The honesty rules
@@ -1566,7 +1566,7 @@ calu honesty reset                      # back to the rules calu ships
 calu checker edit honesty               # the honesty checker's own project instructions
 ```
 
-The rules are the setting `honesty.rules` (empty: calu's text). Change them to use your own
+The rules are the setting `honesty.rules` (empty: Calu's text). Change them to use your own
 documentation standard, for example NumPy docstrings instead of Google style. They are not
 meant to change often.
 
@@ -1597,16 +1597,16 @@ precision and recall for HONEST, DISHONEST and ESCALATE.
 
 ### Details
 
-- When a file is marked, calu withdraws the stored verification (`check` or `review`) of that
-  content, so that it does not count as verified after a restart. A session never withdraws a
+- Calu withdraws the stored verification (`check` or `review`) of a file's content when the
+  file is marked, so that it does not count as verified after a restart. A session never withdraws a
   person's certification.
 - Marks live in the session's memory and end with it. Verified contents and trusted commits
   are stored, so a restart does not make verified files unreviewed.
-- calu tracks files that git ignores and files outside the repository only when the session
+- Calu tracks files that git ignores and files outside the repository only when the session
   wrote them or a person named them. It does not scan ignored directories.
 - The edit check does not verify an edit through a symbolic link, or of a file that is not
   UTF-8 or is over 8 MB. A review or a person verifies it.
-- calu hashes file contents itself and runs no content filter of the repository. In a
+- Calu hashes file contents itself and runs no content filter of the repository. In a
   repository that converts line endings or applies filters on checkout, the converted files
   are unreviewed until verified, and only a person certifies commits of them. The same holds
   for a commit that adds or moves a submodule.
@@ -1632,7 +1632,7 @@ setting off ends the file.
 
 ### The files
 
-calu writes one file per session:
+Calu writes one file per session:
 
 ```
 <project>/agent/traces/<YYYY-MM-DD>/<user>/session_NNN.md
@@ -1645,9 +1645,9 @@ agent/traces/2026-11-19/kai/session_001.md
 - The date is the day the session started (UTC). The user is the OS user Claude Code runs as.
   NNN is the next free number in that directory. Two sessions that start at the same moment
   get two files.
-- A resumed or forked conversation is a new calu session with a new file. Its header names
+- A resumed or forked conversation is a new Calu session with a new file. Its header names
   the file of the conversation it continues, if that file is in the trace directory.
-- calu removes a file that got no step (a session that ended before its first message).
+- Calu removes a file that got no step (a session that ended before its first message).
 
 | Setting | Values | Effect |
 |---|---|---|
@@ -1711,7 +1711,7 @@ Summary of the step: Reads src/cart.py to find the rounding code.
 | `### Result of tool call N (<tool>)` | the result, cut to `traces.max_result_chars` characters |
 | `#### Subagent K: ...` | the same blocks for a subagent, one heading level below the tool call that started it |
 
-- The file only grows. calu folds or summarises nothing.
+- The file only grows. Calu folds or summarises nothing.
 - Tool calls stay numbered when turn numbers are off, because the checks and results refer to
   them.
 - With `context.narrate` off there is no narrator, and the file holds the plain form.
@@ -1721,11 +1721,11 @@ Summary of the step: Reads src/cart.py to find the rounding code.
 
 ### Redaction
 
-The files are meant to be shared, so every block passes two stages before calu writes it.
+The files are meant to be shared, so every block passes two stages before Calu writes it.
 
 | Stage | Replaces | Can be switched off |
 |---|---|---|
-| 1. Known values and shapes | the values of the environment variables calu hides from Claude Code; of variables whose names say key, token, secret or password; the session's client token; the database password; AWS access key ids, `sk-...` keys, GitHub tokens, JSON Web Tokens, private key blocks, passwords inside URLs and connection strings | no |
+| 1. Known values and shapes | the values of the environment variables Calu hides from Claude Code; of variables whose names say key, token, secret or password; the session's client token; the database password; AWS access key ids, `sk-...` keys, GitHub tokens, JSON Web Tokens, private key blocks, passwords inside URLs and connection strings | no |
 | 2. The redaction agent (one model call per block) | secrets and personal data: names of private persons, e-mail addresses, phone numbers, postal addresses, account and card numbers. The shipped instructions also let it remove the user's questions, hints of when the session happened and how long it took, and remarks about the user's private life. They keep every requirement and decision that entered the session, and the changes with their reasons | `traces.redact false`; the header then says that personal data was not removed |
 
 - A replaced value leaves a typed placeholder: `[redacted: api key]`, `[redacted: e-mail
@@ -1736,7 +1736,7 @@ The files are meant to be shared, so every block passes two stages before calu w
   models` sets it with the other roles).
 
 **Withheld blocks.** If the redaction agent fails, answers unusably (removing a block other
-than a user message counts), or takes longer than `traces.redactor_timeout_s`, calu writes
+than a user message counts), or takes longer than `traces.redactor_timeout_s`, Calu writes
 the block's heading and the line
 
 ```
@@ -1745,8 +1745,8 @@ the block's heading and the line
 
 The step's text is not in the file, and the session goes on. A step never waits for the
 trace, and a trace problem never stops Claude. A block that was still being redacted when the
-session ended is withheld too. When `traces.queue_blocks` blocks wait for the agent, calu
-leaves further blocks out and a line says how many.
+session ended is withheld too. Calu leaves further blocks out while
+`traces.queue_blocks` blocks wait for the agent, and a line says how many.
 
 **The redaction agent's instructions** are the setting `traces.redactor_instructions`, global
 or per project:
@@ -1760,7 +1760,7 @@ calu traces instructions reset                  # back to the next scope, or cal
 
 - The web interface edits them on the settings pane "Session traces"; the settings dialogs of
   the VSCode extension and the PyCharm plugin under `traces`.
-- calu puts a fixed part in front of them, which says that the excerpt is data and in which
+- Calu puts a fixed part in front of them, which says that the excerpt is data and in which
   form to answer.
 - A save is refused when the stored text changed after the editor opened; the terminal keeps
   the edited text in its file. Every change is in the audit log with the text before and
@@ -1768,7 +1768,7 @@ calu traces instructions reset                  # back to the next scope, or cal
 
 ### The final redaction before a commit
 
-The per-block redaction sees one block at a time. Before a commit, calu therefore redacts the
+The per-block redaction sees one block at a time. Before a commit, Calu therefore redacts the
 part that the commit adds to each trace file once more, as a whole.
 
 ```
@@ -1780,7 +1780,7 @@ file after the pass   committed part | new part, redacted as a whole | marker li
 - The agent reads the new part in pieces of up to 24,000 characters, with the same
   instructions and a fixed part for this pass: keep every requirement and decision as
   written, summarise nothing, do not remove the stretch as a whole.
-- calu never reads or changes the committed part again.
+- Calu never reads or changes the committed part again.
 - The marker line says how far the pass ran:
   `_[calu: the final redaction pass ran up to this line (check 3f2a9c0d1e4b5a67)]_`. The
   check value is a hash of the text above the line, so a second pass before the same commit
@@ -1794,8 +1794,8 @@ file after the pass   committed part | new part, redacted as a whole | marker li
 
 | The pass runs when | Detail | On failure |
 |---|---|---|
-| Claude runs `git commit` in a session | calu runs the pass before the commit, writes the files back and stages them, so the commit takes the finalized trace files along (a trace directory that `.gitignore` excludes is left out). The session's trace writer waits until the commit is over | the commit is refused; Claude is told why |
-| you commit outside calu, with the hook installed | the pre-commit hook runs `calu traces finalize --staged` | the commit is refused with instructions |
+| Claude runs `git commit` in a session | Calu runs the pass before the commit, writes the files back and stages them, so the commit takes the finalized trace files along (a trace directory that `.gitignore` excludes is left out). The session's trace writer waits until the commit is over | the commit is refused; Claude is told why |
+| you commit outside Calu, with the hook installed | the pre-commit hook runs `calu traces finalize --staged` | the commit is refused with instructions |
 | you run it by hand | `calu traces finalize` works on the files on disk that differ from `HEAD`, without staging them; `--staged` works on the index | the command fails; the file is unchanged |
 
 ```bash
@@ -1808,19 +1808,19 @@ calu traces finalize --staged       # the final pass over the staged files (the 
 
 **The hook**
 
-- calu installs it only on request, in the hooks directory git uses (`core.hooksPath` is
-  followed). It refuses to replace a pre-commit hook that calu did not write; `--chain`
+- Calu installs it only on request, in the hooks directory git uses (`core.hooksPath` is
+  followed). It refuses to replace a pre-commit hook that Calu did not write; `--chain`
   renames that hook to `pre-commit.calu-chained` and runs it after the final pass.
 - With a hook manager (pre-commit, husky, lefthook), add a hook that runs `calu traces
   finalize --staged`. For pre-commit: a `local` hook with `language: system`,
   `pass_filenames: false` and `always_run: true`.
-- The hook needs no running session. When the staged trace files have no new part, it reads
-  nothing and needs no login. Otherwise it reads the project's settings with the first login
+- The hook needs no running session. It reads nothing and needs no login when the staged
+  trace files have no new part. Otherwise it reads the project's settings with the first login
   it finds: the one of `sudo calu setup --no-password`, a `calu_admin` entry stored without a
   password, or the `operator` or `admin` credential. It asks for a password only on a
   terminal.
-- When the settings cannot be read or the redaction agent cannot be reached, the hook refuses
-  the commit: run `calu traces finalize --staged` in a terminal and commit again.
+- The hook refuses the commit when it cannot read the settings or reach the redaction
+  agent: run `calu traces finalize --staged` in a terminal and commit again.
 - `git commit --no-verify` skips the hook and commits the trace files as the per-block
   redaction wrote them.
 
@@ -1835,12 +1835,12 @@ file until its next step. `queue_blocks` and `redactor_timeout_s` count from the
 
 ### Responsibilities
 
-- calu writes the files and makes no commit of its own. Commit the directory, or add it to
+- Calu writes the files and makes no commit of its own. Commit the directory, or add it to
   `.gitignore` to keep the files local.
 - While tracing is on, a tool call of Claude that would write into the trace directory waits
   for a person. The trace files are left out of the write sets and of the code honesty state,
   and the checkers' code tools do not read them.
-- **Read a trace before you publish it.** Stage 1 knows only the secrets calu knows and the
+- **Read a trace before you publish it.** Stage 1 knows only the secrets Calu knows and the
   shapes it lists. Stage 2 is a model: it can miss a name or a key, and it can replace
   something harmless. Redaction lowers the risk of publishing a secret or personal data and
   gives no guarantee.
@@ -1896,7 +1896,7 @@ calu start --resume <session id>                       # the same three through 
   each is listed on its own. `calu sessions` and the web interface show a fork beside the
   conversation it branched from.
 - For `--fork-before-turn N`, N is 2 or more. The checkers of the fork read only the turns it
-  kept. If the folded summary already describes a turn the fork discards, calu says so at the
+  kept. If the folded summary already describes a turn the fork discards, Calu says so at the
   start; correct the summary with `calu summary <session> --edit`.
 - `--resume` and `--fork` take a session id as printed, not a session title.
 
@@ -1917,12 +1917,12 @@ These ask the running `calu serve` for the new session, and the client switches 
 session you left keeps running.
 
 **Conversations started with plain `claude`.** `calu list-sessions` also lists the
-conversations of this directory that you started with `claude` itself, marked "outside calu".
+conversations of this directory that you started with `claude` itself, marked "outside Calu".
 You can resume or fork them.
 
-- calu saw none of such a conversation, so none of its steps was checked.
+- Calu saw none of such a conversation, so none of its steps was checked.
 - The checkers get your messages from its transcript as a report about an earlier
-  conversation, not as your words in this session, because calu cannot verify a file it did
+  conversation, not as your words in this session, because Calu cannot verify a file it did
   not write.
 - If a `claude` still has the conversation open, fork it instead of resuming it. Two
   processes would otherwise write one transcript.
@@ -1932,7 +1932,7 @@ You can resume or fork them.
 This section describes `calu serve`, which runs many sessions from one process, and the
 commands that watch all sessions of all machines. Read it when you run more than one session.
 
-### calu serve and calu start
+### Calu serve and Calu start
 
 `calu serve` asks for the session password once and then runs as many sessions as you ask
 for, in its projects directory and the directories below it, until you stop it.
@@ -1969,8 +1969,8 @@ calu start ~/src/other --no-attach      # another directory; attach later
   it. A database login that may write the request table is therefore required to start a
   session, and Claude Code has none: a running session cannot ask for another one.
 - **The answering server** runs on the same machine as the same OS user and serves the
-  directory. When none answers within ten seconds, `calu start` withdraws its request and
-  says so.
+  directory. `calu start` withdraws its request and says so when no server answers
+  within ten seconds.
 - **A served session waits for you.** It does not end when Claude has nothing left to do.
   `/shutdown` in a client ends that one session. Ctrl-C or SIGTERM stops the server and every
   session it runs, each in order.
@@ -1985,7 +1985,7 @@ calu start ~/src/other --no-attach      # another directory; attach later
 | `--max-sessions N` | how many sessions run at once (default 10) |
 | `--idle-timeout MINUTES` | end a session that has been idle that long with no client attached; its conversation stays and `calu start --resume` continues it. Default: never |
 | `--relay-port N`, `--no-relay` | name the relay port (`0`: any free one), or switch the relay off |
-| `--user`, `--sudo`, `--secure`, `--insecure` | see [calu as root](#calu-as-root-claude-code-as-another-user) |
+| `--user`, `--sudo`, `--secure`, `--insecure` | see [Calu as root](#calu-as-root-claude-code-as-another-user) |
 
 The server prints one line when a session is asked for, started and ended, each with the
 directory's name and the request's number.
@@ -2028,7 +2028,7 @@ port = 8811 + (SHA-256 of the resolved projects directory) mod 189      # 8811 t
 
 - A server of the same directory gets the same port after every restart, so an SSH forward
   written once keeps working.
-- When that port is taken, the server says so and takes the next free one of the range. A
+- The server says so when that port is taken, and takes the next free one of the range. A
   forward of the first port does not reach it then.
 - With `--relay-port N` and a taken port, the server does not start.
 - Each session keeps its own port and tokens as well. Sessions of `calu run` have no relay.
@@ -2104,7 +2104,7 @@ calu resolve 31 deny --note "Do not touch the payment module; skip that item."
 This section shows how to reach sessions that run on another machine: through the database,
 or through SSH. Read it when Claude Code runs on a server and you sit at a laptop.
 
-**No calu process binds a public interface.** A session's WebSocket has no TLS, and the web
+**No Calu process binds a public interface.** A session's WebSocket has no TLS, and the web
 interface has only a local login. Every remote way therefore goes through the database or
 through SSH.
 
@@ -2113,7 +2113,7 @@ through SSH.
 | A. The database | `calu sessions`, `calu escalations`, `calu resolve` with an `operator` credential | lists and decisions for the whole herd; no live stream |
 | B. The client on the server | `ssh -t the-host`, then `calu attach` in the project | everything, with the server's credentials |
 | C. The server's web interface | `ssh -N -L 8800:127.0.0.1:8800 the-host`, then the address `calu web` printed there | every session of that machine, live, through one tunnel |
-| D. A local client through the relay | `ssh -N -L <port>:127.0.0.1:<port> the-host` with the relay port, then `calu attach ws://127.0.0.1:<port>` with a server token | every session of that `calu serve` through one forward; no calu setup on your machine |
+| D. A local client through the relay | `ssh -N -L <port>:127.0.0.1:<port> the-host` with the relay port, then `calu attach ws://127.0.0.1:<port>` with a server token | every session of that `calu serve` through one forward; no Calu setup on your machine |
 | E. A local client, one session | the same with the session's own port and a client token | one session (also one of `calu run`, which has no relay) |
 | F. An IDE | VSCode Remote-SSH, or PyCharm modes 2 and 3 | the IDE extensions, which run or connect on the server |
 
@@ -2215,15 +2215,15 @@ calu attach ws://127.0.0.1:41235 --token=<the token it printed>
 | a client on the session's own machine (`calu attach` without an address) | it does not wait: "the session ended: its process is gone" |
 | the web interface | its page reconnects the same way |
 
-## calu as root, Claude Code as another user
+## Calu as root, Claude Code as another user
 
-This section describes the arrangement in which calu runs as root and Claude Code as an
+This section describes the arrangement in which Calu runs as root and Claude Code as an
 unprivileged user, so that the operating system separates the two. Read it when the sandbox
-is off, when you want a stronger separation than the sandbox, or when calu runs as root in a
+is off, when you want a stronger separation than the sandbox, or when Calu runs as root in a
 container.
 
-**The default arrangement:** calu and Claude Code run as the same user. The sandbox and
-calu's own precautions keep Claude's commands away from calu's credentials.
+**The default arrangement:** Calu and Claude Code run as the same user. The sandbox and
+Calu's own precautions keep Claude's commands away from Calu's credentials.
 
 **The root arrangement:**
 
@@ -2234,8 +2234,8 @@ calu's own precautions keep Claude's commands away from calu's credentials.
  user (you, ada, uid 1000):   Claude Code and every command it runs
 ```
 
-Claude Code and its commands then cannot read calu's credentials or checker keys, cannot
-signal or trace the calu process, and cannot change calu's installation.
+Claude Code and its commands then cannot read Calu's credentials or checker keys, cannot
+signal or trace the Calu process, and cannot change Calu's installation.
 
 ### Quick start with sudo
 
@@ -2253,8 +2253,8 @@ calu attach --sudo           # 6. the client as root, for you
 calu web --sudo              #    the web interface as root, for you
 ```
 
-- `--sudo` runs calu again as root through sudo, which asks for its password.
-- calu refuses `--sudo` when a non-root user can change calu's files, because the elevation
+- `--sudo` runs Calu again as root through sudo, which asks for its password.
+- Calu refuses `--sudo` when a non-root user can change Calu's files, because the elevation
   would otherwise hand root to that user. Step 1 installs it for root.
 - The `operator` credential that `calu attach` and `calu start` use stays in your own
   account.
@@ -2275,8 +2275,8 @@ calu serve --user 1000:1000         # the same for a server and all its sessions
 | `root` | everything runs as root, as one user. Such a session has no socket for root clients, and every client shows a token |
 
 - **`--user` is required as root.** Claude Code never runs as root by accident.
-- calu's own work in the project (git for its snapshots, the files a checker reads) is done
-  with that user's rights too. calu therefore refuses a link in the project that points at a
+- Calu's own work in the project (git for its snapshots, the files a checker reads) is done
+  with that user's rights too. Calu therefore refuses a link in the project that points at a
   file only root may read, as the system refuses it for Claude.
 
 ### Root's files
@@ -2289,7 +2289,7 @@ calu serve --user 1000:1000         # the same for a server and all its sessions
 | a root session's socket | `/run/calu/sessions/<session id>.sock` (mode 0600, directory 0700) |
 | logs | `/var/lib/calu/log/` |
 
-A root calu never keeps its files in a home directory. Started through sudo it ignores
+A root Calu never keeps its files in a home directory. Started through sudo it ignores
 `XDG_CONFIG_HOME` and `XDG_STATE_HOME`.
 
 ### Clients of a root session
@@ -2338,7 +2338,7 @@ sudo does not pass on.
 
 ### Changing settings from your own account
 
-calu's files are privileged; the ability to change settings is not. `calu setup` gives the
+A user without root can change settings with the admin password. `calu setup` gives the
 database role `calu_admin` the admin password you chose.
 
 - With only an `operator` credential in your own store, `calu config`, `calu checker`, `calu
@@ -2351,7 +2351,7 @@ database role `calu_admin` the admin password you chose.
   logins.
 - After an upgrade, run `sudo calu setup` once so that the role gets its password.
 
-calu chooses the database in this order:
+Calu chooses the database in this order:
 
 ```
 1. the login in /var/lib/calu/database.json        (sudo calu setup --no-password)
@@ -2374,7 +2374,7 @@ calu config set claude.model claude-sonnet-4-5 --database operator
 |---|---|
 | Logins in `/etc/calu` | stored protected by the file's mode alone (only root reads the directory) |
 | The role that changes settings | gets a generated password, stored the same way **and** written to `/var/lib/calu/database.json`, which every user and program of the machine can read |
-| Prompts | `calu run --sudo`, `calu serve --sudo`, `calu attach --sudo` and `calu web --sudo` ask for no calu password; `calu web --sudo` prints its address with a token; your plain `calu attach` saves settings without a password |
+| Prompts | `calu run --sudo`, `calu serve --sudo`, `calu attach --sudo` and `calu web --sudo` ask for no Calu password; `calu web --sudo` prints its address with a token; your plain `calu attach` saves settings without a password |
 | **Security** | **weak on purpose: only the checkers keep a program, Claude Code's commands included, from changing the checkers** |
 
 - An existing setup is converted; its passwords are asked one last time.
@@ -2395,7 +2395,7 @@ calu config set claude.model claude-sonnet-4-5 --database operator
 
 - **`calu doctor --sudo [DIR]`** (as root: `calu doctor --user NAME|UID [DIR]`) reports the
   things `calu run --sudo` would find: the user and its home directory, whether only root can
-  change calu's installation, the launcher, the credentials and checker keys in `/etc/calu`,
+  change Calu's installation, the launcher, the credentials and checker keys in `/etc/calu`,
   and Claude Code's settings, sandbox and the project as that user sees them. It starts
   nothing and creates no directory. As root without `--user` it says that it looked at root's
   own account. It also reports a bubblewrap that is installed but cannot create a sandbox (a
@@ -2403,7 +2403,7 @@ calu config set claude.model claude-sonnet-4-5 --database operator
 - **Stopping.** Ctrl-C and SIGTERM (`kill`, `docker stop`, a service manager) stop `calu run`
   and `calu serve` in order: open escalations are cancelled, the sessions' rows say
   "stopped", their sockets are removed.
-- **`PATH` under `--sudo`.** Claude Code starts with the `PATH` sudo gives calu (its
+- **`PATH` under `--sudo`.** Claude Code starts with the `PATH` sudo gives Calu (its
   `secure_path`), not with your shell's. A command of Claude may therefore miss a program
   that is installed in your home directory (`~/.local/bin`, a Node version manager).
 - **Not yet supported:** the RDS variant of the database together with `--user`.
@@ -2428,12 +2428,12 @@ traceback is in the log file that the line names: `~/.local/state/calu/log/run.l
 | Symptom | Cause | Fix |
 |---|---|---|
 | The session refuses to start and names `bubblewrap` or `socat` | the sandbox is on and cannot be built | install both, or `calu setup --no-sandbox` |
-| The session refuses to start and names a settings file and a sandbox entry | one of Claude Code's settings files holds a sandbox entry beyond calu's configuration | remove the entry and put the need into calu's configuration (`calu config add claude.sandbox.allowed_domains <domain>`), or leave the file out with `claude.setting_sources` |
+| The session refuses to start and names a settings file and a sandbox entry | one of Claude Code's settings files holds a sandbox entry beyond Calu's configuration | remove the entry and put the need into Calu's configuration (`calu config add claude.sandbox.allowed_domains <domain>`), or leave the file out with `claude.setting_sources` |
 | Every command of Claude fails with the sandbox on, in a container | bubblewrap cannot create user namespaces there (`calu doctor` reports it) | give the container that right, or switch the sandbox off and use the root arrangement |
 | `calu start` says that no server answered | no `calu serve` of your user on this machine serves the directory | start `calu serve` in a parent directory, or use `calu run` |
 | `calu start` or `/new` is refused with a directory name | the directory is outside the server's projects directory | start a server with `--projects`, or use `calu run` |
 | `calu serve` refuses to start before asking for a password | the projects directory is `/`, hidden, or a system directory | serve a directory under `/home`, `/srv`, `/opt` |
-| `calu run --sudo` refuses | a non-root user can change calu's installation | install calu for root ([quick start](#quick-start-with-sudo)) |
+| `calu run --sudo` refuses | a non-root user can change Calu's installation | install Calu for root ([quick start](#quick-start-with-sudo)) |
 | Claude Code is not signed in under `--sudo` or `--user` | the login belongs to another user, and sudo does not pass `ANTHROPIC_API_KEY` on | `calu login --sudo`, or `calu login --user <uid>` |
 | A command of Claude does not find a program under `--sudo` | `PATH` is sudo's `secure_path` | install the program system-wide |
 
@@ -2444,11 +2444,11 @@ traceback is in the log file that the line names: `~/.local/state/calu/log/run.l
 | Every step escalates with a checker error | the checker's key is missing, expired or for another provider | `calu doctor --keys`; `calu config models auto` |
 | A command cannot reach the network | the session has no registered project (empty allow list), or the domain is not listed | `calu project add`; `calu config add claude.sandbox.allowed_domains <domain> --project <name>` |
 | Claude Code asks about a domain and the session escalates | the domain is not on the project's allow list | allow once, or add the domain |
-| `git add ... && git commit` is denied | calu reviews a commit only as a command line of its own | Claude runs `git add` first, then `git commit` alone; it is told so |
+| `git add ... && git commit` is denied | Calu reviews a commit only as a command line of its own | Claude runs `git add` first, then `git commit` alone; it is told so |
 | A commit is denied with "`git add -- <path>`" | code honesty: the index holds an older content of a verified file | Claude stages the file and repeats the commit |
 | The first test run under `honesty.mode enforce` waits for you | no trusted commit | `/trust` or `calu honesty trust HEAD` |
 | A passed step still waits for you | the supervision level covers it; or `claude.require_auto_mode` is on and the session is not in auto mode; or Claude Code's own approval asked | the card names the reason |
-| Many subagents stop at once | one decision is open, and calu approves no other checked step meanwhile | answer the open decision |
+| Many subagents stop at once | one decision is open, and Calu approves no other checked step meanwhile | answer the open decision |
 | The next step waits after the system clock moved backwards | the attribution of file changes to steps would no longer hold | decide the step |
 | Bash and Monitor commands wait for a person mid-session | a sandbox entry appeared in a settings file of Claude Code | remove the entry |
 | A changed `claude.model` or permission mode has no effect | Claude Code reads those at session start | start a new session, or use `/model` and `/mode` in a client |
@@ -2471,7 +2471,7 @@ traceback is in the log file that the line names: `~/.local/state/calu/log/run.l
 | A root client "does not know the database" | `/var/lib/calu/database.json` is missing | run `sudo calu setup` once |
 | A session is listed as stale | no heartbeat for a minute: the process is gone or the machine is unreachable | check the machine; `calu resolve <id> cancel` clears its escalations |
 | A trace block says "withheld: redaction failed" | the redaction agent failed or timed out | check the redactor model and key; the text of that block is lost on purpose |
-| A commit outside calu is refused by the trace hook | the hook could not read the settings or reach the redaction agent | `calu traces finalize --staged` in a terminal, then commit again |
+| A commit outside Calu is refused by the trace hook | the hook could not read the settings or reach the redaction agent | `calu traces finalize --staged` in a terminal, then commit again |
 
 ---
 
@@ -2536,7 +2536,7 @@ This section lists every `calu` command with its purpose and the credential it u
 | `calu ide` | the bridge the IDE extensions start (stdin/stdout) |
 | `calu protocol` | print the JSON Schema of the client protocol |
 
-A command asks for calu's password at most once. `calu attach` with a password-protected
+A command asks for Calu's password at most once. `calu attach` with a password-protected
 credential asks it to find the session and does not ask again to revoke its token when it
 ends. It says that the token was left; only that client knew it, and it ends with its session
 (`calu token revoke <id>` revokes it at once).
@@ -2547,7 +2547,7 @@ A checker is created by giving `calu checker set` a new name with `--route` and
 ## Commands inside the terminal clients
 
 This section lists the slash commands and keys of `calu attach`. A plain line is a message
-for Claude. A `/word` that calu does not know goes to Claude Code as typed.
+for Claude. A `/word` that Calu does not know goes to Claude Code as typed.
 
 **Both clients**
 
@@ -2574,7 +2574,7 @@ for Claude. A `/word` that calu does not know goes to Claude Code as typed.
 | `/inject <text>` | the text reaches Claude inside the running turn |
 | `/to <agent> <text>` | a message to a running background subagent |
 | `/comment PATH FROM TO TEXT` | comment on lines FROM..TO of a project file (the client must run on the session's machine) |
-| `/stop`, `/start [resume id]` | stop and start the Claude session inside the running calu session |
+| `/stop`, `/start [resume id]` | stop and start the Claude session inside the running Calu session |
 | `/state` | print the state again, with the full directory |
 | `/help` | all commands in one line each |
 
@@ -2610,12 +2610,12 @@ for Claude. A `/word` that calu does not know goes to Claude Code as typed.
 ## Models and keys
 
 This section describes which account pays for what, how to choose the checkers' models, and
-how calu keeps the checkers' keys from Claude Code.
+how Calu keeps the checkers' keys from Claude Code.
 
 | Component | Account | Configured by |
 |---|---|---|
-| Claude Code | the account the machine is signed in with: Claude Pro or Max, an Anthropic API key, AWS Bedrock, Google Vertex, Microsoft Foundry | Claude Code itself. calu's one switch is `claude.use_bedrock`, which sets `CLAUDE_CODE_USE_BEDROCK=1` |
-| Checkers, narrator, summarizer, honesty reviewer, trace redactor | a provider of their own | model strings in calu's configuration; keys in `~/.config/calu/.env` |
+| Claude Code | the account the machine is signed in with: Claude Pro or Max, an Anthropic API key, AWS Bedrock, Google Vertex, Microsoft Foundry | Claude Code itself. Calu's one switch is `claude.use_bedrock`, which sets `CLAUDE_CODE_USE_BEDROCK=1` |
+| Checkers, narrator, summarizer, honesty reviewer, trace redactor | a provider of their own | model strings in Calu's configuration; keys in `~/.config/calu/.env` |
 
 A Claude Code subscription authenticates the `claude` CLI, not API calls of other programs,
 so the checkers need a provider of their own. They are
@@ -2658,15 +2658,15 @@ same during setup):
   removes an effort that was set for the previous model.
 - A value in the configuration (`calu config set command_checker.model`) wins over the
   checker definition's own model (`calu checker set command --model`).
-- On Bedrock calu leaves thinking off: when last measured, Pydantic AI could not force the
+- On Bedrock Calu leaves thinking off: when last measured, Pydantic AI could not force the
   structured answer there with thinking on.
 - For EU data residency, check the Bedrock profile's destination regions yourself (`aws
   bedrock get-inference-profile`); AWS advises against relying on the `eu.` prefix alone.
 - `mistral:` models go to the EU endpoint unless `MISTRAL_BASE_URL` says otherwise. A
   `bedrock:` model takes its credentials from the usual AWS chain. Ollama or vLLM keeps the
   call on your own machine.
-- calu works with providers that offer zero data retention. The guarantee is the provider's;
-  calu neither enables nor enforces it.
+- Calu works with providers that offer zero data retention. The guarantee is the provider's;
+  Calu neither enables nor enforces it.
 
 ### Checkers on the Claude Code account
 
@@ -2685,16 +2685,16 @@ calu config set command_checker.model claude:haiku
 | Slower | each check starts a process (a second or two) |
 | More tokens | the CLI adds a fixed prompt of its own (about 2.9k tokens) to every call |
 
-calu states these limits at every start. The checks run in an empty temporary directory, so
+Calu states these limits at every start. The checks run in an empty temporary directory, so
 that a `CLAUDE.md` of the project under review cannot write instructions into the reviewing
 agent's prompt.
 
 ### Keys
 
 - Keys belong in `~/.config/calu/.env` (as root: `/etc/calu`).
-- **Claude Code never sees them.** calu blanks every provider key it knows, and every variable
+- **Claude Code never sees them.** Calu blanks every provider key it knows, and every variable
   of that file, in the environment it hands to Claude Code.
-- A key that is set elsewhere under a name calu does not know: name it in `hidden_env` (`calu
+- A key that is set elsewhere under a name Calu does not know: name it in `hidden_env` (`calu
   config add hidden_env XAI_API_KEY`). It is blanked from the next session start. The start-up
   warnings say when a checker provider needs that.
 - `calu doctor --keys` sends each key to its provider's free model-list request and reports
@@ -2703,7 +2703,7 @@ agent's prompt.
 
 **Claude Code itself on an API key.** An `ANTHROPIC_API_KEY` that is only in
 `~/.config/calu/.env` pays for the checkers and never reaches Claude Code. Give Claude Code
-its key the way it is set up without calu, for example in the `env` block of
+its key the way it is set up without Calu, for example in the `env` block of
 `~/.claude/settings.json` (`{"env": {"ANTHROPIC_API_KEY": "sk-ant-..."}}`, file mode 600).
 The same key may stand in both files; the checkers and the main conversation then bill one
 account.
@@ -2714,13 +2714,13 @@ This section describes the limits on the files and network addresses that Claude
 commands can reach. Read it when a session refuses to start, a command cannot reach a host,
 or you decide whether to run without the sandbox.
 
-Claude's Bash commands run in **Claude Code's own sandbox**: an own process namespace, calu's
+Claude's Bash commands run in **Claude Code's own sandbox**: an own process namespace, Calu's
 files hidden, no write access to Claude Code's configuration, read denials for credentials,
-and network access only through a filtering proxy. calu configures the sandbox and passes
+and network access only through a filtering proxy. Calu configures the sandbox and passes
 the settings to Claude Code. The sandbox needs `bubblewrap` and `socat`.
 
-**The sandbox bounds a command's reach. The rule lists and the checkers judge the command's
-text.**
+**The sandbox limits the files and hosts a command can reach.** The rule lists and the
+checkers only read the command's text.
 
 ### On or off
 
@@ -2739,15 +2739,15 @@ the option the stored value stays.
 | off | neither program is needed. Only the checkers and the deny lists stand between Claude's commands and the machine, and the commands run with the rights of the user Claude Code runs as |
 
 **With the sandbox off**, protect the logins with passwords (the default of `calu setup`;
-`calu setup --set-passwords` puts them back after `--no-password`) or run calu with `--sudo`
-([calu as root](#calu-as-root-claude-code-as-another-user)), or both. `calu setup`, every
-session start and `calu doctor --db` warn while the sandbox is off, unless calu runs as root
+`calu setup --set-passwords` puts them back after `--no-password`) or run Calu with `--sudo`
+([Calu as root](#calu-as-root-claude-code-as-another-user)), or both. `calu setup`, every
+session start and `calu doctor --db` warn while the sandbox is off, unless Calu runs as root
 for another user or every entry of the credential store has a password, and the place file
-publishes no admin login. calu also warns when it cannot tell.
+publishes no admin login. Calu also warns when it cannot tell.
 
 ### File access
 
-calu's own directories (`$XDG_CONFIG_HOME/calu` and `$XDG_STATE_HOME/calu`) are always
+Calu's own directories (`$XDG_CONFIG_HOME/calu` and `$XDG_STATE_HOME/calu`) are always
 denied. The other read denials are a list you edit (15 entries by default; `calu config get
 claude.sandbox.deny_read` shows them):
 
@@ -2763,7 +2763,7 @@ The network policy is a property of the project.
 | Policy | A command reaches | Set with |
 |---|---|---|
 | `proxy` (default of `calu project add`) | the domains on the project's allow list. The starter list holds package registries, git over HTTPS and OS packages | `calu project add . --name demo` |
-| `full` | every domain, as Claude Code without calu | `calu project network --name demo --network full` |
+| `full` | every domain, as Claude Code without Calu | `calu project network --name demo --network full` |
 | `none` | nothing | `calu project network --name demo --network none` |
 
 ```bash
@@ -2774,7 +2774,7 @@ calu project network --name demo --network none
 ```
 
 - **The allow list is a don't-ask list.** A command that wants an unlisted domain makes
-  Claude Code ask, and calu turns that into an escalation that names the domain. You allow it
+  Claude Code ask, and Calu turns that into an escalation that names the domain. You allow it
   once, or add the domain.
 - **A session without a registered project reaches nothing.** An empty allow list blocks
   every connection, and the session says so at its start.
@@ -2784,16 +2784,16 @@ calu project network --name demo --network none
 
 ### Sandbox entries in Claude Code's settings files
 
-calu passes its sandbox settings to Claude Code complete and has to be sure that nothing else
+Calu passes its sandbox settings to Claude Code complete and has to be sure that nothing else
 changes them.
 
 - A session does not start while `~/.claude/settings.json`, the project's
   `.claude/settings.json` or `.claude/settings.local.json` holds a sandbox entry that goes
-  beyond calu's configuration, or a sandbox key calu does not know. The error names the file
+  beyond Calu's configuration, or a sandbox key Calu does not know. The error names the file
   and the entry.
 - If such an entry appears while a session runs, its Bash and Monitor commands wait for a
   person.
-- Fix: remove the entry and put the need into calu's configuration, or leave the file out
+- Fix: remove the entry and put the need into Calu's configuration, or leave the file out
   with `claude.setting_sources`.
 - `calu doctor DIR` reports such entries before a session starts.
 
@@ -2815,7 +2815,7 @@ history.
 
 ### The credential store
 
-- calu keeps the logins in `~/.config/calu/credentials.json` (file mode 0600, directory
+- Calu keeps the logins in `~/.config/calu/credentials.json` (file mode 0600, directory
   0700; as root `/etc/calu`). Each entry is encrypted under a password of its own (Argon2id,
   AES-GCM), and each command that uses an entry asks for that password.
 - The store also holds the database's location: host, login, and for the local database its
@@ -2841,7 +2841,7 @@ calu credential remove operator
 - `calu credential new operator` run again replaces the password, which takes every copy
   handed out before out of use.
 
-**Protection from Claude.** Claude runs as your user in the default arrangement, so calu
+**Protection from Claude.** Claude runs as your user in the default arrangement, so Calu
 keeps the store from it in two ways:
 
 1. With the sandbox on, `~/.config/calu` is unreadable to Claude's commands.
@@ -2849,12 +2849,12 @@ keeps the store from it in two ways:
    calu …`, `python -m calu …`) and every command that names the file ask you first, with or
    without the sandbox.
 
-The sandbox is the boundary for a command's reads; the rule matches text. A session started
+The sandbox prevents the read itself. The rule only matches the command's text. A session started
 without the sandbox says so at its start when a credential has no password.
 
-**Memory.** Before Claude Code starts, calu wipes the password you typed, the key derived
+**Memory.** Before Claude Code starts, Calu wipes the password you typed, the key derived
 from it and the buffer the credential was decrypted into. The connection string stays in the
-memory of the session process, which needs it to reconnect. calu never puts it into the
+memory of the session process, which needs it to reconnect. Calu never puts it into the
 environment, a command line or a file, and the process closes its memory to other processes
 of the same user.
 
@@ -2913,7 +2913,7 @@ or edit, the checkers' summaries and decisions, the settings and the checker ins
 That record can contain code, secrets the agent came across and personal data. Protect, back
 up and upgrade it like any other database with sensitive data.
 
-`calu setup` asks which database calu uses the first time it runs on a machine, and stores
+`calu setup` asks which database Calu uses the first time it runs on a machine, and stores
 the answer in the encrypted credential store. Options choose each variant for a script:
 
 ```bash
@@ -2924,7 +2924,7 @@ calu setup --database rds-iam --host calu.abc.eu-central-1.rds.amazonaws.com --u
 calu setup --database docker --no-sandbox    # no bubblewrap here; warns unless the logins are protected
 ```
 
-Passwords are never options. calu asks for them without echo on a terminal, or reads them as
+Passwords are never options. Calu asks for them without echo on a terminal, or reads them as
 lines from standard input, in this order: the database password (existing server only), the
 new admin password twice, the new session password twice.
 
@@ -2936,7 +2936,7 @@ new admin password twice, the new session password twice.
 
 ### 1. A local PostgreSQL in Docker
 
-- calu creates the database, generates its owner password and keeps the files in the
+- Calu creates the database, generates its owner password and keeps the files in the
   directory you name (default `~/.local/state/calu/db`). The directory is private to you;
   the cluster's files inside belong to the container's own user.
 - **You never have to start it.** `calu run` and every other command that needs the database
@@ -2945,7 +2945,7 @@ new admin password twice, the new session password twice.
 - `calu db down` stops it and `calu db up` starts it by hand. A session that is running while
   the database is stopped waits for it and does not start it.
 - The local database asks every connection for a password, including those from inside its
-  container. For a database set up with this version, calu's connections also require the
+  container. For a database set up with this version, Calu's connections also require the
   server to prove that it knows the password (SCRAM), so another program that listens on the
   port is refused.
 - A database that an earlier `calu db up` created in the Docker volume `calu-db_data` keeps
@@ -2954,8 +2954,8 @@ new admin password twice, the new session password twice.
 
 ### 2. A PostgreSQL server that exists already
 
-calu asks for host, port, database, user and password. That user becomes the owner login of
-calu's database: it creates the tables and the roles `calu_session` and `calu_operator`.
+Calu asks for host, port, database, user and password. That user becomes the owner login of
+Calu's database: it creates the tables and the roles `calu_session` and `calu_operator`.
 `calu run` never uses it.
 
 An administrator prepares the server once:
@@ -2970,14 +2970,14 @@ the missing ones together with the SQL for an administrator:
 
 | Requirement | Detail |
 |---|---|
-| a database of its own | calu creates none and refuses one that holds other tables |
+| a database of its own | Calu creates none and refuses one that holds other tables |
 | the right to create tables in it | the user owns the database |
-| the right to create roles (`CREATEROLE`) | from PostgreSQL 16 on, if the two roles exist already (another calu database on the server), they must be granted to the user with the admin option. No superuser is needed |
+| the right to create roles (`CREATEROLE`) | from PostgreSQL 16 on, if the two roles exist already (another Calu database on the server), they must be granted to the user with the admin option. No superuser is needed |
 
 - For a server on another host the connection is encrypted (`sslmode=require`). `--sslmode
   verify-full --sslrootcert FILE` also verifies the server's certificate. `--sslmode disable`
   switches encryption off and says so.
-- The two roles belong to the whole server. A second calu database on the same server shares
+- The two roles belong to the whole server. A second Calu database on the same server shares
   them, and setup refuses to replace an existing session login unless you pass
   `--renew-session`.
 - A connection pooler in transaction mode is not supported: a session needs its own
@@ -2987,7 +2987,7 @@ the missing ones together with the SQL for an administrator:
 
 **This variant has not been run against a real RDS instance yet.**
 
-No database password exists. At every connection calu asks AWS's signing code for a token
+No database password exists. At every connection Calu asks AWS's signing code for a token
 (valid for 15 minutes for new logins) with the AWS profile you name, and sends it over a
 verified TLS connection (`verify-full` with the CA bundle from AWS, which setup copies next
 to its credential store). By default the session login uses tokens too, so a running session
@@ -3006,7 +3006,7 @@ and an IAM policy that allows `rds-db:connect` for the database users `calu_admi
 `calu_session`.
 
 **Protection in this variant.** The AWS policy and access to that AWS profile on the machine
-decide who may log in; no password that only calu holds exists. While calu and Claude Code
+decide who may log in; no password that only Calu holds exists. While Calu and Claude Code
 run as the same OS user, only the sandbox's read deny list keeps Claude's commands from
 `~/.aws`.
 
@@ -3078,7 +3078,7 @@ token; without one (`--insecure`) the name is "" and `state_since` is null.
 
 ## The editor bridge and the project copy over SSH
 
-This section describes `calu ide`, the bridge that calu's own IDE extensions start, and its
+This section describes `calu ide`, the bridge that Calu's own IDE extensions start, and its
 file synchronisation for an editor that works on a copy of the project. Read it when you use
 PyCharm's mode 3 or write an editor extension. Nobody types this command; the extension runs
 it.
@@ -3101,12 +3101,12 @@ files, and reports changes on the server, over the same SSH connection.
 
 | Rule | Detail |
 |---|---|
-| Only the project directory | Paths are relative to it. An absolute path, a path with `..` and a path through a symbolic link are refused; links are listed as skipped and never followed. `.git`, the session traces and calu's own configuration and state directories are neither listed nor read nor written |
+| Only the project directory | Paths are relative to it. An absolute path, a path with `..` and a path through a symbolic link are refused; links are listed as skipped and never followed. `.git`, the session traces and Calu's own configuration and state directories are neither listed nor read nor written |
 | Files covered | In a git repository the tracked and untracked files, without the ignored ones. Elsewhere every file except `node_modules`, `.venv`, `venv`, `__pycache__`, `.tox`, `.mypy_cache`, `.ruff_cache`, `.idea` |
 | Limits | 32 MiB per file (a larger one is listed as skipped); 1 MiB of content per request (larger files travel in pieces); four uploads at a time; an upload that nobody continues for two minutes is discarded |
 | No silent overwrite | A write, a delete and a rename name the hash the file is expected to have. If the file has another content, the request is refused with the present hash, and the editor merges or asks. A write replaces the file in one step |
 | Not while Claude edits the file | During a turn, an upload to a file Claude is editing is refused until the turn ends, unless the editor's user asks for it explicitly |
-| Your edits are yours | An upload is your own edit, like typing in a shell on the server: no checker judges it. calu does not count it as Claude's: a command that runs at that moment gets a write set without the file, and the code honesty state shows the file as unreviewed |
+| Your edits are yours | An upload is your own edit, like typing in a shell on the server: no checker judges it. Calu does not count it as Claude's: a command that runs at that moment gets a write set without the file, and the code honesty state shows the file as unreviewed |
 | Changes on the server | Found by looking at the files every two seconds (size and modification time; only a changed file is read), and at once after each tool call of the attached session |
 
 The bridge runs as you and adds no rights. It logs every write, delete and rename in
@@ -3114,8 +3114,8 @@ The bridge runs as you and adds no rights. It logs every write, delete and renam
 
 ## Security model
 
-This section states the protections calu provides, the mechanism behind each, and their
-limits. Read it before you rely on calu for an unsupervised run. calu comes with no warranty:
+This section states the protections Calu provides, the mechanism behind each, and their
+limits. Read it before you rely on Calu for an unsupervised run. Calu comes with no warranty:
 a checker is a language model that reads a step.
 
 ### Protections
@@ -3123,31 +3123,31 @@ a checker is a language model that reads a step.
 | Threat | Mechanism | Limit |
 |---|---|---|
 | Claude changes the rules it is judged by | instructions, rules and settings are database rows that the session's login may only read; the admin login needs a password Claude never has | weak when you chose `--no-password` |
-| Claude reads calu's credentials or checker keys | the sandbox hides calu's directories; a built-in rule escalates commands that name them or run `calu`; the keys are blanked in Claude Code's environment; in the root arrangement the operating system separates the users | with the sandbox off and one shared user, only the rule and the passwords remain |
+| Claude reads Calu's credentials or checker keys | the sandbox hides Calu's directories; a built-in rule escalates commands that name them or run `calu`; the keys are blanked in Claude Code's environment; in the root arrangement the operating system separates the users | with the sandbox off and one shared user, only the rule and the passwords remain |
 | Claude approves its own steps | a client needs a token; requests for new sessions need a database login | `--insecure` removes this protection on purpose |
 | Text in the conversation instructs a checker (prompt injection) | Claude's words reach the checkers only narrated; tool output and file content reach them fenced and labelled as data; the permissive test triggers count only in the user's own messages | a model can still be misled |
 | Claude retries, rephrases or probes while a person decides | an open escalation holds every other checked step of the session | - |
 | A checker wrongly approves a known-dangerous step | deny rules are evaluated before any model is called; a match goes to a person and no checker verdict can overrule it | only for steps a rule covers |
 | A checker approves a step it saw only in part | an approval of a cut step becomes an escalation | - |
-| A command writes more than it says | file change times, which an unprivileged process cannot forge; optionally the measured write set and its review; calu watches its own clock and escalates the next step after a backward jump | `changes.snapshot` is off by default |
+| A command writes more than it says | file change times, which an unprivileged process cannot forge; optionally the measured write set and its review; Calu watches its own clock and escalates the next step after a backward jump | `changes.snapshot` is off by default |
 | Code hides behaviour behind a harmless name | [code honesty](#code-honesty) tracking and enforcement | off by default |
 | A broken or compromised checker model acts | a checker has exactly five tools and every one only reads; it has no write, no shell, no network call and no tool that reaches the session | it can answer wrongly |
-| Something fails inside calu | every error path of the decision ends in ESCALATE; while the database is unreachable nothing is approved | - |
-| A web page or local program answers an escalation through the web interface | the interface serves only requests that name `calu.localhost`, from a browser that signed in; a request that changes state needs a second secret that only calu's own pages hold | - |
+| Something fails inside Calu | every error path of the decision ends in ESCALATE; while the database is unreachable nothing is approved | - |
+| A web page or local program answers an escalation through the web interface | the interface serves only requests that name `calu.localhost`, from a browser that signed in; a request that changes state needs a second secret that only Calu's own pages hold | - |
 | A terminal escape sequence or bidirectional override disguises a command | the clients show control characters as visible signs | - |
 
 ### Checkers are read-only by design
 
 - A checker's tools are `read_file`, `find_files`, `grep_files`, and for the changeset
   checker `step_times` and `changed_files`.
-- calu confines the tools itself. A path must be relative and without `..`. After every
-  symbolic link is resolved it must lie inside the project directory and outside calu's own
+- Calu confines the tools itself. A path must be relative and without `..`. After every
+  symbolic link is resolved it must lie inside the project directory and outside Calu's own
   configuration directory. The read deny rules apply to the path as written and as resolved.
-- A checker changes calu's state only by **answering**: its structured answer carries the
+- A checker changes Calu's state only by **answering**: its structured answer carries the
   decision, a reason, a one-line summary and, for code honesty, the dishonest and honest
-  spots. calu checks each path in an answer before it records a mark: the path must be
+  spots. Calu checks each path in an answer before it records a mark: the path must be
   relative, stay inside the project, and name a file that exists or that the step creates.
-  calu drops any other path and logs it.
+  Calu drops any other path and logs it.
 
 **The two directions of a wrong answer**
 
@@ -3186,20 +3186,20 @@ third person and in indirect speech.
 `context.narrate false` turns narration off. That saves one model call per turn, gives the
 checkers Claude's words directly, and gives up the three properties.
 
-### Limits of calu
+### Limits of Calu
 
-- A checker can be wrong. calu reduces the cases that depend on one model's answer; it does
-  not remove them.
+- A checker can be wrong. Calu reduces the number of cases that depend on one
+  model's answer and cannot remove all of them.
 - The checkers do not see images.
 - No checker judges your own edits (in an editor, in a shell).
-- A conversation resumed from plain `claude` was not checked before calu took over.
+- A conversation resumed from plain `claude` was not checked before Calu took over.
 - With the sandbox off and without the root arrangement, a command of Claude runs with all
   your rights.
 - Trace redaction can miss a secret or a name.
 
 ## Limits and fixed numbers
 
-This section collects the fixed numbers of calu in one place. Settings with defaults are in
+This section collects the fixed numbers of Calu in one place. Settings with defaults are in
 [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 | Subject | Value |
@@ -3227,10 +3227,10 @@ This section collects the fixed numbers of calu in one place. Settings with defa
 
 ## Upgrading and starting over
 
-This section describes upgrades of calu and its database schema, and the reset of the
+This section describes upgrades of Calu and its database schema, and the reset of the
 database.
 
-**Upgrade calu.**
+**Upgrade Calu.**
 
 ```bash
 uv tool upgrade calu          # the newest commit
@@ -3287,6 +3287,6 @@ settings as a form.
 | `honesty` | code honesty | [Code honesty](#code-honesty) |
 | `changes` | write sets and their review | [Reviewing the files a command wrote](#reviewing-the-files-a-command-wrote-optional) |
 | `traces` | session traces | [Session traces](#session-traces) |
-| `tool_routes`, `default_route` | the checker a tool goes to; a tool calu does not know goes to the command checker | [The decision about a step](#the-decision-about-a-step) |
+| `tool_routes`, `default_route` | the checker a tool goes to; a tool Calu does not know goes to the command checker | [The decision about a step](#the-decision-about-a-step) |
 | `hidden_env` | further environment variables hidden from Claude Code | [Keys](#keys) |
 | `escalation_timeout_s`, `store_failures_before_stop`, `clock`, `web` | timeouts, the clock watch, git links | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) |
