@@ -246,7 +246,7 @@ with its subagent's state.
 `calu.gate` and seen in the run: while an escalation is open or being opened, every other
 tool call of the session that needs a check waits in the gate (`EscalationDesk.hold`), for at
 most 300 s (`HOLD_BUDGET_S`), after which it becomes an escalation itself (source "held"). A
-question of the agent holds nothing and is not held. That is what README and CALU_GUIDE
+question of the agent holds nothing and is not held. That is what README and DOCUMENTATION.md
 ("A violation freezes the agent") say. So an
 escalation in one subagent does not stop the other subagents' text and thinking, and it does
 stop their next command or edit: after about 30 s all ten subagents were waiting. A second
@@ -624,7 +624,7 @@ Latency and loss with `tc qdisc ... netem` inside the box (on its `eth0`, so on 
 traffic). Fixes are in c19c532 unless another commit is named.
 
 What is remote by design: a session listens only on its machine's loopback interface and has
-no TLS (CALU_GUIDE "From another machine"), so there is no direct TCP attach and no TLS case;
+no TLS (DOCUMENTATION.md "From another machine"), so there is no direct TCP attach and no TLS case;
 every remote client goes through SSH. Three ways were run: the client on the server (`ssh -t
 host`, then `calu attach`), the server's `calu web` through one tunnel, and a client on the
 host with the session's port forwarded and a token.

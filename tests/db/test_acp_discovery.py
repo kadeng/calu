@@ -2,7 +2,7 @@
 
 See agent/records/PLAN.md D105, D106.
 
-This is the configuration CALU_GUIDE.md tells an editor to use --
+This is the configuration DOCUMENTATION.md tells an editor to use --
 `{"command": "calu", "args": ["acp"]}` with the project as the working directory -- and nothing
 else covers it: `tests/unit/test_acp_process.py` spawns the adapter with an address and a
 token, which is the remote path. What is tested here is the editor path: the adapter looks the

@@ -55,7 +55,7 @@ and the web interface used remotely through SSH (test plan section I).
 **The system of records moved to `agent/records/`** (PLAN D238, about 11:00): done, with the
 traces' default `agent/traces/`; the records keep their files and structure, only placed out
 of the users' view (the owner, 2026-11-19). **Still to do, by the lead while no agent runs:**
-rename `CALU_GUIDE.md` to `DOCUMENTATION.md` (the owner, same day) with `git mv` and update
+rename `DOCUMENTATION.md` to `DOCUMENTATION.md` (the owner, same day) with `git mv` and update
 every reference (16 files: README, AGENTS.md, docs/, the records, `src/calu/config.py`,
 `src/calu/checkers/result_checker.py`, `src/calu/defaults/checkers/README.md`, the
 extensions' `serverCommand.ts` and `ServerCommand.kt`, tests), anchors unchanged.
@@ -286,7 +286,7 @@ Next steps for the extension, in order:
    the chat, a subagent, an escalation, the settings dialog, the checker editor. Nothing of
    the extension has ever run inside VSCode: expect defects in the wiring.
 3. Integration tests (`@vscode/test-cli`, as stay-in-the-loop has them) and the user
-   documentation (`CALU_GUIDE.md`, `README.md`, `docs/TESTING.md`, the manual checklist).
+   documentation (`DOCUMENTATION.md`, `README.md`, `docs/TESTING.md`, the manual checklist).
 4. Ask the owner to try it in his VSCode against WSL.
    **Session traces in the project** (requirement 36, D232) are built and merged: a
    setting that appends each step of a session as redacted Markdown to
@@ -501,7 +501,7 @@ credentials are the `admin` and `session` entries of his own store. gitui is in
    there are no changes). **Not tried: gitui itself** (starting it with `f4` and quitting it);
    this session was not allowed to download and run the binary.
 3. **Done: the user documentation of the full-screen client** (README "Four ways to work
-   with a running session", `CALU_GUIDE.md` "Attached to a session"; the decision is D199).
+   with a running session", `DOCUMENTATION.md` "Attached to a session"; the decision is D199).
    It was written from the builders' reports and checked against the command table in
    `src/calu/tui/commands.py`, not against a session in a real terminal: correct it where
    item 4 shows a difference.
@@ -536,7 +536,7 @@ credentials are the `admin` and `session` entries of his own store. gitui is in
      Claude Code with the same `> ` as a message of the user (the core records it as
      automatic, so no checker takes it for user input).
 5. **Done: the user documentation of the honesty redesign** (README "Code honesty";
-   `CALU_GUIDE.md` "Code honesty enforcement" with "Verified code, ..." and "Judging the
+   `DOCUMENTATION.md` "Code honesty enforcement" with "Verified code, ..." and "Judging the
    checkers before you let them block"). Written from the reports in `agent/records/notes/` and checked
    against the live runs of item 1 and the command line's own help. `PLAN.md` §13 still
    describes the register of 2026-11-10 as history; D196 is what holds.
@@ -671,7 +671,7 @@ there.
   (caution for nothing) and steps it approved that were then denied (misses). Read from the
   record, no model called. `calu checker misses [NAME]` lists the rows behind those counts,
   with the escalation id, so the instructions can be fixed against a real case (D62).
-- **Docs**: `README.md` for users and `CALU_GUIDE.md` as their reference documentation, `docs/CONFIGURATION.md` (generated from `calu.config` by
+- **Docs**: `README.md` for users and `DOCUMENTATION.md` as their reference documentation, `docs/CONFIGURATION.md` (generated from `calu.config` by
   `calu.configdoc`; `tests/unit/test_configdoc.py` fails when the file and the model
   disagree, or a field has no docstring), `docs/TESTING.md` for the four layers and the
   manual checklist, `PLAN.md` for the decisions, `AGENTS.md` for the rules.
@@ -1126,7 +1126,7 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    /root" with `--resolve deny`: the deny rule matched, the session went to `escalated` and
    waited, the operator's denial reached it within a second, and Claude reported the denial and
    said it would not retry or look for another way -- REQUIREMENTS 12 end to end. Worth noting
-   because it confirms by measurement what CALU_GUIDE.md now claims about the checkers'
+   because it confirms by measurement what DOCUMENTATION.md now claims about the checkers'
    bounds: there is **no** `checker_runs` row for that step at all, so no checker verdict could
    have overruled the deny list.
 
@@ -1149,7 +1149,7 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    (`(honesty): ... (closed by a checker)`, `(security): ... (closed by kai)`), and
    `calu checker stats` said `honesty  marks: 2 opened, 1 cleared` and
    `security  marks: 1 opened, 0 cleared, 1 overruled by a person` -- which is the signal
-   CALU_GUIDE.md tells a user to read before switching `honesty.mode` to `enforce`.
+   DOCUMENTATION.md tells a user to read before switching `honesty.mode` to `enforce`.
 22. **The subagent-result checker, measured for the first time** (D77, D78), which completes the
    set -- all four checkers are now measurable. Its first result was the worst so far: 67% and
    three critical misses in nine runs, all three the same case, a subagent demanding that a

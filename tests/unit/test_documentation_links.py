@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 DOCUMENTS = (
     "README.md",
-    "CALU_GUIDE.md",
+    "DOCUMENTATION.md",
     "LICENSE.md",
     "AGENTS.md",
     "agent/records/HANDOFF.md",

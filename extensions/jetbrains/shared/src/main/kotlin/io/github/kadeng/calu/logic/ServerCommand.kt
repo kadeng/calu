@@ -131,7 +131,7 @@ fun buildServerHelp(input: ServerCommandInput): ServerHelp {
  * The plugin only shows this command; it needs sudo and is never run by the plugin.
  *
  * @param source What to install (the install source of calu, e.g. a git address or a directory).
- * @return The shell command of CALU_GUIDE.md that installs calu for root with uv (below
+ * @return The shell command of DOCUMENTATION.md that installs calu for root with uv (below
  *   /usr/local/lib/calu, linked from /usr/local/bin).
  */
 fun rootInstallCommand(source: String): String =

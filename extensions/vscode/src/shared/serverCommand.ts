@@ -131,7 +131,7 @@ export function buildServerHelp(input: ServerCommandInput): ServerHelp {
  * The extension only shows this command; it needs sudo and is never run by the extension.
  *
  * @param source What to install (`calu.install.source`).
- * @returns The shell command of CALU_GUIDE.md that installs calu for root with uv (below
+ * @returns The shell command of DOCUMENTATION.md that installs calu for root with uv (below
  *   /usr/local/lib/calu, linked from /usr/local/bin).
  */
 export function rootInstallCommand(source: string): string {

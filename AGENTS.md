@@ -20,7 +20,7 @@ READMEs). This file stays at the top level, where every agent looks first.
 | File | Content |
 |---|---|
 | `README.md` | Description for end users, getting started |
-| `CALU_GUIDE.md` | The user documentation: commands, credentials, sandbox, remote access, web interface, ACP, checkers |
+| `DOCUMENTATION.md` | The user documentation: commands, credentials, sandbox, remote access, web interface, ACP, checkers |
 | `agent/records/REQUIREMENTS.md` | The owner's requirements and priorities, only as stated by the owner. Do not add derived requirements; those belong in `agent/records/PLAN.md`. |
 | `agent/records/PLAN.md` | Design, decisions, threat model, database sketch, CLI, open questions, phases |
 | `agent/records/HANDOFF.md` | State of the work and next steps, for the next session |

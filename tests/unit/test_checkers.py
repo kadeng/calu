@@ -283,7 +283,7 @@ def test_cache_points_reuse_the_previous_check(tmp_path: Path):
 
 
 def test_the_guide_names_every_tool_a_checker_has(tmp_path: Path) -> None:
-    """CALU_GUIDE.md claims a checker has exactly five tools, all reads (D123).
+    """DOCUMENTATION.md claims a checker has exactly five tools, all reads (D123).
 
     That claim is part of the security argument -- "a checker cannot edit your code, run a
     command or send your source anywhere" -- so it must not be able to go stale quietly. Adding
@@ -291,7 +291,7 @@ def test_the_guide_names_every_tool_a_checker_has(tmp_path: Path) -> None:
     """
     from calu.checkers.tools import CodeTools, StepTime
 
-    guide = (Path(__file__).resolve().parents[2] / "CALU_GUIDE.md").read_text(encoding="utf-8")
+    guide = (Path(__file__).resolve().parents[2] / "DOCUMENTATION.md").read_text(encoding="utf-8")
 
     plain = CodeTools(tmp_path).toolset()
     with_times = CodeTools(tmp_path, times=lambda: [StepTime(seq=1, tool_name="Bash")]).toolset()

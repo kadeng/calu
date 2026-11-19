@@ -1483,7 +1483,7 @@ async def test_a_second_checker_on_a_route_runs_and_is_recorded(tmp_path: Path):
 
 
 async def test_a_deny_rule_escalates_before_any_checker_is_asked(tmp_path: Path):
-    """The bound CALU_GUIDE.md claims for a wrong checker verdict (D124).
+    """The bound DOCUMENTATION.md claims for a wrong checker verdict (D124).
 
     "A wrong ALLOW cannot reach the dangerous cases at all: the deny lists are evaluated before
     any model is called, and a match escalates to a human at once -- the checkers are never
