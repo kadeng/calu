@@ -1251,6 +1251,36 @@ The bridge runs as you and adds no rights: it can read and write exactly what yo
 shell on that machine. Every write, delete and rename is logged in
 `$XDG_STATE_HOME/calu/log/ide.log`.
 
+### PyCharm: the three ways to work
+
+| Mode | Where the IDE runs | Where the files, calu and Claude are | How you set it up |
+|---|---|---|---|
+| 1. Local | this machine | this machine | open the project; the plugin starts `calu ide` |
+| 2. Remote development | the JetBrains Client here, the IDE backend on the server | the server | File, Remote Development, SSH: `user@host`, the project directory. Install the plugin in the client (`~/.local/share/JetBrains/<IDE>/frontend/`) and on the server (`~/.local/share/JetBrains/<IDE>/`) |
+| 3. Local copy over SSH | this machine, on a local copy | the server; the copy is kept equal through `calu ide` | Settings, Tools, calu: "On a server, over SSH", host, remote directory, Sync "through calu" |
+
+In mode 2 everything the plugin opens (diffs, files, the checker instructions, the terminal
+with `calu serve`) belongs to the server; the client only shows it.
+
+In mode 3 both copies can change: Claude edits on the server, you edit here. calu merges
+changes to different lines and never overwrites a change silently: when both sides changed the
+same lines, or one side deleted what the other changed, the file is a **conflict**. It is
+marked red in the project view, named in the status bar and on a card in the chat, and
+"Merge…" opens the IDE's three-way dialog (or a choice of side for a deletion or a binary
+file); the conflict survives a restart of the IDE. The server's git repository is the only
+one: `.git` is never copied in either direction, and a `.git` that appears in the local copy
+(`git init`, "Enable Version Control Integration") is shown with an explanation; run git on
+the server, in a terminal or through Claude.
+
+To run and debug on the server in mode 3, add PyCharm's SSH interpreter (Python Interpreter,
+Add Interpreter, On SSH) for the same host, with the sync folder `<Project root>` →
+the remote project directory, and **without** "Automatically upload project files to the
+server": calu already puts every saved file there. Breakpoints and line numbers then match,
+because both copies hold the same text. If PyCharm's Deployment uploads changed files by
+itself into the same directory, the plugin warns ("two writers"); turn one of them off. With
+Sync "None", PyCharm's Deployment (or rsync) is the only writer and calu only shows the chat;
+the agent's edits then reach the local copy only through whatever download you use.
+
 ## Checker instructions, rules and evaluations
 
 Your rules live in the database. Write them as Markdown, put them in, and measure whether the

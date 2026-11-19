@@ -5,16 +5,18 @@ the transcript with the checkers' decisions, cards to allow or deny a waiting st
 every edit, and calu's settings. It offers what the VSCode extension offers
 (`../vscode`, `docs/notes/vscode-extension-spec.md`) and reaches calu in three ways.
 
-State: third round. The plugin runs in PyCharm 2026.3 on Linux in a local IDE and in the SSH
-mode with file synchronisation; both were walked through in the UI-test desktop ("State" at the
-end, `docs/notes/test-plan.md` sections B and H). Remote development (split mode) loads in
-both halves and has not been used yet: the thin client's own agreement waits for a person.
+State: fourth round. The plugin runs in PyCharm 2026.3 on Linux in all three modes below, each
+walked through in the UI-test desktop ("State" at the end, `docs/notes/test-plan.md` sections B
+and H): a local IDE; JetBrains remote development with the IDE backend on a headless SSH server
+and the JetBrains Client on the desktop; a local copy kept equal over SSH, with PyCharm's SSH
+interpreter running and debugging the code on the server.
 
 ## How calu is reached
 
     A  local IDE ─────────────────────────── calu ide            (child process in the project directory)
        Windows IDE, project in WSL ───────── wsl.exe -d <distro> --cd <dir> -- calu ide
-    B  JetBrains remote development ──────── calu ide            (started by the backend on the remote host)
+    B  JetBrains remote development ──────── calu ide            (started by the backend on the remote host;
+                                                                  the JetBrains Client only shows what it opens)
     C  local IDE + local copy of the project ─ ssh -T -o BatchMode=yes ... <host> 'calu ide --cwd <dir>'
 
 In every mode the plugin speaks the protocol of `calu ide` (JSON-RPC over newline-delimited
@@ -42,7 +44,16 @@ alias of `~/.ssh/config` or `user@host`), the remote project directory, and "Syn
   of the same relative path, and no `ide.fs.*` request is sent (the IDE's Deployment, rsync
   or Mutagen keep the copy equal).
 
-What the user goes through the first time:
+Remote development (mode B): File | Remote Development | SSH, `user@host`, the project
+directory; PyCharm installs its backend on the server. The plugin must be in both halves: on the
+server in `~/.local/share/JetBrains/PyCharm2026.3/`, in the client in
+`~/.local/share/JetBrains/PyCharm2026.3/frontend/` (Linux paths; the client reads its plugins
+from that `frontend` folder, so a plugin installed only for the ordinary IDE is missing there).
+Diffs, files, checker instructions and the terminal with the server command open on the server
+and appear in the client. A comment in the diff of an edit finds its file through the backend
+(the client's diff editor knows only its text).
+
+What the user goes through the first time in mode C:
 
     1  open a local folder (empty for a clone) and fill the three settings
     2  the plugin connects (a card says "Connecting to <host> over SSH…"; a wrong host, a
@@ -68,6 +79,30 @@ Afterwards:
                                       restart and is replayed, then both sides are compared
     links, files above 32 MiB,     -> never followed or copied; listed ("3 paths are not
       what git ignores                synchronised", Show)
+
+Conflicts are never resolved silently. Every case ends with both sides equal or with a
+conflict that keeps both contents until the user decides: the same lines changed on both sides
+(saved, or unsaved text in an editor), a change against a deletion in either direction, a
+rename on one side while the other edits the old file, a new file of the same name on both
+sides, a held file whose turn ended with an overlap, an offline queue replayed onto a changed
+file. A conflict is shown by a card ("Merge …"), a notification that closes when it is
+resolved, the status bar, and the project view (the file in red, "sync conflict"; its folders
+"contains a sync conflict"); it survives a restart of the IDE with its merge base.
+`SynchronizerTest` has one test per case.
+
+`.git` is never synchronised, in either direction: the server's repository is the one calu and
+Claude commit to. A local copy that gets a `.git` of its own (git init, "Enable Version Control
+Integration", a clone into a repository) is listed under "not synchronised" with a warning
+once per IDE start that says so; git commands belong on the server (an SSH terminal, or
+Claude).
+
+Running and debugging on the server: add PyCharm's SSH interpreter for the same host
+(Add Interpreter | On SSH), sync folder `<Project root>` → the remote directory, and leave
+"Automatically upload project files to the server" off. Run and Debug then start the code on
+the server; breakpoints and line numbers match because calu keeps both copies equal (checked
+after an edit on the server that moved lines). If PyCharm's Deployment uploads changed files
+by itself into the same directory, the plugin warns in the chat and with a notification: two
+writers can overwrite each other.
 
 The status bar shows one line ("calu sync: in sync", "3 files uploading", "conflict in x.py",
 "offline: 2 changes queued"); the title action "Sync Now" compares both sides again. The last
@@ -242,7 +277,8 @@ found, with the buttons of the chat's setup cards).
 | Installing uv and calu | the offer is seen ("Install calu" on the card); the installation itself was not run |
 | File sync for mode C | built; unit-tested, tested against `calu ide` as a local process and over SSH, and seen in the IDE (section H of the test plan) |
 | A message to a subagent | built; not confirmed in the IDE this round |
-| Remote development (split mode) | built for it; both halves load; not used: the client's agreement waits for a person |
+| Remote development | seen with the backend on the SSH box and the JetBrains Client on the desktop: tool window, sessions, a turn with Allow and Deny with a note, diffs and file links opened by the backend, a comment in a diff, the terminal with the server command; with `runIdeSplitMode` also the one-password dialog, the settings dialog with a refused value and Reset, the checker editor |
+| SSH interpreter next to the SSH mode | seen: run and debug on the server with a breakpoint, line numbers match after a server edit; the "two writers" warning for PyCharm's automatic upload; "Sync: none" with PyCharm's Deployment uploading |
 | The activity verbs' spinner, a browser surface | not built in the UI |
 
 Known gaps: thinking text is shown only when its row is expanded; with ten subagents the tab
