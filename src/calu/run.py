@@ -40,6 +40,7 @@ session's status (`STATUS_EVENTS`) and one line per error; the tracebacks go to 
 (`calu.logfile`, D225).
 """
 
+import concurrent.futures
 import contextvars
 import ctypes
 import dataclasses
@@ -49,6 +50,7 @@ import os
 import socket
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -719,10 +721,50 @@ def both(first: Callable[[Event], Awaitable[None]], second: Callable[[Event], Aw
     return sink
 
 
+_pending_line: tuple[object, concurrent.futures.Future[str]] | None = None
+"""The stdin object and the line its reading thread will deliver, while nobody took it yet."""
+
+
+async def _next_stdin_line() -> str:
+    """Wait for the next line of stdin, taking over a read a cancelled caller left pending.
+
+    Side effect: starts a daemon thread that reads one line when no read of the current
+    `sys.stdin` is pending; a pending read of another (replaced) stdin is dropped.
+
+    Returns:
+        The line with its line end, or "" at end of input.
+
+    Raises:
+        OSError: If stdin cannot be read.
+    """
+    global _pending_line
+    stdin = sys.stdin
+    if _pending_line is None or _pending_line[0] is not stdin:
+        future: concurrent.futures.Future[str] = concurrent.futures.Future()
+
+        def read() -> None:
+            """Read one line into `future` (its result, or the error)."""
+            try:
+                future.set_result(stdin.readline())
+            except BaseException as exc:  # handed to the waiting caller
+                future.set_exception(exc)
+
+        threading.Thread(target=read, name="calu-stdin", daemon=True).start()
+        _pending_line = (stdin, future)
+    pending = _pending_line[1]
+    line = await anyio.to_thread.run_sync(pending.result, abandon_on_cancel=True)
+    if _pending_line is not None and _pending_line[1] is pending:
+        _pending_line = None
+    return line
+
+
 async def read_lines(send: Callable[[str], Awaitable[None]]) -> Literal["eof", "quit"]:
     """Read lines from stdin and pass them on until end of input or a quit command.
 
-    Blank lines are skipped. Reading runs in a worker thread, so it does not block the session.
+    Blank lines are skipped. Reading runs in a thread, so it does not block the session. A
+    read that is still waiting when the caller is cancelled stays pending for the same stdin,
+    and the next call takes its line: the line client stops reading when it switches to
+    another session, and the line typed next belongs to the client that reads on.
 
     Args:
         send: Called with each line (without the line end).
@@ -733,7 +775,7 @@ async def read_lines(send: Callable[[str], Awaitable[None]]) -> Literal["eof", "
         that no further message will come.
     """
     while True:
-        line = await anyio.to_thread.run_sync(sys.stdin.readline, abandon_on_cancel=True)
+        line = await _next_stdin_line()
         if not line:
             return "eof"
         text = line.strip()

@@ -44,6 +44,11 @@ revoked (`calu token revoke`), or because it is a minted token of a session that
 the process runs the next one. Reconnecting with the same token is refused; the close reason
 says which of the two it was."""
 
+ENDED_WITH_SESSION = "the client token belonged to a session that has ended: attach again"
+"""Close reason (with `CLOSE_TOKEN_REVOKED`) for a minted token whose connection outlived its
+session row: the process runs the next row of the same session (a `session.start` after a
+stop), for which a client needs a token of its own."""
+
 CLOSE_FELL_BEHIND = 4002
 """WebSocket close code: the session closed the connection because the client fell more than
 `calu.bus.CLIENT_QUEUE` events behind. Nothing is wrong with the token: the client should
@@ -80,7 +85,11 @@ class InitializeResult(BaseModel):
 
 
 class SessionStartParams(BaseModel):
-    """Start a Claude session, or resume the session `resume_id`. Result: `{}`.
+    """Start a Claude session, or resume the session `resume_id`.
+
+    Result: `{"claude_session_id": ..., "calu_session_id": ...}`, the ids of the Claude session
+    and of the session row that runs now. A start after a stop runs a new row, for which a
+    client that attached with a minted token needs a token of its own (`ENDED_WITH_SESSION`).
 
     `model` and `effort` replace the configured `claude.model` / `claude.effort` for this and
     later sessions of the core process; None keeps the configured value. `model` is a Claude

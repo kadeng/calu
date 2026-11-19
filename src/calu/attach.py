@@ -67,6 +67,7 @@ from calu.protocol.client import (
 )
 from calu.protocol.messages import (
     CLOSE_SERVER_TOKEN_REVOKED,
+    ENDED_WITH_SESSION,
     EVENTS,
     EscalationRequest,
     Event,
@@ -224,6 +225,8 @@ class Console:
         self.workspace = workspace
         self.relay = relay
         self.current = current
+        self.first = current
+        """The row id the client attached to first; `current` changes with a `/start`."""
         self.switch_to: str | None = None
         """The session `/switch`, `/new` or `/fork` named; the console quits for it."""
         self.quit = anyio.Event()
@@ -309,6 +312,11 @@ class Console:
                     "session.start", {"resume_id": rest} if rest else {}
                 )
                 say(f"[started] {result}", flush=True)
+                # A start after a stop runs a new session row; `attach` follows it when the
+                # session closes this client's connection because the token was the old row's.
+                row = result.get("calu_session_id") if isinstance(result, dict) else None
+                if isinstance(row, str):
+                    self.current = row
             case "/interrupt":
                 await self.client.request("interrupt")
             case "/inject":
@@ -369,7 +377,9 @@ class Console:
                 if not rest:
                     say("[error] /why needs an escalation id", flush=True)
                     return
-                found = await self.client.request("escalation.context", {"escalation_id": rest})
+                found = await self.client.request(
+                    "escalation.context", {"escalation_id": rest.removeprefix("#")}
+                )
                 say(f"--- escalation {found['escalation_id']} ({found['state']})", flush=True)
                 say(found.get("reason", ""), flush=True)
                 for run in found.get("checker_runs", []):
@@ -553,12 +563,13 @@ class Console:
         run; the escalation is recorded as "answered".
 
         Args:
-            rest: The escalation id and the answer.
+            rest: The escalation id (a leading "#" is dropped) and the answer.
 
         Raises:
             RequestFailed: If the session refused it (e.g. unknown escalation).
         """
         escalation_id, _, answer = rest.partition(" ")
+        escalation_id = escalation_id.removeprefix("#")  # as the full-screen client shows it
         if not escalation_id or not answer.strip():
             say("[error] /answer needs an escalation id and an answer", flush=True)
             return
@@ -572,12 +583,13 @@ class Console:
 
         Args:
             decision: "allow" or "deny".
-            rest: The escalation id and an optional note.
+            rest: The escalation id (a leading "#" is dropped) and an optional note.
 
         Raises:
             RequestFailed: If the session refused the decision (e.g. unknown escalation).
         """
         escalation_id, _, note = rest.partition(" ")
+        escalation_id = escalation_id.removeprefix("#")  # as the full-screen client shows it
         if not escalation_id:
             say(f"[error] /{decision} needs an escalation id", flush=True)
             return
@@ -614,7 +626,10 @@ async def attach(
     away), the client tries again after 1, 2, 4, 8, then every 15 seconds for `REDIAL_FOR_S`
     seconds, says so on every attempt, and continues after the last event it printed; a
     session that refuses the token at such an attempt has ended, which ends the client. A
-    session whose process is known to be gone (`gone`) ends the client at once.
+    session whose process is known to be gone (`gone`) ends the client at once. A session that
+    closes the connection because the client's minted token belonged to the row that ended
+    (`ENDED_WITH_SESSION`), after this client's `/start` told it the new row, ends the client
+    with that row in `switch_to` (when given), so that the caller attaches to it.
 
     Args:
         address: The WebSocket address that `calu run` printed.
@@ -709,6 +724,18 @@ async def attach(
                             continue
                         broken = client.close_code in BROKEN_CODES
                         reason = client.describe_close()
+                        if (
+                            ENDED_WITH_SESSION in reason
+                            and switch_to is not None
+                            and console.current is not None
+                            and console.current != console.first
+                        ):
+                            # The session was started again under a new row, for which this
+                            # client's minted token is not valid: `calu attach` attaches to
+                            # the new row with a token of its own, as after `/switch`.
+                            console.switch_to = console.current
+                            quit_event.set()
+                            break
                         if not broken:
                             say(
                                 f"[detached] {closer(client.close_code)} closed the connection: "

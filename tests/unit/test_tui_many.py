@@ -14,6 +14,7 @@ import pytest
 pytest.importorskip("textual")
 
 from calu import herd
+from calu.protocol.messages import CLOSE_TOKEN_REVOKED, ENDED_WITH_SESSION
 from calu.tui import render, scenarios
 from calu.tui.capabilities import Capabilities
 from calu.tui.fake import FakeAdmin, FakeSession
@@ -91,6 +92,17 @@ def test_a_step_without_a_check_is_held_while_another_steps_escalation_is_open()
     assert lines[1] == "    held    calu approves no step while decision #7 is open"
     panel, _ = render.panel_lines(model, view(34), Capabilities())
     assert plain(panel)[0] == "NEEDS YOU (1)  1 step held"
+
+
+def test_the_held_line_names_several_decisions_in_the_plural() -> None:
+    model, _ = swarm()
+    feed(model, deploy("7", "a1"))
+    feed(model, deploy("8", "a3"))
+    feed(model, [tool_use("t2", "a2", "make test")])
+    held = model.step("t2")
+    assert held is not None and model.held(held)
+    lines = plain(render.step_lines(held, model, view(100)))
+    assert lines[1] == "    held    calu approves no step while decisions #7, #8 are open"
 
 
 def test_the_hold_ends_with_the_decision_and_the_held_lines_are_drawn_again() -> None:
@@ -454,6 +466,33 @@ async def test_a_client_that_lost_its_session_says_what_leads_to_another_one() -
         footer = run.line("footer")
         assert "/new session here" in footer and "/running other sessions" in footer
         assert "enter send" not in footer and "^d leave" in footer
+
+
+async def test_a_client_whose_token_ended_with_the_stopped_row_follows_the_restarted_one() -> None:
+    # `/stop`, then Enter on the card: the session runs a new row, and the session closes the
+    # connection of a minted token of the old row. The client attaches to the new row, with a
+    # token of its own (`calu attach` mints it, as after `/switch`), instead of staying
+    # detached with "attach again" and refusing `/switch` to "the session this client shows".
+    session = FakeSession()
+    async with running("simple_turn", session=session) as run:
+        await session.emit("session.state", {"state": "stopped"})
+        session.calu_session_id = "calu-8e52"
+        await session.emit("session.state", {"state": "starting"})
+        await session.emit("session.state", {"state": "idle"})
+        await run.pilot.pause(0.2)
+        assert run.app.model.calu_session_id == "calu-8e52"
+        session.drop(CLOSE_TOKEN_REVOKED, ENDED_WITH_SESSION)
+        await run.pilot.pause(0.2)
+        assert run.app.switch_to == "calu-8e52"
+
+
+async def test_a_token_that_ended_with_the_only_row_known_leaves_the_client_detached() -> None:
+    session = FakeSession()
+    async with running("simple_turn", session=session) as run:
+        session.drop(CLOSE_TOKEN_REVOKED, ENDED_WITH_SESSION)
+        await run.pilot.pause(0.2)
+        assert run.app.switch_to is None
+        assert "detached" in run.line("status")
 
 
 async def test_the_stored_history_is_listed_in_plain_columns() -> None:

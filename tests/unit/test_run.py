@@ -1,6 +1,7 @@
 """`calu run`: event rendering for the terminal, the idle signal and reading stdin."""
 
 import io
+import os
 
 import anyio
 import pytest
@@ -246,6 +247,24 @@ async def test_read_lines_ends_at_end_of_input(monkeypatch):
     # second one means "stop now".
     assert await read_lines(lambda text: _collect(sent, text)) == "eof"
     assert sent == ["only"]
+
+
+async def test_a_line_typed_while_no_reader_waits_reaches_the_next_reader(monkeypatch):
+    """The line client stops reading when it switches sessions (`/switch`, `/new`, a start
+    under a new row) and the next client reads on. The line typed next must reach that
+    client: it was lost to the abandoned read of the first one."""
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(read_fd, "r") as stdin, os.fdopen(write_fd, "w") as typing:
+        monkeypatch.setattr("sys.stdin", stdin)
+        first: list[str] = []
+        with anyio.move_on_after(0.3):
+            await read_lines(lambda text: _collect(first, text))  # nothing typed: cancelled
+        typing.write("are you there\n/quit\n")
+        typing.flush()
+        second: list[str] = []
+        with anyio.fail_after(5):
+            assert await read_lines(lambda text: _collect(second, text)) == "quit"
+    assert first == [] and second == ["are you there"]
 
 
 async def _collect(sink: list, text: str) -> None:

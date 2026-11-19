@@ -71,6 +71,7 @@ from calu.localsocket import check_socket_path
 from calu.protocol.messages import (
     CLOSE_FELL_BEHIND,
     CLOSE_TOKEN_REVOKED,
+    ENDED_WITH_SESSION,
     MAX_FRAME_BYTES,
     REQUESTS,
     AutoEscalate,
@@ -149,9 +150,6 @@ REQUEST_BACKLOG = 256
 """Ordinary requests of one client that may wait for the one that is running. Past that the
 read loop waits (and with it the client's control requests), so a client cannot make the
 session buffer requests without bound."""
-
-ENDED_WITH_SESSION = "the client token belonged to a session that has ended: attach again"
-"""Close reason for a minted token whose connection outlived its session row."""
 
 REFUSAL_WAIT_S = 2.0
 """How long the close of a revoked client's connection waits for the error responses of the
@@ -1276,7 +1274,10 @@ class Client:
                 await session.start(
                     self.server.task_group, params.resume_id, params.model, params.effort
                 )
-                return {"claude_session_id": session.session_id}
+                return {
+                    "claude_session_id": session.session_id,
+                    "calu_session_id": session.store.session_id,
+                }
             case "session.stop":
                 await session.stop()
                 return {}

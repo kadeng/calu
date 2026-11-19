@@ -55,6 +55,7 @@ from textual.widgets import Static
 
 from calu import asuser, herd
 from calu.acp.modes import LADDER
+from calu.protocol.messages import ENDED_WITH_SESSION
 from calu.session_requests import SessionRequest
 from calu.tui import completion, gittool, render, settings
 from calu.tui.actions import Actions, Outcome
@@ -289,6 +290,8 @@ class CaluApp(App[None]):
         self.admin: AdminAccess = admin if admin is not None else StoreAdmin()
         self.switch_to: str | None = None
         """The id of the session `/new` or `/fork` started: the client ended to attach to it."""
+        self._first_session_id: str | None = None
+        """The session row id the client attached to first (`_run_link` compares it)."""
         self.environ: Mapping[str, str] = os.environ
         """The environment `f4` reads `CALU_GIT_TOOL` from."""
         self.which: gittool.Which = shutil.which
@@ -437,9 +440,27 @@ class CaluApp(App[None]):
             self.flash(" · ".join(self.options.problems), error=True)
 
     async def _run_link(self) -> None:
-        """Keep the connection until the user detaches; leave the app if it never opened."""
+        """Keep the connection until the user detaches; leave the app if it never opened.
+
+        A connection the session closed because this client's minted token belonged to the
+        session row that ended (`ENDED_WITH_SESSION`: the session was stopped and started
+        again, and runs a new row) is followed: when the client learned the new row's id
+        and can find sessions itself, it ends with that id in `switch_to`, and `calu attach`
+        attaches to it with a token of its own, as after `/switch`. Otherwise the client
+        stays detached and says why.
+        """
         await self.link.run()
         if self.link.error is not None:
+            self.exit()
+            return
+        now = self.model.calu_session_id
+        if (
+            ENDED_WITH_SESSION in self.link.closed_reason
+            and now is not None
+            and now != self._first_session_id
+            and self.admin.sessions_problem() is None
+        ):
+            self.switch_to = now
             self.exit()
 
     async def _read_name(self) -> None:
@@ -565,6 +586,8 @@ class CaluApp(App[None]):
             change: What the event altered.
         """
         self._pending.merge(change)
+        if self._first_session_id is None:
+            self._first_session_id = self.model.calu_session_id
         if self.options.read_name and self.model.calu_session_id:
             self.options.read_name = False  # once per client
             self._spawn(self._read_name())

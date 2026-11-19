@@ -571,11 +571,16 @@ def held_text(model: SessionModel) -> str:
         model: The model, for the open escalations.
 
     Returns:
-        For example "calu approves no step while decision #4, #5 is open"; "" if no
-        escalation is open.
+        For example "calu approves no step while decision #4 is open", "... while
+        decisions #4, #5 are open"; "" if no escalation is open.
     """
-    ids = ", ".join(f"#{decision.escalation_id}" for decision in model.holding())
-    return f"calu approves no step while decision {ids} is open" if ids else ""
+    holding = model.holding()
+    ids = ", ".join(f"#{decision.escalation_id}" for decision in holding)
+    if not ids:
+        return ""
+    if len(holding) == 1:
+        return f"calu approves no step while decision {ids} is open"
+    return f"calu approves no step while decisions {ids} are open"
 
 
 def _under(label: str, text: str, style: str, view: View, label_style: str = "") -> Text:

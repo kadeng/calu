@@ -97,6 +97,22 @@ async def test_commands_become_requests():
     assert not con.quit.is_set()
 
 
+async def test_an_escalation_id_may_be_written_as_the_full_screen_client_shows_it():
+    # The full-screen client shows "#19" on its card and takes `/allow #19`; the line client,
+    # attached to the same session, must take the id written the same way.
+    con, client = console({"escalation.context": {"escalation_id": "19", "state": "open"}})
+    await con.line("/allow #19 ok")
+    await con.line("/deny #20")
+    await con.line("/answer #21 Dark")
+    await con.line("/why #19")
+    assert client.sent == [
+        ("escalation.decide", {"escalation_id": "19", "decision": "allow", "note": "ok"}),
+        ("escalation.decide", {"escalation_id": "20", "decision": "deny", "note": None}),
+        ("escalation.decide", {"escalation_id": "21", "answer": "Dark"}),
+        ("escalation.context", {"escalation_id": "19"}),
+    ]
+
+
 async def test_the_honesty_commands_become_requests_and_print_their_answers(capsys):
     """`/trust`, `/trust-file`, `/honesty-review`, `/honesty` and `/clear-mark`."""
     con, client = console(
@@ -544,6 +560,33 @@ async def test_attach_says_why_the_session_closed_the_connection(tmp_path, monke
     out = capsys.readouterr().out
     assert "[detached] the session closed the connection: the client token was revoked" in out
     assert "[reconnecting]" not in out
+
+
+async def test_the_line_client_follows_a_restart_its_token_did_not_survive(tmp_path, monkeypatch):
+    """`/stop`, then `/start`: the session runs a new row and closes the connection of a minted
+    token of the old one. The client ends with the new row in `switch_to`, so that `calu
+    attach` attaches to it with a token of its own, instead of "[detached] ... attach again"."""
+    import calu.attach as attach_module
+    from calu.attach import attach
+    from calu.tokens import token_hash
+    from tests.unit.test_protocol_server import RowPerStart, served
+
+    async def read_lines(send):
+        await send("/stop")
+        await send("/start")
+        await anyio.sleep_forever()
+
+    store = RowPerStart()
+    async with served(tmp_path, [[{"text": "one"}], [{"text": "two"}]], store=store) as run:
+        await store.add_client_token(token_hash(run.token), run.address)
+        await run.session.start(run.server.task_group)
+        await store.add_client_token(token_hash("minted"), run.address)
+        monkeypatch.setattr(attach_module, "read_lines", read_lines)
+        switched: list[str] = []
+        with anyio.fail_after(20):
+            code = await attach(run.address, "minted", switch_to=switched)
+    assert code == 0
+    assert switched == ["row-2"]
 
 
 def test_an_escalation_names_the_line_clients_own_commands() -> None:
