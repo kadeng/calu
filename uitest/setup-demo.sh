@@ -99,9 +99,10 @@ if ! calu credential list 2>/dev/null | grep -q '^admin\b'; then
     printf '%s\n\n\n' "$OWNER_PASSWORD" | calu setup --database server --host 127.0.0.1 \
         --port 5432 --dbname calu --user calu_owner --sslmode disable --no-password
 else
-    echo "credentials exist: setup skipped (migrations run with the next line)"
-    printf '\n' | calu setup --database server --host 127.0.0.1 --port 5432 --dbname calu \
-        --user calu_owner --sslmode disable --no-password >/dev/null 2>&1 || true
+    # `calu setup` refuses a second database; the migrations of a newer calu come from
+    # `calu db migrate` (the admin login has no password here, so the prompt takes a blank).
+    echo "credentials exist: setup skipped; migrations:"
+    printf '\n' | calu db migrate
 fi
 calu config set claude.sandbox.enabled false
 

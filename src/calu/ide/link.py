@@ -13,6 +13,9 @@
                        not connected within `reconnect_wait_s` ─► `ide.link lost`
                        `MAX_RECONNECTS` connections in a row without a new event ─► lost
 
+`ide.link lost` carries a `cause` (`LostCause`) besides the sentence, so that an editor can
+tell a stopped session or server from a revoked token without reading the sentence.
+
 The editor gets every event once and in the session's order: an event whose `seq` is not
 above the last one forwarded is dropped (a replay after a reconnect may repeat events), and
 one task alone writes the notifications.
@@ -42,6 +45,23 @@ FIRST_WAIT_S = 0.25
 
 LONGEST_WAIT_S = 2.0
 """The longest wait between two attempts to connect again."""
+
+LOST_UNREACHABLE = "unreachable"
+"""`cause` of `ide.link lost`: the last attempt found nothing that answers at the session's
+address (connection refused, a network error, no answer in time). The session's process or
+its `calu serve` stopped, or the network between them is down."""
+
+LOST_REVOKED = "revoked"
+"""`cause` of `ide.link lost`: the session closed the connection because the token was
+revoked (close code 4001)."""
+
+LOST_REFUSED = "refused"
+"""`cause` of `ide.link lost`: the session answers but refused the connection (its error)."""
+
+LOST_CLOSED = "closed"
+"""`cause` of `ide.link lost`: connections were made but the session closed each of them
+(`MAX_RECONNECTS` in a row without a new event), or the reconnect time ran out right after
+such a close."""
 
 
 @dataclass(frozen=True)
@@ -166,6 +186,7 @@ class SessionLink:
         while True:
             before = self._last_seq
             final = False
+            cause = LOST_CLOSED
             at_once = False
             stood = False
             try:
@@ -207,14 +228,17 @@ class SessionLink:
                     await client.closed.wait()
                     reason = client.describe_close()
                     final = client.close_code == CLOSE_TOKEN_REVOKED
+                    cause = LOST_REVOKED if final else LOST_CLOSED
                     at_once = client.fell_behind
             except RequestFailed as error:
                 reason, final = f"the session refused the connection: {error}", True
+                cause = LOST_REFUSED
                 if first:
                     self.error = error
                     return
             except (OSError, ConnectionError, TimeoutError) as error:
                 reason = _connect_failure(error)
+                cause = LOST_UNREACHABLE
                 if first:
                     self.error = error
                     return
@@ -234,7 +258,7 @@ class SessionLink:
                 self._link.lost()
                 # The clients put "connection lost" / "reconnecting" in front: the message is
                 # the reason alone.
-                self._queue_link("lost", reason)
+                self._queue_link("lost", reason, cause=cause)
                 return
             log.info("the session connection closed (%s); connecting again", reason)
             self._queue_link("reconnecting", reason)
@@ -242,19 +266,24 @@ class SessionLink:
                 await anyio.sleep(wait_s)
                 wait_s = min(LONGEST_WAIT_S, max(FIRST_WAIT_S, wait_s * 2))
 
-    def _queue_link(self, state: str, message: str, complete: bool | None = None) -> None:
+    def _queue_link(
+        self, state: str, message: str, complete: bool | None = None, cause: str | None = None
+    ) -> None:
         """Queue an `ide.link` notification behind the events already queued.
 
         Args:
             state: "attached", "reconnecting" or "lost".
             message: One sentence for the editor's user.
             complete: For "attached": whether the replay had no gap; None leaves it out.
+            cause: For "lost": one of the `LOST_*` values; None leaves it out.
         """
         params: dict[str, Any] = {"state": state, "message": message}
         if self.session_id:
             params["session_id"] = self.session_id
         if complete is not None:
             params["complete"] = complete
+        if cause is not None:
+            params["cause"] = cause
         self._send.send_nowait(("ide.link", params))
 
     async def _on_event(self, method: str, params: dict[str, Any]) -> None:

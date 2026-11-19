@@ -11,7 +11,7 @@ import anyio
 import psycopg
 import pytest
 
-from calu import admin, herd
+from calu import admin, herd, servers
 from calu.config import BEDROCK_EU_HAIKU
 from calu.credentials import CredentialStore
 from calu.db import Db, connect
@@ -563,7 +563,16 @@ async def test_with_an_operator_credential_a_change_takes_the_admin_password(
     async with bridged(tmp_path, store) as editor:
         status = await editor.request("ide.status")
         assert status["database"]["reachable"] is True and status["database"]["problem"] == ""
-        assert status["server"] == {"sessions_running": 0}
+        assert status["server"] == {"sessions_running": 0, "servers_running": 0}
+        # A server of this host whose process runs counts (this test's own pid); one whose
+        # process is gone does not, nor one of another host.
+        async with owner_db(db_url) as db:
+            await servers.record_start(db, socket.gethostname(), USER, "ws://127.0.0.1:1")
+            gone = await servers.record_start(db, socket.gethostname(), USER, "")
+            await db.execute("UPDATE servers SET pid = 2147483646 WHERE id = %s", (gone,))
+            await servers.record_start(db, "another-host", USER, "")
+        status = await editor.request("ide.status")
+        assert status["server"] == {"sessions_running": 0, "servers_running": 1}
         with pytest.raises(Failed) as wrong:
             await editor.request(
                 "ide.settings.set",

@@ -42,7 +42,7 @@ Requests of the extension (all results are JSON objects):
 | method | params | result |
 |---|---|---|
 | `ide.initialize` | `client`, `client_version` | `bridge_version` (calu's version), `protocol_version`, `workspace` |
-| `ide.status` | - | `findings`: list of `{name, ok, level: "ok"/"missing"/"note", message, advice}` from `calu.doctor` (claude present and its version, sandbox tools, git, credential store, checker keys) plus `uv` (present, version); `database`: `{reachable, place, problem}` (checked with the credential rules below, never prompting); `server`: whether a `calu serve` answers for this host and user is not known without asking, so: `{sessions_running: n}` |
+| `ide.status` | - | `findings`: list of `{name, ok, level: "ok"/"missing"/"note", message, advice}` from `calu.doctor` (claude present and its version, sandbox tools, git, credential store, checker keys) plus `uv` (present, version); `database`: `{reachable, place, problem}` (checked with the credential rules below, never prompting); `server`: whether a `calu serve` answers for this host and user is not known without asking, so: `{sessions_running: n, servers_running: n or null}` (`servers_running`: the `servers` rows of this host that are not ended and whose process is not known to be gone; null without a database, with a login that may not read `servers`, or before migration 0038) |
 | `ide.sessions` | `all: bool = false` | `running`: sessions of this host (`herd.sessions`), each `{id, directory, state, claude_session_id, open_escalations, started_at, stale, here: bool}` (`here`: its directory is the workspace or an ancestor); `stored`: conversations of the workspace (`herd` conversations with transcripts), each `{claude_session_id, last_input, turns, age_s, running, outside}` |
 | `ide.attach` | `session: str | null` (id or prefix; null = the session of the workspace) , `after_seq = 0` | `{attached: true, session_id, initialize: InitializeResult, snapshot: SessionSnapshot, events: [...], complete}`; from then on session events arrive as notifications (below). Error -32011 if no session matches (message says what to do), -32012 if several match (`data.sessions`) |
 | `ide.detach` | - | `{}`; a minted token is revoked |
@@ -63,7 +63,7 @@ Notifications from the bridge:
 | method | params |
 |---|---|
 | `session.event` | `{method, params}`: one event of the attached session, in order, `params.seq` included |
-| `ide.link` | `{state: "attached"/"reconnecting"/"lost", message}`: the connection to the session; after "lost" the extension offers to attach again |
+| `ide.link` | `{state: "attached"/"reconnecting"/"lost", message}`: the connection to the session; "lost" also carries `cause`: "unreachable" (nothing answers at the address: the session or its server stopped, or the network is down), "revoked" (close code 4001), "refused" (the session refused the connection), "closed" (connections stood but were closed again and again). After "unreachable" with no server running the VSCode extension says "The calu server stopped" (Start server, Retry); otherwise it offers to attach again |
 | `ide.log` | `{level, message}` |
 
 Credential rules (never a prompt): the shared login of the place file (`cli._shared_admin`),

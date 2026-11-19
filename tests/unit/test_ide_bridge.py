@@ -213,6 +213,12 @@ async def test_a_session_that_ends_is_reported_as_lost(tmp_path: Path, store: Cr
         assert lost[-1]["message"] == (
             "nothing answers at the session's address: the session or its calu server stopped"
         )
+        # The cause says the same for a program: nothing answers (not a revoked token).
+        assert lost[-1]["cause"] == "unreachable"
+        others = [
+            p for name, p in editor.notifications if name == "ide.link" and p["state"] != "lost"
+        ]
+        assert others and all("cause" not in p for p in others)
         with pytest.raises(Failed) as gone:
             await editor.call("state.get")
         assert gone.value.code == -32015
@@ -343,7 +349,7 @@ async def test_the_status_reports_the_tools_and_a_missing_database(
         assert finding["level"] in ("ok", "missing", "note")
     assert status["database"]["reachable"] is False
     assert "no database credential" in status["database"]["problem"]
-    assert status["server"] == {"sessions_running": 0}
+    assert status["server"] == {"sessions_running": 0, "servers_running": None}
     assert status["locked"] is False and status["unlocked"] == []
 
 

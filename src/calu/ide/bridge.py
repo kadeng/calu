@@ -41,7 +41,17 @@ from typing import Any
 import anyio
 import psycopg
 
-from calu import __version__, admin, asuser, doctor, herd, localsocket, session_requests
+from calu import (
+    __version__,
+    admin,
+    asuser,
+    doctor,
+    herd,
+    localsocket,
+    machine,
+    servers,
+    session_requests,
+)
 from calu.acp.peer import Peer, ReadLine, RpcError, WriteLine
 from calu.acp.serve import DRAIN_S, RECONNECT_WAIT_S
 from calu.credentials import CredentialStore
@@ -517,31 +527,46 @@ class Bridge:
             `findings` (`calu.doctor.local_findings` plus uv, tmux and screen, each as
             `finding_json`), `database` (`{reachable, place, problem}`, and `needs` with the
             credential's name when only a password is missing), `server`
-            (`{sessions_running}`: the sessions of this host that say they are running;
-            whether a `calu serve` answers is not known without asking it for a session),
+            (`{sessions_running, servers_running}`: the sessions of this host that say they
+            are running, and the `calu serve` processes of this host whose `servers` row is
+            not ended and whose process is not known to be gone (`herd.process_gone`);
+            `servers_running` is None when that is not known: no database, a login that may
+            not read `servers`, or a schema older than migration 0038; it says that a server
+            ran when it was recorded, not that it answers now),
             `locked` (a protected credential exists and no login is held: the editor asks
             for the one password, `ide.unlock`) and `unlocked` (the held logins' names).
         """
         local = await anyio.to_thread.run_sync(doctor.local_findings, self.store)
         programs = await anyio.to_thread.run_sync(program_findings)
 
-        async def count(db: Db) -> int:
-            """Count the sessions of this host that still say they are running.
+        async def count(db: Db) -> tuple[int, int | None]:
+            """Count the sessions and the servers of this host that still say they run.
 
             Args:
                 db: The connection.
 
             Returns:
-                The number.
+                The number of sessions, and the number of servers (None if the `servers`
+                rows cannot be read with this login or schema).
             """
+            host = socket.gethostname()
             rows = await herd.sessions(db, active_only=True)
-            return len([r for r in rows if r.hostname == socket.gethostname() and not r.stale])
+            sessions = len([r for r in rows if r.hostname == host and not r.stale])
+            try:
+                recorded = await servers.running(db, hostname=host)
+            except psycopg.Error as error:
+                log.info("the servers of this host were not read: %s", error)
+                return sessions, None
+            here = machine.here()
+            alive = [s for s in recorded if not herd.process_gone(s.pid, s.machine, here)]
+            return sessions, len(alive)
 
         place = await anyio.to_thread.run_sync(self.access.place)
         state: dict[str, Any] = {"reachable": False, "place": place, "problem": ""}
         running = 0
+        servers_running: int | None = None
         try:
-            running = await self.access.read(count, start_local=False)
+            running, servers_running = await self.access.read(count, start_local=False)
             state["reachable"] = True
         except RpcError as error:
             state["problem"] = error.message
@@ -551,7 +576,7 @@ class Bridge:
         return {
             "findings": [finding_json(finding) for finding in [*local, *programs]],
             "database": state,
-            "server": {"sessions_running": running},
+            "server": {"sessions_running": running, "servers_running": servers_running},
             "locked": self.access.locked(),
             "unlocked": self.access.unlocked(),
         }
