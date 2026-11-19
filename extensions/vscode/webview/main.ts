@@ -560,7 +560,7 @@ function renderHeader(): void {
     const anchor = sessionSlot.querySelector('button');
     if (anchor) refreshPopup('sessions', buildSessionMenu(), { anchor });
   }
-  const quickSig = JSON.stringify([view.honesty, view.honestyStored, view.autoEscalate, isAttached(view)]);
+  const quickSig = JSON.stringify([view.honesty, view.honestyStored, view.autoEscalate, view.permissionMode, isAttached(view)]);
   if (setSection(quickSlot, quickSig, buildQuickRow)) {
     const anchor = quickSlot.querySelector('[data-testid="header-honesty"]');
     if (anchor) refreshPopup('honesty', buildHonestyMenu(), { anchor });
