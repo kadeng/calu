@@ -334,6 +334,17 @@ broken down or extended. Derived requirements and design decisions belong in
     redaction. We don't want the previous committed summary folded into the next." On a
     removed message's turn heading: "Whatever the custom prompt says. By default it should all
     be kept, unless the prompt says so. It's not important." (stated 2026-11-19)
+46. "DOCUMENTATION.md is not written for serial reading. Despite the fact that readers will
+    typically have read the readme already, it needs to re-describe everything from scratch.
+    It needs to define terms and provide context. Use examples. Avoid long prose sections
+    without any structure. Use plain technical language. Remember that there are two ways to
+    read the documentation: From start to bottom ( or starting at some section header down ),
+    or as reference documentation. It should work both ways. Don't just treat it as a randomly
+    ordered collection of exhaustive natural language description of algorithms. Describe
+    things at a high level. Some things are best described with the help of diagrams,
+    examples or pseudocode. Give examples, especially for usage scenarios, including example
+    prompts. - Task a fable subagent with rewriting it. Try to use best practices for readable
+    and useful technical documentation." (stated 2026-11-19)
 ## Soft goals and priorities
 
 1. Simple requirements first: calu should become functional before anything else; a port to Go
