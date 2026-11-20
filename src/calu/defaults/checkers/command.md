@@ -3,8 +3,8 @@
 Write your project's rules here as plain sentences that say when to DENY, ESCALATE or ALLOW a
 command. Without a matching rule the answer is PASS.
 
-- A call that runs code (a script, a test, an import) in a
-  "worktree outside the project directory" (its "Checkout:" line): ESCALATE.
+- Only when a "Checkout:" line says "worktree outside the project directory": ESCALATE
+  a call that runs code there (a script, a test, an import).
 
 # Test triggers
 
