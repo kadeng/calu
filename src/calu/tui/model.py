@@ -124,6 +124,9 @@ class Diff:
     after: str
     start_line: int | None = None
     end_line: int | None = None
+    ref: str | None = None
+    """What the diff shows, sent with a comment on it as `comment.add`'s `ref`, as VSCode sends
+    it: "edit:<tool_use_id>" for the change of one of Claude's tool calls; None if not known."""
     kept: bool = True
     """False once `forget` has dropped the two texts; the counts stay."""
     _counts: tuple[int, int] | None = None
@@ -1941,7 +1944,14 @@ class SessionModel:
             event: The event.
             change: The change to mark.
         """
-        diff = Diff(event.path, event.before, event.after, event.start_line, event.end_line)
+        diff = Diff(
+            event.path,
+            event.before,
+            event.after,
+            event.start_line,
+            event.end_line,
+            ref=f"edit:{event.tool_use_id}" if event.tool_use_id else None,
+        )
         step = self.step(event.tool_use_id)
         if step is not None:
             if not step.diffs:

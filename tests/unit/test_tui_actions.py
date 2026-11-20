@@ -432,6 +432,7 @@ async def test_a_comment_on_diff_lines_carries_both_texts_and_the_side() -> None
                 "end_line": 2,
                 "after_text": "a\nB\n",
                 "before_text": "a\nb\n",
+                "ref": None,
                 "text": "why this line?",
             }
         ]
@@ -439,6 +440,10 @@ async def test_a_comment_on_diff_lines_carries_both_texts_and_the_side() -> None
         assert ranged.message == "comment on src/gate.py:1-2 sent to Claude"
         empty = await actions.comment_diff(diff, "after", 1, 1, "  ")
         assert not empty.ok and len(session.sent("comment.add")) == 2
+        # The diff of one of Claude's edits names it, as VSCode does (D250).
+        edited = Diff("src/gate.py", "a\n", "b\n", ref="edit:toolu_1")
+        await actions.comment_diff(edited, "after", 1, 1, "why?")
+        assert session.sent("comment.add")[-1]["ref"] == "edit:toolu_1"
 
 
 async def test_a_restart_stops_first_and_then_starts_with_what_was_chosen() -> None:

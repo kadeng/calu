@@ -65,11 +65,12 @@ def proposed_diffs(decision: Decision, model: SessionModel, files: dict[str, str
         return []
     content = decision.tool_input.get("content")
     old, new = decision.tool_input.get("old_string"), decision.tool_input.get("new_string")
+    ref = f"edit:{decision.tool_use_id}" if decision.tool_use_id else None
     if isinstance(content, str):
-        return [Diff(path, before, content)]
+        return [Diff(path, before, content, ref=ref)]
     if isinstance(old, str) and isinstance(new, str) and old in before:
         count = -1 if decision.tool_input.get("replace_all") else 1
-        return [Diff(path, before, before.replace(old, new, count))]
+        return [Diff(path, before, before.replace(old, new, count), ref=ref)]
     return []
 
 

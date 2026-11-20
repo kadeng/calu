@@ -652,7 +652,7 @@ subsection of the client you use.
 | (into the running turn) `Stop refactoring cart.py, only fix the rounding.` | reaches Claude after its running tool calls |
 | `/btw which file defines the tax rate?` | a side question: Claude answers it while its work continues; the question and the answer do not become part of the conversation, and the checkers do not see them |
 | `/compact keep the decisions about the API` | Claude Code's own command; Calu passes it on |
-| a comment on selected lines of a diff: `This loop reads the file twice.` | reaches Claude at once with the path, the lines and the text before and after the change |
+| a comment on selected lines of a diff: `This loop reads the file twice.` | reaches Claude at once with the path, the lines, the text before and after the change and what the diff shows (one of Claude's edits, or a git reference) |
 
 ### In VSCode
 

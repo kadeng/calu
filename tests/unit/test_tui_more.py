@@ -272,6 +272,7 @@ async def test_selected_lines_of_a_diff_are_commented_on() -> None:
         assert (
             sent[0]["before_text"] == scenarios.BEFORE and sent[0]["after_text"] == scenarios.AFTER
         )
+        assert sent[0]["ref"].startswith("edit:"), "the comment names the edit it was made on"
         assert "comment on src/gate.py:1 sent to Claude" in screen.message
         assert not screen.commenting and screen.mark_row is None
 

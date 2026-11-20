@@ -439,7 +439,9 @@ class Actions:
         """Send a comment on lines of a diff (`comment.add`, kind "diff").
 
         The content before and after the edit comes from the step's `edit.diff` event, so
-        this needs no file on the client's machine.
+        this needs no file on the client's machine. The diff's `ref` ("edit:<tool_use_id>")
+        goes with it, so that the recorded comment names the edit it was made on, as with
+        VSCode (agent/records/PLAN.md D250).
 
         Args:
             diff: The file with its content before and after the edit.
@@ -463,6 +465,7 @@ class Actions:
                 "end_line": last,
                 "after_text": diff.after,
                 "before_text": diff.before,
+                "ref": diff.ref,
                 "text": text.strip(),
             },
         )
