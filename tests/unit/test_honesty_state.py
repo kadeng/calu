@@ -941,9 +941,14 @@ def test_only_the_content_the_checkers_judged_is_verified(repo: Path) -> None:
 
     # An edit that was not predicted verifies nothing, and drops what was recorded.
     assert checked_write(state, "src/parser.py", PARSER + "X = 1\n")
+    target.write_text(PARSER + "Y = 2\n", encoding="utf-8")
     assert state.record_edit("src/parser.py", None) is None
     assert state.record_edit("src/parser.py", "not a hash") is None
     assert state.snapshot().unreviewed.paths == ("src/parser.py",)
+    # The content the checkers judged stays verified as a content (D251): back to it, the
+    # file is verified again, as it would be after a restart from the stored trust.
+    target.write_text(PARSER + "X = 1\n", encoding="utf-8")
+    assert state.snapshot().unreviewed.paths == ()
 
 
 def test_the_expected_content_of_an_edit() -> None:

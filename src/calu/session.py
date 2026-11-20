@@ -227,7 +227,9 @@ from calu.honesty import (
     MarkChanges,
     Reviewed,
     ReviewPlan,
+    combine_snapshots,
     find_baseline,
+    merge_plans,
     resolve_commit,
     run_git,
     shown,
@@ -286,6 +288,7 @@ from calu.steps import files_before as files_before
 from calu.steps import result_summary
 from calu.steps import workspace_relative_input as workspace_relative_input
 from calu.store import CheckerRun, ProjectSettings, SessionIdentity, SessionStore, StepDecision
+from calu.store.trust import TrustSource
 from calu.tokens import token_hash
 from calu.traces import (
     Header,
@@ -438,6 +441,9 @@ class ReviewRun:
     fresh: bool = False
     """True if a person asked for this review. Only such a review runs although the last one
     looked at the same files, and only such a review certifies HEAD without a baseline."""
+    checkouts: tuple[Checkout, ...] | None = None
+    """The checkouts whose files the review judges (a step's, D251); None for every known
+    checkout."""
     dropped: bool = False
     """Set when the review's result was applied except for files that changed while it ran."""
     stopped: bool = False
@@ -543,8 +549,15 @@ class Session:
         self.honesty = HonestyState(
             workspace, self.config.honesty.max_open_marks, self.config.honesty.sufficient_trust
         )
-        """The code honesty state of this session, in memory only (`calu.honesty`): marks,
-        verified contents, the baseline. Unused while `honesty.mode` is "off"."""
+        """The code honesty state of the main checkout, in memory only (`calu.honesty`):
+        marks, verified contents, the baseline. Unused while `honesty.mode` is "off"."""
+        self._states: dict[Path, HonestyState] = {self.checkouts.main.root: self.honesty}
+        """Checkout root -> its honesty state (D251): the main checkout's is `honesty`, a
+        worktree's is created when a step or a file first needs it (`_state_of`). All share
+        the trust of contents and the mark ids (`HonestyShared`)."""
+        self._trace_dir: str | None = None
+        """The trace directory relative to a checkout's root while tracing is on, else None;
+        no checkout's honesty state judges it (`_exclude_from_states`)."""
         self._honesty_lock = anyio.Lock()
         """Held while the honesty state is refreshed, read as a snapshot or changed, so that a
         snapshot never sees half of a tool result's changes."""
@@ -554,8 +567,9 @@ class Session:
         self._written: set[str] = set()
         """Files that measured write sets named and the honesty state does not watch yet
         (`_watch_written`); the next worker-thread call of the state takes them."""
-        self._honesty_head: str | None = None
-        """The HEAD the baseline was last looked up for; a different HEAD looks it up again."""
+        self._honesty_heads: dict[Path, str | None] = {}
+        """Checkout root -> the HEAD its baseline was last looked up for; a different HEAD, or
+        a checkout not looked up yet, looks the baselines up again."""
         self._review_running = False
         """True while an honesty review runs; at most one runs at a time."""
         self._review_run: ReviewRun | None = None
@@ -641,7 +655,9 @@ class Session:
             clock_alarm=self._clock_alarm,
             keep_changeset=self._keep_changeset,
             honesty=self._gate_honesty,
-            honesty_review=lambda _step, wait_s: self.honesty_review(wait_s=wait_s),
+            honesty_review=lambda step, wait_s: self.honesty_review(
+                wait_s=wait_s, checkouts=self.step_checkouts(step)
+            ),
         )
         """Decides about each tool call (`calu.gate`); it reads the policy, the rules, the
         configuration and the checkers of this session as they are at the moment of a step."""
@@ -852,6 +868,112 @@ class Session:
 
     # ------------------------------------------------------------------ code honesty
 
+    def _trust_needed(self, checkout: Checkout) -> TrustSource:
+        """Name the weakest source of trust that counts in a checkout (D251).
+
+        Args:
+            checkout: A checkout of the project.
+
+        Returns:
+            "user" for a worktree outside the project directory: its files count as verified
+            only when a person certified or trusted them (the owner's decision of
+            2026-11-20). `honesty.sufficient_trust` for every other checkout.
+        """
+        return "user" if checkout.outside else self.config.honesty.sufficient_trust
+
+    def _state_of(self, checkout: Checkout) -> HonestyState:
+        """Return the honesty state of a checkout, creating it on first use (D251).
+
+        A new state has no baseline yet; the next `_refresh_trust` looks it up from the
+        checkout's own HEAD.
+
+        Args:
+            checkout: A checkout of the registry.
+
+        Returns:
+            The state, which asks git in the checkout's root and names files relative to the
+            session directory.
+        """
+        state = self._states.get(checkout.root)
+        if state is None:
+            state = HonestyState(
+                self.workspace,
+                self.config.honesty.max_open_marks,
+                self._trust_needed(checkout),
+                root=checkout.root,
+                shared=self.honesty.shared,
+            )
+            state.excluded = self._excluded_of(checkout)
+            self._states[checkout.root] = state
+        return state
+
+    def _state_for_path(self, path: str | Path) -> HonestyState:
+        """Return the honesty state that judges a file (D251).
+
+        Args:
+            path: Absolute, or relative to the session directory.
+
+        Returns:
+            The state of the checkout the file lies in; the main checkout's for a file
+            outside every checkout (as before: named by its absolute path there).
+        """
+        checkout = self.checkouts.of(path)
+        return self.honesty if checkout is None else self._state_of(checkout)
+
+    def _scope_states(self, checkouts: Sequence[Checkout] | None) -> list[HonestyState]:
+        """Return the honesty states of some checkouts, or of every known one.
+
+        Args:
+            checkouts: The checkouts (a step's); None for the main checkout, every known
+                worktree and every state created earlier that the registry still lists.
+
+        Returns:
+            The states, each once, in the order of `checkouts` (the main checkout's first for
+            None).
+        """
+        if checkouts is not None:
+            chosen = [self._state_of(checkout) for checkout in checkouts]
+        else:
+            chosen = [self._state_of(checkout) for checkout in self.checkouts.all()]
+        unique: list[HonestyState] = []
+        for state in chosen:
+            if state not in unique:
+                unique.append(state)
+        return unique
+
+    def _excluded_of(self, checkout: Checkout) -> tuple[str, ...]:
+        """Name what a checkout's honesty state does not judge.
+
+        Args:
+            checkout: A checkout of the registry.
+
+        Returns:
+            The checkout's copy of the trace directory while tracing is on, and for the main
+            checkout also the worktrees nested in it, which are checkouts of their own (their
+            directory entry would otherwise be an unreviewable file of the main checkout).
+            Each relative to the session directory, or absolute outside it.
+        """
+        excluded: list[str] = []
+        if self._trace_dir is not None:
+            excluded.append(self.checkouts.label(checkout.root / self._trace_dir))
+        if checkout.main:
+            excluded += self.checkouts.nested()
+        return tuple(excluded)
+
+    def _exclude_from_states(self) -> None:
+        """Bring every honesty state's `excluded` and the write sets' up to date.
+
+        Called when the trace settings change and after the registry changed.
+        Side effects: drops the state of a worktree that the registry no longer lists (git
+        removed it, so its files and marks are gone with it).
+        """
+        known = {checkout.root: checkout for checkout in self.checkouts.all()}
+        for root in [root for root in self._states if root not in known]:
+            del self._states[root]
+            self._honesty_heads.pop(root, None)
+        for root, state in self._states.items():
+            state.excluded = self._excluded_of(known[root])
+
     async def clear_mark(self, mark_id: int, client: str = "unknown") -> HonestyMark:
         """Close one open mark by hand: a person's override of a checker (`honesty.clear`).
 
@@ -877,14 +999,20 @@ class Session:
             SessionError: If no open mark has that id.
         """
         by = client or "unknown"
+        closed: HonestyMark | None = None
+        owner = self.honesty
         async with self._honesty_lock:
-            closed = await anyio.to_thread.run_sync(self.honesty.clear, mark_id, f"{by} (by hand)")
+            for state in list(self._states.values()):
+                closed = await anyio.to_thread.run_sync(state.clear, mark_id, f"{by} (by hand)")
+                if closed is not None:
+                    owner = state
+                    break
         if closed is None:
             raise SessionError(f"no open honesty mark {mark_id}")
         stored = ""
-        if not any(mark.path == closed.path for mark in self.honesty.open_marks):
+        if not any(mark.path == closed.path for mark in owner.open_marks):
             try:
-                sha256 = await anyio.to_thread.run_sync(self.honesty.content_sha256, closed.path)
+                sha256 = await anyio.to_thread.run_sync(owner.content_sha256, closed.path)
                 if sha256 is not None:
                     note = f"mark cleared by hand: {closed.label()}"[:500]
                     await self.store.trust_file(sha256, closed.path, "user", by, note)
@@ -937,8 +1065,9 @@ class Session:
         by = client or "unknown"
         try:
             if path:
-                key = await anyio.to_thread.run_sync(self.honesty.watch, path)
-                sha256 = await anyio.to_thread.run_sync(self.honesty.content_sha256, key)
+                state = await anyio.to_thread.run_sync(self._state_for_path, path)
+                key = await anyio.to_thread.run_sync(state.watch, path)
+                sha256 = await anyio.to_thread.run_sync(state.content_sha256, key)
                 if sha256 is None:
                     raise SessionError(f"{path} is not a file calu can read")
                 recorded = await self.store.trust_file(sha256, key, "user", by, note)
@@ -1003,7 +1132,13 @@ class Session:
             )
         return FilesUserEditResult(excluded=list(self.write_sets.excluded))
 
-    async def honesty_review(self, *, asked: bool = False, wait_s: float | None = None) -> str:
+    async def honesty_review(
+        self,
+        *,
+        asked: bool = False,
+        wait_s: float | None = None,
+        checkouts: Sequence[Checkout] | None = None,
+    ) -> str:
         """Run the honesty review: judge the unreviewed and the marked files (section 4).
 
         The gate calls this for a step that needs a clean honesty state, and `request_review`
@@ -1013,15 +1148,22 @@ class Session:
             asked: True when a person asked for the review.
             wait_s: The longest time to wait for the review's end, in seconds; None waits
                 until it ends.
+            checkouts: The checkouts whose files are judged (the step's, D251); None for
+                every known checkout.
 
         Returns:
             "" if a review ran and judged every file it had to (the caller then reads the
             state again); otherwise one sentence saying why none ran, why it failed, which
             files it could not judge, or that it is still running. Never raises.
         """
-        return (await self._run_review(asked, wait_s)).problem
+        return (await self._run_review(asked, wait_s, checkouts)).problem
 
-    async def _run_review(self, asked: bool, wait_s: float | None = None) -> HonestyReviewResult:
+    async def _run_review(
+        self,
+        asked: bool,
+        wait_s: float | None = None,
+        checkouts: Sequence[Checkout] | None = None,
+    ) -> HonestyReviewResult:
         """Run one honesty review, or say why none runs (specification section 4).
 
             the plan         `HonestyState.review_plan`: the unreviewed and the marked files,
@@ -1050,6 +1192,11 @@ class Session:
         review verifies no file, so only a person's request starts one (its findings and the
         clearing of "review required" still apply).
 
+        With worktrees (D251) the review judges the files of the given checkouts, each against
+        its own baseline, in one reviewer run. A worktree outside the project directory is
+        left out: only a person's certification verifies its files, and the result says so
+        while files there are not verified.
+
         One request runs up to `REVIEW_PASSES` reviews, within `wait_s`:
 
             the review dropped results because files
@@ -1072,6 +1219,7 @@ class Session:
             asked: True when a person asked for the review.
             wait_s: The longest time to wait for the review's end, in seconds; None waits
                 until it ends.
+            checkouts: The checkouts whose files are judged; None for every known checkout.
 
         Returns:
             `ran` says whether the reviewer's result was applied; `problem` is "" if every
@@ -1086,7 +1234,8 @@ class Session:
             run = self._review_run
             joined = run is not None
             if run is None:
-                run = self._review_run = ReviewRun(fresh=asked)
+                scope = None if checkouts is None else tuple(checkouts)
+                run = self._review_run = ReviewRun(fresh=asked, checkouts=scope)
                 running = not self._run_state.run_done.is_set()
                 tasks = self._run_state.tg if running else None
                 if tasks is None:
@@ -1180,8 +1329,8 @@ class Session:
                 )
         async with self._honesty_lock:
             await self._refresh_trust()
-            plan = await anyio.to_thread.run_sync(
-                self._review_plan, self._take_written(), cfg.review_max_files
+            plan, outside = await anyio.to_thread.run_sync(
+                self._review_plan, self._take_written(), cfg.review_max_files, run.checkouts
             )
         base = plan.baseline
         if base is None and not fresh:
@@ -1240,7 +1389,7 @@ class Session:
             self._review_failed = (anyio.current_time(), outcome.problem)
             await self._emit_safely(Log(level="warning", message=f"honesty: {outcome.problem}"))
             await self.announce_honesty()
-            return HonestyReviewResult(ran=False, problem=outcome.problem)
+            return HonestyReviewResult(ran=False, problem=f"{outcome.problem} {outside}".strip())
         self._review_failed = None
         async with self._honesty_lock:
             changes, store, seen = await anyio.to_thread.run_sync(
@@ -1260,7 +1409,7 @@ class Session:
                 await self._certify_reviewed()
         await self._report_marks(changes)
         left = [*(f"{path} ({why})" for path, why in plan.skipped), *changes.ignored]
-        parts: list[str] = []
+        parts: list[str] = [outside] if outside else []
         if left:
             parts.append(
                 f"The honesty review could not judge {len(left)} file(s): {_some(left)}. "
@@ -1335,20 +1484,47 @@ class Session:
             Log(level="info", message=f"honesty: review: batch {done} of {total} answered")
         )
 
-    def _review_plan(self, written: Collection[str], max_files: int) -> ReviewPlan:
+    def _review_plan(
+        self,
+        written: Collection[str],
+        max_files: int,
+        checkouts: Sequence[Checkout] | None = None,
+    ) -> tuple[ReviewPlan, str]:
         """Compute the plan of an honesty review (reads git and files; for a worker thread).
 
         Args:
             written: Files that commands wrote since the last look (`_take_written`); they
                 are watched from now on.
-            max_files: `honesty.review_max_files`.
+            max_files: `honesty.review_max_files`, for all checkouts together.
+            checkouts: The checkouts to judge; None for every known one.
 
         Returns:
-            `HonestyState.review_plan`, after the marks whose code is gone were closed.
+            (`HonestyState.review_plan` of each checkout inside the project directory,
+            combined (`merge_plans`), after the marks whose code is gone were closed; "" or
+            one sentence naming the worktrees outside the project directory in scope whose
+            state is not clean, which only a person's certification settles).
         """
-        self.honesty.watch_all(written)
-        self.honesty.close_stale()
-        return self.honesty.review_plan(max_files)
+        self._watch_all(written)
+        chosen = self.checkouts.all() if checkouts is None else checkouts
+        outside: list[str] = []
+        plans: list[ReviewPlan] = []
+        for checkout in dict.fromkeys(chosen):
+            state = self._state_of(checkout)
+            state.close_stale()
+            if checkout.outside:
+                if not state.snapshot().clean:
+                    outside.append(checkout.label)
+                continue
+            plans.append(state.review_plan(max_files))
+        plan = merge_plans(plans) if plans else ReviewPlan(self.honesty.baseline)
+        note = ""
+        if outside:
+            note = (
+                "The files of a worktree outside the project directory count as verified only "
+                f"when a person certifies them ({', '.join(outside)}): `/trust` or `/trust-file` "
+                "in a client of the session, or `calu honesty trust` in a terminal."
+            )
+        return plan, note
 
     def _apply_review(
         self, results: Mapping[str, FileReview]
@@ -1364,17 +1540,26 @@ class Session:
             whose result was applied, the content the review judged and the file's open marks
             now (`HonestyState.seen_now`)).
         """
-        state = self.honesty
-        changes = state.apply_current_review(results)
+        by_state: dict[int, tuple[HonestyState, dict[str, FileReview]]] = {}
+        for path, review in results.items():
+            state = self._state_for_path(path)
+            by_state.setdefault(id(state), (state, {}))[1][path] = review
+        changes = MarkChanges()
         store: list[tuple[str, str]] = []
-        for path in results:
-            held = state.storable(path)
-            if held is not None and held.source == "review":
-                store.append((held.sha256, state.key(path)))
-        state.close_stale()
-        changes.review_required = state.review_required
-        dropped = {path for path, _why in changes.dropped}
-        return changes, store, state.seen_now(set(results) - dropped)
+        seen: dict[str, FileSeen] = {}
+        for state, part in by_state.values():
+            done = state.apply_current_review(part)
+            _add_changes(changes, done)
+            changes.dropped += done.dropped
+            for path in part:
+                held = state.storable(path)
+                if held is not None and held.source == "review":
+                    store.append((held.sha256, state.key(path)))
+            state.close_stale()
+            dropped = {path for path, _why in done.dropped}
+            seen.update(state.seen_now(set(part) - dropped))
+        changes.review_required = any(state.review_required for state in self._states.values())
+        return changes, store, seen
 
     async def _certify_reviewed(self) -> None:
         """Certify HEAD after an honesty review that a person asked for without a baseline.
@@ -1487,8 +1672,13 @@ class Session:
         except Exception:
             log.exception("computing the honesty state failed")
 
-    async def honesty_snapshot(self) -> HonestySnapshot:
+    async def honesty_snapshot(
+        self, checkouts: Sequence[Checkout] | None = None
+    ) -> HonestySnapshot:
         """Compute the honesty state as it is now, and tell the clients if it changed.
+
+        The state of several checkouts is combined (`combine_snapshots`, D251): it is clean
+        only if each is. Only the state of every known checkout is sent to the clients.
 
         Before the state is read, the settings `honesty.max_open_marks` and
         `honesty.sufficient_trust` are applied, the baseline and the stored file trust are read
@@ -1497,6 +1687,9 @@ class Session:
 
         Side effects: may query the database; may close marks; emits `honesty.update` if the
         state differs from the one last sent.
+
+        Args:
+            checkouts: The checkouts to look at (a step's); None for every known checkout.
 
         Returns:
             The state.
@@ -1507,12 +1700,18 @@ class Session:
                 baseline.
         """
         async with self._honesty_lock:
+            await anyio.to_thread.run_sync(self._scope_states, checkouts)
             await self._refresh_trust()
-            snapshot = await anyio.to_thread.run_sync(self._settled_snapshot, self._take_written())
-        await self._emit_honesty(snapshot)
+            snapshot = await anyio.to_thread.run_sync(
+                self._settled_snapshot, self._take_written(), checkouts
+            )
+        if checkouts is None:
+            await self._emit_honesty(snapshot)
         return snapshot
 
-    def _settled_snapshot(self, written: Collection[str]) -> HonestySnapshot:
+    def _settled_snapshot(
+        self, written: Collection[str], checkouts: Sequence[Checkout] | None = None
+    ) -> HonestySnapshot:
         """Close the marks whose code is gone and compute the state (reads git and files).
 
         For a worker thread: the state's methods wait for one another and read many files.
@@ -1520,13 +1719,32 @@ class Session:
         Args:
             written: Files that commands wrote since the last look (`_take_written`); they
                 are watched from now on.
+            checkouts: The checkouts to look at; None for every known checkout.
 
         Returns:
-            The state after that.
+            The state after that, combined over the checkouts (`combine_snapshots`): for a
+            step, or as the overview of the whole session when `checkouts` is None.
         """
-        self.honesty.watch_all(written)
-        self.honesty.close_stale()
-        return self.honesty.snapshot()
+        self._watch_all(written)
+        parts: list[HonestySnapshot] = []
+        for state in self._scope_states(checkouts):
+            state.close_stale()
+            parts.append(state.snapshot())
+        if checkouts is None:
+            labels = [self.checkouts.label(state.root) for state in self._scope_states(None)]
+            return combine_snapshots(parts, labels)
+        return combine_snapshots(parts)
+
+    def _watch_all(self, written: Collection[str]) -> None:
+        """Watch files that commands wrote, each in the state of its checkout (D251).
+
+        For a worker thread.
+
+        Args:
+            written: Paths relative to the session directory, or absolute.
+        """
+        for path in written:
+            self._state_for_path(path).watch(path)
 
     def _take_written(self) -> set[str]:
         """Hand out the files that measured write sets named since the last call.
@@ -1539,8 +1757,12 @@ class Session:
         written, self._written = self._written, set()
         return written
 
-    async def _gate_honesty(self) -> HonestySnapshot | None:
+    async def _gate_honesty(self, step: Step) -> HonestySnapshot | None:
         """Give the gate the honesty state for a step (`StepGate`'s `honesty`).
+
+        Args:
+            step: The tool call; the state is the one of its checkouts (`step_checkouts`,
+                D251), so a mark in another worktree does not stop it.
 
         Returns:
             None while `honesty.mode` is "off". Otherwise the state; in the mode "track" also
@@ -1554,53 +1776,68 @@ class Session:
         if mode == "off":
             return None
         try:
-            return await self.honesty_snapshot()
+            scope = await anyio.to_thread.run_sync(self.step_checkouts, step)
+            if scope == list(self.checkouts.all()):
+                return await self.honesty_snapshot()  # the whole session: the clients get it
+            return await self.honesty_snapshot(scope)
         except Exception:
             if mode == "enforce":
                 raise
             log.exception("computing the honesty state failed")
             return None
 
-    async def _head(self) -> str | None:
+    async def _head(self, root: Path | None = None) -> str | None:
         """Read the commit id of HEAD now, without the cache of `_git_head`.
 
+        Args:
+            root: The checkout whose HEAD is read; None for the session directory.
+
         Returns:
-            The full commit id; None if the workspace is in no repository, has no commit yet,
+            The full commit id; None if the directory is in no repository, has no commit yet,
             or git could not be asked.
         """
         try:
             answer = await anyio.to_thread.run_sync(
-                run_git, self.workspace, ["rev-parse", "--verify", "--quiet", "HEAD"]
+                run_git, root or self.workspace, ["rev-parse", "--verify", "--quiet", "HEAD"]
             )
         except GitError:
             return None
         return answer.decode(errors="replace").strip() or None
 
     async def _refresh_trust(self) -> None:
-        """Bring the honesty state's settings, baseline and stored file trust up to date.
+        """Bring the honesty states' settings, baselines and stored file trust up to date.
 
-        The baseline and the stored trust are read from the database when HEAD is another
-        commit than at the last look or `_trust_stale` is set. If the database cannot be
-        asked, the state has no baseline and no stored trust until a later look succeeds, and
-        a warning is logged. The caller holds `_honesty_lock`.
+        Each checkout's baseline is the nearest trusted ancestor of its own HEAD (D251). The
+        baselines and the stored trust are read from the database when a checkout's HEAD is
+        another commit than at the last look, a checkout is new, or `_trust_stale` is set. If
+        the database cannot be asked, the states have no baseline and no stored trust until a
+        later look succeeds, and a warning is logged. The caller holds `_honesty_lock`.
         """
-        state, cfg = self.honesty, self.config.honesty
-        state.max_open_marks = cfg.max_open_marks
-        if state.sufficient_trust != cfg.sufficient_trust:
-            state.sufficient_trust = cfg.sufficient_trust
-            self._trust_stale = True
-        head = await self._head()
-        if not self._trust_stale and head == self._honesty_head:
+        cfg = self.config.honesty
+        known = {checkout.root: checkout for checkout in self.checkouts.all()}
+        for root, state in self._states.items():
+            state.max_open_marks = cfg.max_open_marks
+            wanted = self._trust_needed(known[root]) if root in known else cfg.sufficient_trust
+            if state.sufficient_trust != wanted:
+                state.sufficient_trust = wanted
+                self._trust_stale = True
+        heads = {root: await self._head(root) for root in self._states}
+        if not self._trust_stale and heads == self._honesty_heads:
             return
         self._trust_stale = False  # a change announced while this reads sets it again
         try:
-            baseline = await find_baseline(
-                self.workspace, self.store.trusted_among, minimum=cfg.sufficient_trust
-            )
+            baselines = {
+                root: await find_baseline(
+                    root, self.store.trusted_among, minimum=state.sufficient_trust
+                )
+                for root, state in self._states.items()
+            }
             hashes = await self.store.trusted_file_sources()
         except Exception as exc:
             log.exception("reading the stored trust failed")
-            state.baseline, state.trusted_hashes = None, {}
+            for state in self._states.values():
+                state.baseline = None
+            self.honesty.trusted_hashes = {}
             self._trust_stale = True
             await self._emit_safely(
                 Log(
@@ -1613,8 +1850,10 @@ class Session:
                 )
             )
             return
-        state.baseline, state.trusted_hashes = baseline, hashes
-        self._honesty_head = head
+        for root, state in self._states.items():
+            state.baseline = baselines[root]
+        self.honesty.trusted_hashes = hashes
+        self._honesty_heads = heads
 
     async def _emit_honesty(self, snapshot: HonestySnapshot | None) -> None:
         """Tell the clients the honesty state, unless they already have exactly this.
@@ -1808,7 +2047,8 @@ class Session:
             await self._report_marks(changes)
         except Exception as exc:
             log.exception("applying a step's result to the honesty state failed")
-            self.honesty.review_required = True
+            for state in list(self._states.values()):
+                state.review_required = True
             await self._emit_safely(
                 Log(
                     level="warning",
@@ -1835,24 +2075,40 @@ class Session:
             be withdrawn, over all checkers of the step; the (SHA-256, path) of each
             verification to store in the database).
         """
-        state = self.honesty
-        state.watch_all(written)
+        self._watch_all(written)
         edited: set[str] = set()
+        edit_state: HonestyState | None = None
         if pending.edit_path is not None:
-            edited.add(state.watch(pending.edit_path))
-        # All checkers' clean marks before any dirty mark (`record_step`): one checker's HONEST
-        # must not close the mark another checker opens in the same step.
-        total = state.record_step(pending.marks, edited)
+            edit_state = self._state_for_path(pending.edit_path)
+            edited.add(edit_state.watch(pending.edit_path))
+        # Each mark goes to the state of its file's checkout (D251). Within a state, all
+        # checkers' clean marks come before any dirty mark (`record_step`): one checker's
+        # HONEST must not close the mark another checker opens in the same step.
+        parts: dict[int, tuple[HonestyState, list[tuple[str, list[CodeMark], list[CodeMark]]]]]
+        parts = {}
+        for name, dirty, clean in pending.marks:
+            for kind, marks in (("dirty", dirty), ("clean", clean)):
+                for one in marks:
+                    state = self._state_for_path(one.path.strip() or ".")
+                    answers = parts.setdefault(id(state), (state, []))[1]
+                    if not answers or answers[-1][0] != name:
+                        answers.append((name, [], []))
+                    _name, dirty_part, clean_part = answers[-1]
+                    (dirty_part if kind == "dirty" else clean_part).append(one)
+        total = MarkChanges()
+        for state, answers in parts.values():
+            _add_changes(total, state.record_step(answers, edited))
         store: list[tuple[str, str]] = []
-        if pending.edit_path is not None:
-            state.record_edit(
+        if pending.edit_path is not None and edit_state is not None:
+            edit_state.record_edit(
                 pending.edit_path, pending.expected_sha256 if pending.checked else None
             )
-            held = state.storable(pending.edit_path)
+            held = edit_state.storable(pending.edit_path)
             if held is not None:
-                store.append((held.sha256, state.key(pending.edit_path)))
-        state.close_stale()
-        total.review_required = state.review_required
+                store.append((held.sha256, edit_state.key(pending.edit_path)))
+        for state in list(self._states.values()):
+            state.close_stale()
+        total.review_required = any(state.review_required for state in self._states.values())
         return total, store
 
     async def _certify(self, pending: PendingHonesty) -> None:
@@ -1872,10 +2128,12 @@ class Session:
         Raises:
             Exception: Whatever git or the store raised; the commit is then not certified.
         """
-        head = await self._head()
+        root = pending.root or self.workspace
+        head = await self._head(root)
         if head is None or head == pending.head_before:
             return
-        verdict = await anyio.to_thread.run_sync(self.honesty.certification, head)
+        state = self._states.get(root, self.honesty)
+        verdict = await anyio.to_thread.run_sync(state.certification, head)
         if verdict.problem or verdict.source is None:
             await self._emit_safely(
                 Log(
@@ -1885,7 +2143,7 @@ class Session:
             )
             return
         source = "review" if verdict.source == "user" else verdict.source
-        commit = await anyio.to_thread.run_sync(resolve_commit, self.workspace, head)
+        commit = await anyio.to_thread.run_sync(resolve_commit, root, head)
         await self.store.certify_commit(commit.commit_id, commit.tree_id, source, CERTIFIER)
         self._trust_stale = True
         await self._emit_safely(
@@ -1959,7 +2217,7 @@ class Session:
             Exception: In the mode "enforce", whatever `honesty_snapshot` raised; the review
                 of the write set then escalates.
         """
-        state = await self._gate_honesty()
+        state = await self._gate_honesty(step)
         if state is not None:
             step = step.model_copy(update={"notes": [*step.notes, state.note()]})
         decision, runs = await self.gate.run_checkers(
@@ -2995,7 +3253,8 @@ class Session:
         raises; when git cannot be asked the registry keeps what it had.
         """
         try:
-            await anyio.to_thread.run_sync(self.checkouts.refresh)
+            if await anyio.to_thread.run_sync(self.checkouts.refresh):
+                self._exclude_from_states()
         except Exception:
             log.exception("reading the worktrees failed")
 
@@ -3066,7 +3325,8 @@ class Session:
             if decided.clean_commit and step.tool_use_id:
                 kept = self._run_state.peek(step.tool_use_id).honesty
                 if kept is not None:
-                    kept.head_before = await self._head()
+                    kept.root = self.step_checkouts(step)[0].root
+                    kept.head_before = await self._head(kept.root)
         except Exception:
             # Without the record nothing is verified and no commit is certified.
             log.exception("keeping a step's honesty changes failed")
@@ -4198,7 +4458,8 @@ class Session:
         cfg = self.config.traces
         directory = cfg.directory if cfg.enabled else None
         self.rules.trace_directory = None if directory is None else self.workspace / directory
-        self.honesty.excluded = () if directory is None else (directory,)
+        self._trace_dir = directory
+        self._exclude_from_states()
         self.write_sets.excluded = () if directory is None else (directory,)
 
     def _trace_settings(self) -> tuple[object, ...]:
@@ -4624,8 +4885,9 @@ class Session:
             return None
         path = Path(step.cwd or self.workspace) / str(raw)
         try:
+            state = await anyio.to_thread.run_sync(self._state_for_path, path)
             return await anyio.to_thread.run_sync(
-                self.honesty.expect_edit, path, step.tool_name, step.tool_input
+                state.expect_edit, path, step.tool_name, step.tool_input
             )
         except Exception:
             log.exception("predicting the content of an edit failed")
@@ -4721,6 +4983,21 @@ class Session:
                 "a foreground subagent blocks the main agent until it finishes"
             )
         return agent
+
+
+def _add_changes(total: MarkChanges, part: MarkChanges) -> None:
+    """Add what one checkout's honesty state changed to the changes of a whole step (D251).
+
+    Args:
+        total: The changes so far; changed in place: opened, closed, ignored and withdrawn
+            are extended (each withdrawn content once). `dropped` and `review_required` are
+            left to the caller.
+        part: What one state's call changed.
+    """
+    total.opened += part.opened
+    total.closed += part.closed
+    total.ignored += part.ignored
+    total.withdrawn += [one for one in part.withdrawn if one not in total.withdrawn]
 
 
 def _some(items: Sequence[str]) -> str:

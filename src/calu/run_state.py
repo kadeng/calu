@@ -20,6 +20,7 @@ from __future__ import annotations
 import itertools
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import anyio
 from anyio.abc import TaskGroup
@@ -61,6 +62,8 @@ class PendingHonesty:
     """True for a plain `git commit` that the gate decided while the honesty state was clean."""
     head_before: str | None = None
     """HEAD before a `clean_commit` ran; the commit is certified only if HEAD moved."""
+    root: Path | None = None
+    """The checkout a `clean_commit` runs in (D251); None for the session directory."""
 
 
 @dataclass

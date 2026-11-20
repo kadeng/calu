@@ -251,7 +251,7 @@ async def needs_clean(
         asked.append("review" if wait_s is None else f"review within {wait_s:.0f} s")
         return problem
 
-    async def now() -> HonestySnapshot | None:
+    async def now(_step: Step) -> HonestySnapshot | None:
         """Return the state after the review.
 
         Returns:
@@ -280,7 +280,7 @@ async def test_the_gate_waits_for_the_review_only_within_its_own_time(tmp_path: 
         waits.append(wait_s)
         return "The honesty review is still running."
 
-    async def now() -> HonestySnapshot | None:
+    async def now(_step: Step) -> HonestySnapshot | None:
         """Return the unchanged state.
 
         Returns:
@@ -347,7 +347,7 @@ async def test_a_failure_to_compute_the_state_escalates_the_step(tmp_path: Path)
     """Fail closed: under "enforce", a state that cannot be computed is no approval."""
     gate = gate_of(tmp_path)
 
-    async def broken() -> HonestySnapshot | None:
+    async def broken(_step: Step) -> HonestySnapshot | None:
         """Stand in for a state that cannot be computed.
 
         Raises:

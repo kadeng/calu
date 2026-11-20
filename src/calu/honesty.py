@@ -1041,6 +1041,119 @@ def match_symbol(symbol: str, names: Collection[str]) -> str | None:
     return fitting[0] if len(fitting) == 1 else None
 
 
+class HonestyShared:
+    """What the honesty states of one session's checkouts share (D251).
+
+    A session keeps one `HonestyState` per checkout (the main checkout and each git worktree,
+    `calu.checkouts`). What is a fact about a file **content** and not about a place is shared
+    by all of them, so that a content verified in one worktree counts in another and in the
+    main checkout (a merge, a copy):
+
+        lock            one reentrant lock for all states: calls of any of them run one after
+                        the other
+        trusted_hashes  SHA-256 -> source, the stored trust of contents (`trusted_files`) and
+                        what this session verified since
+        verified_blobs  git blob id -> source, for every content verified in this session
+        next_id         the id the next mark gets, unique over all states
+    """
+
+    def __init__(self) -> None:
+        """Create the shared part of a session that has verified nothing yet."""
+        self.lock = threading.RLock()
+        self.trusted_hashes: Mapping[str, TrustSource] = {}
+        self.verified_blobs: dict[str, TrustSource] = {}
+        self.next_id = 1
+
+
+def combine_snapshots(
+    snapshots: Sequence[HonestySnapshot], labels: Sequence[str] | None = None
+) -> HonestySnapshot:
+    """Combine the honesty states of several checkouts into one (D251).
+
+    A step that runs in more than one checkout (`cd .claude/worktrees/b && pytest` from the
+    main checkout) needs each of them clean; the clients get one state for the whole session.
+    The result is clean exactly if every part is.
+
+    Args:
+        snapshots: One snapshot per checkout, the step's own checkout (or the main checkout)
+            first; at least one.
+        labels: For the overview of the whole session: the checkouts' labels in the order of
+            `snapshots`. None combines for a step.
+
+    Returns:
+        The first snapshot itself if there is one. Otherwise the open marks of all parts by id,
+        "review required" if any part requires one, and:
+
+            for a step       the first part's baseline if every part has one, else None;
+                             every part's unreviewed files (`everything` if any part has it,
+                             with the parts' problems joined)
+            for an overview  the first part's baseline and `everything`; a later part
+                             without a baseline, or whose files git could not list, is
+                             named by its label among the unreviewed files
+    """
+    if len(snapshots) == 1:
+        return snapshots[0]
+    bases = [snapshot.baseline for snapshot in snapshots]
+    marks = sorted((mark for snapshot in snapshots for mark in snapshot.marks), key=lambda m: m.id)
+    parts = [snapshot.unreviewed for snapshot in snapshots]
+    if labels is None and any(part.everything for part in parts):
+        problem = "; ".join(part.problem for part in parts if part.problem)
+        unreviewed = Unreviewed(everything=True, problem=problem)
+        base = None
+    elif labels is not None and parts[0].everything:
+        unreviewed, base = parts[0], bases[0]
+    else:
+        whole = (
+            {labels[index] for index, part in enumerate(parts) if part.everything}
+            if labels is not None
+            else set[str]()
+        )
+        unreviewed = Unreviewed(
+            paths=tuple(sorted({path for part in parts for path in part.paths} | whole)),
+            restage=tuple(sorted({path for part in parts for path in part.restage})),
+        )
+        complete = all(one is not None for one in bases)
+        base = bases[0] if labels is not None or complete else None
+    return HonestySnapshot(
+        baseline=base,
+        marks=tuple(marks),
+        unreviewed=unreviewed,
+        review_required=any(snapshot.review_required for snapshot in snapshots),
+    )
+
+
+def merge_plans(plans: Sequence[ReviewPlan]) -> ReviewPlan:
+    """Combine the review plans of several checkouts into one honesty review (D251).
+
+    Args:
+        plans: One plan per checkout, the step's own checkout first; at least one.
+
+    Returns:
+        The first plan itself if there is one. Otherwise one plan with the first plan's
+        baseline if every plan has one (else None), every file of every plan sorted by path,
+        the counts added, and "review required" if any plan required one. If a plan has a
+        `problem`, the result has only that problem and the total count.
+    """
+    if len(plans) == 1:
+        return plans[0]
+    bases = [plan.baseline for plan in plans]
+    base = bases[0] if all(one is not None for one in bases) else None
+    count = sum(plan.count for plan in plans)
+    problem = next((plan.problem for plan in plans if plan.problem), "")
+    if problem:
+        return ReviewPlan(base, count=count, problem=problem)
+    return ReviewPlan(
+        base,
+        count=count,
+        files=tuple(sorted((one for plan in plans for one in plan.files), key=lambda f: f.path)),
+        shortcuts={key: value for plan in plans for key, value in plan.shortcuts.items()},
+        skipped=tuple(one for plan in plans for one in plan.skipped),
+        verified_already=sum(plan.verified_already for plan in plans),
+        seen={key: value for plan in plans for key, value in plan.seen.items()},
+        review_required=any(plan.review_required for plan in plans),
+    )
+
+
 def _locked[**P, R](
     method: Callable[Concatenate[HonestyState, P], R],
 ) -> Callable[Concatenate[HonestyState, P], R]:
@@ -1096,9 +1209,13 @@ class HonestyState:
         certification(commit)              whether a commit may be certified, and its source
 
     Paths are relative to the workspace, with forward slashes; a file outside the workspace is
-    named by its absolute path. A file is **verified** while the SHA-256 of its content is the
-    one recorded for its path in this session, or one of `trusted_hashes`, and the source of
-    that record is at least `sufficient_trust`. A file is **unreviewed** when it exists,
+    named by its absolute path. A session keeps one state per checkout (D251): each asks git
+    in its own `root` (its files, index and baseline), names files relative to the same
+    workspace, and shares the trust of contents and the mark ids (`HonestyShared`).
+
+    A file is **verified** while the SHA-256 of its content is the one recorded for its path
+    in this session, or one of `trusted_hashes`, and the source of that record is at least
+    `sufficient_trust`. A file is **unreviewed** when it exists,
     differs from the baseline (or the baseline does not hold it) and is not verified, and also
     when the index holds a content for it that is not reviewed (`unreviewed`). Every failure
     to read git or a file counts as unreviewed.
@@ -1121,19 +1238,35 @@ class HonestyState:
     """
 
     def __init__(
-        self, workspace: Path, max_open_marks: int = 3, sufficient_trust: TrustSource = "check"
+        self,
+        workspace: Path,
+        max_open_marks: int = 3,
+        sufficient_trust: TrustSource = "check",
+        *,
+        root: Path | None = None,
+        shared: HonestyShared | None = None,
     ) -> None:
         """Create an empty state: no baseline, no mark, nothing verified.
 
         Args:
-            workspace: The project directory.
+            workspace: The project directory. Files are named relative to it (`key`).
             max_open_marks: `honesty.max_open_marks`: with more open marks than this a review
                 is required. The attribute may be set again when the configuration changes.
             sufficient_trust: `honesty.sufficient_trust`: the weakest source of trust that
                 counts. The attribute may be set again when the configuration changes; the
                 session then also looks up its baseline again.
+            root: The checkout this state judges (D251): git is asked there, so its files,
+                its index and its baseline are the ones of that working tree. None is the
+                workspace itself (the main checkout).
+            shared: What the states of the session's other checkouts share with this one
+                (`HonestyShared`); None gives this state a part of its own.
         """
         self.workspace = workspace.resolve()
+        self.root = root.resolve() if root is not None else self.workspace
+        """The top directory of the checkout this state judges (D251)."""
+        self.shared = shared if shared is not None else HonestyShared()
+        """The lock, the trust of contents and the mark ids, shared with the states of the
+        session's other checkouts."""
         self.max_open_marks = max_open_marks
         self.sufficient_trust: TrustSource = sufficient_trust
         self.baseline: Baseline | None = None
@@ -1151,21 +1284,48 @@ class HonestyState:
         """Directories, relative to the workspace, whose files are never unreviewed and that
         no honesty review reads: calu's own output inside the project (the session traces,
         agent/records/PLAN.md D232). The session sets it when the configuration changes."""
-        self.trusted_hashes: Mapping[str, TrustSource] = {}
-        """SHA-256 -> source, from the table `trusted_files`, set by the session
-        (`SessionStore.trusted_file_sources`). A file with such a content is verified wherever
-        it lies, if the source is sufficient."""
         self.review_required = False
-        self._lock = threading.RLock()
-        self._next_id = 1
+        self._lock = self.shared.lock
         self._top: Path | None = None
         self._object_format: str | None = None
         self._trees: dict[str, dict[str, tuple[str, str]]] = {}
         self._hashed: dict[str, tuple[tuple[int, int, int, int], ContentIds]] = {}
-        self._verified_blobs: dict[str, TrustSource] = {}
-        """git blob id -> source, for every content verified in this session. The index may
-        hold such a content after the working file was edited again. One entry per verified
-        edit or reviewed file; it is empty after a restart."""
+
+    @property
+    def trusted_hashes(self) -> Mapping[str, TrustSource]:
+        """The trust of file contents: SHA-256 -> source, shared by every checkout.
+
+        It holds the table `trusted_files`, set by the session
+        (`SessionStore.trusted_file_sources`), plus every content this session verified.
+        A file with such a content is verified wherever it lies, in every checkout, if the
+        source is sufficient. Shared by the states of all checkouts (`HonestyShared`).
+
+        Returns:
+            The mapping.
+        """
+        return self.shared.trusted_hashes
+
+    @trusted_hashes.setter
+    def trusted_hashes(self, value: Mapping[str, TrustSource]) -> None:
+        """Replace the trust of contents for every checkout of the session.
+
+        Args:
+            value: SHA-256 -> source.
+        """
+        self.shared.trusted_hashes = value
+
+    @property
+    def _verified_blobs(self) -> dict[str, TrustSource]:
+        """Map the git blob id of every content verified in this session to its source.
+
+        The index may hold such a content after the working file was edited again. One entry
+        per verified edit or reviewed file; it is empty after a restart. Shared by the states
+        of all checkouts.
+
+        Returns:
+            The mapping, which callers change in place.
+        """
+        return self.shared.verified_blobs
 
     # ------------------------------------------------------------------ paths and contents
 
@@ -1257,7 +1417,7 @@ class HonestyState:
         """
         if self._object_format is None:
             try:
-                answer = run_git(self.workspace, ["rev-parse", "--show-object-format"])
+                answer = run_git(self.root, ["rev-parse", "--show-object-format"])
             except GitError:
                 return "sha1"
             name = answer.decode(errors="replace").strip()
@@ -1265,7 +1425,7 @@ class HonestyState:
         return self._object_format
 
     def _repository(self) -> Path:
-        """Return the top directory of the repository the workspace is in.
+        """Return the top directory of the checkout this state judges (`root`).
 
         Returns:
             The directory, resolved.
@@ -1274,7 +1434,7 @@ class HonestyState:
             GitError: If the workspace is in no git repository or git could not be asked.
         """
         if self._top is None:
-            answer = run_git(self.workspace, ["rev-parse", "--show-toplevel"])
+            answer = run_git(self.root, ["rev-parse", "--show-toplevel"])
             text = os.fsdecode(answer).rstrip("\n")
             if not text:
                 raise GitError("git did not name the repository's directory")
@@ -1380,10 +1540,13 @@ class HonestyState:
         return source if sufficient(source, self.sufficient_trust) else None
 
     def _remember_verified(self, key: str, record: Verified) -> None:
-        """Remember the blob id of a content that was just verified, for `_blob_source`.
+        """Remember a content that was just verified, for `_blob_source` and every checkout.
 
-        Nothing is remembered while the file carries an open mark, or when its present content
-        is not the verified one.
+        Its blob id goes to the verified blobs, and its SHA-256 to `trusted_hashes` with the
+        record's source (unless a stronger source is held already), so that the same content
+        counts as verified at any path of any checkout of the session (D251). Nothing is
+        remembered while the file carries an open mark, or when its present content is not
+        the verified one.
 
         Args:
             key: The file.
@@ -1394,6 +1557,12 @@ class HonestyState:
         ids = self._content(key)
         if ids is not None and ids.sha256 == record.sha256:
             self._verified_blobs[ids.blob] = record.source
+            # A content verified here counts in every checkout at once (D251): a copy or a
+            # merge that does not move HEAD needs no reload of the stored trust.
+            held = self.trusted_hashes.get(record.sha256)
+            best = stronger(held, record.source)
+            if best is not None and best != held:
+                self.trusted_hashes = {**self.trusted_hashes, record.sha256: best}
 
     def _marked(self, key: str, changes: MarkChanges) -> None:
         """Withdraw what calu holds about the present content of a file a mark was opened on.
@@ -2105,14 +2274,14 @@ class HonestyState:
                 self.marks[index] = replace(mark, reason=reason, opened_by=by or None)
                 return self.marks[index]
         mark = HonestyMark(
-            id=self._next_id,
+            id=self.shared.next_id,
             path=path,
             symbol=wanted,
             reason=reason,
             opened_at=datetime.now(UTC),
             opened_by=by or None,
         )
-        self._next_id += 1
+        self.shared.next_id += 1
         self.marks.append(mark)
         return mark
 

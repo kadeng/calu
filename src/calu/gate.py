@@ -477,7 +477,7 @@ class StepGate:
         own_agent: Callable[[Step], bool],
         clock_alarm: Callable[[], str | None],
         keep_changeset: Callable[[str, str], None],
-        honesty: Callable[[], Awaitable[HonestySnapshot | None]],
+        honesty: Callable[[Step], Awaitable[HonestySnapshot | None]],
         honesty_review: Callable[[Step, float | None], Awaitable[str]],
     ) -> None:
         """Create the gate of one session.
@@ -503,9 +503,9 @@ class StepGate:
                 forgets it when a human has decided the escalation the gate returns for it.
             keep_changeset: Remembers the rendered changeset of a commit for the escalation's
                 row: (the call's `tool_use_id`, the text).
-            honesty: Computes the honesty state of the session as it is now; returns None
-                while `honesty.mode` is "off". It may raise; the step is then escalated
-                (`decide`).
+            honesty: Computes the honesty state for a step as it is now: the state of the
+                checkouts the step belongs to (D251); returns None while `honesty.mode` is
+                "off". It may raise; the step is then escalated (`decide`).
             honesty_review: Runs the honesty review for a step that needs a clean state: (the
                 step, the longest time to wait for the review in seconds or None for no
                 limit). Returns "" if the review ran (the gate then reads the state again),
@@ -866,7 +866,7 @@ class StepGate:
             and route in (Route.COMMAND, Route.EDIT, Route.CHANGESET)
             and (mode == "enforce" or not listed or plain_commit)
         ):
-            state = await self._honesty()
+            state = await self._honesty(step)
         # Only "enforce" stops a step, and only while the state is not clean.
         unclean = mode == "enforce" and state is not None and not state.clean
         if listed and not unclean:
@@ -1118,7 +1118,7 @@ class StepGate:
         if budget is not None and budget.deadline != float("inf"):
             wait_s = max(0.0, budget.deadline - anyio.current_time() - REVIEW_MARGIN_S)
         problem = await self._honesty_review(step, wait_s)
-        after = await self._honesty()
+        after = await self._honesty(step)
         if after is None or after.clean:
             return None, after
         if not problem and after.marks:

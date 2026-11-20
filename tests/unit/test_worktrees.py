@@ -219,3 +219,277 @@ async def test_the_fake_runner_runs_a_call_in_its_own_working_directory(repo: Pa
     assert rec.of(TurnResult)
     assert seen == [str(inner)]
     assert (inner / "out.txt").read_text() == "x\n" and not (repo / "out.txt").exists()
+
+
+# ------------------------------------------------------------------ honesty per checkout
+
+DISHONEST = (
+    '"""Help."""\n\n\ndef add(a, b):\n    """Return the sum of a and b."""\n    return a - b\n'
+)
+HONEST = '"""Help."""\n\n\ndef add(a, b):\n    """Return the sum of a and b."""\n    return a + b\n'
+
+
+def run_in(where: str, command: str = "make test") -> dict[str, object]:
+    """Build a scripted Bash call that the fake command checker reads as running code.
+
+    Args:
+        where: The call's working directory, relative to the project ("" for the project).
+        command: The command line.
+
+    Returns:
+        The action for the fake runner's script.
+    """
+    return {"tool": "Bash", "input": {"command": command}, "cwd": where, "result": "ok"}
+
+
+def write_in(where: str, path: str, content: str) -> dict[str, object]:
+    """Build a scripted Write call in a working directory that really writes the file.
+
+    Args:
+        where: The call's working directory, relative to the project.
+        path: The file, relative to `where`.
+        content: The new content.
+
+    Returns:
+        The action for the fake runner's script.
+    """
+    return {
+        "tool": "Write",
+        "input": {"file_path": path, "content": content},
+        "cwd": where,
+        "writes": {path: content},
+        "result": "ok",
+    }
+
+
+def decisions(rec: object) -> list[str]:
+    """List the decision of every recorded step, in order.
+
+    Args:
+        rec: The session's event recorder.
+
+    Returns:
+        The decisions' values ("pass", "deny", "escalate", ...).
+    """
+    from calu.protocol.messages import CheckResult
+
+    return [check.decision.value.lower() for check in rec.of(CheckResult)]  # type: ignore[attr-defined]
+
+
+async def test_u3_a_mark_in_one_worktree_does_not_stop_the_others(repo: Path) -> None:
+    from calu.testing import honesty_answering
+    from tests.unit.test_honesty_session import run_turns, session_on
+
+    worktree(repo, "a")
+    worktree(repo, "b")
+    session, rec, _store = await session_on(
+        repo,
+        [
+            [
+                write_in(".claude/worktrees/a", "helper.py", DISHONEST),
+                run_in(".claude/worktrees/b"),
+                run_in(""),
+                run_in(".claude/worktrees/a"),
+            ]
+        ],
+        models={
+            "honesty": honesty_answering(
+                dishonest=[(".claude/worktrees/a/helper.py", "add", "subtracts")]
+            )
+        },
+    )
+    await run_turns(session, rec)
+    assert decisions(rec) == ["pass", "pass", "pass", "deny"]
+    (mark,) = [m for state in session._states.values() for m in state.open_marks]  # pyright: ignore[reportPrivateUsage]
+    assert mark.path == ".claude/worktrees/a/helper.py"
+    assert session.honesty.open_marks == [], "the main checkout's state holds no mark"
+
+
+async def test_u4_an_unignored_worktree_is_no_unreviewed_file_of_the_main_checkout(
+    repo: Path,
+) -> None:
+    from tests.unit.test_honesty_session import run_turns, session_on
+
+    session, rec, _store = await session_on(
+        repo,
+        [
+            [
+                {
+                    "tool": "EnterWorktree",
+                    "input": {"name": "wta"},
+                    "run": ["git", "worktree", "add", "-q", ".claude/worktrees/wta"],
+                    "result": "ok",
+                },
+                run_in(""),
+            ]
+        ],
+    )
+    await run_turns(session, rec)
+    assert decisions(rec)[-1] == "pass"
+    state = await session.honesty_snapshot()
+    assert state.clean, state
+    assert ".claude/worktrees/wta" in session.honesty.excluded
+
+
+async def test_u5_a_dishonest_file_left_in_an_ignored_worktree_is_reviewed_again(
+    repo: Path,
+) -> None:
+    from calu.testing import fake_reviewer
+    from tests.unit.test_honesty_session import logs, run_turns, session_on
+
+    (repo / ".gitignore").write_text(".claude/worktrees/\n", encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "ignore worktrees")
+    inner = worktree(repo, "b")
+    # What an earlier session left: an uncommitted dishonest edit in an ignored worktree.
+    (inner / "helper.py").write_text(DISHONEST, encoding="utf-8")
+    session, rec, _store = await session_on(
+        repo,
+        [[run_in(".claude/worktrees/b")]],
+        models={
+            "honesty-review": fake_reviewer({".claude/worktrees/b/helper.py": [("add", "minus")]})
+        },
+    )
+    await run_turns(session, rec)
+    assert decisions(rec) == ["deny"]
+    assert "honesty: review started" in logs(rec)
+    (mark,) = [m for state in session._states.values() for m in state.open_marks]  # pyright: ignore[reportPrivateUsage]
+    assert mark.label() == ".claude/worktrees/b/helper.py:add"
+
+
+async def test_u6_a_commit_merged_from_a_worktree_is_verified_in_the_main_checkout(
+    repo: Path,
+) -> None:
+    from tests.unit.test_honesty_session import COMMIT, logs, run_turns, session_on
+
+    worktree(repo, "wta")
+    session, rec, _store = await session_on(
+        repo,
+        [
+            [
+                write_in(".claude/worktrees/wta", "helper.py", HONEST),
+                {
+                    "tool": "Bash",
+                    "input": {"command": "git commit -am change"},
+                    "cwd": ".claude/worktrees/wta",
+                    "run": ["git", "-c", "user.email=a@b", "-c", "user.name=a", "add", "-A"],
+                    "result": "ok",
+                },
+                {
+                    "tool": "Bash",
+                    "input": {"command": "git merge worktree-wta"},
+                    "result": "ok",
+                },
+                run_in(""),
+            ]
+        ],
+    )
+
+    # The fake runner runs one program per call: the commit and the merge are made by git
+    # itself right before the merge step is judged.
+    original = session.pre_tool_use
+
+    async def spy(step: Step):  # type: ignore[no-untyped-def]
+        command = str(step.tool_input.get("command", ""))
+        if command == "git merge worktree-wta":
+            git(repo / ".claude" / "worktrees" / "wta", *COMMIT[5:])
+            git(repo, "merge", "-q", "--ff-only", "worktree-wta")
+        return await original(step)
+
+    session.pre_tool_use = spy  # type: ignore[method-assign]
+    await run_turns(session, rec)
+    assert (repo / "helper.py").read_text() == HONEST
+    assert decisions(rec)[-1] == "pass"
+    assert "honesty: review started" not in logs(rec)
+    state = await session.honesty_snapshot()
+    assert state.clean, state
+
+
+async def test_u7_a_copy_of_a_verified_worktree_file_is_verified_without_a_head_move(
+    repo: Path,
+) -> None:
+    from tests.unit.test_honesty_session import logs, run_turns, session_on
+
+    worktree(repo, "wta")
+    session, rec, _store = await session_on(
+        repo,
+        [
+            [
+                write_in(".claude/worktrees/wta", "helper.py", HONEST),
+                {
+                    "tool": "Bash",
+                    "input": {"command": "cp .claude/worktrees/wta/helper.py helper.py"},
+                    "run": ["cp", ".claude/worktrees/wta/helper.py", "helper.py"],
+                    "result": "ok",
+                },
+                run_in(""),
+            ]
+        ],
+    )
+    await run_turns(session, rec)
+    assert decisions(rec)[-1] == "pass"
+    assert "honesty: review started" not in logs(rec)
+
+
+async def test_files_of_an_outside_worktree_count_only_with_a_persons_certification(
+    repo: Path,
+) -> None:
+    """The owner's decision: with honesty on, an outside worktree needs "user" trust."""
+    import anyio
+
+    from calu.protocol.messages import ChatSendParams, EscalationRequest, TurnResult
+    from tests.unit.test_honesty_session import session_on
+
+    outside = repo.parent / "outside"
+    git(repo, "worktree", "add", "-q", "-b", "out", str(outside))
+    session, rec, _store = await session_on(
+        repo,
+        [[run_in(str(outside)), write_in(str(outside), "helper.py", HONEST), run_in(str(outside))]],
+    )
+    reasons: list[str] = []
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        asked = (await rec.wait_for(EscalationRequest))[0]
+        reasons.append(asked.reason)
+        await session.decide_escalation(asked.escalation_id, "deny", "no")
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    # HEAD is certified by a person, so the untouched worktree runs; after a checked edit
+    # its file is verified only by the checkers, which does not count there.
+    assert decisions(rec) == ["pass", "pass", "escalate"]
+    assert "outside the project directory" in reasons[0]
+    assert str(outside.resolve()) in reasons[0]
+
+
+async def test_with_honesty_off_an_outside_worktree_gets_nothing_of_calus_own(
+    repo: Path,
+) -> None:
+    from tests.unit.test_honesty_session import run_turns, session_on
+
+    outside = repo.parent / "outside"
+    git(repo, "worktree", "add", "-q", "-b", "out", str(outside))
+    session, rec, _store = await session_on(
+        repo,
+        [[write_in(str(outside), "helper.py", HONEST), run_in(str(outside))]],
+        mode="off",
+    )
+    await run_turns(session, rec)
+    assert decisions(rec) == ["pass", "pass"]
+
+
+def test_the_states_of_several_checkouts_combine_for_a_step_and_for_the_overview() -> None:
+    from calu.honesty import Baseline, HonestySnapshot, Unreviewed, combine_snapshots
+
+    base = Baseline("1" * 40, "2" * 40, "user")
+    main = HonestySnapshot(base, (), Unreviewed(paths=("a.py",)), False)
+    worktree_part = HonestySnapshot(base, (), Unreviewed(paths=(".claude/worktrees/w/b.py",)), True)
+    outside = HonestySnapshot(None, (), Unreviewed(everything=True), False)
+    for_step = combine_snapshots([main, worktree_part])
+    assert for_step.baseline == base and for_step.review_required
+    assert for_step.unreviewed.paths == (".claude/worktrees/w/b.py", "a.py")
+    assert combine_snapshots([main, outside]).baseline is None
+    assert combine_snapshots([main, outside]).unreviewed.everything
+    overview = combine_snapshots([main, outside], [".", "/tmp/x"])
+    assert overview.baseline == base and not overview.unreviewed.everything
+    assert overview.unreviewed.paths == ("/tmp/x", "a.py") and not overview.clean
