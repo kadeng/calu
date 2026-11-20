@@ -286,6 +286,16 @@ wrapper on the same kernel features. Design questions: replace Claude Code's san
 (an MCP tool `run_with_capabilities(command, read, write, net, reason)`); how grants persist
 (per call, per session, per project); how a denial is reported to the agent. Spike first:
 nono on this host with calu's own test suite (database tests on TCP port 5432).
+nono's Python SDK (`nono-py` on PyPI, Python 3.10+, Linux Landlock 5.13+ / macOS Seatbelt;
+owner: "looks pretty powerful") fits calu directly: `CapabilitySet` (`allow_path(path,
+AccessMode.READ|WRITE|READ_WRITE)`, `allow_file`, `block_network`, `proxy_only`; host
+allowlists through `start_proxy(ProxyConfig(allowed_hosts=[...]))`), `sandboxed_exec(caps,
+command, cwd, timeout_secs, env, ...)` runs one command in a sandboxed child while calu stays
+unsandboxed (so calu can build a new set for each retry), `QueryContext` pre-checks a path or
+the network against a set (static, not a runtime denial log), the proxy reports network
+events (`drain_audit_events`). Not found in the docs read: a per-port rule in the Python API
+and a runtime "why was this denied" for `sandboxed_exec`; denials would have to be inferred
+from the command's error output plus `QueryContext`.
 
 #### Tool documentation for the checkers (backlog, owner 2026-11-20)
 
