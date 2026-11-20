@@ -502,6 +502,48 @@ class ClaudeConfig(ConfigModel):
     when that setting is off."""
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     """Isolation of Bash commands (agent/records/PLAN.md D15, D4)."""
+    pass_env: list[str] = Field(default_factory=list)
+    """Further environment variables, by name, that Claude Code gets from calu's own
+    environment when it runs as another user (`--sudo`, `--user`), e.g. `CALU_TEST_DSN`. Such
+    a Claude Code starts with an environment built from an empty one (PATH, locale, proxies,
+    `ANTHROPIC_*`, `CLAUDE_*` and a few more); every name listed here is added to it, with the
+    value calu's process has at the session start. A name that is not set there is left out;
+    sudo itself drops most variables before calu starts, so `--sudo` needs
+    `sudo --preserve-env=NAME calu run --user "$USER"` instead. Without `--sudo` or `--user`
+    Claude Code inherits calu's environment anyway, and the list changes nothing. Names
+    only, no patterns. Refused: the checkers' provider keys (`PROVIDER_KEYS`), calu's own
+    secret variables (`CALU_SECRET_ENV`), and, at the session start, every name calu hides
+    from Claude Code (`hidden_env`, the names of calu's env file). Add or remove single names
+    with `calu config add|remove claude.pass_env <NAME>`."""
+
+    @field_validator("pass_env")
+    @classmethod
+    def _passable_names(cls, names: list[str]) -> list[str]:
+        """Accept only plain variable names that are not secrets of calu or of the checkers.
+
+        Args:
+            names: The configured entries.
+
+        Returns:
+            The entries, unchanged.
+
+        Raises:
+            ValueError: If an entry is not a plain variable name (letters, digits and "_",
+                not starting with a digit; so no pattern such as `CALU_*`), or names a
+                provider key of the checkers or a secret variable of calu.
+        """
+        for name in names:
+            if not _VARIABLE_NAME.fullmatch(name):
+                raise ValueError(
+                    f"claude.pass_env holds names of environment variables, and {name!r} is "
+                    'not one: letters, digits and "_", not starting with a digit, no pattern'
+                )
+            if name in PROVIDER_KEYS or name in CALU_SECRET_ENV:
+                raise ValueError(
+                    f"claude.pass_env cannot pass {name} to Claude Code: calu keeps it from "
+                    "Claude Code, because it holds a secret of the checkers or of calu"
+                )
+        return names
 
 
 class AutoEscalate(ConfigModel):
@@ -1095,6 +1137,14 @@ PROVIDER_KEYS = frozenset(
     }
 )
 """Keys of model providers used by checkers; always hidden from Claude Code."""
+
+CALU_SECRET_ENV = frozenset({"CALU_TOKEN", "CALU_DB_OWNER_PASSWORD", "CALU_LAUNCH"})
+"""calu's own variables that `claude.pass_env` refuses: a client token (`calu attach`), the
+password of a local database's owner (`calu setup`), and the launch record of
+`calu-claude`, which the launcher sets itself."""
+
+_VARIABLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+"""A plain environment variable name, as `claude.pass_env` takes it."""
 
 PROVIDER_KEYS_BY_PREFIX: dict[str, tuple[str, ...]] = {
     "mistral": ("MISTRAL_API_KEY",),

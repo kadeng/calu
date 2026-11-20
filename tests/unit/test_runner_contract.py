@@ -247,6 +247,16 @@ async def test_the_runner_does_not_start_on_a_sandbox_entry_calu_did_not_configu
         await runner.run(AllowAll(), no_sink)
 
 
+async def test_the_runner_does_not_pass_a_hidden_variable_on(tmp_path: Path):
+    """`claude.pass_env` with a name calu hides (env file, `hidden_env`): the start is refused."""
+    config = ClaudeConfig(cli_path="/nonexistent/claude", pass_env=["CALU_TEST_DSN", "XAI_API_KEY"])
+    runner = SdkRunner(tmp_path, config, {"MISTRAL_API_KEY", "XAI_API_KEY"})
+    with pytest.raises(StartRefused, match=r"claude\.pass_env names XAI_API_KEY") as refused:
+        await runner.run(AllowAll(), no_sink)
+    assert "calu config remove claude.pass_env XAI_API_KEY" in str(refused.value)
+    assert not runner._ready.is_set(), "nothing was started"
+
+
 async def test_a_refused_start_fails_the_session_with_the_reason(tmp_path: Path):
     """Through the session: the start fails visibly and says which file and which entry."""
     from calu.config import Config

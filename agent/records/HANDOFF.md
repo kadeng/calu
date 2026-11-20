@@ -1,14 +1,14 @@
 # Handoff
 
 State on 2026-11-19, in a session that began on 2026-11-18 and is still going. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D253, open
+(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D254, open
 questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here
 
 ### State of the repository (updated 2026-11-20 evening, by the lead)
 
-**Read first:** this section and "Next, in this order" below; `PLAN.md` D238-D253 (the
+**Read first:** this section and "Next, in this order" below; `PLAN.md` D238-D254 (the
 decisions of 2026-11-19/20); `agent/records/notes/test-plan.md` (sections A-L, the record of
 every case); `agent/records/notes/worktree-design.md`; the skill
 `.claude/skills/ui-testing-with-cua/SKILL.md`. The owner's words are in `REQUIREMENTS.md`
@@ -460,14 +460,17 @@ result checker reviewed Claude Code's pointer to a handed-back report a second t
 tells Claude they belong there). The setup that worked is "Developing Calu inside Calu" in
 DOCUMENTATION.md. Proposals, not built: a tested recipe for the database tests under the
 sandbox (Unix socket, `claude.sandbox.allow_unix_sockets`; TCP is not proxied, so the tests
-are skipped there), and a setting for extra environment variables kept by `--sudo`/`--user`
-(`CALU_TEST_DSN` is dropped today). The dogfood PostgreSQL container `calu-dogfood-pg` was
-removed; the clone `~/work/calu-dogfood` stays in the desktop.
+are skipped there). Built afterwards (PLAN D254): `claude.pass_env`, the variable names that
+reach a Claude Code started by `--sudo`/`--user` (`CALU_TEST_DSN`; with `--sudo` started as
+`sudo --preserve-env=CALU_TEST_DSN calu run --user "$USER"`, because sudo drops it first).
+The dogfood PostgreSQL container `calu-dogfood-pg` was removed; the clone
+`~/work/calu-dogfood` stays in the desktop.
 
 #### Next, in this order
 
 1. **Support the owner's dogfooding** (developing Calu inside Calu): fix what he reports first.
-   Two proposals from the rehearsal wait for his say (section above).
+   One proposal from the rehearsal waits for his say: the database tests under the sandbox
+   (section above).
 2. **Hand checks still to run** (docs/TESTING.md): item 46 (usage panel with a real
    subscription), 48 (the subagent handback review with a real Claude Code, incl. 48(c)
    what happens after a denied handback), 49 (human diffs in both IDEs, incl. (f) the

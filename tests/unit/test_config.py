@@ -1,7 +1,7 @@
 import pydantic
 import pytest
 
-from calu.config import Config, build_config, merge_settings
+from calu.config import ClaudeConfig, Config, build_config, merge_settings
 
 
 def test_merge_is_deep_for_dicts_and_replaces_other_values() -> None:
@@ -85,3 +85,14 @@ def test_hidden_env_holds_variable_names_only() -> None:
             Config(hidden_env=[entry])
         with pytest.raises(pydantic.ValidationError):
             build_config([{"hidden_env": [entry]}])
+
+
+def test_pass_env_takes_plain_names_and_refuses_secrets() -> None:
+    """`claude.pass_env`: no pattern, no checker key, no secret variable of calu."""
+    assert ClaudeConfig(pass_env=["CALU_TEST_DSN"]).pass_env == ["CALU_TEST_DSN"]
+    for entry in ("CALU_*", "A=B", "", "1ABC", "MY VAR"):
+        with pytest.raises(pydantic.ValidationError, match="names of environment variables"):
+            ClaudeConfig(pass_env=[entry])
+    for secret in ("MISTRAL_API_KEY", "FIREWORKS_API_KEY", "CALU_TOKEN", "CALU_DB_OWNER_PASSWORD"):
+        with pytest.raises(pydantic.ValidationError, match=f"cannot pass {secret}"):
+            build_config([{"claude": {"pass_env": [secret]}}])

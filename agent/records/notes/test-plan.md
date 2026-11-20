@@ -1129,8 +1129,9 @@ Open points:
    sandbox may use (`claude.sandbox.allow_unix_sockets`), checked on a machine with a
    working sandbox.
 2. **`--sudo`/`--user` drop `CALU_TEST_DSN`** (the launcher keeps a fixed set of
-   variables). The tests then fall back to `127.0.0.1:55432`. Documented; a setting for
-   extra kept variables is a proposal, not built.
+   variables). The tests then fall back to `127.0.0.1:55432`. Fixed afterwards: the setting
+   `claude.pass_env` (PLAN D254; unit tests in `test_launch.py`, `test_config.py`,
+   `test_runner_contract.py`, a root test in `tests/root/test_privileges.py`).
 3. **The commit review on Haiku** refused a commit whose test was renamed unasked and
    judged against an older request. Model judgement; the documented answer is a message that
    says what the commit should hold (M6).

@@ -98,6 +98,39 @@ def test_the_launcher_starts_the_program_as_the_user_with_an_environment_built_f
     }
 
 
+def test_pass_env_reaches_claude_code_as_another_user(shared_dir: Path) -> None:
+    """`claude.pass_env`: the runner's record keeps the named variable through the switch."""
+    from calu.claude.sdk_runner import SdkRunner
+    from calu.config import ClaudeConfig
+
+    recorder = shared_dir / "claude"
+    recorder.write_text(
+        '#!/bin/sh\necho "uid=$(id -u) dsn=${CALU_TEST_DSN-none} pg=${PGHOST-none}"\n'
+    )
+    recorder.chmod(0o755)
+    run_as = launch.RunAs(uid=OTHER_UID, gid=OTHER_UID, home="/var/empty/home")
+    config = ClaudeConfig(cli_path=str(recorder), pass_env=["CALU_TEST_DSN"])
+    overrides = SdkRunner(shared_dir, config, {"MISTRAL_API_KEY"}, run_as=run_as)._claude_env()
+    # What the Agent SDK hands the launcher: calu's environment with the overrides on top.
+    environment = {
+        "PATH": os.environ["PATH"],
+        "CALU_TEST_DSN": "postgresql://calu_owner@127.0.0.1:5434/calu",
+        "PGHOST": "dropped",
+    } | overrides
+    done = subprocess.run(
+        [str(launch.launcher_path())],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == (
+        f"uid={OTHER_UID} dsn=postgresql://calu_owner@127.0.0.1:5434/calu pg=none"
+    )
+
+
 def test_the_launcher_refuses_to_change_users_without_root(shared_dir: Path) -> None:
     """Run by hand as an ordinary user it gains nothing: only its own uid is accepted."""
     spec = launch.RunAs(uid=0, gid=0, home="/root").spec("/bin/true").dump()

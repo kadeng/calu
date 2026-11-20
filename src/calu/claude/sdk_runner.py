@@ -480,7 +480,8 @@ class SdkRunner:
 
         Raises:
             StartRefused: If a loaded settings file holds sandbox entries beyond calu's
-                configuration; nothing was started.
+                configuration, or `claude.pass_env` names a variable of `hidden_env`;
+                nothing was started.
             claude_agent_sdk.ClaudeSDKError: If the CLI cannot be started or fails, including a
                 fork point the CLI refuses ("Resume rejected by --resume-drops-turn:").
 
@@ -491,6 +492,13 @@ class SdkRunner:
         blockers = self._sandbox_blockers()
         if blockers:
             raise StartRefused(" ".join(blockers))
+        hidden = sorted(set(self.config.pass_env) & self.hidden_env)
+        if hidden:
+            raise StartRefused(
+                f"claude.pass_env names {', '.join(hidden)}, which calu hides from Claude Code "
+                "(a checker key, a name of calu's env file or of hidden_env); remove it with "
+                f"`calu config remove claude.pass_env {hidden[0]}`"
+            )
         with anyio.CancelScope() as scope:
             self._cancel = scope
             if self._stop_requested:
@@ -1556,6 +1564,8 @@ class SdkRunner:
 
         With `run_as`, the launch record for calu's launcher is added (`CALU_LAUNCH`); the
         launcher drops every variable that Claude Code does not need, and the record itself.
+        The record keeps the names of `claude.pass_env` besides `calu.launch.DEFAULT_KEEP`, so
+        those variables reach Claude Code with the values of calu's environment.
 
         Returns:
             Variable name -> value ("" means unset for Claude Code).
@@ -1568,7 +1578,10 @@ class SdkRunner:
         if self.config.use_bedrock:
             env["CLAUDE_CODE_USE_BEDROCK"] = "1"
         if self.run_as is not None:
-            env[LAUNCH_ENV] = self.run_as.spec(claude_path(self.config.cli_path)).dump()
+            spec = self.run_as.spec(claude_path(self.config.cli_path))
+            if self.config.pass_env:
+                spec = spec.model_copy(update={"keep": (*spec.keep, *self.config.pass_env)})
+            env[LAUNCH_ENV] = spec.dump()
         return env
 
     def _cli_path(self) -> str | None:

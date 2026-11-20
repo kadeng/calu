@@ -2858,9 +2858,19 @@ calu run .
   quiet `pytest -q` shows them only as `s`.
 - **The variable reaches Claude's commands** in the default arrangement, where Claude Code
   inherits the environment of `calu run`. With `--sudo` or `--user`, Claude Code starts with
-  a fresh environment without `CALU_TEST_DSN`; the tests then use their default
-  (`127.0.0.1:55432`, the `caludb` service of `docker-compose.yml`), or Claude names the
-  variable on the command line. The test password is not a secret.
+  an environment built from an empty one, and only the names in `claude.pass_env` join it.
+  Without that setting the tests use their default (`127.0.0.1:55432`, the `caludb` service
+  of `docker-compose.yml`). sudo drops the variable as well, so start Calu through sudo
+  yourself and keep it there:
+
+  ```bash
+  calu config add --project calu claude.pass_env CALU_TEST_DSN
+  sudo --preserve-env=CALU_TEST_DSN calu run --user "$USER" .
+  ```
+
+  The test password is not a secret. `claude.pass_env` refuses the checkers' provider keys,
+  Calu's own secret variables and every name Calu hides from Claude Code (`hidden_env`, the
+  names in Calu's env file).
 - **The session needs no Docker socket.** Start the test server yourself; Claude's commands
   reach it by its address.
 - **The sandbox:** Claude Code's sandbox lets a command reach only the domains on the
