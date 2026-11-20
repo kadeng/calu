@@ -1,4 +1,20 @@
-# Worktree support: design (2026-11-20, not built)
+# Worktree support: design (2026-11-20, decided by the owner the same day)
+
+**The owner's decisions (2026-11-20).**
+
+1. *Hold scope:* unchanged (decided 2026-11-19). An open decision holds every checked step of
+   every agent, also of subagents in other worktrees (question 2 below, answer (a)).
+2. *Worktrees outside the project directory:* a checkout like the others (registry, rules,
+   snapshots), and the checkers' read tools stay confined to the project directory. With
+   `honesty.mode` on, the files of such a checkout count as verified only when a person
+   certified or trusted them (`calu honesty trust`, `/trust`, `/trust-file`): its honesty
+   state takes "user" as the sufficient trust whatever `honesty.sufficient_trust` says, so a
+   code-running step there waits for that certification. The shipped (editable) command and
+   edit instructions say how to treat a step in such a checkout. With `honesty.mode` "off"
+   calu adds nothing of its own: the checkers' instructions and Claude Code's auto mode
+   decide. This replaces the recommendation of point 5.
+3. *Simple first:* trade-offs over perfectionism; the cross-checkout rule (point 3) is a
+   checker rule for obvious cases only.
 
 Answers the eight questions of HANDOFF "Worktree support (needed, owner 2026-11-20)" with the
 measured facts of `spikes/RESULTS.md`, "Worktrees, 2026-11-20". The owner's rulings it follows:
@@ -158,6 +174,9 @@ obvious cases. A copy into the own checkout needs no rule: the copied file is un
 
 ## 5. Worktrees outside the project
 
+**Decided by the owner** (decision 2 at the top): as below, and with honesty on their files
+need a person's certification. The text below was the recommendation.
+
 **Decision (recommended, see owner question 1).** They are checkouts like the others for the
 registry, the honesty state, the rules (`match_form` uses the registry instead of the
 `.claude/worktrees/<name>/.git` test, so their `CLAUDE.md` and `.claude/` are protected) and
@@ -227,7 +246,7 @@ once not):
 | L5 | second session in the same project after L2 | the left dishonest file is reviewed again before code runs there |
 | L6 | `git worktree remove --force` of a worktree with uncommitted work | asks |
 
-## Decisions for the owner
+## Decisions for the owner (answered 2026-11-20, see the top)
 
 1. **Worktrees outside the project directory** (`git worktree add ../x`, rare; Claude Code's
    own tools never create them): (a) treat them as checkouts for honesty, rules and snapshots,
