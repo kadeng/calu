@@ -54,6 +54,7 @@ the code; this file names settings and links there.
 - [Several sessions and the herd](#several-sessions-and-the-herd)
 - [From another machine](#from-another-machine)
 - [Calu as root, Claude Code as another user](#calu-as-root-claude-code-as-another-user)
+- [Developing Calu inside Calu](#developing-calu-inside-calu)
 - [Troubleshooting](#troubleshooting)
 
 **Part 3: Reference**
@@ -2831,6 +2832,57 @@ calu config set claude.model claude-sonnet-4-5 --database operator
   `secure_path`), not with your shell's. A command of Claude may therefore miss a program
   that is installed in your home directory (`~/.local/bin`, a Node version manager).
 - **Not yet supported:** the RDS variant of the database together with `--user`.
+
+## Developing Calu inside Calu
+
+This section describes a setup in which a Calu session works on Calu's own repository. Read it
+when you develop Calu with Calu, or another project whose tests need a database server or
+start Calu.
+
+### Setup
+
+```bash
+git clone https://github.com/kadeng/calu ~/work/calu && cd ~/work/calu
+calu project add . --name calu
+calu config set --project calu traces.enabled true      # optional: the session traces
+docker run -d --name calu-test-pg -p 127.0.0.1:55490:5432 -e POSTGRES_USER=calu_owner \
+    -e POSTGRES_PASSWORD=calu-dev -e POSTGRES_DB=calu postgres:17
+export CALU_TEST_DSN=postgresql://calu_owner:calu-dev@127.0.0.1:55490/calu
+calu run .
+```
+
+- **Give the test suite a database server of its own.** The database tests create and drop
+  databases and change server-wide roles (they take the login from the role `calu_admin`).
+  On the server that holds Calu's own database this breaks Calu's own logins. Without a
+  reachable server the database tests are skipped ("test database not reachable"), and a
+  quiet `pytest -q` shows them only as `s`.
+- **The variable reaches Claude's commands** in the default arrangement, where Claude Code
+  inherits the environment of `calu run`. With `--sudo` or `--user`, Claude Code starts with
+  a fresh environment without `CALU_TEST_DSN`; the tests then use their default
+  (`127.0.0.1:55432`, the `caludb` service of `docker-compose.yml`), or Claude names the
+  variable on the command line. The test password is not a secret.
+- **The session needs no Docker socket.** Start the test server yourself; Claude's commands
+  reach it by its address.
+- **The sandbox:** Claude Code's sandbox lets a command reach only the domains on the
+  project's allow list, through a proxy. The starter list holds PyPI, so `uv sync` and the
+  first `uv run` work. A TCP connection to the test server is not proxied, so with the
+  sandbox on the database tests are skipped inside the session; run that layer in your own
+  terminal. The rehearsal ran with the sandbox off (a container without user namespaces).
+
+### What to expect
+
+| Step | Behaviour |
+|---|---|
+| `uv run pytest -q tests/unit/<file>` | passes the checkers. The first run creates `.venv` and installs about 90 packages (about a minute) |
+| an edit of code or tests | the edit checker passes it when the user asked for it |
+| `git commit` | the commit review compares the staged change with what the user asked for. It can refuse a commit whose change drifted from the request (a renamed test, for example); say in a message what the commit should hold, and Claude commits again |
+| the trace files | with traces on, the final redaction pass stages the session's trace files for each commit of Claude's, and Calu tells Claude that they belong there. List `agent/traces/` in `.gitignore` to keep them out of git |
+| `uv run calu …`, `calu …` | always waits for a person (a built-in rule): Calu decides Claude's escalations, so Claude must not start it unchecked. Allow such a step, or ask Claude to try the change through the tests, which run Calu's code in the test process |
+| a review subagent, a background subagent | each command is checked; the result checker reviews the report the subagent hands back |
+
+With code honesty on (`calu checker set honesty --enable`, `calu config set --project calu
+honesty.mode track`), certify the starting commit first (`calu honesty trust HEAD`);
+otherwise every file counts as unreviewed.
 
 ## Troubleshooting
 

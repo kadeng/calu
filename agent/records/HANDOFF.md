@@ -446,9 +446,28 @@ Not started; the owner put it on the backlog. What ties calu to Linux today:
   heartbeat alone;
 - the local database through Docker Desktop is untested.
 
+#### Rehearsal: developing Calu inside Calu (2026-11-20 evening, test plan section M)
+
+An agent ran a small piece of Calu work end to end in a Calu session in the desktop (Haiku,
+shipped checkers, auto mode, traces on, honesty switched on midway, a clone of Calu with its
+own test PostgreSQL reached by name): read AGENTS.md, a unit test file, an added test, a
+review subagent, ruff, a commit with the final trace pass, a background subagent running a
+database test file, and `uv run calu --version`. 8 user messages, 34 Haiku calls of Claude
+Code, 33 checker runs. It works; three things hurt and are fixed, each with a test:
+`52b2e92` (`git restore --staged` escalated as a write of the unstaged file), `ba1fd3a` (the
+result checker reviewed Claude Code's pointer to a handed-back report a second time),
+`9997488` (Claude undid a commit because of the trace files the final pass staged; Calu now
+tells Claude they belong there). The setup that worked is "Developing Calu inside Calu" in
+DOCUMENTATION.md. Proposals, not built: a tested recipe for the database tests under the
+sandbox (Unix socket, `claude.sandbox.allow_unix_sockets`; TCP is not proxied, so the tests
+are skipped there), and a setting for extra environment variables kept by `--sudo`/`--user`
+(`CALU_TEST_DSN` is dropped today). The dogfood PostgreSQL container `calu-dogfood-pg` was
+removed; the clone `~/work/calu-dogfood` stays in the desktop.
+
 #### Next, in this order
 
 1. **Support the owner's dogfooding** (developing Calu inside Calu): fix what he reports first.
+   Two proposals from the rehearsal wait for his say (section above).
 2. **Hand checks still to run** (docs/TESTING.md): item 46 (usage panel with a real
    subscription), 48 (the subagent handback review with a real Claude Code, incl. 48(c)
    what happens after a denied handback), 49 (human diffs in both IDEs, incl. (f) the

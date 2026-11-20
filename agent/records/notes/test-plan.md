@@ -1083,3 +1083,58 @@ Open points and judgement calls for the owner:
    comment, the `comments` table.
 5. L2 in `noign`: the main agent's test run in the same session as the mark was not observed
    (see the table); s3 covers the condition in a later session.
+
+### M. Developing Calu inside Calu: a rehearsal with real Claude Code (2026-11-20)
+
+Run by an agent in the desktop (`calu-uitest`, user `cua`, shell only, `calu run` in tmux, a
+`calu attach --plain` client as the log): Claude Code 2.1.327 on Haiku, every Calu model role
+on Haiku, the shipped checkers, auto mode, traces on, honesty off at first. Calu was installed
+from `366606a` (`uitest/setup-real.sh` with `CALU_UITEST_SOURCE`), then from `9997488` after
+the fixes. The project `~/work/calu-dogfood` is a plain clone of a git bundle of `366606a`
+(no remote, no access to the host's `.git`), registered with `calu project add` (network
+policy `proxy`, the starter list). The clone's test suite had its own PostgreSQL, the
+container `calu-dogfood-pg` on the network `calu-uitest-net`, reached by name through
+`CALU_TEST_DSN`; the desktop has no Docker socket. Changed from the defaults:
+`escalation_timeout_s 300`, so that an escalation nobody decides stops the session after five
+minutes. Claude Code's sandbox was off: the container cannot create user namespaces, so the
+network policy was not in force. Nobody decided an escalation.
+
+Evidence in `~/.cache/calu-uitest/share/dogfood/`: `attach.log`, `attach2.log` (the
+conversation), `run.log`, `run2.log` (calu's terminal, client tokens removed), `traces/`
+(the two session traces as committed), `git.txt`. The leak check
+(`spikes/worktrees_leakcheck.py`) found no secret value and no key shape in the 7 files.
+
+| # | Step (one user message each) | Result |
+|---|---|---|
+| M1 | Read AGENTS.md, run `uv run pytest -q tests/unit/test_shipped_instructions.py` | ok: PASS; the first `uv run` created `.venv` and installed 93 packages from PyPI; 10 passed; 67 s. AGENTS.md was already in Claude's context |
+| M2 | Add a test of `calu.homes.home_of`, run the file again | ok: two reads (`cat`, `sed`), two edits, the test run, all PASS; 11 passed; 19 s |
+| M3 | A read-only review subagent (Agent tool, Explore) of `git diff` against AGENTS.md | fixed ba1fd3a: the subagent's commands PASS, its `SubagentHandback` report reviewed (PASS), 32 s. Then the result checker reviewed Claude Code's pointer text ("This agent's report was delivered to you as a message from ...") as a second result and sent the main agent a confusing note; the pointer now passes like the empty result (D252) |
+| M4 | Honesty on (`calu checker set honesty --enable`, `honesty.mode track`, `calu honesty trust HEAD`, by the operator between turns); drop two redundant lines, ruff, the tests, commit | fixed 52b2e92, 9997488. The switch took effect at the next step; the edit was judged honest. `git checkout -b X && git add ... && git commit` was refused by the commit rule (a commit must be the whole line), Claude split it; the commit passed. The final pass staged the trace file into the commit; Claude took it for a mistake, ran `git reset --soft HEAD~1` and `git restore --staged <trace>`, which **escalated** as a write of the trace file (it only changes the index). Nobody decided; the session stopped after 5 min |
+| M5 | (resumed with `calu run --resume`, the fixed Calu) "finish the commit" | ok for the fix: `git restore --staged <trace>` PASS. Then the commit review (changeset checker) **denied** the commit: it compared the diff with turn 2's request and missed that turn 4 dropped those lines; Claude also had renamed the test unasked. Claude stopped and asked the user, as it should |
+| M6 | "Commit it as it is" | ok: the commit passed; the final pass staged both trace files; Claude read Calu's note and left them in the commit; 56 s |
+| M7 | A background subagent runs `uv run pytest -q -m db tests/db/test_least_privilege.py` | ok: 4 passed against `calu-dogfood-pg` by name; the handed-back report reviewed (PASS), the empty final result passed without a check; the main agent relayed the counts |
+| M8 | `uv run calu --version` | ok (as designed, D160): ESCALATE at once by the built-in rule; nobody decided; the session stopped after 5 min |
+
+Cost: 8 user messages in two sessions, 34 Haiku calls of Claude Code (10.6k output tokens,
+117k cache writes, 956k cache reads), 33 checker runs (command 22, edit 3, changeset 3,
+subagent-result 3, honesty 1: 246k input tokens, 150k of them cached, 10k output; 1.9 s per
+command check on average, 7.4 s the longest), plus the narrator and the trace redaction.
+
+Open points:
+
+1. **The sandbox and the database tests.** With the sandbox on, a command reaches only
+   proxied HTTP(S) domains, so the database tests cannot reach a TCP port and are skipped
+   inside a session (`-q` shows `s`). Not run here (no sandbox in this container). Proposal,
+   not built: a documented recipe with the test server's Unix socket in a directory the
+   sandbox may use (`claude.sandbox.allow_unix_sockets`), checked on a machine with a
+   working sandbox.
+2. **`--sudo`/`--user` drop `CALU_TEST_DSN`** (the launcher keeps a fixed set of
+   variables). The tests then fall back to `127.0.0.1:55432`. Documented; a setting for
+   extra kept variables is a proposal, not built.
+3. **The commit review on Haiku** refused a commit whose test was renamed unasked and
+   judged against an older request. Model judgement; the documented answer is a message that
+   says what the commit should hold (M6).
+4. Haiku wrote `\n` inside a double-quoted `git commit -m`, so the commit message holds a
+   literal backslash-n. Not Calu's concern.
+5. The tools without a route at the session start include `EnterWorktree` (it goes to the
+   command checker); unchanged.
