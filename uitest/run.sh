@@ -16,13 +16,20 @@
 # --privileged and without the Docker socket. The only published port is
 # 127.0.0.1:$PORT -> 3211 (cua-spacesd: gRPC, HTTP viewer, MCP).
 #
+# `--security-opt seccomp=unconfined` lets bubblewrap create user namespaces, so that
+# Claude Code's sandbox runs inside the desktop (Docker's default seccomp profile blocks
+# them; agent/records/PLAN.md D134). It applies to a newly created container only; README.md
+# ("Claude Code's sandbox in the desktop") says how to move an existing one over.
+#
 # Environment:
 #   CALU_UITEST_PORT    host port for cua-spacesd (default 56211)
 #   CALU_UITEST_MEMORY  memory limit of the container (default 8g)
+#   CALU_UITEST_IMAGE   image of a newly created container (default calu-uitest:latest;
+#                       e.g. an image made with `docker commit` from the old container)
 set -euo pipefail
 
 NAME=calu-uitest
-IMAGE=calu-uitest:latest
+IMAGE="${CALU_UITEST_IMAGE:-calu-uitest:latest}"
 PORT="${CALU_UITEST_PORT:-56211}"
 MEMORY="${CALU_UITEST_MEMORY:-8g}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -37,7 +44,7 @@ if [ ! -s "$TOKEN_FILE" ]; then
 fi
 
 if [ "${1:-}" = "--rebuild" ] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build -t "$IMAGE" "$HERE"
+    docker build -t calu-uitest:latest "$HERE"
 fi
 
 # `docker container inspect` prints an empty line for a missing container.
@@ -49,6 +56,7 @@ case "$state" in
     missing)
         docker run -d --name "$NAME" --hostname "$NAME" \
             --shm-size=1g --memory="$MEMORY" \
+            --security-opt seccomp=unconfined \
             -e CUA_ENV_TOKEN="$(cat "$TOKEN_FILE")" \
             -e DO_NOT_TRACK=1 -e CUA_TELEMETRY=0 \
             -p "127.0.0.1:$PORT:3211" \

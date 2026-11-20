@@ -24,14 +24,45 @@ calu/uitest/stop.sh --remove    # stop and delete the container (VSCode profile,
 
 After a Dockerfile change: `stop.sh --remove`, then `run.sh --rebuild`.
 
+`run.sh` creates the container with `--security-opt seccomp=unconfined`. Docker's default
+seccomp profile blocks user namespaces, and without them bubblewrap, and with it Claude Code's
+sandbox, cannot start (agent/records/PLAN.md D134). The option is fixed when a container is
+created. To move an existing container over and keep everything in it (calu, Claude Code, the
+IDEs' settings, `~/work`):
+
+```bash
+# in the desktop, as cua: stop the servers, take the key files out of the container
+bash /workspace/calu/uitest/setup-real.sh --stop-server
+sudo pg_ctlcluster 16 main stop; sudo pg_ctlcluster 16 pw stop     # pw: if it exists
+(umask 077; mkdir /share/.keyhold)
+mv ~/.config/calu/.env /share/.keyhold/calu.env
+mv ~/.claude/settings.json /share/.keyhold/claude-settings.json
+# on the host
+docker stop calu-uitest && docker commit calu-uitest calu-uitest:state
+docker rename calu-uitest calu-uitest-old
+CALU_UITEST_IMAGE=calu-uitest:state calu/uitest/run.sh
+docker network connect --alias calu-uitest calu-uitest-net calu-uitest   # if the network exists
+# in the desktop, as cua: put the key files back, start PostgreSQL
+mv /share/.keyhold/calu.env ~/.config/calu/.env
+mv /share/.keyhold/claude-settings.json ~/.claude/settings.json && rmdir /share/.keyhold
+sudo pg_ctlcluster 16 main start; sudo pg_ctlcluster 16 pw start
+bwrap --unshare-user --unshare-net --ro-bind / / true && echo user namespaces work
+```
+
+The key files stay out of the committed image. `docker rm calu-uitest-old` once the new
+container works. Claude Code's sandbox works in such a container, with one exception: with
+`allowAllUnixSockets` Claude Code runs bubblewrap with `--disable-userns`, which needs a
+writable `/proc/sys`, and the sandbox does not start (the setting is not one calu writes).
+
 | Item | Value |
 | --- | --- |
 | Container name | `calu-uitest` (plain `docker run`, no compose project) |
-| Image | `calu-uitest:latest`, built `FROM ghcr.io/trycua/linux:24.04` |
+| Image | `calu-uitest:latest`, built `FROM ghcr.io/trycua/linux:24.04`; `CALU_UITEST_IMAGE` names another one for a new container (the running container was created on 2026-11-20 from `calu-uitest:state`, a commit of the previous one) |
 | Published port | `127.0.0.1:56211` -> `3211` (cua-spacesd: gRPC, viewer, MCP). `CALU_UITEST_PORT` changes it. |
 | Access token | `~/.cache/calu-uitest/token` (random, created by `run.sh`, mode 0600) |
 | Mounts | calu repository -> `/workspace/calu` (read-only); `~/.cache/calu-uitest/share` -> `/share` (read-write) |
 | Limits | 8 GB memory (`CALU_UITEST_MEMORY`), 1 GB `/dev/shm` |
+| Security options | `seccomp=unconfined`, so that bubblewrap can create user namespaces (Claude Code's sandbox) |
 | Desktop user | `cua` (uid 1000, home `/home/cua`, passwordless `sudo` inside the container) |
 
 ## Watch the desktop in a browser
@@ -168,7 +199,7 @@ $D shell 'bash /workspace/calu/uitest/setup-real.sh --remove-key'  # delete the 
 | The key, for calu's agents | `~/.config/calu/.env` (mode 600): checkers, narrator, summarizer, trace redactor |
 | The key, for Claude Code | the `env` block of `~/.claude/settings.json` (mode 600) |
 | Models | every role `anthropic:claude-haiku-5-5` (`calu config models`), `claude.model = haiku` |
-| Sandbox | off: Docker without privileges cannot create user namespaces (`bwrap --unshare-user` fails), although bubblewrap and socat are installed |
+| Sandbox | on in a container created by `run.sh` since 2026-11-20 (`--security-opt seccomp=unconfined`, see [Start and stop](#start-and-stop)); `setup-real.sh` switches it off in an older container, where Docker's default seccomp profile blocks user namespaces (`bwrap --unshare-user` fails) |
 | Server | tmux session `calu-real`, log `/tmp/calu-real-server.log`; calu's own log `~/.local/state/calu/log/serve.log` |
 
 The script never prints a value of the key file, moves the file out of `/share` and deletes
