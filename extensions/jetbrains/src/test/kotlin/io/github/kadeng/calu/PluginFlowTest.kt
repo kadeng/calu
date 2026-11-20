@@ -10,7 +10,20 @@ import com.intellij.testFramework.PlatformTestUtil
 import io.github.kadeng.calu.backend.CHECKER_ORIGIN
 import io.github.kadeng.calu.backend.CaluProjectService
 import io.github.kadeng.calu.backend.EditorActions
+import io.github.kadeng.calu.backend.ChoiceDialog
+import io.github.kadeng.calu.backend.HeldFilesRunner
 import io.github.kadeng.calu.backend.chooseLauncher
+import io.github.kadeng.calu.backend.heldFilesOf
+import io.github.kadeng.calu.backend.nextRunner
+import io.github.kadeng.calu.remote.CALU_DIFF_REF
+import io.github.kadeng.calu.sync.SIDE_CANCEL
+import io.github.kadeng.calu.sync.heldRunQuestion
+import io.github.kadeng.calu.sync.sideChoice
+import com.intellij.execution.RunManager
+import com.intellij.execution.configurations.ConfigurationType
+import com.intellij.execution.executors.DefaultRunExecutor
+import com.intellij.execution.runners.ProgramRunner
+import com.intellij.openapi.ui.DialogWrapper
 import io.github.kadeng.calu.chat.DiffData
 import io.github.kadeng.calu.frontend.CaluFrontendService
 import io.github.kadeng.calu.frontend.NativeChatSurface
@@ -110,6 +123,56 @@ class PluginFlowTest : HeavyPlatformTestCase() {
         val scroll = request.getUserData(DiffUserDataKeys.SCROLL_TO_LINE)!!
         assertEquals(Side.RIGHT, scroll.first)
         assertEquals(6, scroll.second)
+        assertEquals("edit:t", request.getUserData(CALU_DIFF_REF))
+    }
+
+    fun `test a comment in the diff of an edit finds the edit's ref through the backend`() {
+        val backend = CaluProjectService.of(project)
+        val file = "${project.basePath}/src/a.py"
+        backend.controller.diffs.record(buildJsonObject {
+            put("tool_use_id", JsonPrimitive("toolu_9"))
+            put("path", JsonPrimitive(file))
+            put("before", JsonPrimitive("x = 1\n"))
+            put("after", JsonPrimitive("x = 2\n"))
+        })
+        val found = EditorActions(project).diffOfText("x = 1\n")!!
+        assertEquals("src/a.py", (found["path"] as JsonPrimitive).content)
+        assertEquals("before", (found["side"] as JsonPrimitive).content)
+        assertEquals("edit:toolu_9", (found["ref"] as JsonPrimitive).content)
+    }
+
+    fun `test the held-files runner comes first and claims nothing while nothing is held`() {
+        val runners = ProgramRunner.PROGRAM_RUNNER_EP.extensionList
+        val held = runners.filterIsInstance<HeldFilesRunner>().single()
+        assertSame(held, runners.first())
+        assertEquals(emptyList<String>(), heldFilesOf(project))
+        val factory = ConfigurationType.CONFIGURATION_TYPE_EP.extensionList.flatMap { it.configurationFactories.toList() }.first()
+        val settings = RunManager.getInstance(project).createConfiguration("t", factory)
+        assertFalse(held.canRun(DefaultRunExecutor.EXECUTOR_ID, settings.configuration))
+    }
+
+    fun `test the next runner skips the held-files runner`() {
+        val self = "calu"
+        assertEquals("python", nextRunner(listOf("calu", "other", "python"), self) { it == "python" })
+        assertEquals(null, nextRunner(listOf("calu"), self) { true })
+    }
+
+    fun `test the conflict dialog has no default button and focuses Cancel`() {
+        val side = ChoiceDialog(project, sideChoice("k_b.txt", "changed on the server, deleted here", mineExists = false, theirsExists = true))
+        try {
+            assertEquals(listOf("Keep Mine", "Take Theirs", "Cancel"), side.buttonActions.map { it.getValue(javax.swing.Action.NAME) })
+            assertTrue(side.buttonActions.none { it.getValue(DialogWrapper.DEFAULT_ACTION) == true })
+            assertFalse(side.isOKActionEnabled)
+            assertEquals(SIDE_CANCEL, side.chosen)
+        } finally {
+            side.close(DialogWrapper.CANCEL_EXIT_CODE)
+        }
+        val run = ChoiceDialog(project, heldRunQuestion(listOf("greeter.py")))
+        try {
+            assertEquals(listOf(true, null, null), run.buttonActions.map { it.getValue(DialogWrapper.DEFAULT_ACTION) })
+        } finally {
+            run.close(DialogWrapper.CANCEL_EXIT_CODE)
+        }
     }
 
     fun `test checker instructions open in an editor and are saved with the version check`() {

@@ -28,7 +28,6 @@ import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.openapi.vfs.newvfs.BulkFileListener
 import com.intellij.openapi.vfs.newvfs.events.VFileCopyEvent
@@ -41,6 +40,11 @@ import com.intellij.util.messages.MessageBusConnection
 import io.github.kadeng.calu.bridge.BridgeSupervisor
 import io.github.kadeng.calu.chat.ChatController
 import io.github.kadeng.calu.sync.ConflictKind
+import io.github.kadeng.calu.sync.KEEP_MINE
+import io.github.kadeng.calu.sync.PLAN_APPLY
+import io.github.kadeng.calu.sync.TAKE_THEIRS
+import io.github.kadeng.calu.sync.planQuestion
+import io.github.kadeng.calu.sync.sideChoice
 import io.github.kadeng.calu.sync.PathMapper
 import io.github.kadeng.calu.sync.PlanSummary
 import io.github.kadeng.calu.sync.RemoteFileStore
@@ -58,6 +62,7 @@ import io.github.kadeng.calu.sync.parseDeployment
 import io.github.kadeng.calu.sync.isProbablyBinary
 import io.github.kadeng.calu.sync.syncMark
 import io.github.kadeng.calu.sync.syncStatusText
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -70,6 +75,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -337,6 +343,31 @@ class CaluSync(
         driver.post { for (path in paths) sync.uploadNow(path) }
     }
 
+    /**
+     * Upload every held file now and wait until each upload was tried ("Upload now and run").
+     * The synchronisation's base check still applies: a file the agent changed meanwhile is
+     * not overwritten but becomes a conflict.
+     *
+     * @param timeoutMs how long to wait for the synchronisation's queue at most.
+     * @return the files of the hold that are still not on the server afterwards (held, in
+     *   conflict, or all of them if the wait timed out); empty if every one was uploaded.
+     */
+    suspend fun uploadHeldAndWait(timeoutMs: Long = 60_000): List<String> {
+        val paths = sync.status.value.held
+        if (paths.isEmpty()) return emptyList()
+        val done = CompletableDeferred<Unit>()
+        driver.post {
+            try {
+                for (path in paths) sync.uploadNow(path)
+            } finally {
+                done.complete(Unit)
+            }
+        }
+        if (withTimeoutOrNull(timeoutMs) { done.await() } == null) return paths
+        val after = sync.status.value
+        return paths.filter { it in after.held || it in after.conflicts }
+    }
+
     /** List the paths that are not synchronised as a notice in the chat. */
     fun showSkipped() {
         val notes = sync.status.value.notes
@@ -355,9 +386,15 @@ class CaluSync(
         withBackgroundProgress(project, title, true) { local.batched(block) }
     }
 
+    /**
+     * Ask whether a plan may be applied (`planQuestion`: a plan that deletes files has no
+     * default button, so Enter does not apply it).
+     *
+     * @param summary what the plan would do.
+     * @return true if the user chose "Apply" or "Clone from Server".
+     */
     override suspend fun confirm(summary: PlanSummary): Boolean = withContext(Dispatchers.EDT) {
-        val yes = if (summary.isClone) "Clone from Server" else "Apply"
-        Messages.showYesNoDialog(project, summary.text(), "calu Sync", yes, "Not Now", Messages.getQuestionIcon()) == Messages.YES
+        ChoiceDialog.ask(project, planQuestion(summary)) == PLAN_APPLY
     }
 
     override fun conflict(conflict: SyncConflict) {
@@ -468,16 +505,12 @@ class CaluSync(
      * @return (true, the content both sides get, null to delete on both) or (false, null) for a cancel.
      */
     private suspend fun chooseSide(path: String, kind: ConflictKind, mine: ByteArray?, theirs: ByteArray?): Pair<Boolean, ByteArray?> {
-        val choice = withContext(Dispatchers.EDT) {
-            Messages.showDialog(
-                project,
-                "$path: ${kindText(kind)}.\n\nKeep Mine: the server gets ${if (mine == null) "the deletion" else "this machine's file"}.\nTake Theirs: this machine gets ${if (theirs == null) "the deletion" else "the server's file"}.",
-                "calu Sync Conflict", arrayOf("Keep Mine", "Take Theirs", "Cancel"), 0, Messages.getWarningIcon(),
-            )
-        }
+        // Both answers replace or delete one side's version: no default button, the focus on
+        // Cancel (`sideChoice`), so Enter decides nothing.
+        val choice = withContext(Dispatchers.EDT) { ChoiceDialog.ask(project, sideChoice(path, kindText(kind), mine != null, theirs != null)) }
         return when (choice) {
-            0 -> true to mine
-            1 -> true to theirs
+            KEEP_MINE -> true to mine
+            TAKE_THEIRS -> true to theirs
             else -> false to null
         }
     }

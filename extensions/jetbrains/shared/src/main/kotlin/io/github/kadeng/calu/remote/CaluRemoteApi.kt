@@ -209,9 +209,9 @@ interface CaluRemoteApi : RemoteApi<Unit> {
      *
      * @param projectId The project.
      * @param text The whole text of the editor the selection was made in.
-     * @return JSON object text `{"path", "side", "before", "after"}` with `path` relative to
-     *   the project directory, or "" if no held diff has that text or its file is outside the
-     *   project.
+     * @return JSON object text `{"path", "side", "before", "after", "ref"}` with `path`
+     *   relative to the project directory and `ref` the edit's reference ("edit:<tool_use_id>"),
+     *   or "" if no held diff has that text or its file is outside the project.
      */
     suspend fun diffOfText(projectId: ProjectId, text: String): String
 

@@ -39,6 +39,7 @@ import io.github.kadeng.calu.json.str
 import io.github.kadeng.calu.logic.absoluteRemotePath
 import io.github.kadeng.calu.logic.commentPathFromShown
 import io.github.kadeng.calu.logic.diffSideTitle
+import io.github.kadeng.calu.logic.editRef
 import io.github.kadeng.calu.logic.formatCheckerContext
 import io.github.kadeng.calu.logic.formatEscalationContext
 import io.github.kadeng.calu.logic.splitArgs
@@ -46,6 +47,7 @@ import io.github.kadeng.calu.logic.sshLocalPath
 import io.github.kadeng.calu.logic.terminalCommand
 import io.github.kadeng.calu.protocol.BridgeError
 import io.github.kadeng.calu.protocol.checkerConflict
+import io.github.kadeng.calu.remote.CALU_DIFF_REF
 import io.github.kadeng.calu.rpc.RpcRequestException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -144,8 +146,9 @@ class EditorActions(private val project: Project) {
      * to the project directory.
      *
      * @param text The whole text of a diff editor's side.
-     * @return `{"path", "side", "before", "after"}`, or `null` if no held diff has that text or
-     *   its file has no path inside the project on this machine.
+     * @return `{"path", "side", "before", "after", "ref"}` (`ref` = "edit:<tool_use_id>"), or
+     *   `null` if no held diff has that text or its file has no path inside the project on this
+     *   machine.
      */
     fun diffOfText(text: String): JsonObject? {
         val (diff, side) = service.controller.diffs.findByText(text) ?: return null
@@ -156,6 +159,7 @@ class EditorActions(private val project: Project) {
             put("side", JsonPrimitive(side))
             put("before", JsonPrimitive(diff.before))
             put("after", JsonPrimitive(diff.after))
+            put("ref", JsonPrimitive(editRef(diff.toolUseId)))
         }
     }
 
@@ -183,7 +187,8 @@ class EditorActions(private val project: Project) {
      *   with the scroll position at `diff.startLine` on the right side if it is known. Each
      *   side's title names the file too (`diffSideTitle`, relative to the project where it is
      *   inside): in remote development only the side titles reach the client, and the comment
-     *   action reads the file from them.
+     *   action reads the file from them. The request carries the edit's reference
+     *   (`CALU_DIFF_REF`, "edit:<tool_use_id>") for a comment made in it.
      */
     fun diffRequest(diff: DiffData): SimpleDiffRequest {
         val type = FileTypeManager.getInstance().getFileTypeByFileName(diff.path.substringAfterLast('/'))
@@ -198,6 +203,7 @@ class EditorActions(private val project: Project) {
             diffSideTitle(shown, "after"),
         )
         diff.startLine?.takeIf { it >= 1 }?.let { request.putUserData(DiffUserDataKeys.SCROLL_TO_LINE, Pair.create(Side.RIGHT, it - 1)) }
+        request.putUserData(CALU_DIFF_REF, editRef(diff.toolUseId))
         return request
     }
 

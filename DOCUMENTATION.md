@@ -708,6 +708,16 @@ arrangements:
   the other changed. PyCharm marks it red in the project view and names it in the status bar
   and on a card in the chat. "Merge…" opens the IDE's three-way dialog (for a deletion or a
   binary file: a choice of side). A conflict survives a restart of the IDE.
+- The choice of side ("Keep Mine", "Take Theirs", "Cancel") has no default button: Enter
+  presses "Cancel" and changes nothing. A first synchronisation whose plan deletes files has no
+  default button either.
+- A save of a file that Claude edits in the running turn is **held** until the turn ends (the
+  chat says "1 file held until the turn ends", with "Upload now"). Starting a run or debug
+  configuration while a file is held asks: "Upload now and run" (the default), "Run anyway"
+  (the server runs its old version) or "Cancel". The Rerun button of a Run or Debug tab does
+  not ask; a notification with "Upload now" says that files are held.
+- A comment in a diff (Ctrl+Alt+K) names what the diff shows, as in VSCode: the edit
+  (`edit:<tool_use_id>`) for the diff of one of Claude's edits, the revision for a VCS diff.
 - The server's git repository is the only one. Calu never copies `.git` in either direction.
   When a `.git` directory appears in the local copy (after `git init` or "Enable Version
   Control Integration"), the plugin shows an explanation. Run git on the server, in a terminal

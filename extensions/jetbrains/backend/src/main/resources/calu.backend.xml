@@ -17,5 +17,12 @@
         <pathMacroFilter implementation="io.github.kadeng.calu.backend.CaluPathMacroFilter"/>
         <fileDocumentManagerListener implementation="io.github.kadeng.calu.backend.CheckerSaveListener"/>
         <projectViewNodeDecorator implementation="io.github.kadeng.calu.backend.SyncProjectViewDecorator"/>
+        <!-- Asks before a run or debug start while local saves are held (SSH mode); see HeldFilesRunner. -->
+        <programRunner id="caluHeldFiles" order="first" implementation="io.github.kadeng.calu.backend.HeldFilesRunner"/>
     </extensions>
+
+    <projectListeners>
+        <!-- A start that bypassed HeldFilesRunner (Rerun) while files are held: a notification. -->
+        <listener class="io.github.kadeng.calu.backend.HeldFilesStartListener" topic="com.intellij.execution.ExecutionListener"/>
+    </projectListeners>
 </idea-plugin>

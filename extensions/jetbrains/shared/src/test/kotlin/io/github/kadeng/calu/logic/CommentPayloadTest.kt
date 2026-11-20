@@ -1,6 +1,7 @@
 package io.github.kadeng.calu.logic
 
 import io.github.kadeng.calu.state.jo
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -42,6 +43,24 @@ class CommentPayloadTest {
         assertEquals("index", describeGitRef(""))
         assertEquals("index or HEAD", describeGitRef("~"))
         assertEquals("edit:t-1", editRef("t-1"))
+    }
+
+    @Test
+    fun `a diff comment's ref is the edit first, then the VCS revision, else none`() {
+        assertEquals("edit:t-1", diffCommentRef("edit:t-1", "abc123"))
+        assertEquals("abc123", diffCommentRef(null, " abc123 "))
+        assertEquals("abc123", diffCommentRef("", "abc123"))
+        assertEquals(null, diffCommentRef(null, " "))
+        assertEquals(null, diffCommentRef(null, null))
+    }
+
+    @Test
+    fun `a diff comment sends its ref, a file comment none`() {
+        val diff = buildCommentParams(CommentInput("a.py", sel(1, 0, 1, 3), "why?", diff = CommentDiff("before", "x\ny\n", "x\nz\n", diffCommentRef(editRef("toolu_1"), null))))
+        assertEquals(JsonPrimitive("edit:toolu_1"), diff["ref"])
+        assertEquals(JsonPrimitive("diff"), diff["kind"])
+        val file = buildCommentParams(CommentInput("a.py", sel(1, 0, 1, 3), "why?", fileText = "x\ny\n"))
+        assertFalse(file.containsKey("ref"))
     }
 
     @Test

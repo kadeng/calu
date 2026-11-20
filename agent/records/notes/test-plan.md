@@ -207,6 +207,21 @@ Screenshots `~/.cache/calu-uitest/share/pycharm-stop/NN.png`; three in
 | B17 | the waiting count: "calu: 3 waiting" before the stop (03), none after it (status bar, tab chips, the strip of other tabs, the activity line); escalation notifications of the ended session are expired | ok |
 | B18 | the same over SSH (mode 3) | ok (section J, J-P4); before that: - (not run: the SSH box was left to the other agents; the logic is the bridge's and the plugin's own, the same in every mode, and `--projects` is the remote directory's parent there) |
 
+Seventh round (2026-11-20, the owner's answers of 2026-11-20), mode 3 against the SSH box
+(`~/work/sshheld`, a copy of `sshproj3` with its SSH interpreter, against `/home/dev/project`),
+scripted server, `tour` with its escalation waiting so that the turn stays open. Screenshots
+`~/.cache/calu-uitest/share/held/NN.png`. Unit tests: `QuestionsTest`, `CommentPayloadTest`,
+`PluginFlowTest` (runner registered first and idle while nothing is held, the conflict dialog's
+actions, the edit's `ref` on the diff request and from `diffOfText`).
+
+| # | Case | Status |
+|---|---|---|
+| B19 | `greeter.py` saved locally while the turn's Edit of it waits: "1 file held until the turn ends"; Run: the dialog "1 file is held until Claude's turn ends; the server still runs the old version." with the file, "Upload now and run" (default), "Run anyway", "Cancel" (05, 06) | ok |
+| B20 | Cancel: nothing starts, the server file unchanged (07); Run anyway: `run_demo.py` runs on the box, the file stays held, no notification (08, 15); Debug, Enter: the file is uploaded (server has the local line), the hold ends, the debugger runs on the box (12, 13) | ok |
+| B21 | Rerun button of the Run or Debug tab while a file is held: no dialog (the tab keeps PyCharm's own runner), a notification "calu: run_demo started with held files" with "Upload now" (14) | ok (by design: `ExecutionListener` cannot stop a start) |
+| B22 | a comment in the diff of an edit carries `ref` `edit:<tool_use_id>` (local IDE and mode 3: from the diff request; remote development: from the backend, `diffOfText`), in a VCS diff the left side's revision | built, unit-tested (`CommentPayloadTest`, `PluginFlowTest`); not walked through by hand this round |
+| B23 | an IDE restart while a save is held and the turn still runs | open (found in this round, not changed): after the restart the held save was uploaded at once (the first comparison runs before the transcript of the running turn has arrived, so no file counts as held) |
+
 ### C. Full-screen client and line client (`calu attach`)
 
 Run 2026-11-18 by an agent in a private tmux server (`tmux -L calutest`) on the host: the
@@ -641,6 +656,13 @@ Fifth round (2026-11-19), screenshots `~/.cache/calu-uitest/share/pycharm5/` (se
 | H34 | Run and Debug on the server | ok (10, 12, 21): `run_demo.py` ran as `/home/dev/.local/bin/python3.12 /home/dev/project/run_demo.py` with "host: sshbox"; Debug stopped at a breakpoint in `greeter.py` line 3 with `name = 'Ada'` and the frames `greet`, `greet_all`, `<module>` |
 | H35 | no card where a matching interpreter exists; "Not now" | ok (13, 32, 33): no card after a restart in the project that got the interpreter, nor in `~/work/sshproj` with the SSH interpreter made by hand in PyCharm's dialog; "Not now" hides the card |
 
+Seventh round (2026-11-20), screenshots `~/.cache/calu-uitest/share/held/` (see B19):
+
+| # | Case | Status |
+|---|---|---|
+| H36 | "changed on the server, deleted here" (network cut, `k_b.txt` deleted locally, changed on the box, network back): the dialog "Keep Mine / Take Theirs / Cancel" has no default button and the focus on Cancel; Enter closes it and changes nothing (the conflict stays, the box keeps its file); "Take Theirs" then restores the file locally (18 to 23) | fixed (judgement call 5 of section K): `ChoiceDialog` with `sideChoice`; before, "Keep Mine" was the default |
+| H37 | the other questions of the synchronisation: every side choice (deletion either way, binary, too large) has no default; the plan of a first synchronisation keeps "Apply" as the default unless it deletes files on either side, then none and the focus on "Not Now"; the three-way merge dialog is the platform's own (its "Apply" asks before it leaves changes unresolved) | fixed; unit-tested (`QuestionsTest`); a deleting plan not seen by hand |
+
 Measurements (the box and the desktop are containers on one host): the first clone of the 307
 files 1.3 s in the IDE after the confirmation (8 s before the VFS was refreshed once instead
 of per file), 2.5 s in the test over SSH with its checks; an edit of the agent to the local
@@ -970,7 +992,7 @@ Judgement calls for the owner (each also in the report):
    user made never produce that warning?
 4. The full-screen client and PyCharm send diff comments without `ref` (VSCode sends
    `edit:<tool_use_id>`, or the git ref). Should all clients send it, so that the recorded
-   comment names the edit it was made on?
+   comment names the edit it was made on? (Owner, 2026-11-20: yes; PyCharm built, B22.)
 5. In the sync dialog for "changed on the server, deleted here", "Keep Mine" (delete the
    server's changed file) is the focused default. Should the default be the choice that
-   loses nothing (Take Theirs), or none?
+   loses nothing (Take Theirs), or none? (Owner, 2026-11-20: none; built, H36, H37.)

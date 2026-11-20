@@ -84,6 +84,10 @@ Afterwards:
     a local save                   -> on the server at once (300 ms after the last change)
     a save while the agent edits   -> held ("1 file held until the turn ends", "Upload now");
       that file in a running turn     merged with the agent's change when the turn ended
+    Run or Debug while a file      -> "N files are held until Claude's turn ends; the server still
+      is held                         runs the old version." Upload now and run (default) / Run
+                                      anyway / Cancel; a Rerun from a Run or Debug tab only gets a
+                                      notification with "Upload now"
     both sides changed             -> different lines: merged on both sides, a line in the chat;
                                       the same lines: nothing is overwritten, a card and a
                                       notification offer the IDE's three-way merge dialog
@@ -93,6 +97,14 @@ Afterwards:
     links, files above 32 MiB,     -> never followed or copied; listed ("3 paths are not
       what git ignores                synchronised", Show)
 
+The question before a run (`HeldFilesRunner`) is a `ProgramRunner` registered with
+`order="first"`: every start of a run configuration (Run, Debug, the gutter, Shift+F10) asks the
+registered runners in order, and this one claims a start only while files are held; it shows
+the dialog and then hands the start to the runner that would have taken it, uploads first, or
+starts nothing. `ExecutionListener` cannot stop a start, and a `BeforeRunTaskProvider` acts
+only on configurations whose "Before launch" list holds its task. The Rerun button reuses the
+other runner, so for it `HeldFilesStartListener` (an `ExecutionListener`) only notifies.
+
 Conflicts are never resolved silently. Every case ends with both sides equal or with a
 conflict that keeps both contents until the user decides: the same lines changed on both sides
 (saved, or unsaved text in an editor), a change against a deletion in either direction, a
@@ -100,7 +112,11 @@ rename on one side while the other edits the old file, a new file of the same na
 sides, a held file whose turn ended with an overlap, an offline queue replayed onto a changed
 file. A conflict is shown by a card ("Merge …"), a notification that closes when it is
 resolved, the status bar, and the project view (the file in red, "sync conflict"; its folders
-"contains a sync conflict"); it survives a restart of the IDE with its merge base.
+"contains a sync conflict"); it survives a restart of the IDE with its merge base. Where no
+three-way merge is possible (a deletion against a change, a binary file) the dialog "Keep Mine /
+Take Theirs / Cancel" has no default button and the focus on Cancel, so Enter decides nothing;
+the plan of a first synchronisation that deletes files has no default button either
+(`shared/sync/Questions.kt`).
 `SynchronizerTest` has one test per case.
 
 `.git` is never synchronised, in either direction: the server's repository is the one calu and
@@ -239,9 +255,11 @@ synchronisation's test against a real bridge starts `uv run calu ide` from this 
 is skipped where `uv` or `git` is missing). The Gradle build cache is off (`gradle.properties`):
 it restored test classes compiled against an older `shared`.
 
-Plugin Verifier result (2026-11-19, fifth round): compatible with PyCharm 2026.3
-(PY-263.7307.206), 10 usages of deprecated API (default methods of `ToolWindowFactory`,
-`StatusBarWidget` and `ProjectViewNodeDecorator`, `FileEditorManager.openFile`), 22 of
+Plugin Verifier result (2026-11-20): compatible with PyCharm 2026.3
+(PY-263.7307.206), 11 usages of deprecated API (default methods of `ToolWindowFactory`,
+`StatusBarWidget` and `ProjectViewNodeDecorator`, `FileEditorManager.openFile`, and
+`Key.findKeyByName`, which reads the revision of a VCS diff without a dependency on the VCS
+plugin, absent in a JetBrains Client), 22 of
 experimental API, none of internal API (the progress
 indicator of the synchronisation has no percentage for that reason) (the RPC and `ProjectId` API that split
 mode needs, and the Reworked Terminal API). No EAP of the next version (2027.1) was published
@@ -285,7 +303,9 @@ The tool window "calu" is in the right stripe (below "More tool windows" until i
     footer     model, effort, supervision level, context usage (click: limits and cost)
     title bar  New Session, Checker Instructions, Checker Context, Side Question, Models, calu Settings,
                Plugin Settings, Sync Now (SSH mode)
-    elsewhere  editor popup "Add Comment for Claude" (Ctrl+Alt+K; also in a diff), status bar
+    elsewhere  editor popup "Add Comment for Claude" (Ctrl+Alt+K; also in a diff: the comment's
+               `ref` is "edit:<tool_use_id>" in the diff of an edit, the revision in a VCS diff, as
+               in VSCode), status bar
                "calu: N waiting", notifications with Allow / Deny while the tool window is hidden
 
 ## Settings

@@ -14,7 +14,9 @@
  * does no diffing. The chat action is `act("comment", <these params>)` (`ChatActions.kt`).
  *
  * Port of `extensions/vscode/src/commentPayload.ts` (without the parsing of VSCode's `git:`
- * URIs) and of the prompt text of `comment.ts`.
+ * URIs) and of the prompt text of `comment.ts`. A diff comment's `ref` names what the diff's
+ * left side is (`diffCommentRef`): "edit:<tool_use_id>" for the diff of one of Claude's edits,
+ * the revision for a VCS diff.
  */
 package io.github.kadeng.calu.logic
 
@@ -102,6 +104,21 @@ fun describeGitRef(ref: String): String = when (ref) {
  * @return "edit:<tool_use_id>".
  */
 fun editRef(toolUseId: String): String = "edit:$toolUseId"
+
+/**
+ * Choose the `ref` of a diff comment from what the diff editor knows about its left side, as
+ * the VSCode extension does (`refOf` in `comment.ts`):
+ *
+ *     a diff the plugin opened for one of Claude's edits   -> "edit:<tool_use_id>"
+ *     a VCS diff whose left side is a revision             -> that revision (a commit hash for git)
+ *     anything else                                        -> no ref
+ *
+ * @param caluRef The reference the plugin attached to its own diff (`CALU_DIFF_REF`), or `null`.
+ * @param revision The revision of the left side of a VCS diff, or `null`.
+ * @return `caluRef` if set, else `revision` if it is not blank, else `null`.
+ */
+fun diffCommentRef(caluRef: String?, revision: String?): String? =
+    caluRef?.takeIf { it.isNotBlank() } ?: revision?.trim()?.takeIf { it.isNotEmpty() }
 
 private val DRIVE_PREFIX = Regex("^[a-zA-Z]:/")
 
