@@ -303,8 +303,8 @@ update of the CLI or of `claude-agent-sdk`; it takes about half a minute on haik
    claude.ai subscription. In the full-screen client click the `ctx` cell of the status line:
    the usage panel shows "not reported yet by Claude Code" or the 5-hour and weekly limits
    with "reported ... ago", "YOUR PLAN NOW" for a subscription, and Claude Code's `/usage`
-   text; `calu sessions <id>` and the transcript gain no turn, and the checkers' context
-   (`/checker-context`) does not mention it. `/usage` in the line client and a click on the
+   text; the chat log on the session page of `calu web` and the transcript gain no turn, and
+   the checkers' context (`/checker-context`) does not mention it. `/usage` in the line client and a click on the
    web's usage line show the same. Type `/context` and `/compact` in the full-screen client:
    Claude Code answers them as in VSCode. In the web live view ask a side question while a
    turn runs, then a follow-up that refers to it: the answers stay on that page (a second
@@ -848,8 +848,8 @@ escalation resolved from the database alone.
    the line client `/mode`. Ask for a long task with several commands, and while it runs choose
    `default` in VSCode: within a second every other client shows `default` (the full-screen
    client with "changed by ..."), the next command's check runs without auto mode's
-   classifier, and `calu sessions <id>` lists "permission_mode ... mode: 'auto' -> 'default'"
-   with the VSCode client's name. Switch to `acceptEdits` from PyCharm, then from the web view
+   classifier, and the session page of `calu web` lists under "Settings changed while the
+   session ran" "permission_mode ... mode: 'auto' -> 'default'" with the VSCode client's name. Switch to `acceptEdits` from PyCharm, then from the web view
    back to `auto`; `/mode ac` + Tab in the full-screen client completes `acceptEdits`. Make a
    step escalate in `acceptEdits` (`calu:escalate` with the fake checker, or a deny-list
    command): it must wait for a decision. `/mode plan` and `/mode bypassPermissions` must be
@@ -866,8 +866,9 @@ escalation resolved from the database alone.
    checker model helps): that command runs without an escalation, and no "was asked for the
    permission mode auto" warning appears; switch before the first turn of a new session: no
    warning either. (b) In the full-screen client open a step's diff, comment on a line: the
-   session's comment row (`calu sessions <id>`, or the web's session page) names
-   `edit:<tool call id>`. (c) `calu checker template list`, `show review-findings`, then `use
+   session's row in the `comments` table names `edit:<tool call id>` (no command or page lists
+   comments: `SELECT ref, path FROM comments WHERE session_id = '<session id>'` as the owner
+   role). (c) `calu checker template list`, `show review-findings`, then `use
    review-findings` on a database with the shipped subagent-result text: replaced; `use
    edit-project-rules` over your own edit text: refused, `--append` adds it. (d) `calu setup <
    /dev/null` with an older shipped text stored: kept and listed with `calu setup

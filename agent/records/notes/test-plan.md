@@ -1074,6 +1074,8 @@ Open points and judgement calls for the owner:
    cases only (the owner's decision 3), and both checkouts' honesty states must be clean.
 4. `docs/TESTING.md` named `calu sessions <id>` for the write sets of item 47; `calu sessions`
    takes no id. Item 47 now names the web interface's session page. Items at lines 306, 851
-   and 869 name the same command and were not changed.
+   and 869 name the same command and were not changed. *Fixed 2026-11-20:* they name the
+   session page of `calu web` (chat log, "Settings changed while the session ran") and, for a
+   comment, the `comments` table.
 5. L2 in `noign`: the main agent's test run in the same session as the mark was not observed
    (see the table); s3 covers the condition in a later session.
