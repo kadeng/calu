@@ -26,6 +26,7 @@ import { addCommentCommand, inputBoxProvider } from './comment';
 import { normaliseRelativePath } from './commentPayload';
 import { CONTEXT_SCHEME, ContextDocuments } from './contextDoc';
 import { DIFF_SCHEME, DiffStore } from './diffView';
+import { watchSaves } from './humanDiffs';
 import { runItemAction } from './itemActions';
 import type { ChatSendParams, EditDiff } from './protocol.generated';
 import { Sessions } from './sessions';
@@ -1201,6 +1202,8 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
     contextDocs,
     settingsPanel,
     new vscode.Disposable(() => clearInterval(timer)),
+    // The user's saves, for the recorded human diffs (D253); the session decides whether to record.
+    watchSaves(bridge, () => isAttached(chat.state), (line) => output.appendLine(line)),
     vscode.window.registerWebviewViewProvider(CHAT_VIEW_ID, chat, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.workspace.registerTextDocumentContentProvider(DIFF_SCHEME, diffs),
     vscode.workspace.registerTextDocumentContentProvider(CONTEXT_SCHEME, contextDocs),

@@ -336,7 +336,8 @@ export interface BridgeRequestResults {
   'ide.session.rename': { name: string };
   'session.call': unknown;
   'ide.settings.get': IdeSettingsResult;
-  'ide.settings.set': { value: unknown };
+  /** `offer`: a related switch to offer as well (D253); set only on the user's yes. */
+  'ide.settings.set': { value: unknown; offer?: { key: string; text: string } };
   'ide.settings.unset': Record<string, never>;
   'ide.models.presets': IdeModelsResult;
   'ide.models.set_all': { changed: string[] };

@@ -98,6 +98,17 @@ class CaluProjectService(private val project: Project, private val scope: Corout
      */
     fun currentSync(): CaluSync? = synchronized(lock) { wiring?.sync }
 
+    /**
+     * Return the wiring if it exists, without creating it (for listeners that must not start a
+     * bridge, such as the one for the recorded human diffs).
+     *
+     * @return the wiring, or null.
+     */
+    fun currentWiring(): Wiring? = synchronized(lock) { wiring }
+
+    /** Pauses the sending of saves after the session said that human diffs are off (D253). */
+    val humanDiffGate: io.github.kadeng.calu.logic.HumanDiffGate = io.github.kadeng.calu.logic.HumanDiffGate()
+
     /** The chat controller of the project (creates the wiring if needed). */
     val controller: ChatController get() = wiring().controller
 

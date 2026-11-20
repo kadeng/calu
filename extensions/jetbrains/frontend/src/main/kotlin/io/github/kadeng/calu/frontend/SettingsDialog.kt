@@ -26,6 +26,7 @@ import com.intellij.openapi.application.asContextElement
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
+import com.intellij.openapi.ui.Messages
 import com.intellij.ui.CollectionListModel
 import com.intellij.ui.DocumentAdapter
 import com.intellij.ui.SearchTextField
@@ -71,6 +72,8 @@ import io.github.kadeng.calu.logic.selectedPresetId
 import io.github.kadeng.calu.logic.settingEdit
 import io.github.kadeng.calu.logic.settingsGetRequest
 import io.github.kadeng.calu.logic.settingsUnsetRequest
+import io.github.kadeng.calu.logic.settingsSetRequest
+import io.github.kadeng.calu.logic.enableOffer
 import io.github.kadeng.calu.remote.CallResultDto
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -372,15 +375,27 @@ class CaluSettingsDialog(private val project: Project, private val host: ChatHos
      */
     private fun store(key: String, request: BridgeRequest, done: String) {
         setStatus("Saving…")
+        val scopeProject = project()
         host.launch {
             val answer = send(request)
-            withContext(Dispatchers.EDT + modality) {
-                if (isDisposed) return@withContext
+            // Switching one setting on may offer a related one (D253: human diffs offer the
+            // session traces); it is set only on the user's yes.
+            val offer = if (answer.ok) enableOffer(parseObjectOrNull(answer.resultJson)) else null
+            val accepted = withContext(Dispatchers.EDT + modality) {
+                if (isDisposed) return@withContext false
                 if (answer.ok) errors.remove(key) else errors[key] = answer.message
                 if (!answer.ok) {
                     setStatus(answer.message, "error")
                     drawContent()
                 }
+                offer != null && Messages.showYesNoDialog(
+                    project, offer.text, "calu: ${offer.key}", "Switch On", "Not Now", Messages.getQuestionIcon(),
+                ) == Messages.YES
+            }
+            if (accepted && offer != null) {
+                settingsSetRequest(offer.key, JsonPrimitive(true), scopeProject)?.let { send(it) }
+                reload("$done ${offer.key} is switched on as well.")
+                return@launch
             }
             if (answer.ok) reload(done)
         }

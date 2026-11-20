@@ -16,6 +16,8 @@
         <editorNotificationProvider implementation="io.github.kadeng.calu.backend.CheckerBannerProvider"/>
         <pathMacroFilter implementation="io.github.kadeng.calu.backend.CaluPathMacroFilter"/>
         <fileDocumentManagerListener implementation="io.github.kadeng.calu.backend.CheckerSaveListener"/>
+        <!-- The user's saves for the recorded human diffs (D253); see HumanDiffSaves.kt. -->
+        <fileDocumentManagerListener implementation="io.github.kadeng.calu.backend.HumanDiffSaveListener"/>
         <projectViewNodeDecorator implementation="io.github.kadeng.calu.backend.SyncProjectViewDecorator"/>
         <!-- Asks before a run or debug start while local saves are held (SSH mode); see HeldFilesRunner. -->
         <programRunner id="caluHeldFiles" order="first" implementation="io.github.kadeng.calu.backend.HeldFilesRunner"/>

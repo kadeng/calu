@@ -595,6 +595,28 @@ export interface HonestyUpdate {
   worktrees?: string[];
 }
 /**
+ * `human_diffs.add`: the user saved a file in an editor (agent/records/PLAN.md D253).
+ *
+ * An editor extension sends it after each save through its editor (not for files that
+ * another program, Claude or the editor's file synchronisation wrote). The session records
+ * the diff of `before` and `after` while `human_diffs.enabled` is on and git tracks the file;
+ * otherwise it records nothing. Both texts have their line ends normalised to "\n".
+ */
+export interface HumanDiffAddParams {
+  after: string;
+  before: string;
+  path: string;
+}
+/**
+ * Result of `human_diffs.add`.
+ */
+export interface HumanDiffAddResult {
+  enabled: boolean;
+  file?: string | null;
+  reason?: string;
+  recorded?: boolean;
+}
+/**
  * First request of a client; every other request is refused before it.
  *
  * The result is an `InitializeResult`. `token` is the client token that `calu run` printed
@@ -1285,6 +1307,7 @@ export interface RequestParams {
   'honesty.clear': HonestyClearParams;
   'honesty.review': EmptyParams;
   'honesty.trust': HonestyTrustParams;
+  'human_diffs.add': HumanDiffAddParams;
   'initialize': InitializeParams;
   'interrupt': EmptyParams;
   'model.set': ModelSetParams;
@@ -1310,6 +1333,7 @@ export interface RequestResults {
   'files.user_edit': FilesUserEditResult;
   'honesty.review': HonestyReviewResult;
   'honesty.trust': HonestyTrustResult;
+  'human_diffs.add': HumanDiffAddResult;
   'initialize': InitializeResult;
   'session.history': SessionHistoryResult;
   'session.list': SessionListResult;

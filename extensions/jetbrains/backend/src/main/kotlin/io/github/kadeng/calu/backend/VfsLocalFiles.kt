@@ -86,7 +86,8 @@ class VfsLocalFiles(private val project: Project, root: Path) : DiskLocalFiles(r
             withContext(Dispatchers.EDT) {
                 WriteCommandAction.runWriteCommandAction(project, "calu Sync: ${path.substringAfterLast('/')}", null, {
                     document.setText(text)
-                    FileDocumentManager.getInstance().saveDocument(document)
+                    // Not the user's save: it is left out of the recorded human diffs (D253).
+                    OwnSaves.during(document) { FileDocumentManager.getInstance().saveDocument(document) }
                 })
             }
             val saved = withContext(Dispatchers.IO) { runCatching { Files.readAllBytes(file) }.getOrNull() }

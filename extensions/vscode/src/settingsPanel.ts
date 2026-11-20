@@ -22,6 +22,7 @@ import type { IdeModelsResult, IdeSettingsResult, IdeStatusResult } from './brid
 import { renderHtml } from './chatView';
 import type { ServerHelp } from './shared/serverCommand';
 import { errorKey, parseSettingsMessage, type SettingsHostMessage, type SettingsWebviewMessage } from './shared/settingsMessages';
+import { enableOffer } from './shared/humanDiffs';
 import type { FixAction } from './shared/settingsModel';
 
 /** View type of the panel. */
@@ -147,6 +148,7 @@ export class SettingsPanel implements vscode.Disposable {
           project: message.project,
         });
         this.post({ type: 'saved', key: message.key, value: result.value });
+        await this.offerRelated(result, message.project);
         return;
       }
       case 'unset':
@@ -186,6 +188,26 @@ export class SettingsPanel implements vscode.Disposable {
         await this.sendData(this.project);
         return;
     }
+  }
+
+  /**
+   * Ask whether to switch a related setting on as well, if the answer of a set offers one
+   * (`offer`, D253), and set it on a yes. Nothing is switched without the user's yes.
+   *
+   * @param result The answer of `ide.settings.set`.
+   * @param project The scope of the set.
+   * @returns A promise that resolves when the question is answered and the value stored.
+   * @throws (rejects) Error of the bridge request for the related setting.
+   */
+  private async offerRelated(result: unknown, project: string | null): Promise<void> {
+    const offer = enableOffer(result);
+    if (!offer) return;
+    const yes = `Switch on ${offer.key}`;
+    const answer = await vscode.window.showInformationMessage(offer.text, { modal: true }, yes);
+    if (answer !== yes) return;
+    const stored = await this.bridge.request('ide.settings.set', { key: offer.key, value: true, project });
+    this.post({ type: 'saved', key: offer.key, value: stored.value });
+    await this.sendData(project);
   }
 
   /**
