@@ -66,6 +66,20 @@ class PendingHonesty:
     """The checkout a `clean_commit` runs in (D251); None for the session directory."""
 
 
+@dataclass(frozen=True)
+class Window:
+    """The snapshot of one checkout taken before an approved command (D31, D251)."""
+
+    store: SnapshotStore
+    """The snapshot repository of that checkout (`RunState.snapshots` for the main one)."""
+    prefix: str
+    """What is put before the checkout's paths to make them relative to the session directory:
+    "" for the main checkout, `.claude/worktrees/wta/` for a nested worktree, the absolute root
+    with "/" for a worktree outside the project."""
+    tree: str
+    """The tree id of the snapshot."""
+
+
 @dataclass
 class PerCall:
     """What the session remembers about one tool call, by Claude's `tool_use_id`.
@@ -80,13 +94,14 @@ class PerCall:
     was recorded already."""
     time_seq: int | None = None
     """Sequence number of the call's entry in `RunState.times`; None once the call ended."""
-    before: tuple[str, int | None, str] | None = None
-    """The snapshot taken before an approved command (agent/records/PLAN.md D31): the tree, the
-    `steps` row id and the checker's summary of the step. None if no snapshot is open for the call.
+    before: tuple[tuple[Window, ...], int | None, str] | None = None
+    """The snapshots taken before an approved command (agent/records/PLAN.md D31): one window
+    per checkout the step belongs to (D251), the `steps` row id and the checker's summary of
+    the step. None if no snapshot is open for the call.
     """
     overlapped: bool = False
-    """True if another command ran while this call's snapshot was open, so the write set cannot
-    be attributed to one of them."""
+    """True if another command ran in one of the same checkouts while this call's snapshot was
+    open, so the write set cannot be attributed to one of them."""
     changeset: str | None = None
     """The diff a commit would record, for the escalation's row; None if the call has none."""
     running: bool = False
@@ -132,6 +147,9 @@ class RunState:
     """What is remembered about single tool calls, by `tool_use_id`. Calls without an id share
     the key "". Read with `peek`, write with `call`, and let `release` remove a record."""
     snapshots: SnapshotStore | None = None  # the optional write-set snapshot (D31)
+    worktree_snapshots: dict[Path, SnapshotStore] = field(default_factory=dict[Path, SnapshotStore])
+    """The snapshot repositories of the worktrees, by checkout root (D251), created when a
+    command first runs in one; empty while `snapshots` is None."""
     # agent id (None = main agent) -> thinking and text since that agent's last tool call
     claude_outputs: dict[str | None, list[ClaudeOutput]] = field(
         default_factory=dict[str | None, list[ClaudeOutput]]

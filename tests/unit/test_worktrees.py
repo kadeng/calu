@@ -578,3 +578,158 @@ async def test_the_session_tells_the_checkers_the_steps_checkout(repo: Path) -> 
             "`.` (main checkout)",
         )
     ]
+
+
+# ------------------------------------------------------------------ U10: write sets
+
+
+def written(store: object) -> list[tuple[list[str], bool]]:
+    """List the recorded write sets in the order of their steps.
+
+    Args:
+        store: The session's in-memory store.
+
+    Returns:
+        (paths, overlapping) per recorded write set.
+    """
+    rows = store.write_sets  # type: ignore[attr-defined]
+    return [(rows[key]["paths"], rows[key]["overlapping"]) for key in sorted(rows)]
+
+
+def bash_writes(where: str, path: str, content: str, **more: object) -> dict[str, object]:
+    """Build a scripted Bash call that writes one file in its working directory.
+
+    Args:
+        where: The call's working directory, relative to the project.
+        path: The file, relative to `where`.
+        content: Its new content.
+        more: Further keys of the action ("duration").
+
+    Returns:
+        The action for the fake runner's script.
+    """
+    return {
+        "tool": "Bash",
+        "input": {"command": f"generate {path}"},
+        "cwd": where,
+        "writes": {path: content},
+        "result": "ok",
+        **more,
+    }
+
+
+async def test_u10_a_command_in_a_worktree_has_an_itemised_write_set(repo: Path) -> None:
+    from calu.config import ChangesConfig, Config
+    from tests.unit.helpers import make_session
+    from tests.unit.test_honesty_session import run_turns
+
+    worktree(repo, "wta")  # not ignored: the main checkout would see one opaque entry
+    session, rec, store = make_session(
+        repo,
+        [
+            [
+                bash_writes(".claude/worktrees/wta", "out.txt", "x\n"),
+                bash_writes("", "main.txt", "y\n"),
+            ]
+        ],
+        Config(changes=ChangesConfig(snapshot=True)),
+    )
+    await run_turns(session, rec)
+    assert written(store) == [
+        ([".claude/worktrees/wta/out.txt"], False),
+        (["main.txt"], False),
+    ]
+
+
+async def test_u10_two_parallel_subagents_in_two_worktrees_do_not_overlap(repo: Path) -> None:
+    from calu.config import ChangesConfig, Config
+    from tests.unit.helpers import make_session
+    from tests.unit.test_honesty_session import run_turns
+
+    worktree(repo, "a")
+    worktree(repo, "b")
+
+    def agent(name: str) -> dict[str, object]:
+        """Build a subagent whose one command writes a file in its own worktree.
+
+        Args:
+            name: The worktree's name.
+
+        Returns:
+            The action.
+        """
+        where = f".claude/worktrees/{name}"
+        return {
+            "agent": {
+                "description": name,
+                "actions": [bash_writes(where, f"{name}.txt", "x\n", duration=0.3)],
+            }
+        }
+
+    session, rec, store = make_session(
+        repo,
+        [[{"parallel": [[agent("a")], [agent("b")]]}]],
+        Config(changes=ChangesConfig(snapshot=True)),
+    )
+    await run_turns(session, rec)
+    assert sorted(written(store)) == [
+        ([".claude/worktrees/a/a.txt"], False),
+        ([".claude/worktrees/b/b.txt"], False),
+    ]
+
+
+async def test_u10_two_parallel_commands_in_one_worktree_still_overlap(repo: Path) -> None:
+    from calu.config import ChangesConfig, Config
+    from tests.unit.helpers import make_session
+    from tests.unit.test_honesty_session import run_turns
+
+    worktree(repo, "a")
+    where = ".claude/worktrees/a"
+    session, rec, store = make_session(
+        repo,
+        [
+            [
+                {
+                    "parallel": [
+                        [bash_writes(where, "one.txt", "1\n", duration=0.3)],
+                        [bash_writes(where, "two.txt", "2\n", duration=0.3)],
+                    ]
+                }
+            ]
+        ],
+        Config(changes=ChangesConfig(snapshot=True)),
+    )
+    await run_turns(session, rec)
+    assert [overlapping for _paths, overlapping in written(store)] == [True, True]
+
+
+async def test_u10_a_refused_change_in_a_worktree_is_undone_there(repo: Path) -> None:
+    from calu.config import ChangesConfig, Config
+    from tests.unit.helpers import make_session
+    from tests.unit.test_honesty_session import run_turns
+
+    inner = worktree(repo, "wta")
+    session, rec, store = make_session(
+        repo,
+        [[bash_writes(".claude/worktrees/wta", "helper.py", "x = 1  # calu:deny\n")]],
+        Config(changes=ChangesConfig(snapshot=True, review=True)),
+    )
+    await run_turns(session, rec)
+    assert written(store) == [([".claude/worktrees/wta/helper.py"], False)]
+    assert (inner / "helper.py").read_text() == '"""Help."""\n', "reverted in the worktree"
+
+
+async def test_u14_a_command_in_an_outside_worktree_is_snapshotted_too(repo: Path) -> None:
+    from calu.config import ChangesConfig, Config
+    from tests.unit.helpers import make_session
+    from tests.unit.test_honesty_session import run_turns
+
+    outside = repo.parent / "outside"
+    git(repo, "worktree", "add", "-q", "-b", "out", str(outside))
+    session, rec, store = make_session(
+        repo,
+        [[bash_writes(str(outside), "tool.py", "x = 1\n")]],
+        Config(changes=ChangesConfig(snapshot=True)),
+    )
+    await run_turns(session, rec)
+    assert written(store) == [([f"{outside.resolve()}/tool.py"], False)]

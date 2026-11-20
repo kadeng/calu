@@ -21,8 +21,14 @@ Guarantees:
 - Claude is told that a change was undone only if the revert applied.
 - A write set that could not be measured is not read as "nothing was written": with the review
   on, a human is asked about it.
-- Commands that ran at the same time share one write set. It is recorded as overlapping and
-  neither reviewed nor undone, because it cannot be attributed to one of them.
+- Commands that ran at the same time in the same checkout share one write set. It is recorded
+  as overlapping and neither reviewed nor undone, because it cannot be attributed to one of
+  them. Commands in different checkouts (parallel subagents in their own worktrees) do not
+  overlap.
+- Each checkout has its own snapshots (D251): a command is snapshotted in every checkout it
+  belongs to (its working directory and its `cd` targets), and its write set is the union,
+  with paths relative to the session directory. The main checkout's snapshots leave out the
+  worktrees nested in it.
 - A failing snapshot never stops a run: it is reported, and the session goes on without write
   sets.
 - A file the user wrote through an editor while a command ran (`user_edited`, reported by
@@ -41,22 +47,23 @@ import os
 import shutil
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 import anyio
 import anyio.to_thread
 
-from calu.changes import ChangeSet, SnapshotError, SnapshotStore
+from calu.changes import Change, ChangeSet, SnapshotError, SnapshotStore
 from calu.checkers import CheckContext, CheckDecision, Checker, CheckOutcome, Decision, Route, Step
 from calu.checkers.render import inline
+from calu.checkouts import Checkout
 from calu.config import ChangesConfig
 from calu.escalations import NOBODY_ASKED, Asked
 from calu.gate import CHECKER_DEADLINE_S
 from calu.markdown import fence
 from calu.protocol.messages import Event, Log
-from calu.run_state import RunState
+from calu.run_state import RunState, Window
 from calu.store import SessionStore
 
 log = logging.getLogger(__name__)
@@ -130,12 +137,18 @@ class Measured:
 
     change: ChangeSet
     before: str
+    """The tree before the command, of the first checkout it ran in."""
     after: str
+    """The tree after it, of the same checkout; "" if not measured."""
     step_id: int | None
     summary: str
     """What the checker said the step does, for the comparison with the written paths."""
     error: str = ""
     """Why the write set could not be measured; `change` is empty then and `after` is ""."""
+    parts: tuple[tuple[Window, str, tuple[str, ...]], ...] = ()
+    """Per checkout: the window before the command, the tree after it, and the paths written
+    there as the checkout's snapshots name them (without the window's prefix); what an undo
+    reverts (D251)."""
 
 
 class RunCheckers(Protocol):
@@ -191,6 +204,8 @@ class WriteSets:
         run_checkers: RunCheckers,
         check_context: Callable[[], CheckContext],
         wrote: Callable[[Sequence[str]], None] | None = None,
+        checkouts: Callable[[Step], Sequence[Checkout]] | None = None,
+        nested: Callable[[], Sequence[str]] | None = None,
     ) -> None:
         """Remember the collaborators; no snapshot repository exists before `prepare`.
 
@@ -216,6 +231,10 @@ class WriteSets:
             wrote: Called with the paths of every measured write set that is not empty
                 (relative to the workspace), or None. The session's honesty state watches
                 these files from then on. It must not raise.
+            checkouts: Names the checkouts a step belongs to, its own first
+                (`Session.step_checkouts`, D251); None snapshots the project directory only.
+            nested: Names the worktrees inside the project directory, relative to it, which
+                the main checkout's snapshots leave out; None for none.
         """
         self._workspace = workspace
         self._store = store
@@ -229,6 +248,11 @@ class WriteSets:
         self._run_checkers = run_checkers
         self._check_context = check_context
         self._wrote = wrote
+        self._checkouts = checkouts
+        self._nested = nested
+        self._creating = anyio.Lock()
+        """Held while a worktree's snapshot repository is created, so that two commands that
+        start at once in a new worktree create it once."""
         self.excluded: Sequence[str] = ()
         """Directories, relative to the project directory, that no write set names: calu's
         own output inside the project (the session traces, D232). The session sets it."""
@@ -317,12 +341,17 @@ class WriteSets:
         only.
         """
         store, self._run().snapshots = self._run().snapshots, None
-        if store is None:
-            return
-        try:
-            await anyio.to_thread.run_sync(lambda: shutil.rmtree(store.root, ignore_errors=True))
-        except OSError as exc:
-            log.warning("could not remove the snapshots in %s: %s", store.root, exc)
+        others = list(self._run().worktree_snapshots.values())
+        self._run().worktree_snapshots.clear()
+        for one in [store, *others]:
+            if one is None:
+                continue
+            try:
+                await anyio.to_thread.run_sync(
+                    lambda root=one.root: shutil.rmtree(root, ignore_errors=True)
+                )
+            except OSError as exc:
+                log.warning("could not remove the snapshots in %s: %s", one.root, exc)
 
     async def snapshot_before(self, step: Step, step_id: int | None, summary: str) -> None:
         """Snapshot the project directory before an approved command runs (D31).
@@ -339,20 +368,70 @@ class WriteSets:
         if self._snapshots is None or not step.tool_use_id:
             return
         opened_at = time.monotonic()
+        windows: list[Window] = []
         try:
-            self._snapshots.exclude = tuple(self.excluded)
-            tree = await self._snapshots.take()
+            for store, prefix in await self._stores(step):
+                windows.append(Window(store, prefix, await store.take()))
         except SnapshotError as exc:
             log.warning("no snapshot before %s: %s", step.tool_name, exc)
             return
         call = self._run().call(step.tool_use_id)
-        open_calls = [c for c in self._run().calls.values() if c.before is not None]
-        if open_calls:
-            for open_call in open_calls:
+        mine = {id(window.store) for window in windows}
+        for open_call in self._run().calls.values():
+            if open_call.before is None or open_call is call:
+                continue
+            if mine & {id(window.store) for window in open_call.before[0]}:
                 open_call.overlapped = True
-            call.overlapped = True
-        call.before = (tree, step_id, summary)
+                call.overlapped = True
+        call.before = (tuple(windows), step_id, summary)
         self._opened[step.tool_use_id] = opened_at
+
+    async def _stores(self, step: Step) -> list[tuple[SnapshotStore, str]]:
+        """Return the snapshot repositories of the checkouts a command belongs to (D251).
+
+        The main checkout's repository is `RunState.snapshots`; it leaves out the worktrees
+        nested in the project directory. A worktree's repository is created on first use under
+        the same snapshot root and kept in `RunState.worktree_snapshots`.
+
+        Args:
+            step: The command.
+
+        Returns:
+            (repository, prefix of its paths) per checkout, the step's own first; the prefix
+            is "" for the main checkout and the checkout's label with "/" otherwise.
+
+        Raises:
+            SnapshotError: If a worktree's repository cannot be created.
+        """
+        main = self._snapshots
+        assert main is not None
+        nested = tuple(self._nested()) if self._nested is not None else ()
+        main.exclude = (*self.excluded, *nested)
+        checkouts = list(self._checkouts(step)) if self._checkouts is not None else []
+        if not checkouts:
+            return [(main, "")]
+        found: list[tuple[SnapshotStore, str]] = []
+        for checkout in checkouts:
+            if checkout.main:
+                found.append((main, ""))
+                continue
+            async with self._creating:
+                store = self._run().worktree_snapshots.get(checkout.root)
+                if store is None:
+                    changes = self._changes()
+                    number = len(self._run().worktree_snapshots) + 1
+                    store = SnapshotStore(
+                        workspace=checkout.root,
+                        root=main.root.with_name(f"{main.root.name}-w{number}"),
+                        max_file_bytes=changes.max_file_bytes,
+                        max_patch_bytes=changes.max_patch_bytes,
+                        always_capture=tuple(changes.always_capture),
+                    )
+                    await store.prepare()
+                    self._run().worktree_snapshots[checkout.root] = store
+            store.exclude = tuple(self.excluded)
+            found.append((store, f"{checkout.label}/"))
+        return found
 
     def drop_before(self, tool_use_id: str) -> None:
         """Forget the "before" snapshot of a call that does not start yet after all.
@@ -407,12 +486,25 @@ class WriteSets:
         opened_at = self._opened.pop(tool_use_id, None)
         if opened is None or self._snapshots is None:
             return None
-        before, step_id, summary = opened
+        windows, step_id, summary = opened
+        before = windows[0].tree if windows else ""
+        parts: list[tuple[Window, str, tuple[str, ...]]] = []
+        written: list[Change] = []
+        patches: list[str] = []
+        cut = False
         try:
-            self._snapshots.exclude = tuple(self.excluded)
-            after = await self._snapshots.take()
-            # Read after the snapshot, so that a report from while it was taken counts.
-            change = await self._snapshots.changes(before, after, self._user_edits_since(opened_at))
+            for window in windows:
+                after = await window.store.take()
+                # Read after the snapshot, so that a report from while it was taken counts.
+                part = await window.store.changes(
+                    window.tree, after, self._user_edits_since(opened_at), window.prefix
+                )
+                own = tuple(change.path.removeprefix(window.prefix) for change in part.changes)
+                parts.append((window, after, own))
+                written += part.changes
+                if part.patch:
+                    patches.append(part.patch)
+                cut = cut or part.cut
         except SnapshotError as exc:
             log.warning("no write set for %s: %s", tool_use_id, exc)
             await self._emit(
@@ -426,9 +518,20 @@ class WriteSets:
                 summary=summary,
                 error=str(exc),
             )
-        change = replace(change, overlapping=overlapping)
+        change = ChangeSet(
+            changes=tuple(written),
+            patch="".join(patches),
+            cut=cut,
+            overlapping=overlapping,
+        )
+        after = parts[0][1] if parts else ""
         measured = Measured(
-            change=change, before=before, after=after, step_id=step_id, summary=summary
+            change=change,
+            before=before,
+            after=after,
+            step_id=step_id,
+            summary=summary,
+            parts=tuple(parts),
         )
         if not change.changes:
             return measured
@@ -621,10 +724,13 @@ class WriteSets:
         if self._snapshots is not None:
             try:
                 with anyio.CancelScope(shield=True):
-                    reverted = await self._snapshots.revert(
-                        measured.before, measured.after, change.paths
-                    )
+                    reverted = True
+                    for window, after, paths in measured.parts:
+                        if paths:
+                            done = await window.store.revert(window.tree, after, paths)
+                            reverted = reverted and done
             except SnapshotError as exc:
+                reverted = False
                 log.warning("the revert failed: %s", exc)
         await self._emit(
             Log(

@@ -540,7 +540,7 @@ async def test_a_write_set_that_cannot_be_measured_is_escalated_not_skipped(tmp_
         await session.start(tg)
         assert session._run_state.snapshots is not None
 
-        async def broken(before: str, after: str, skip: object = ()) -> None:
+        async def broken(before: str, after: str, skip: object = (), prefix: str = "") -> None:
             raise SnapshotError("the patch leaves out 1 changed path(s): payload.py")
 
         session._run_state.snapshots.changes = broken  # type: ignore[method-assign,assignment]

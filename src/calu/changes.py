@@ -38,7 +38,7 @@ import logging
 import os
 import re
 from collections.abc import Collection, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import anyio
@@ -194,6 +194,9 @@ class SnapshotStore:
     output inside the project (the session traces, D232). It may be set again between two
     snapshots; `take` applies the current value."""
     _ready: bool = field(default=False, init=False)
+    _taking: anyio.Lock = field(default_factory=anyio.Lock, init=False)
+    """Held while a snapshot is taken: two commands that end at the same time must not write
+    the repository's index at once (git refuses the second with `index.lock`)."""
     _excluded: tuple[str, ...] | None = field(default=None, init=False)
     """The value of `exclude` that the repository's exclude file holds; None before the first
     snapshot."""
@@ -220,6 +223,7 @@ class SnapshotStore:
 
         Side effects: writes git objects into `root` for everything that changed since the last
         snapshot. In-tree `.gitignore` files are honoured; `always_capture` is added regardless.
+        Two snapshots of the same store are taken one after the other.
 
         Returns:
             The tree id (a hexadecimal object name).
@@ -229,16 +233,17 @@ class SnapshotStore:
         """
         if not self._ready:
             raise SnapshotError("prepare() has not run")
-        await self._write_excludes()
-        await self._git(["add", "-A", "--", "."])
-        for path in self.always_capture:
-            # A path a `.gitignore` covers is only captured when it is named explicitly; an
-            # absent path is not an error, so failures here are logged and ignored.
-            try:
-                await self._git(["add", "-f", "--", path])
-            except SnapshotError as exc:
-                log.debug("not capturing %s: %s", path, exc)
-        return (await self._git(["write-tree"])).strip()
+        async with self._taking:
+            await self._write_excludes()
+            await self._git(["add", "-A", "--", "."])
+            for path in self.always_capture:
+                # A path a `.gitignore` covers is only captured when it is named explicitly;
+                # an absent path is not an error, so failures here are logged and ignored.
+                try:
+                    await self._git(["add", "-f", "--", path])
+                except SnapshotError as exc:
+                    log.debug("not capturing %s: %s", path, exc)
+            return (await self._git(["write-tree"])).strip()
 
     async def _write_excludes(self) -> None:
         """Bring the repository's exclude file in line with `exclude`.
@@ -274,15 +279,22 @@ class SnapshotStore:
             )
         self._excluded = wanted
 
-    async def changes(self, before: str, after: str, skip: Collection[str] = ()) -> ChangeSet:
+    async def changes(
+        self, before: str, after: str, skip: Collection[str] = (), prefix: str = ""
+    ) -> ChangeSet:
         """Return what changed between two snapshots.
 
         Args:
             before: Tree id from `take` before the command ran.
             after: Tree id from `take` after it ran.
-            skip: Paths, relative to the project directory, that are left out of the write
-                set and of its patch: files somebody else is known to have written between
-                the two snapshots (the user through an editor, `WriteSets.user_edited`).
+            skip: Paths, written as the result names them (with `prefix`), that are left out
+                of the write set and of its patch: files somebody else is known to have
+                written between the two snapshots (the user through an editor,
+                `WriteSets.user_edited`).
+            prefix: Put before every path of the result and of the patch's file names, e.g.
+                ".claude/worktrees/wta/" for the snapshots of a worktree (D251), so that the
+                paths are relative to the session directory; "" for the session directory
+                itself.
 
         Returns:
             The write set: one `Change` per path, and a patch cut to `max_patch_bytes` that
@@ -303,7 +315,7 @@ class SnapshotStore:
             for change in await self._parse(listed)
             # A directory that was excluded after a snapshot held it would show as deleted.
             if not any(change.path == p or change.path.startswith(p + "/") for p in left_out)
-            and change.path not in skip
+            and prefix + change.path not in skip
         ]
         if not changes:
             return ChangeSet()
@@ -314,7 +326,8 @@ class SnapshotStore:
         ]
         patch, cut = "", len(small) != len(changes)
         if small:
-            patch = await self._git(["diff", *DIFF_OPTIONS, before, after, "--", *small])
+            named = [f"--src-prefix=a/{prefix}", f"--dst-prefix=b/{prefix}"] if prefix else []
+            patch = await self._git(["diff", *DIFF_OPTIONS, *named, before, after, "--", *small])
             # The patch is what a checker judges, so it must hold every path it was asked for.
             # Asking git for the names with the same arguments shows what it really selected.
             names = await self._git(
@@ -328,6 +341,8 @@ class SnapshotStore:
                 )
             if len(patch) > self.max_patch_bytes:
                 patch, cut = patch[: self.max_patch_bytes] + "\n[... the diff was cut]\n", True
+        if prefix:
+            changes = [replace(change, path=prefix + change.path) for change in changes]
         return ChangeSet(changes=tuple(changes), patch=patch, cut=cut)
 
     async def revert(self, before: str, after: str, paths: Sequence[str] = ()) -> bool:

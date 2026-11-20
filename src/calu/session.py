@@ -674,6 +674,8 @@ class Session:
             run_checkers=self._review_checkers,
             check_context=lambda: self.context.check_context(),
             wrote=self._watch_written,
+            checkouts=self.step_checkouts,
+            nested=self.checkouts.nested,
         )
         """Measures what each command wrote, has it reviewed and undoes a refused change
         (`calu.write_sets`, agent/records/PLAN.md D31)."""
