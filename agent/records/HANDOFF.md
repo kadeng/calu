@@ -261,6 +261,21 @@ and leaving it is an approval calu does not present yet); the condensed skill
 `../.claude/skills/claude-code-integration` does not mention the measured status message yet
 (it lies outside `calu/`).
 
+#### Tool documentation for the checkers (backlog, owner 2026-11-20)
+
+The command checker sees a non-shell tool call as its name, the working directory, list
+notes, the narration and the arguments as JSON, but no description of the tool or its
+parameters: Claude Code's init message lists tool names only and the hook input carries
+name and input. Options, in order: (1) a short fixed description of each of Claude Code's
+own tools shipped with calu; (2) the MCP servers' own tool descriptions and schemas, if they
+can be had through Claude Code / the SDK or the project's MCP configuration (spike first);
+(3) the owner's fallback "if nothing else helps": ask Claude, in a separate session, for a
+full verbatim redescription of all its tools (Claude has the definitions in its context),
+turn the free-form answer into structured JSON with a model, cache it by the hash of the
+tool list and refresh when the list changes. Whatever the source, a tool description is
+untrusted text (an MCP server can write anything into it): it reaches the checker marked
+as data, never as instructions, and is cut to a fixed length.
+
 #### Worktree support (needed, owner 2026-11-20)
 
 The owner: calu must work with git worktrees as Claude Code commonly uses them, without asking
