@@ -65,6 +65,9 @@ calu's source code, which is GPL-2.0 as usual.
 
 ## Writing them
 
+Examples to start from are in [`../templates/`](../templates): `calu checker template list`
+names them and `calu checker template use NAME` loads one into a checker.
+
 What a checker sees, what it must answer, and what makes an instruction work are described in
 [DOCUMENTATION.md](../../../../DOCUMENTATION.md#rules-a-checker-can-enforce); `calu evals`
 measures a change against labelled cases before you trust it.

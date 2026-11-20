@@ -421,3 +421,44 @@ async def test_checker_show_diff_and_update_say_how_the_text_relates_to_the_ship
     assert "never replaces" in capsys.readouterr().err
     assert await anyio.to_thread.run_sync(calu, "checker", "update", "edit") == 0
     assert "updated to the present shipped version" in capsys.readouterr().out
+
+
+async def test_checker_template_lists_shows_and_loads_a_template(
+    db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """D250: `calu checker template list|show|use`; `use` keeps the user's own text."""
+    from calu import admin
+    from calu.defaults import library
+
+    store = CredentialStore(tmp_path / "credentials.json")
+    store.save("admin", db_url, None)
+    monkeypatch.setattr("sys.stdin", io.StringIO("session-pw\nsession-pw\n"))
+
+    def calu(*argv: str) -> int:
+        return cli.main(list(argv), store_factory=lambda: cast(CredentialStore, store))
+
+    assert await anyio.to_thread.run_sync(calu, "setup", "--renew-session") == 0
+    capsys.readouterr()
+    assert await anyio.to_thread.run_sync(calu, "checker", "template", "list") == 0
+    assert "review-findings          subagent-result" in capsys.readouterr().out
+    assert (
+        await anyio.to_thread.run_sync(calu, "checker", "template", "show", "review-findings") == 0
+    )
+    assert capsys.readouterr().out == library.template("review-findings").text
+    assert (
+        await anyio.to_thread.run_sync(calu, "checker", "template", "use", "review-findings") == 0
+    )
+    assert "loaded into the subagent-result checker" in capsys.readouterr().out
+    db = Db(await connect(db_url))
+    try:
+        assert await admin.instructions(db, "subagent-result") == (
+            library.template("review-findings").text
+        )
+        await admin.set_checker(db, "edit", instructions_text="Own rules.\n")
+    finally:
+        await db.aclose()
+    assert (
+        await anyio.to_thread.run_sync(calu, "checker", "template", "use", "edit-project-rules")
+        != 0
+    )
+    assert "your own text" in capsys.readouterr().err

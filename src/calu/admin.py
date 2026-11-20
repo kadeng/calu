@@ -32,6 +32,7 @@ from calu.config import (
 )
 from calu.db import Db
 from calu.defaults.instructions import SHIPPED_TEXTS, ShippedStatus, shipped_status
+from calu.defaults.library import Template, matching
 from calu.setup import RuleRow as SetupRuleRow
 from calu.setup import parse_rule_file, recommended_rules
 
@@ -1283,3 +1284,76 @@ async def update_instructions(db: Db, name: str) -> CheckerRow:
             f"`calu checker diff {name}` shows how it differs from the shipped one"
         )
     return await set_checker(db, name, instructions_text=status.present)
+
+
+async def use_template(
+    db: Db, name: str, template: Template, append: bool = False, replace: bool = False
+) -> CheckerRow:
+    """Load a template of instructions into a checker (`calu checker template use`, D250).
+
+        append                     stored text + blank line + template
+        replace                    template
+        neither: stored text is    calu's shipped text (any version), an unchanged
+                                   template, or empty   -> template
+                                   anything else        -> refused (the user's own text)
+
+    The write is conflict-safe: it names the version that was read, and nothing is stored when
+    the definition changed in between (another terminal, the web interface, an editor). The
+    database raises the version, and the audit log keeps the replaced text.
+
+    Args:
+        db: A connection that may change `checker_types`.
+        name: The checker type to load the template into.
+        template: The template.
+        append: Add the template after the stored text instead of replacing it.
+        replace: Replace the stored text even when it is the user's own.
+
+    Returns:
+        The definition after the change.
+
+    Raises:
+        AdminError: If no checker has that name, its route differs from the route of the
+            checker type the template is written for, both `append` and `replace` are given,
+            the stored text already contains the template (with `append`) or is it (without),
+            the stored text is the user's own
+            and neither option is given, or the definition changed since it was read.
+        psycopg.Error: On database errors.
+    """
+    if append and replace:
+        raise AdminError("give --append or --replace, not both")
+    row = await db.one(
+        "SELECT instructions, version, route FROM checker_types WHERE name = %s", (name,)
+    )
+    if row is None:
+        raise AdminError(f"no checker named {name!r}")
+    stored, version, route = str(row[0]), int(row[1]), str(row[2])
+    meant = await db.one("SELECT route FROM checker_types WHERE name = %s", (template.checker,))
+    if meant is not None and meant[0] != route:
+        raise AdminError(
+            f"template {template.name!r} is written for the {template.checker} checker (route "
+            f"{meant[0]}); the {name} checker judges another type of step (route {route})"
+        )
+    if template.text.strip() in stored and (append or matching(stored) == template):
+        raise AdminError(f"the {name} checker's instructions contain template {template.name!r}")
+    if append:
+        text = stored.rstrip("\n") + "\n\n" + template.text if stored.strip() else template.text
+    else:
+        shipped = name in SHIPPED_TEXTS and shipped_status(name, stored).kind != "edited"
+        if not (replace or shipped or matching(stored) is not None or not stored.strip()):
+            raise AdminError(
+                f"the {name} checker's instructions are your own text; `--append` adds the "
+                "template after it, `--replace` replaces it (the audit log keeps the old text)"
+            )
+        text = template.text
+    changed = await db.one(
+        "UPDATE checker_types SET instructions = %s WHERE name = %s AND version = %s"
+        " RETURNING version",
+        (text, name, version),
+    )
+    if changed is None:
+        raise AdminError(
+            f"the {name} checker's instructions were changed by someone else just now; "
+            "nothing was stored. Look at them and run the command again"
+        )
+    found = [checker for checker in await checkers(db) if checker.name == name]
+    return found[0]

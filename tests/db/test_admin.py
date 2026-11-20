@@ -520,3 +520,61 @@ async def test_an_older_shipped_text_is_offered_an_update_and_an_edited_one_neve
         assert await admin.instructions(db, "edit") == old
     finally:
         await conn.close()
+
+
+async def test_a_template_is_loaded_into_a_checker_without_losing_own_text(db_url: str) -> None:
+    """D250: shipped text replaced, own text kept unless --append or --replace, route checked."""
+    from calu.defaults import library
+
+    db, conn = await prepared(db_url)
+    review = library.template("review-findings")
+    edit_rules = library.template("edit-project-rules")
+    try:
+        row = await admin.use_template(db, "subagent-result", review)
+        assert await admin.instructions(db, "subagent-result") == review.text
+        assert row.version > 1
+        with pytest.raises(admin.AdminError, match="contain template"):
+            await admin.use_template(db, "subagent-result", review, append=True)
+        with pytest.raises(admin.AdminError, match="another type of step"):
+            await admin.use_template(db, "command", review)
+        with pytest.raises(admin.AdminError, match="not both"):
+            await admin.use_template(db, "edit", edit_rules, append=True, replace=True)
+
+        await admin.set_checker(db, "edit", instructions_text="# Ours\n\n- Keep it short.\n")
+        with pytest.raises(admin.AdminError, match="your own text"):
+            await admin.use_template(db, "edit", edit_rules)
+        await admin.use_template(db, "edit", edit_rules, append=True)
+        assert await admin.instructions(db, "edit") == (
+            "# Ours\n\n- Keep it short.\n\n" + edit_rules.text
+        )
+        await admin.use_template(db, "edit", library.template("edit-project-rules"), replace=True)
+        assert await admin.instructions(db, "edit") == edit_rules.text
+    finally:
+        await conn.close()
+
+
+async def test_a_template_is_not_stored_over_a_change_made_meanwhile(db_url: str) -> None:
+    from calu.defaults import library
+
+    db, conn = await prepared(db_url)
+    other = await connect(db_url)
+
+    class Racing(Db):
+        """Lets another login change the instructions just before the write."""
+
+        async def one(self, statement, params=()):  # type: ignore[no-untyped-def]
+            if statement.startswith("UPDATE checker_types"):
+                await other.execute(
+                    "UPDATE checker_types SET instructions = 'Changed elsewhere.'"
+                    " WHERE name = 'command'"
+                )
+            return await super().one(statement, params)
+
+    try:
+        racing = Racing(conn)
+        with pytest.raises(admin.AdminError, match="changed by someone else"):
+            await admin.use_template(racing, "command", library.template("command-project-rules"))
+        assert await admin.instructions(db, "command") == "Changed elsewhere."
+    finally:
+        await other.close()
+        await conn.close()

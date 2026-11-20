@@ -51,10 +51,12 @@ copied into projects and rewritten there. They are not licensed under the GPL at
 The texts it covers are the Markdown files under
 [`src/calu/defaults/checkers/`](src/calu/defaults/checkers) — `command.md`, `edit.md`,
 `changeset.md`, `honesty.md`, `subagent-result.md`, `narrator.md`, `trace-redaction.md` (the
-instructions of the session traces' redaction agent) — the rule lists under
-[`src/calu/defaults/rules/`](src/calu/defaults/rules), and the same texts as `calu setup` loads
-them into your database and as you then edit them with `calu checker edit` or
-`calu traces instructions edit`.
+instructions of the session traces' redaction agent) — the templates of checker instructions
+under [`src/calu/defaults/templates/`](src/calu/defaults/templates) (the examples that
+`calu checker template use` loads), the rule lists under
+[`src/calu/defaults/rules/`](src/calu/defaults/rules), and the same texts as `calu setup` or
+`calu checker template use` loads them into your database and as you then edit them with
+`calu checker edit` or `calu traces instructions edit`.
 
 So: copy Calu's command checker, change a paragraph or rewrite it entirely, and the result is
 yours to do anything with — keep it private, ship it inside a closed source product, publish it

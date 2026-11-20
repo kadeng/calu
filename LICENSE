@@ -9,8 +9,8 @@ verbatim text follows below. Read this notice first:
     when you distribute Calu itself or a modified version of it.
 
   - Exception: the checker instructions shipped with Calu (the Markdown files under
-    src/calu/defaults/checkers/) and the rule lists that go with them (under
-    src/calu/defaults/rules/) are not under the GPL. The copyright holders of Calu place
+    src/calu/defaults/checkers/ and the templates under src/calu/defaults/templates/) and
+    the rule lists that go with them (under src/calu/defaults/rules/) are not under the GPL. The copyright holders of Calu place
     them in the public domain, to the fullest extent permitted by applicable law. Where the
     law of a jurisdiction does not allow a work to be placed in the public domain, the
     copyright holders grant instead an unconditional, irrevocable, worldwide, royalty-free

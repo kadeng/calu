@@ -125,6 +125,7 @@ from calu.db.target import (
     TargetError,
     from_fields,
 )
+from calu.defaults import library
 from calu.defaults.instructions import (
     SHIPPED_TEXTS,
     default_redaction_instructions,
@@ -5292,6 +5293,9 @@ def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
     if args.action == "edit":
         _edit_checker(args, store)
         return
+    if args.action == "template":
+        _checker_template(args, store)
+        return
     text: str | None = None
     if args.instructions_file:
         try:
@@ -5374,6 +5378,68 @@ def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
             route=args.route,
         )
         return row.line()
+
+    _admin_command(store, work, args)
+
+
+def _checker_template(args: argparse.Namespace, store: CredentialStore) -> None:
+    """List or show the shipped templates of checker instructions, or load one (D250).
+
+        calu checker template list                         name, checker type, summary
+        calu checker template show NAME                    the text `use` would store
+        calu checker template use NAME [--checker C] [--append | --replace]
+
+    `list` and `show` read only the files shipped with calu and need no database. `use`
+    stores the template in the checker type it is written for, or in `--checker`
+    (`admin.use_template`: a text calu shipped or an unchanged template is replaced; the
+    user's own text only with `--replace`, or the template goes after it with `--append`;
+    nothing is stored when the instructions changed between the read and the write).
+
+    Args:
+        args: Parsed arguments (`name`: "list", "show" or "use"; `target`: the template;
+            `checker`, `append`, `replace`).
+        store: The credential store.
+
+    Raises:
+        CliError: If the sub-action is unknown, a template name is missing or unknown, or
+            there is no `admin` credential.
+        CredentialError: On a wrong password.
+        admin.AdminError: If the template cannot be loaded (see `admin.use_template`).
+        psycopg.Error: On database errors.
+    """
+    what = args.name
+    if what not in ("list", "show", "use"):
+        raise CliError("checker template needs list, show NAME or use NAME")
+    try:
+        if what == "list":
+            for found in library.templates():
+                print(f"{found.name:<24} {found.checker:<16} {found.summary}")
+            return
+        if not args.target:
+            raise CliError(f"checker template {what} needs the template's NAME")
+        chosen = library.template(args.target)
+    except library.TemplateError as exc:
+        raise CliError(str(exc)) from exc
+    if what == "show":
+        print(f"# template {chosen.name} for the {chosen.checker} checker", file=sys.stderr)
+        print(chosen.text, end="")
+        return
+    checker = args.checker or chosen.checker
+
+    async def work(db: Db) -> str:
+        """Load the template into the checker.
+
+        Args:
+            db: The connection.
+
+        Returns:
+            The report.
+        """
+        row = await admin.use_template(
+            db, checker, chosen, append=args.append, replace=args.replace
+        )
+        how = "added to" if args.append else "loaded into"
+        return f"template {chosen.name} {how} the {checker} checker: {row.line()}"
 
     _admin_command(store, work, args)
 
@@ -6811,11 +6877,38 @@ def build_parser() -> argparse.ArgumentParser:
     _database_option(config)
     config.set_defaults(handler=cmd_config)
 
-    checker = sub.add_parser("checker", help="checker definitions: instructions, model, limits")
-    checker.add_argument(
-        "action", choices=["list", "show", "set", "edit", "diff", "update", "stats", "misses"]
+    checker = sub.add_parser(
+        "checker",
+        help="checker definitions: instructions, model, limits",
+        description=(
+            "calu checker list | show | set | edit | diff | update | stats | misses [NAME]; "
+            "calu checker template list | show NAME | use NAME [--checker C] "
+            "[--append | --replace]: the example instructions shipped with calu"
+        ),
     )
-    checker.add_argument("name", nargs="?", help="checker name, e.g. command")
+    checker.add_argument(
+        "action",
+        choices=["list", "show", "set", "edit", "diff", "update", "stats", "misses", "template"],
+    )
+    checker.add_argument(
+        "name", nargs="?", help="checker name, e.g. command; for template: list, show or use"
+    )
+    checker.add_argument("target", nargs="?", help="for template show and use: the template")
+    checker.add_argument(
+        "--checker",
+        dest="checker",
+        help="for template use: the checker to load it into (default: the one it is written for)",
+    )
+    checker.add_argument(
+        "--append",
+        action="store_true",
+        help="for template use: add the template after the stored instructions",
+    )
+    checker.add_argument(
+        "--replace",
+        action="store_true",
+        help="for template use: replace instructions that are your own text",
+    )
     checker.add_argument(
         "--instructions-file", help="read new instructions from this file ('-' for stdin)"
     )

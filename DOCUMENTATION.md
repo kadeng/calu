@@ -1182,6 +1182,26 @@ rules about intent, about prose, or about something outside the code such as a l
 Write rules as plain sentences that name the decision. State the reason where it helps the
 checker to judge a borderline case.
 
+The three examples in this section (the command checker's, the edit checker's and the
+[review findings](#review-findings-and-over-engineering) for the subagent-result checker) ship
+with Calu as **templates**. They are in the public domain like the shipped instructions.
+
+```bash
+calu checker template list                              # each template and its checker
+calu checker template show review-findings              # its text
+calu checker template use review-findings               # load it into the subagent-result checker
+calu checker template use edit-project-rules --append   # add it after your own edit rules
+```
+
+- `use` replaces the stored instructions when they are a text Calu shipped or an unchanged
+  template. Your own text stays: `--append` adds the template after it, and `--replace`
+  replaces it (the audit log keeps the old text).
+- `--checker NAME` loads a template into another checker that judges the same type of step.
+- Nothing is stored when somebody changed the instructions between Calu's read and its write.
+- Loading a template over a shipped text removes the shipped text's test triggers.
+- The templates are Markdown files in `src/calu/defaults/templates/` (with an index,
+  `README.md`). A user interface to load them comes later.
+
 **Command checker** (`calu checker edit command`):
 
 ```markdown
@@ -1263,7 +1283,8 @@ What the user said in the conversation decides; a finding that contradicts it is
 the user and not acted on.
 
 The subagent-result checker reads a subagent's result before the main agent acts on it, so it
-is the place to say this. Example (`calu checker edit subagent-result`):
+is the place to say this. Example (the template `review-findings`: `calu checker template use
+review-findings`, or write it with `calu checker edit subagent-result`):
 
 ```markdown
 # Review results
@@ -2651,6 +2672,7 @@ This section lists every `calu` command with its purpose and the credential it u
 | Command | Purpose | Credential |
 |---|---|---|
 | `calu checker list\|show\|edit\|set\|diff\|update` | checker definitions: instructions, model, limits, enabled | admin |
+| `calu checker template list\|show\|use` | the templates of checker instructions shipped with Calu; `use` loads one into a checker | none for `list` and `show`; admin for `use` |
 | `calu checker stats`, `calu checker misses` | the checkers' track record | operator |
 | `calu rules list\|add\|edit\|remove\|enable\|disable\|add-set` | the allow and deny lists | admin |
 | `calu config list\|get\|set\|unset\|add\|remove\|models` | settings, global or per project (`--project`) | admin |

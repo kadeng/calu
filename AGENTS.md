@@ -98,7 +98,7 @@ READMEs). This file stays at the top level, where every agent looks first.
 | `src/calu/files.py` | Files that tool calls refer to (links for clients) |
 | `src/calu/testing.py` | Rule-based fake checkers for tests without model calls |
 | `src/calu/db/` | Connections (`Db`: one connection, several tasks), migrations (`migrations/NNNN_*.sql`), notifications (`notify.py`), what is stored about the database and its logins (`target.py`: the three variants of `calu setup`), where root's database is, without a secret, for clients that asked no database (`place.py`, D228), login tokens for RDS with IAM authentication (`rds.py`), calu's roles and the narrowing of a connection to the role an action needs (`roles.py`, D249), local Docker database with its on-demand start (`local.py`, `local-compose.yml`) |
-| `src/calu/defaults/` | Built-in checker instructions and rule lists (loaded into the database) and the built-in evaluation cases |
+| `src/calu/defaults/` | Built-in checker instructions and rule lists (loaded into the database), the built-in evaluation cases, and the templates of checker instructions (`templates/`, one Markdown file each, read by `library.py`; loaded only by `calu checker template use`) |
 | `tests/unit/` | Tests without database, `claude` or API keys |
 | `tests/db/` | Tests against the test database (marker `db`) |
 | `tests/browser/` | Tests in a headless browser (marker `browser`; those of the web interface also `db`, the easter egg's not: `-m browser` runs all of them; `scripts/get-browser.sh` installs it without root) |
