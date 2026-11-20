@@ -267,7 +267,11 @@ and leaving it is an approval calu does not present yet); the condensed skill
 `../.claude/skills/claude-code-integration` does not mention the measured status message yet
 (it lies outside `calu/`).
 
-#### Capability requests instead of an all-or-nothing sandbox (backlog, owner 2026-11-20)
+#### Capability requests instead of an all-or-nothing sandbox (an idea, NOT on the backlog)
+
+The owner, 2026-11-20: not on the backlog yet, it needs proper planning with him first. For
+starters, running unsandboxed Bash commands occasionally is acceptable, with the checker
+judging them more closely. Notes collected so far, for that planning:
 
 The owner: for now the execution sandbox need not be enforced (a session may run with it
 off). Idea for later, two ways to run a command: (1) the regular sandboxed Bash tool; (2) a
