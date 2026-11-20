@@ -10,6 +10,7 @@ session at all (`calu.claude.sdk_runner.SdkRunner.run`).
 import json
 import os
 import shutil
+import sys
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -247,36 +248,50 @@ def change_warnings(config: Config) -> list[str]:
     return []
 
 
-def network_warnings(config: Config) -> list[str]:
+def network_warnings(config: Config, platform: str | None = None) -> list[str]:
     """Return warnings about the sandbox's network settings (agent/records/PLAN.md D39).
 
     Args:
         config: The session configuration, with the project's network policy already applied.
+        platform: The operating system as `sys.platform` names it; None reads `sys.platform`.
+            Tests pass it to check the Linux case on any machine.
 
     Returns:
         A warning if the commands may reach **every** domain (the wildcard of the "full"
         policy), because that is a deliberate choice worth seeing at every start; one if they
         can reach nothing, which is the safe end but explains every failing download, so a
-        session that is stuck on an install says why; nothing in between.
+        session that is stuck on an install says why; nothing in between. On Linux also one
+        when `allow_unix_sockets` names sockets: Claude Code ignores that list there (it is a
+        macOS setting) and its sandbox refuses every Unix socket a command tries to create
+        (measured 2026-11-20 with CLI 2.1.329, DOCUMENTATION.md "Developing Calu inside
+        Calu"). An empty list for a sandbox that is off.
     """
     sandbox = config.claude.sandbox
     if not sandbox.enabled:
         return []
+    said: list[str] = []
+    if sandbox.allow_unix_sockets and (platform or sys.platform).startswith("linux"):
+        said.append(
+            "claude.sandbox.allow_unix_sockets has no effect on Linux: Claude Code applies it "
+            "on macOS only, and its Linux sandbox refuses every Unix socket a command creates "
+            f"({', '.join(sandbox.allow_unix_sockets)} included). A command that needs such a "
+            "socket, e.g. a database test, cannot reach it in the session."
+        )
     if not sandbox.allowed_domains:
-        return [
+        said.append(
             "the sandbox blocks every outgoing connection of a command (network policy "
             '"none", or "proxy" with an empty allow list), so a download or an install will '
             "fail. Let one through with `calu config add claude.sandbox.allowed_domains "
             "<domain> [--project <project>]`."
-        ]
-    if "*" not in sandbox.allowed_domains:
-        return []
-    denied = f", except {', '.join(sandbox.denied_domains)}" if sandbox.denied_domains else ""
-    return [
-        "the sandbox lets commands reach every domain through its proxy (network policy "
-        f'"full"{denied}). Narrow it with `calu project network --name <project> --network '
-        "proxy` and `claude.sandbox.allowed_domains`."
-    ]
+        )
+    elif "*" in sandbox.allowed_domains:
+        denied = f", except {', '.join(sandbox.denied_domains)}" if sandbox.denied_domains else ""
+        said.append(
+            "the sandbox lets commands reach every domain through its proxy (network policy "
+            f'"full"{denied}). Narrow it with `calu project network --name <project> --network '
+            "proxy` and `claude.sandbox.allowed_domains`."
+        )
+    return said
 
 
 def heartbeat_warnings(config: Config) -> list[str]:

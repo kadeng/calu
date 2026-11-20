@@ -314,7 +314,10 @@ class SandboxConfig(ConfigModel):
     """Domains that stay blocked even when `allowed_domains` holds the wildcard, which is how
     "everything except these" is written."""
     allow_unix_sockets: list[str] = Field(default_factory=list)
-    """Unix sockets a sandboxed command may connect to (e.g. a local database socket)."""
+    """Unix sockets a sandboxed command may connect to. Claude Code applies this list on
+    macOS only: on Linux it ignores the list, and its sandbox refuses every Unix socket a
+    command creates (measured 2026-11-20 with CLI 2.1.329), so a database socket is not
+    reachable there; a session start warns about it."""
 
     def with_policy(self, policy: NetworkPolicy) -> SandboxConfig:
         """Return a copy whose network settings express `policy` (agent/records/PLAN.md D39).

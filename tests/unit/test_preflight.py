@@ -191,6 +191,31 @@ def test_an_open_network_is_reported_at_every_start() -> None:
     assert preflight.network_warnings(disabled) == []
 
 
+def test_unix_sockets_on_linux_are_reported_as_without_effect() -> None:
+    # Claude Code ignores `allowUnixSockets` on Linux and blocks every Unix socket there
+    # (measured 2026-11-20), so the list would promise a socket the session cannot reach.
+    with_socket = Config(
+        claude=ClaudeConfig(
+            sandbox=SandboxConfig(
+                allowed_domains=["pypi.org"], allow_unix_sockets=["/share/pg/.s.PGSQL.5432"]
+            )
+        )
+    )
+    said = preflight.network_warnings(with_socket, platform="linux")
+    assert len(said) == 1
+    assert "no effect on Linux" in said[0] and "/share/pg/.s.PGSQL.5432" in said[0]
+    # On macOS Claude Code applies the list: nothing to say.
+    assert preflight.network_warnings(with_socket, platform="darwin") == []
+    # The warning comes in addition to the one about a closed network.
+    closed = Config(claude=ClaudeConfig(sandbox=SandboxConfig(allow_unix_sockets=["/run/pg.sock"])))
+    assert len(preflight.network_warnings(closed, platform="linux")) == 2
+    # Without the sandbox the list does not matter.
+    off = Config(
+        claude=ClaudeConfig(sandbox=SandboxConfig(enabled=False, allow_unix_sockets=["/x"]))
+    )
+    assert preflight.network_warnings(off, platform="linux") == []
+
+
 def test_a_missing_key_says_what_it_costs_per_role() -> None:
     """The consequence differs by role, and the warning is the first thing a new user reads.
 
