@@ -2708,6 +2708,7 @@ ignores `XDG_CONFIG_HOME` and `XDG_STATE_HOME`.
 |---|---|
 | `calu attach --sudo`, `calu web --sudo` | none. They use the root-only Unix socket: the client checks that the socket and its directory are root's alone, and the session asks the kernel whether the peer is root. `calu attach --sudo` in the project directory finds its session through these sockets, without the database |
 | your own `calu attach` without `--sudo` | a token. This also applies to a session that runs Claude Code as you: every program that Claude Code starts runs as you too, and the kernel cannot tell your client from such a program |
+| the IDE extensions (`calu ide` runs as you) | the admin password, asked in a dialog at the first action that needs the database (attaching, a new session, the settings) and kept in the memory of the editor window's bridge until the window closes. Never written to a file. After `sudo calu setup --no-password` nothing is asked |
 
 - **One password per client run.** The full-screen client of `calu attach --sudo` and `calu
   start --sudo` asks for the admin password at most once, before it starts, and keeps the

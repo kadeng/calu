@@ -57,9 +57,19 @@ def test_the_checker_keys_are_reported_by_provider() -> None:
     assert "calu doctor --keys" in with_keys[0].detail
 
 
+def no_root_place(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep this machine's place file (`/var/lib/calu/database.json`) out of a test."""
+
+    def no_file(path: Path | None = None, owner: int = 0) -> Target:
+        raise db_place.PlaceError("no place file in this test")
+
+    monkeypatch.setattr(db_place, "read", no_file)
+
+
 def test_the_credential_store_is_reported_without_decrypting_anything(
-    store: CredentialStore,
+    store: CredentialStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    no_root_place(monkeypatch)
     empty = doctor.credential_findings(store)
     assert [f.ok for f in empty] == [False, False]
     assert any(f.essential for f in empty)  # `calu run` needs the session credential
@@ -67,6 +77,17 @@ def test_the_credential_store_is_reported_without_decrypting_anything(
     store.save("session", "postgresql://localhost/calu", bytearray(b"password"))
     after = doctor.credential_findings(store)
     assert after[1].ok is True and after[1].detail == "stored"
+
+
+def test_a_user_of_roots_calu_needs_no_credential_of_their_own(
+    store: CredentialStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`sudo calu setup` with passwords: the place file names the database, the store is empty."""
+    place = Target.parse("postgresql://calu_admin@127.0.0.1:5433/calu")
+    monkeypatch.setattr(db_place, "read", lambda path=None, owner=0: place)
+    (only,) = doctor.credential_findings(store)
+    assert only.ok and "runs as root" in only.detail and "127.0.0.1:5433/calu" in only.detail
+    assert not doctor.essential_missing([only])
 
 
 def test_a_credential_without_a_password_is_reported(store: CredentialStore) -> None:

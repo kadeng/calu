@@ -205,9 +205,26 @@ def credential_findings(store: CredentialStore) -> list[Finding]:
         A finding for each of the two credentials calu uses, and one more when an entry is
         stored without a password (D104), which says so even when that is the right choice:
         in a store that root alone can read (`calu.asuser.only_root_writes`) as a plain
-        statement, elsewhere with what it costs for `admin` and `session`.
+        statement, elsewhere with what it costs for `admin` and `session`. An empty store
+        on a machine whose calu runs as root (a trustworthy place file, `calu.db.place`)
+        gives one line instead: this user needs no credential of their own.
     """
     names = set(store.names())
+    if not names:
+        try:
+            root_db = db_place.read()
+        except db_place.PlaceError:
+            root_db = None
+        if root_db is not None:
+            return [
+                Finding(
+                    "credentials",
+                    True,
+                    f"none in this account; calu runs as root here (database {root_db.place}). "
+                    "`calu attach --sudo` needs none; the editor and your own `calu attach` "
+                    "ask for the admin password",
+                )
+            ]
     unprotected = sorted(name for name in names if not store.needs_password(name))
     found = [
         Finding(

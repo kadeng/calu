@@ -25,6 +25,17 @@ def no_place_file(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the machine's place file (`/var/lib/calu/database.json`) out of every choice."""
     monkeypatch.setattr(access_module, "shared_login", lambda: None)
 
+    def no_file(path: Path | None = None, owner: int = 0) -> Target:
+        raise access_module.db_place.PlaceError("no place file in this test")
+
+    monkeypatch.setattr(access_module.db_place, "read", no_file)
+
+
+def root_place(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let root's place file name db.example without a secret (`sudo calu setup` with passwords)."""
+    place = Target.parse("postgresql://calu_admin@db.example:5432/calu")
+    monkeypatch.setattr(access_module.db_place, "read", lambda path=None, owner=0: place)
+
 
 def store_with(tmp_path: Path, **entries: str | None) -> CredentialStore:
     """Return a store in `tmp_path` holding OPERATOR, ADMIN or CALU_ADMIN under the given names.
@@ -115,3 +126,29 @@ async def test_no_entry_at_all_is_no_database(tmp_path: Path):
         with pytest.raises(access_module.RpcError) as refused:
             await choose(None)
         assert refused.value.code == NO_DATABASE
+
+
+async def test_with_only_roots_place_file_the_admin_password_is_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A user of root's calu: no entry of their own, so the editor asks and `unlock` opens it."""
+    root_place(monkeypatch)
+    access = Access(CredentialStore(tmp_path / "credentials.json"))
+    assert access.locked()
+    for choose in (access._reading_login, access._changing_login):
+        with pytest.raises(NeedsPassword) as asked:
+            await choose(None)
+        assert needs(asked.value) == "admin"
+
+    async def is_admin_password(place: Target, password: str) -> bool:
+        return password == "the admin password"
+
+    monkeypatch.setattr(access_module, "is_admin_password", is_admin_password)
+    with pytest.raises(NeedsPassword):
+        await access.unlock("wrong")
+    assert (await access.unlock("the admin password"))["changing"] is True
+    assert not access.locked()
+    login, name = await access._reading_login(None)
+    assert name == access_module.ROLE and text(login).count("calu_admin") == 1
+    _login, name, _typed = await access._changing_login(None)
+    assert name == access_module.ROLE

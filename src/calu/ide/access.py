@@ -5,6 +5,7 @@
       a password-free entry      ─► operator, calu_admin, admin: the narrowest first
       a held login               ─► what `unlock` opened: operator, calu_admin, admin, the role
       a protected entry          ─► operator, admin, calu_admin: needs `password`
+      only root's place file     ─► NEEDS_PASSWORD "admin": `unlock` holds the role's login
 
     changing (settings, models, checker instructions):
       password-free calu_admin   ─► that entry
@@ -14,6 +15,7 @@
       protected admin, calu_admin─► that entry, needs `password`
       only operator              ─► `calu_admin` at the operator's database, logged in with
                                     `password` as the admin password; nothing is stored
+      only root's place file     ─► NEEDS_PASSWORD "admin", as for reading
 
     unlock(password)  (`ide.unlock`: one password, once per bridge process)
       every protected entry (operator, admin, calu_admin) ─► opened with it? then held
@@ -166,15 +168,19 @@ class Access:
         """Tell whether the editor should ask for the one password.
 
         Returns:
-            True if the store holds a protected entry among `PROTECTED` and nothing is
-            held; False otherwise, and when the store cannot be read.
+            True if nothing is held and either the store holds a protected entry among
+            `PROTECTED`, or root's place file names a database that no login of this user
+            reaches (`_only_place`: calu runs as root, the admin password opens it); False
+            otherwise, and when the store cannot be read.
         """
         if self._held:
             return False
         try:
-            return any(self._has(name) and not self._free(name) for name in PROTECTED)
+            if any(self._has(name) and not self._free(name) for name in PROTECTED):
+                return True
         except RpcError:
             return False
+        return self._only_place()
 
     def can_read(self) -> bool:
         """Tell whether a reading request finds a login without a password parameter.
@@ -201,6 +207,32 @@ class Access:
             free = False
         held = any(name in self._held for name in HELD_CHANGING)
         return free or shared_login() is not None or held
+
+    def _only_place(self) -> bool:
+        """Tell whether root's place file is the only way to the database.
+
+        With `sudo calu setup` and passwords, a user's `calu ide` finds no entry in its own
+        store and a place file without a secret: the admin password, given to `unlock`,
+        is the login (as the role `calu_admin`). The editor then asks for it instead of
+        reporting that no credential is stored.
+
+        Returns:
+            True if no login is held, the store has none of the `PROTECTED` entries and no
+            password-free one, and a trustworthy place file exists; False otherwise, also
+            when the store cannot be read.
+        """
+        if self._held or shared_login() is not None:
+            return False
+        try:
+            if any(self._has(name) for name in PROTECTED):
+                return False
+        except RpcError:
+            return False
+        try:
+            db_place.read()
+        except db_place.PlaceError:
+            return False
+        return True
 
     async def unlock(self, password: str) -> dict[str, Any]:
         """Try one password on everything it may open, and hold what opened.
@@ -442,8 +474,10 @@ class Access:
             The login and the name of the credential it came from.
 
         Raises:
-            NeedsPassword: If the login needs a password that is missing or wrong.
-            NoCredential: If no credential is stored.
+            NeedsPassword: If the login needs a password that is missing or wrong, or only
+                root's place file names the database (`_only_place`; `ide.unlock` with the
+                admin password then holds a login).
+            NoCredential: If no credential is stored and no place file names a database.
             RpcError: `NO_DATABASE` if the store cannot be read.
         """
         shared = shared_login()
@@ -458,6 +492,8 @@ class Access:
         for name in READ_PROTECTED:
             if self._has(name):
                 return await self._load(name, password), name
+        if self._only_place():
+            raise NeedsPassword("admin", unlocked=self.unlocked())
         raise NoCredential("read")
 
     async def _changing_login(self, password: str | None) -> tuple[Target | bytearray, str, bool]:
@@ -472,8 +508,9 @@ class Access:
             database means a wrong password).
 
         Raises:
-            NeedsPassword: If the login needs a password that is missing or wrong.
-            NoCredential: If no credential is stored.
+            NeedsPassword: If the login needs a password that is missing or wrong, or only
+                root's place file names the database (`_only_place`).
+            NoCredential: If no credential is stored and no place file names a database.
             RpcError: `NO_DATABASE` if the store or the operator's login cannot be read.
         """
         if self._free(ADMIN_ENTRY):
@@ -490,6 +527,8 @@ class Access:
             if self._has(name):
                 return await self._load(name, password), name, False
         if not self._has("operator"):
+            if self._only_place():
+                raise NeedsPassword("admin", unlocked=self.unlocked())
             raise NoCredential("change")
         if password is None:
             raise NeedsPassword("admin", unlocked=self.unlocked())
