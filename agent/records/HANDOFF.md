@@ -1,7 +1,7 @@
 # Handoff
 
 State on 2026-11-19, in a session that began on 2026-11-18 and is still going. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D249, open
+(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D250, open
 questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here

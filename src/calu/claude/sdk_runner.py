@@ -71,6 +71,7 @@ from calu.claude.runner import (
     ToolGate,
     UsageReport,
     Verdict,
+    hook_decision,
 )
 from calu.config import ClaudeConfig, PermissionMode
 from calu.context.foreign import (
@@ -396,6 +397,17 @@ class SdkRunner:
         self._expected_mode: str | None = None
         """The mode the last start should give: `_launch_mode`, else the `defaultMode` of a
         loaded settings file; what `permission_mode` answers before Claude Code reports one."""
+        self._chosen_mode: str | None = None
+        """The mode calu last set or the user chose: `_expected_mode` at a start, then the mode
+        of each `set_permission_mode`. Claude Code reporting another mode than this one for the
+        main agent at its first sight is the only case of the "started in auto" warning
+        (`_mode_logs`, D250)."""
+        self._switch_pending = False
+        """True from a `set_permission_mode` until Claude Code's next report of the main
+        agent's mode: that report answers the switch (`_mode_events`)."""
+        self._switched_to: str | None = None
+        """The mode of a `set_permission_mode` that Claude Code accepted and has not reported
+        yet; the hook answers by it in that short time (`_mode_now`)."""
         self._ask_reasons: dict[str, str] = {}  # tool call id -> why the runner made it wait
         self._sink: EventSink | None = None  # set by `run`; hooks report through it
         self.sink_failures = 0
@@ -867,6 +879,10 @@ class SdkRunner:
         (reported as `PermissionModeChanged` by `_events_of`); the next tool call of the same
         turn already runs in the new mode.
 
+        Side effects: the mode becomes the chosen one (`_chosen_mode`), so Claude Code's
+        report of it gives no warning; a tool call whose hook answers before that report is
+        answered by this mode (`_mode_now`).
+
         Args:
             mode: The mode to switch to.
 
@@ -877,12 +893,19 @@ class SdkRunner:
         """
         if self._client is None:
             raise PermissionModeChangeFailed("no Claude session is running")
+        # Set before the request: Claude Code's status report may arrive before its answer,
+        # and it must be read as the answer to this switch, not as a mode nobody chose.
+        chosen, pending = self._chosen_mode, self._switch_pending
+        self._chosen_mode, self._switch_pending = mode, True
         try:
             await self._client.set_permission_mode(mode)  # type: ignore[arg-type]
         except Exception as exc:  # the SDK raises bare `Exception` for an error response
+            self._chosen_mode, self._switch_pending = chosen, pending
             raise PermissionModeChangeFailed(
                 f"Claude Code did not change the permission mode: {exc}"
             ) from exc
+        if self._modes.get(None) != mode:
+            self._switched_to = mode  # until Claude Code's own report arrives
 
     # ------------------------------------------------------------------ options and callbacks
 
@@ -916,6 +939,11 @@ class SdkRunner:
         self._launch_mode = launch_permission_mode(self.config, self.home, self.workspace)
         chosen = settings_permission_mode(self.config, self.home, self.workspace)
         self._expected_mode = self._launch_mode or (chosen[0] if chosen else None)
+        self._chosen_mode, self._switch_pending, self._switched_to = (
+            self._expected_mode,
+            False,
+            None,
+        )
 
         async def pre_tool_use(
             input_data: Any, tool_use_id: str | None, context: Any
@@ -923,8 +951,9 @@ class SdkRunner:
             """PreToolUse hook: ask `gate.pre_tool_use` and return its verdict to Claude Code.
 
             For an ASK verdict the step is stored, so that `can_use_tool` reuses it. A PASS verdict
-            is answered without a decision where Claude Code's auto mode is in effect (the
-            permission mode of the hook input, whatever set it), so that the auto mode classifier
+            is answered without a decision where Claude Code's auto mode is in effect when the
+            answer goes out (`_mode_now`: a switch that landed during the check counts, D250;
+            else the permission mode of the hook input), so that the auto mode classifier
             decides as well (agent/records/PLAN.md D5, D21); where there is no auto mode to defer
             to, PASS becomes "allow" -- or, with `claude.require_auto_mode`, "ask", so that a human
             decides in the classifier's place. ALLOW answers "allow". One case overrides both PASS
@@ -945,10 +974,12 @@ class SdkRunner:
                 a decision for PASS under auto mode.
             """
             step = self._step_from_hook(input_data, tool_use_id)
-            mode = input_data.get("permission_mode")
-            for event in self._mode_events(mode, input_data.get("agent_id")):
+            agent = input_data.get("agent_id")
+            for event in self._mode_events(input_data.get("permission_mode"), agent):
                 await self._emit(event)
             result = await gate.pre_tool_use(step)
+            # The check can take minutes; a switch that landed meanwhile decides (D250).
+            mode = self._mode_now(agent, input_data.get("permission_mode"))
             if step.tool_use_id and result.verdict is Verdict.ASK:
                 self._steps[step.tool_use_id] = step  # taken again by can_use_tool
             output: dict[str, Any] = {"hookEventName": "PreToolUse"}
@@ -966,11 +997,12 @@ class SdkRunner:
                     output["permissionDecision"] = "ask"
                     output["permissionDecisionReason"] = reason
                     return {"hookSpecificOutput": output}
-            if result.verdict is Verdict.PASS and mode == "auto":
+            decision = hook_decision(result.verdict, mode, self.config.require_auto_mode)
+            if decision is None:
                 # No decision: Claude Code's auto mode classifier decides as well (checkers AND
                 # auto mode). "allow" would skip the classifier (verified, spike_auto_mode.py).
                 return {"hookSpecificOutput": output}
-            if result.verdict is Verdict.PASS and self.config.require_auto_mode:
+            if result.verdict is Verdict.PASS and decision == "ask":
                 # The checkers have no objection, but the second approval is missing, and the
                 # configuration says a step needs both: a human decides in its place.
                 reason = (
@@ -984,7 +1016,6 @@ class SdkRunner:
                 output["permissionDecision"] = "ask"
                 output["permissionDecisionReason"] = reason
                 return {"hookSpecificOutput": output}
-            decision = "allow" if result.verdict is Verdict.PASS else result.verdict.value
             output["permissionDecision"] = decision
             output["permissionDecisionReason"] = result.reason
             return {"hookSpecificOutput": output}
@@ -1350,10 +1381,12 @@ class SdkRunner:
 
         Outside the auto mode a step the checkers pass runs without the classifier's second approval
         (agent/records/PLAN.md D21). A mode the user chose is reported as information
-        (agent/records/PLAN.md D241). One case is a warning: calu started Claude Code in auto
-        mode (`_launch_mode`) and the main agent reports another mode at its first sight, which
-        Claude Code does without a word for a model that has no auto mode. A tool call
-        (`EnterPlanMode`) can also change the mode during a session; that is information.
+        (agent/records/PLAN.md D241). One case is a warning: the mode calu last set or the user
+        chose (`_chosen_mode`: the start's mode, then each switch) is auto, and the main agent
+        reports another mode at its first sight or in answer to that switch, which Claude Code
+        does without a word for a model that has no auto mode. A switch the user made to
+        another mode gives no warning (D250). A tool call (`EnterPlanMode`) can also change the
+        mode during a session; that is information.
 
         Args:
             mode: `permission_mode` of a hook input or `permissionMode` of the init or a
@@ -1372,6 +1405,14 @@ class SdkRunner:
         if not isinstance(mode, str) or not mode:
             return []
         agent = sdk_agent_id if isinstance(sdk_agent_id, str) and sdk_agent_id else None
+        answers_switch = False
+        if agent is None:
+            # Claude Code's report of the main agent's mode answers a switch under way.
+            answers_switch, self._switch_pending, self._switched_to = (
+                self._switch_pending,
+                False,
+                None,
+            )
         if self._modes.get(agent) == mode:
             return []
         first = agent not in self._modes
@@ -1379,8 +1420,35 @@ class SdkRunner:
         if agent is not None and first and self._modes.get(None) == mode:
             return []
         if agent is None:
-            return [PermissionModeChanged(mode=mode), *self._mode_logs(mode, agent, first)]
+            return [
+                PermissionModeChanged(mode=mode),
+                *self._mode_logs(mode, agent, first or answers_switch),
+            ]
         return self._mode_logs(mode, agent, first)
+
+    def _mode_now(self, sdk_agent_id: object, hook_mode: object) -> str | None:
+        """Return the permission mode an agent is in when the hook answers (D250).
+
+        A check can take minutes, and the user may switch the mode meanwhile. For the main
+        agent the answer follows the switch: the mode of a `set_permission_mode` that Claude
+        Code accepted and has not reported yet, else the mode Claude Code last reported. A
+        subagent's mode is known only from its own hook inputs, so for a subagent it is the
+        mode of the hook input. A hook input that names no mode cannot show that the
+        classifier is active: without a switch under way the answer is then None.
+
+        Args:
+            sdk_agent_id: The SDK's id of the calling agent; None or "" for the main agent.
+            hook_mode: `permission_mode` of the hook input.
+
+        Returns:
+            The mode, or None if nothing is known.
+        """
+        hook = hook_mode if isinstance(hook_mode, str) and hook_mode else None
+        if isinstance(sdk_agent_id, str) and sdk_agent_id:
+            return hook
+        if self._switched_to is not None:
+            return self._switched_to
+        return (self._modes.get(None) or hook) if hook is not None else None
 
     def _mode_logs(self, mode: str, agent: str | None, first: bool) -> list[Event]:
         """Say in a `log` event what an agent's newly seen permission mode means for a step.
@@ -1388,11 +1456,13 @@ class SdkRunner:
         Args:
             mode: The mode, a non-empty string.
             agent: The SDK's id of the agent; None for the main agent.
-            first: Whether this is the first mode seen for that agent.
+            first: Whether this is the first mode seen for that agent, or the main agent's
+                report in answer to a switch.
 
         Returns:
-            One `Log`: a warning when calu started Claude Code in "auto" and the main agent
-            reports another mode at its first sight, else information.
+            One `Log`: a warning when the mode calu last set or the user chose is "auto" and
+            the main agent reports another mode at its first sight or in answer to the
+            switch, else information.
         """
         who = f"The subagent {agent}" if agent else "Claude Code"
         if mode == "auto":
@@ -1409,12 +1479,12 @@ class SdkRunner:
             if self.config.require_auto_mode
             else "a step the checkers pass runs on their approval alone"
         )
-        if agent is None and first and self._launch_mode == "auto":
+        if agent is None and first and self._chosen_mode == "auto":
             return [
                 Log(
                     level="warning",
                     message=(
-                        f'{who} was started in the permission mode "auto" but runs in "{mode}" '
+                        f'{who} was asked for the permission mode "auto" but runs in "{mode}" '
                         "(the model may have no auto mode): auto mode's classifier is off, so "
                         f"{consequence}."
                     ),

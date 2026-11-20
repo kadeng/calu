@@ -111,6 +111,35 @@ class GateResult:
     context: str = ""
 
 
+def hook_decision(verdict: Verdict, mode: str | None, require_auto_mode: bool) -> str | None:
+    """Translate the gate's verdict into the PreToolUse hook's `permissionDecision`.
+
+        PASS  + mode "auto"                 -> None    auto mode's classifier decides as well
+        PASS  + another mode, require_auto  -> "ask"   a human decides in the classifier's place
+        PASS  + another mode                -> "allow" the checkers decide alone (D21)
+        ALLOW -> "allow"     DENY -> "deny"     ASK -> "ask"
+
+    `mode` is the permission mode Claude Code is in when the answer goes out, not the one the
+    hook input named when the check began: a switch that lands while a step is checked decides
+    the answer (agent/records/PLAN.md D250). A mode that is not known counts as one without
+    auto mode.
+
+    Args:
+        verdict: The gate's verdict.
+        mode: Claude Code's permission mode for the calling agent at this moment; None if not
+            known.
+        require_auto_mode: `claude.require_auto_mode`.
+
+    Returns:
+        "allow", "deny" or "ask", or None for no decision.
+    """
+    if verdict is Verdict.PASS:
+        if mode == "auto":
+            return None
+        return "ask" if require_auto_mode else "allow"
+    return verdict.value
+
+
 @dataclass(frozen=True)
 class HumanAnswer:
     """The answer to an ASK verdict.

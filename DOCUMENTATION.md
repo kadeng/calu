@@ -397,8 +397,9 @@ calu config unset claude.permission_mode        # back to auto mode (or the sett
 
 - These settings apply from the next session start.
 - A session names the mode in effect when it starts and whenever the mode changes. It prints a
-  warning only when Calu asked for auto mode and Claude Code did not enter it (for example
-  because the model has no auto mode).
+  warning only when Calu asked for auto mode, at the start or at a switch, and Claude Code did
+  not enter it (for example because the model has no auto mode). A switch you made to another
+  mode gives no warning.
 - `calu doctor` names the mode a session would start in and the setting or settings file that
   determines it.
 - With `claude.require_auto_mode` on, Calu refuses every mode but `auto`. If Claude
@@ -1117,7 +1118,9 @@ Claude Code's own terminal interface:
 | ACP editor | the config option "Claude Code's permission mode" |
 
 - The switch works between turns and while a turn runs. It applies from Claude's next tool
-  call. A tool call whose check has already started is decided under the previous mode.
+  call, and also to a tool call that is being checked when the switch lands: Calu answers it
+  by the mode Claude Code is in when the answer goes out. A step that the checkers pass while
+  you switch from `auto` to `default` therefore runs without asking anybody.
 - Each client shows the mode that Claude Code reports. This includes a change made in another
   client or by Claude Code itself. When a tool call of Claude enters plan mode, the client
   shows `plan`; you leave plan mode by choosing another mode in the selector.

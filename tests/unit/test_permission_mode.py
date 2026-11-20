@@ -192,3 +192,57 @@ async def test_no_switch_without_a_running_session(tmp_path: Path) -> None:
     with pytest.raises(SessionError):
         await session.set_permission_mode("default", client="tui")
     assert store.setting_changes == []
+
+
+async def test_a_switch_during_a_check_decides_the_answer(tmp_path: Path) -> None:
+    """A step checked in auto mode and answered after a switch to default runs on the PASS.
+
+    Test plan K15: the hook took the mode of its input, so the step got no decision and
+    Claude Code, by then in default mode, asked a human about a step nobody objected to.
+    The hook now answers by the mode Claude Code is in when the answer goes out (D250).
+    """
+    from calu.protocol.messages import EscalationRequest, ToolResult
+
+    session, rec, _store = make_session(
+        tmp_path, [[{"tool": "Bash", "input": {"command": "ls"}, "result": "a.py"}]]
+    )
+    checking, release = anyio.Event(), anyio.Event()
+    check = session.pre_tool_use
+
+    async def slow_check(step):  # type: ignore[no-untyped-def]
+        """Hold the check until the test switched the mode."""
+        checking.set()
+        await release.wait()
+        return await check(step)
+
+    session.pre_tool_use = slow_check  # type: ignore[method-assign]
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="list it"))
+        with anyio.fail_after(5):
+            await checking.wait()
+        await session.set_permission_mode("default", client="web")
+        release.set()
+        await rec.wait_for(TurnResult)
+        runner = runner_of(session)
+        assert runner.tool_modes == [("Bash", "auto")], "the call started in auto mode"
+        assert runner.hook_answers == [("Bash", "allow")], "answered by the mode at the answer"
+        assert rec.of(EscalationRequest) == [], "nobody is asked"
+        (result,) = rec.of(ToolResult)
+        assert not result.is_error and result.content == "a.py"
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+async def test_a_step_in_auto_mode_gets_no_decision_from_the_hook(tmp_path: Path) -> None:
+    """Without a switch, a PASS in auto mode leaves the decision to the classifier as well."""
+    session, rec, _store = make_session(
+        tmp_path, [[{"tool": "Bash", "input": {"command": "ls"}, "result": "a.py"}]]
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="list it"))
+        await rec.wait_for(TurnResult)
+        assert runner_of(session).hook_answers == [("Bash", None)]
+        await session.stop()
+        tg.cancel_scope.cancel()

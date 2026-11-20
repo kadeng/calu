@@ -70,8 +70,11 @@ Example script (JSON): {"turns": [[{"text": "Hi"}, {"tool": "Bash", "input": {"c
 `FakeScript.permission_mode` is the mode the runner starts in (default "auto", reported as a
 `permission_mode.changed` event when `run` starts, as the real runner reports the init message);
 `set_permission_mode` changes it and reports it the same way, also during a turn, and every
-scripted tool call records the mode it ran in (`tool_modes`). `permission_mode_error` makes
-the next `set_permission_mode` fail as a refused mode would.
+scripted tool call records the mode it ran in (`tool_modes`). The hook's answer depends on
+the mode at the moment it goes out, as with the SDK runner (`hook_answers`; D250): in auto mode a
+PASS gets no decision and the scripted classifier approves the step; in another mode a PASS
+runs on the checkers' word. `permission_mode_error` makes the next `set_permission_mode` fail
+as a refused mode would.
 
 Messages sent with priority "next" during a turn are taken in after the current action (a
 `UserInput` event); "later" messages start their own turn after the current one.
@@ -100,7 +103,7 @@ from calu.claude.runner import (
     SideQuestionFailed,
     ToolGate,
     UsageReport,
-    Verdict,
+    hook_decision,
 )
 from calu.context.foreign import user_message_source
 from calu.protocol.messages import (
@@ -233,6 +236,9 @@ class FakeRunner:
         """If set, the next `set_permission_mode` fails with this message and changes nothing."""
         self.tool_modes: list[tuple[str, str | None]] = []
         """(tool name, permission mode) of every scripted tool call, at its check."""
+        self.hook_answers: list[tuple[str, str | None]] = []
+        """(tool name, `permissionDecision`) the hook gave each scripted tool call, None for
+        no decision (`calu.claude.runner.hook_decision`), for tests."""
         self._sink: EventSink | None = None
 
     async def run(
@@ -713,7 +719,14 @@ class FakeRunner:
             cwd=str(self.workspace),
         )
         gate_result = await gate.pre_tool_use(step)
-        if gate_result.verdict is Verdict.ASK:
+        # As the SDK runner's hook: the mode Claude Code is in when the answer goes out decides
+        # what a PASS means (D250), not the one the call started in.
+        decision = hook_decision(gate_result.verdict, self.permission_mode, False)
+        self.hook_answers.append((name, decision))
+        if decision is None and self.permission_mode != "auto":
+            # No decision and no auto mode by now: Claude Code asks for its own approval.
+            decision = "ask"
+        if decision == "ask":
             # An interrupt cancels the waiting call, as Claude Code cancels its permission
             # request; the gate then closes the escalation as cancelled.
             allowed, message = False, INTERRUPTED_TOOL_RESULT
@@ -726,9 +739,9 @@ class FakeRunner:
                 finally:
                     self._asks.discard(waiting)
         else:
-            # The fake runner has no auto mode of its own, so PASS runs the step
+            # No decision in auto mode: the scripted auto mode classifier approves every step
             # (agent/records/PLAN.md D21).
-            allowed = gate_result.verdict in (Verdict.PASS, Verdict.ALLOW)
+            allowed = decision in (None, "allow")
             message = gate_result.reason
         note = ""
         if allowed and action.get("fails"):

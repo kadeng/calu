@@ -2713,7 +2713,8 @@ class Session:
         The audit entry comes first, as for `set_auto_escalate`: a change nobody can see
         afterwards is worse than a refused request. If Claude Code then refuses the mode, a
         second entry records that it stayed as it was. The change applies from the next tool
-        call on, between turns and inside a running turn. The mode is also kept as
+        call on, between turns and inside a running turn, and to a call whose check is still
+        running: the runner answers it by the mode at that moment (D250). The mode is also kept as
         `claude.permission_mode` of this process, so that a later start (a resume, a fork, a
         new conversation) begins in it; the project's settings are not changed.
 

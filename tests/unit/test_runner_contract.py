@@ -363,3 +363,96 @@ async def test_a_denied_command_stays_denied_and_other_tools_are_not_held(tmp_pa
     # The sandbox isolates commands; a tool that runs none is decided as before.
     out = await hook_answer(runner, Deciding(Verdict.ALLOW), tool="Read")
     assert out["permissionDecision"] == "allow"
+
+
+# ---------------------------------------------------------------- a switch of the mode (D250)
+
+
+class SwitchingClient:
+    """Stands in for the SDK client: accepts every permission mode."""
+
+    def __init__(self) -> None:
+        """Start with no switch."""
+        self.modes: list[str] = []
+
+    async def set_permission_mode(self, mode: str) -> None:
+        """Accept the mode.
+
+        Args:
+            mode: The mode.
+        """
+        self.modes.append(mode)
+
+
+class SwitchDuringCheck(AllowAll):
+    """A gate that passes the step after something switched the mode during its check."""
+
+    def __init__(self, during: Any) -> None:
+        """Remember what happens during the check.
+
+        Args:
+            during: An async callable run inside `pre_tool_use`.
+        """
+        self.during = during
+
+    async def pre_tool_use(self, step):
+        await self.during()
+        return GateResult(Verdict.PASS)
+
+
+async def test_the_hook_answers_by_the_mode_claude_code_reported_during_the_check(
+    tmp_path: Path,
+):
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+
+    async def status_report() -> None:
+        """Claude Code's status message after a switch made elsewhere."""
+        runner._mode_events("default")
+
+    out = await hook_answer(runner, SwitchDuringCheck(status_report))
+    assert out["permissionDecision"] == "allow", "default mode: the checkers' PASS decides"
+
+
+async def test_the_hook_answers_by_an_accepted_switch_before_its_report(tmp_path: Path):
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    runner._client = SwitchingClient()  # type: ignore[assignment]
+    runner._mode_events("auto")
+
+    async def switch() -> None:
+        """A client switches the mode; Claude Code's report has not arrived yet."""
+        await runner.set_permission_mode("default")
+
+    out = await hook_answer(runner, SwitchDuringCheck(switch))
+    assert out["permissionDecision"] == "allow"
+    # Once the report arrives it is the mode in force, and a switch back is followed too.
+    runner._mode_events("default")
+    assert runner._mode_now(None, "auto") == "default"
+    await runner.set_permission_mode("auto")
+    assert runner._mode_now(None, "default") == "auto"
+    # A subagent's mode is known only from its own hook input.
+    assert runner._mode_now("sub-1", "plan") == "plan"
+
+
+async def test_a_switch_the_user_made_gives_no_auto_mode_warning(tmp_path: Path):
+    """Test plan K24: a switch before the first report printed "started in auto but runs in"."""
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    runner._sink = no_sink
+    runner._options(AllowAll(), None)  # calu asks for auto mode
+    runner._client = SwitchingClient()  # type: ignore[assignment]
+    await runner.set_permission_mode("acceptEdits")
+    _changed, line = runner._mode_events("acceptEdits")
+    assert isinstance(line, Log)
+    assert line.level == "info", line.message
+
+    # Without a switch, a first report of another mode than auto is still a warning.
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    runner._options(AllowAll(), None)
+    _changed, line = runner._mode_events("default")
+    assert isinstance(line, Log) and line.level == "warning"
+    assert 'asked for the permission mode "auto" but runs in "default"' in line.message
+
+    # A switch to auto that Claude Code answers with another mode is a warning as well.
+    runner._client = SwitchingClient()  # type: ignore[assignment]
+    await runner.set_permission_mode("auto")
+    _changed, line = runner._mode_events("acceptEdits")
+    assert isinstance(line, Log) and line.level == "warning"
