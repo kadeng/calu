@@ -353,7 +353,12 @@ broken down or extended. Derived requirements and design decisions belong in
     into agent/human-diffs by default if we do ( they should be typically gitignored, should
     be mentioned in the docs )" Then: "No secret redactions, these diffs are left alone.
     Also, these edits should only be tracked for files under version control and only if the
-    editing happens in the IDE." (stated 2026-11-20)
+    editing happens in the IDE." And: "We might want to have an automatic cleanup for these
+    human diffs. If they are not used, they should be cleaned up after a configurable amount
+    of time. For this reason we need to have a very clear way of marking them. For example
+    they could have an extension of <whatever>.tmp.diff - renaming them to <whatever>.diff
+    would mean they would not be cleaned. We can then also .gitignore .tmp.diff easily."
+    (stated 2026-11-20)
 ## Soft goals and priorities
 
 1. Simple requirements first: calu should become functional before anything else; a port to Go
