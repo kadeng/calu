@@ -167,6 +167,11 @@ Decided (do not ask again):
   - PyCharm mode 3: starting a run or debug while a file is held asks "Upload now and run",
     "Run anyway" or "Cancel".
   - PyCharm sync dialog "changed on the server, deleted here": no default button.
+  - Stored usage limits are keyed by CRC32 of the API key (subscription: CRC32 of e-mail and
+    organisation) plus OS user name and host name; nothing readable about the account is
+    stored (the owner's ruling).
+  - Checker instructions stay global for now; per-project instructions (a global default with
+    per-project overrides, perhaps merged) come later, after everything works.
   - **Built in the core, the CLI and the terminal clients** (PLAN D250, 2026-11-20, not
     pushed by this agent): the template library (`src/calu/defaults/templates/`, `calu checker
     template list|show|use`, public domain); `calu setup` without a terminal keeps outdated
