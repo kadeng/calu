@@ -360,7 +360,8 @@ broken down or extended. Derived requirements and design decisions belong in
     would mean they would not be cleaned. We can then also .gitignore .tmp.diff easily."
     "Default timeout could be 2 weeks." "Also, this is an optional feature, disabled by
     default. In the settings, when enabling the traces, it's offered to also switch it on
-    (if possible)." (stated 2026-11-20)
+    (if possible)." Clarified: "When enabling human diff collection I mean." (stated
+    2026-11-20)
 ## Soft goals and priorities
 
 1. Simple requirements first: calu should become functional before anything else; a port to Go
