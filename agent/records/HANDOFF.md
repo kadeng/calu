@@ -28,6 +28,15 @@ every case); `agent/records/notes/worktree-design.md`; the skill
   tested locally and remotely (requirements 37, 41). Done in rounds A-L of the test plan.
 - **Milestone (2026-11-19):** develop Calu inside Calu. The owner does this himself ("Developing
   calu inside calu is of course my task"); the lead supports with fixes as he finds them.
+  **Status 2026-11-20 night:** rehearsed end to end on Haiku in the Cua desktop (test plan M):
+  reading AGENTS.md, unit tests, edits, a subagent, honesty, a commit with traces all work;
+  fixes D254 and the "Developing Calu inside Calu" section of DOCUMENTATION.md record the
+  setup. Under Claude Code's sandbox on Linux, uv needs `UV_CACHE_DIR=$TMPDIR/uv-cache` and
+  the database tests cannot run inside the session (no Unix sockets, no TCP): run that layer
+  in your own terminal or with the sandbox off. Open owner decision (not urgent): an opt-in
+  setting for Claude Code's `allowAllUnixSockets` (recommended: leave it out).
+  The owner's next step: reinstall from GitHub, `sudo calu setup` (migrations to 0042),
+  `calu project add` for the calu checkout, then work.
 
 #### Built on 2026-11-19/20 (one line each; details in PLAN and the sections below)
 
