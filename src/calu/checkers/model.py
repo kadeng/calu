@@ -347,6 +347,9 @@ class Step(BaseModel):
     worktree."""
     other_checkouts: str = ""
     """calu's description of the project's other checkouts; "" when there are none."""
+    sandbox: str = ""
+    """calu's sentence on why a Bash call runs, or may run, outside Claude Code's sandbox
+    (`calu.config.SandboxConfig.outside_reason`); "" when it stays in the sandbox."""
     notes: list[str] = Field(default_factory=list)
     """Hints from the user's rules for the checker, e.g. paths outside the allowlists."""
     narration: str = ""

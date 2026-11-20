@@ -287,7 +287,9 @@ class SandboxConfig(ConfigModel):
     settings files holds a sandbox entry that goes beyond calu's configuration (a Bash step
     also waits for a human while such an entry exists). False turns both into warnings."""
     allow_unsandboxed_commands: bool = False
-    """Let a call leave the sandbox with `dangerouslyDisableSandbox`. False keeps it in."""
+    """Let a call leave the sandbox with `dangerouslyDisableSandbox`. False keeps it in. Set
+    it true for a project to allow occasional unsandboxed commands: the command checker is
+    told which calls run outside the sandbox and judges them more strictly."""
     auto_allow_bash: bool = False
     """Let Claude Code approve sandboxed Bash calls by itself. Stays False: it would skip
     auto mode's classifier, which agent/records/PLAN.md D5 uses as the second opinion next to the
@@ -338,6 +340,55 @@ class SandboxConfig(ConfigModel):
         if policy == "full":
             return self.model_copy(update={"allowed_domains": ["*"]})
         return self
+
+    def outside_reason(self, command: str, disable_sandbox: bool) -> str:
+        """Say why a Bash command runs, or may run, outside the sandbox, for the checker.
+
+        Two cases, checked in this order, both only while `enabled` is True:
+
+        - `disable_sandbox` (the call's `dangerouslyDisableSandbox`) with
+          `allow_unsandboxed_commands` True: the command runs outside the sandbox.
+        - The command matches an entry of `excluded_commands`: it may run outside. The match
+          approximates Claude Code's pattern syntax and errs towards a match: `*` stands for
+          any text, a final " *" also matches the command without arguments, and an entry
+          without `*` matches the command alone or followed by a space and arguments. Claude
+          Code itself keeps some matching command lines in the sandbox (chains, some
+          redirects), which this does not model; hence "may".
+
+        Args:
+            command: The command line as Claude wrote it.
+            disable_sandbox: Whether the call sets `dangerouslyDisableSandbox` to true.
+
+        Returns:
+            One sentence for the step's "Sandbox:" line, or "" when the command stays in the
+            sandbox (also when the sandbox is off: then every command runs outside it).
+
+        Example:
+            With `excluded_commands=["scripts/db-tests.sh *"]`,
+            `outside_reason("scripts/db-tests.sh -q", False)` starts with "this command may
+            run OUTSIDE".
+        """
+        if not self.enabled:
+            return ""
+        access = "Claude Code's sandbox, with the session user's full file and network access"
+        if disable_sandbox and self.allow_unsandboxed_commands:
+            return (
+                f"this command runs OUTSIDE {access}: it sets `dangerouslyDisableSandbox`, "
+                "which this project allows (`claude.sandbox.allow_unsandboxed_commands`)."
+            )
+        line = command.strip()
+        for entry in self.excluded_commands:
+            pattern = entry.strip()
+            if not pattern:
+                continue
+            parts = [re.escape(part) for part in pattern.removesuffix(" *").split("*")]
+            tail = "(?: .*)?" if pattern.endswith(" *") or "*" not in pattern else ""
+            if re.fullmatch(".*".join(parts) + tail, line, re.DOTALL):
+                return (
+                    f"this command may run OUTSIDE {access}: it matches `{entry}` of the "
+                    "project's excluded commands (`claude.sandbox.excluded_commands`)."
+                )
+        return ""
 
     def denied_read_paths(self) -> list[str]:
         """Return the read deny list as Claude Code gets it.

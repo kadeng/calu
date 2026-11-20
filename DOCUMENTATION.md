@@ -2914,10 +2914,19 @@ calu run .
   - What runs unsandboxed: the script, uv, pytest and every test module and `conftest.py`
     it loads, with the session user's full file and network access. Calu's checkers still
     judge each call, and each edit of the script or a test goes through the edit checker.
-    The command checker sees the command line, not the script's content, and is not told
-    that the command leaves the sandbox.
-  - `claude.sandbox.allow_unsandboxed_commands` stays `false`. It concerns
-    `dangerouslyDisableSandbox`, not the excluded commands.
+    The command checker sees the command line, not the script's content. Calu tells it that
+    the command may run outside the sandbox, and the checker judges the call more closely
+    ([Commands outside the sandbox](#commands-outside-the-sandbox)).
+  - `claude.sandbox.allow_unsandboxed_commands` concerns `dangerouslyDisableSandbox`, not the
+    excluded commands, and is `false` by default. To let Claude run an occasional other
+    command outside the sandbox, set it for the project:
+
+    ```bash
+    calu config set --project calu claude.sandbox.allow_unsandboxed_commands true
+    ```
+
+    The command checker then judges each such call more closely, and escalates one that
+    reaches beyond what you asked for.
   - Outside the sandbox uv uses its own cache, so the script needs no `UV_CACHE_DIR`.
 
   Without the entry, run `scripts/db-tests.sh` in your own terminal, or run the session with
@@ -3326,6 +3335,38 @@ calu project network --name demo --network none
   `claude.sandbox.allow_unix_sockets` lets sockets through on macOS only; Claude Code ignores
   it on Linux.
 - `claude.sandbox.denied_domains` blocks its domains under every policy, including `full`.
+
+### Commands outside the sandbox
+
+Some commands need what the sandbox refuses, for example a test server reached over TCP. Two
+settings of a project let a Bash command run outside the sandbox. Such a command has the full
+file and network access of the user Claude Code runs as.
+
+| Setting | Default | Effect |
+|---|---|---|
+| `claude.sandbox.allow_unsandboxed_commands` | `false` | Claude can run a single Bash call outside the sandbox by setting the call's `dangerouslyDisableSandbox` parameter. Claude decides this per call |
+| `claude.sandbox.excluded_commands` | empty | the listed commands always run outside the sandbox. The entries use the syntax of Claude Code's Bash permission rules, e.g. `scripts/db-tests.sh *` |
+
+```bash
+calu config set --project demo claude.sandbox.allow_unsandboxed_commands true
+calu config add --project demo claude.sandbox.excluded_commands "scripts/db-tests.sh *"
+```
+
+**The command checker judges these calls more closely.** Calu adds a line "Sandbox:" to the
+step the checker sees. Calu's fixed part of the command checker's instructions tells the
+checker to name what the call reads, writes and contacts outside the project, and to escalate
+when the call reaches beyond what you asked for or when that is unclear. Ordinary development
+commands that only need the network or a local service pass, for example package downloads
+or tests against a test database.
+
+- For `dangerouslyDisableSandbox` the line says that the command runs outside the sandbox.
+- For an excluded command the line says that it *may* run outside: Calu compares the command
+  with the entries approximately and marks it when in doubt. Claude Code keeps some matching
+  command lines in the sandbox, for example a chain with another command.
+
+Keep `allow_unsandboxed_commands` off unless a project needs it: with it on, any Bash call can
+leave the sandbox, and only the checkers and the deny lists stand between that call and the
+machine.
 
 ### Sandbox entries in Claude Code's settings files
 

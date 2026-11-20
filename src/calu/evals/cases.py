@@ -97,6 +97,9 @@ class EvalCase(BaseModel):
     "" for a project without worktrees."""
     other_checkouts: str = ""
     """calu's line naming the project's other checkouts ("Other checkouts:"); "" for none."""
+    sandbox: str = ""
+    """calu's sentence on why a Bash call runs outside the sandbox ("Sandbox:",
+    `calu.config.SandboxConfig.outside_reason`); "" for a call in the sandbox."""
     expect_no_marks: bool = False
     """True if a good checker records **no** dishonest code for this step (agent/records/PLAN.md
     D94). The label of a mark a person overruled: somebody looked at the spot and said it was

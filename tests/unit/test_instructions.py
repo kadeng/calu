@@ -66,12 +66,15 @@ def test_the_part_about_unverified_code_is_added_only_while_honesty_is_on() -> N
 def test_the_shipped_instructions_are_short(name: str) -> None:
     """Requirement 38: system part and default together are a few plain rules.
 
+    The command checker's limit is higher by the section on commands outside the sandbox
+    (D255), which the owner asked for after requirement 38.
+
     Args:
         name: The checker type.
     """
     route = "subagent" if name == "subagent-result" else name
     words = len(compose_instructions(route, default_instructions(name)).split())
-    assert words < 360, f"{name}: {words} words"
+    assert words < (460 if name == "command" else 360), f"{name}: {words} words"
     assert "auto mode" in system_part(route) or route == "subagent"
 
 

@@ -3501,6 +3501,11 @@ class Session:
             await self._refresh_checkouts()
             own = await anyio.to_thread.run_sync(self.step_checkouts, step)
             step.checkout, step.other_checkouts = self.checkouts.header(own)
+            if step.tool_name == "Bash":
+                step.sandbox = self.config.claude.sandbox.outside_reason(
+                    str(step.tool_input.get("command", "")),
+                    step.tool_input.get("dangerouslyDisableSandbox") is True,
+                )
             step_id = await self.recorder.add_step(step)
             expected = await self._expect_edit(step)
             decided = await self.gate.decide(step, pending)

@@ -1,14 +1,14 @@
 # Handoff
 
 State on 2026-11-19, in a session that began on 2026-11-18 and is still going. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D254, open
+(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D255, open
 questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here
 
 ### State of the repository (updated 2026-11-20 evening, by the lead)
 
-**Read first:** this section and "Next, in this order" below; `PLAN.md` D238-D254 (the
+**Read first:** this section and "Next, in this order" below; `PLAN.md` D238-D255 (the
 decisions of 2026-11-19/20); `agent/records/notes/test-plan.md` (sections A-L, the record of
 every case); `agent/records/notes/worktree-design.md`; the skill
 `.claude/skills/ui-testing-with-cua/SKILL.md`. The owner's words are in `REQUIREMENTS.md`
@@ -39,6 +39,14 @@ every case); `agent/records/notes/worktree-design.md`; the skill
   Code's `allowAllUnixSockets` unnecessary for the database tests.
   The owner's next step: reinstall from GitHub, `sudo calu setup` (migrations to 0042),
   `calu project add` for the calu checkout, then work.
+  **Occasional unsandboxed commands (PLAN D255, 2026-11-20, not pushed):** no new tool. A
+  project sets `claude.sandbox.allow_unsandboxed_commands true` (default stays false), and
+  Claude's Bash calls with `dangerouslyDisableSandbox` run outside the sandbox. The checker's
+  step header then has a "Sandbox:" line (also, as "may run", for a match of
+  `excluded_commands`), and the fixed part `system/command.md` tells the command checker to
+  judge such calls more strictly and to ESCALATE what reaches beyond the user's request. Not
+  checked with a real Claude or a real checker model yet; the two new eval cases are the
+  first thing to run (`calu evals`).
 
 #### Built on 2026-11-19/20 (one line each; details in PLAN and the sections below)
 
