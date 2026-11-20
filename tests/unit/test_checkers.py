@@ -45,6 +45,20 @@ class TestPolicy:
         assert policy.route("Read") is Route.ALLOW
         assert policy.route("mcp__x__y") is Route.COMMAND
 
+    def test_entering_a_worktree_needs_no_model_call(self):
+        """`EnterWorktree` creates a new worktree and changes no file; `ExitWorktree` can
+        delete work, so it stays with the command checker and its rule (D165)."""
+        from calu.checkers.policy import unknown_tools
+
+        policy = ToolPolicy()
+        assert policy.route("EnterWorktree") is Route.ALLOW
+        assert policy.route("ExitWorktree") is Route.COMMAND
+        assert unknown_tools(["EnterWorktree", "ExitWorktree"]) == []
+        # The user can still send it to a checker.
+        assert ToolPolicy(overrides={"EnterWorktree": Route.COMMAND}).route("EnterWorktree") is (
+            Route.COMMAND
+        )
+
     def test_overrides_win(self):
         policy = ToolPolicy(overrides={"Read": Route.ESCALATE}, default=Route.ESCALATE)
         assert policy.route("Read") is Route.ESCALATE
@@ -64,7 +78,7 @@ class TestPolicy:
             assert policy.route(tool) is Route.COMMAND, f"{tool} would run unchecked"
 
     def test_nothing_that_writes_or_runs_is_on_the_allow_list(self):
-        """The allow list is read-only work plus four documented exceptions."""
+        """The allow list is read-only work plus five documented exceptions."""
         from calu.checkers.policy import READ_ONLY_TOOLS
 
         allowed_to_write = {
@@ -75,6 +89,7 @@ class TestPolicy:
             "Task",
             "SendMessage",
             "Skill",
+            "EnterWorktree",
         }
         for tool in READ_ONLY_TOOLS - allowed_to_write:
             assert not any(

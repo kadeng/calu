@@ -2131,6 +2131,10 @@ its own worktree `.claude/worktrees/agent-<id>`. Each worktree has its own branc
 index and files. Claude can also run `git worktree add`, which puts a worktree wherever it is
 told, also outside the project directory.
 
+`EnterWorktree` runs without a checker: it creates a new worktree and changes no existing
+file, and every later step in the worktree is checked. `ExitWorktree` goes to the command
+checker, because it can delete the worktree's work.
+
 ### Checkouts
 
 Calu calls the project directory the **main checkout**, and the project directory and every

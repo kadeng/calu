@@ -462,7 +462,8 @@ DOCUMENTATION.md. Proposals, not built: a tested recipe for the database tests u
 sandbox (Unix socket, `claude.sandbox.allow_unix_sockets`; TCP is not proxied, so the tests
 are skipped there). Built afterwards (PLAN D254): `claude.pass_env`, the variable names that
 reach a Claude Code started by `--sudo`/`--user` (`CALU_TEST_DSN`; with `--sudo` started as
-`sudo --preserve-env=CALU_TEST_DSN calu run --user "$USER"`, because sudo drops it first).
+`sudo --preserve-env=CALU_TEST_DSN calu run --user "$USER"`, because sudo drops it first),
+and `EnterWorktree` runs without a checker (it was unrouted and went to the command checker).
 The dogfood PostgreSQL container `calu-dogfood-pg` was removed; the clone
 `~/work/calu-dogfood` stays in the desktop.
 

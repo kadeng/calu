@@ -1138,4 +1138,5 @@ Open points:
 4. Haiku wrote `\n` inside a double-quoted `git commit -m`, so the commit message holds a
    literal backslash-n. Not Calu's concern.
 5. The tools without a route at the session start include `EnterWorktree` (it goes to the
-   command checker); unchanged.
+   command checker). Fixed afterwards: it runs without a checker (PLAN D254 (b);
+   `test_checkers.py`, `test_worktrees.py`).

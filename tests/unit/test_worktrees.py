@@ -331,6 +331,37 @@ async def test_u4_an_unignored_worktree_is_no_unreviewed_file_of_the_main_checko
     assert ".claude/worktrees/wta" in session.honesty.excluded
 
 
+async def test_entering_a_worktree_passes_without_a_checker(repo: Path) -> None:
+    """Rehearsal of 2026-11-20 (test plan M): `EnterWorktree` went to the command checker as
+    an unrouted tool. It creates a new worktree and changes no file, so it passes unchecked;
+    the steps in the worktree are checked as before."""
+    from calu.protocol.messages import CheckResult
+    from tests.unit.test_honesty_session import run_turns, session_on
+
+    session, rec, _store = await session_on(
+        repo,
+        [
+            [
+                {
+                    "tool": "EnterWorktree",
+                    "input": {"name": "wta"},
+                    "run": ["git", "worktree", "add", "-q", ".claude/worktrees/wta"],
+                    "result": "ok",
+                },
+                run_in(".claude/worktrees/wta"),
+            ]
+        ],
+    )
+    await run_turns(session, rec)
+    entered, ran = rec.of(CheckResult)
+    assert (entered.tool_name, entered.route, entered.decision.value) == (
+        "EnterWorktree",
+        "allow",
+        "PASS",
+    )
+    assert (ran.tool_name, ran.route) == ("Bash", "command")
+
+
 async def test_u4_a_worktree_a_step_creates_is_no_write_and_no_unreviewed_file(
     repo: Path,
 ) -> None:

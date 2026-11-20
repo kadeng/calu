@@ -67,11 +67,12 @@ READ_ONLY_TOOLS = frozenset(
         "ToolSearch",
         "ExitPlanMode",
         "EnterPlanMode",
+        "EnterWorktree",  # a new worktree; every call in it is checked
     }
 )
 """Tools that run without a check.
 
-Most of them read. The four that do not are deliberate, and each is safe for the same reason --
+Most of them read. The five that do not are deliberate, and each is safe for the same reason --
 whatever they set in motion is itself checked:
 
 * `TodoWrite`, `TaskCreate`, `TaskUpdate` write Claude Code's own plan and task state, which
@@ -88,6 +89,12 @@ whatever they set in motion is itself checked:
   (`Session._own_agent`, agent/records/PLAN.md D69). calu's own relay always matches, because the id
   it tells the main agent to use comes from that same registry.
 * `Skill` loads instructions. The tool calls the skill then asks for are checked like any other.
+* `EnterWorktree` creates `.claude/worktrees/<name>` on a new branch from `HEAD` and moves the
+  main agent into it (measured: `spikes/RESULTS.md`, worktrees). It changes no file that exists,
+  neither in the project nor elsewhere, and the main checkout's write sets leave the new
+  worktree out. Every later call of the agent in the worktree goes through the gate, so a
+  checker would only judge the name. Its counterpart `ExitWorktree` stays on the default route,
+  because it can delete work (`calu.checkers.rules.OTHER_RULED_TOOLS`).
 
 Everything that leaves the machine (`WebFetch`, `WebSearch`) or that calu does not know is
 deliberately absent: it falls to `ToolPolicy.default`, which is the command checker. A route of
