@@ -305,6 +305,7 @@ class EscalationDesk:
                 tool_use_id=step.tool_use_id,
                 agent_id=step.agent_id,
                 tool_name=step.tool_name,
+                checkouts=step.checkouts,
                 held=True,
                 reason=holding,
             )
@@ -328,6 +329,7 @@ class EscalationDesk:
                         tool_use_id=step.tool_use_id,
                         agent_id=step.agent_id,
                         tool_name=step.tool_name,
+                        checkouts=step.checkouts,
                         held=False,
                     )
                 )

@@ -3319,6 +3319,7 @@ class Session:
             await self._refresh_checkouts()
             own = await anyio.to_thread.run_sync(self.step_checkouts, step)
             step.checkout, step.other_checkouts = self.checkouts.header(own)
+            step.checkouts = [checkout.label for checkout in own] if self.checkouts.others else []
             step_id = await self.recorder.add_step(step)
             expected = await self._expect_edit(step)
             decided = await self.gate.decide(step, pending)
@@ -3526,6 +3527,7 @@ class Session:
                 step_summary=result.step_summary,
                 comment=comment,
                 git_head=await self._git_head(),
+                checkouts=step.checkouts,
                 **_honesty_result(decided.runs),
             )
         )

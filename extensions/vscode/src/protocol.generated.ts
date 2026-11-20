@@ -193,6 +193,7 @@ export interface ChatSendParams {
  */
 export interface CheckResult {
   agent_id?: string | null;
+  checkouts?: string[];
   comment?: string;
   decision: Decision;
   git_head?: string | null;
@@ -1139,6 +1140,7 @@ export interface SideAskResult {
  */
 export interface StepHeld {
   agent_id?: string | null;
+  checkouts?: string[];
   held: boolean;
   reason?: string;
   seq?: number;

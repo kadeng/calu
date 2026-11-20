@@ -36,6 +36,7 @@ from calu.protocol.messages import (
     EscalationResolved,
     Event,
     SessionState,
+    StepHeld,
     ToolResult,
     ToolUse,
     TurnResult,
@@ -61,6 +62,7 @@ from calu.traces.render import (
     Header,
     TraceFileError,
     TraceRenderer,
+    checkout_names,
     create_trace_file,
     cut,
     find_trace_of,
@@ -415,6 +417,77 @@ def test_subagents_are_nested_under_the_step_that_started_them():
         "### Result of tool call 1 (Agent)",
         "#### Subagent 3: tool call 5: LS",
     ]
+
+
+def check(tool_use_id: str, checkouts: list[str], agent_id: str | None = None) -> CheckResult:
+    """Return a PASS of a Bash call with the step's checkouts."""
+    return CheckResult(
+        tool_use_id=tool_use_id,
+        agent_id=agent_id,
+        tool_name="Bash",
+        route=Route.COMMAND,
+        decision=Decision.PASS,
+        checkouts=checkouts,
+    )
+
+
+def test_the_checkout_names_of_a_heading():
+    assert checkout_names([]) == "" and checkout_names(["."]) == ""
+    assert checkout_names([".claude/worktrees/agent-a1b2"]) == "worktree agent-a1b2"
+    assert checkout_names([".", ".claude/worktrees/b"]) == "main checkout, worktree b"
+    assert checkout_names(["/tmp/x"]) == "worktree /tmp/x"
+    assert "\n" not in checkout_names([".claude/worktrees/a\n## User"])
+
+
+def test_a_tool_call_heading_names_the_worktree_of_its_step():
+    """D252: the heading of a tool call outside the main checkout names its worktree, whether
+    the check comes after the call (block held open until then) or before it."""
+    renderer = TraceRenderer(narrated=False)
+    blocks = []
+    for event in [
+        UserInput(text="go"),
+        ToolUse(agent_id="a1", tool_use_id="t1", name="Bash", input={"command": "pytest"}),
+        ToolUse(agent_id="a1", tool_use_id="t2", name="Bash", input={"command": "ls"}),
+        check("t1", [".claude/worktrees/agent-a1b2"], "a1"),
+        check("t3", ["."]),  # the hook came first
+        ToolUse(tool_use_id="t3", name="Bash", input={"command": "make"}),
+        StepHeld(tool_use_id="t4", tool_name="Bash", held=True, checkouts=["/tmp/x"]),
+        ToolUse(tool_use_id="t4", name="Bash", input={"command": "x"}),
+        ToolUse(tool_use_id="t5", name="Bash", input={"command": "cd b && pytest"}),
+        StepHeld(
+            tool_use_id="t5", tool_name="Bash", held=True, checkouts=[".", ".claude/worktrees/b"]
+        ),
+        ToolResult(agent_id="a1", tool_use_id="t2", content="x"),
+        ToolUse(tool_use_id="t6", name="Read", input={"file_path": "a"}),
+    ]:
+        blocks += renderer.render(event)
+    calls = re.compile(r"#+ (Subagent \d+: tool|Tool) call \d+: ")
+    tool = [block for block in blocks if calls.match(block.heading)]
+    assert [(block.heading, block.closed) for block in tool] == [
+        ("#### Subagent 1: tool call 1: Bash (worktree agent-a1b2)", True),
+        ("#### Subagent 1: tool call 2: Bash", True),  # no checkouts known: closed by its result
+        ("### Tool call 3: Bash", True),  # the main checkout only
+        ("### Tool call 4: Bash (worktree /tmp/x)", True),
+        ("### Tool call 5: Bash (main checkout, worktree b)", True),
+        ("### Tool call 6: Read", False),  # waits for its check
+    ]
+    renderer.render(TurnResult(subtype="success", is_error=False))
+    assert tool[-1].closed and tool[-1].heading == "### Tool call 6: Read"
+
+
+async def test_the_writer_writes_a_worktree_heading_after_the_check(tmp_path: Path):
+    """The writer keeps the order: the held tool call block, then what came after it."""
+    writer = writer_for(tmp_path, None)
+    async with anyio.create_task_group() as tg:
+        writer.start(tg)
+        writer.feed(UserInput(text="go"))
+        writer.feed(ToolUse(tool_use_id="t1", name="Bash", input={"command": "pytest"}))
+        writer.feed(AssistantText(agent_id="other", text="meanwhile"))
+        writer.feed(check("t1", [".claude/worktrees/wta"]))
+        await writer.close("The session ended.")
+    text = body_of(writer)
+    assert text.index("### Tool call 1: Bash (worktree wta)") < text.index("meanwhile")
+    assert text.index("meanwhile") < text.index("### Check of tool call 1 (Bash): PASS")
 
 
 def test_the_narrated_form_collects_text_until_the_agents_next_step():

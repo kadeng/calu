@@ -614,6 +614,51 @@ async def test_the_session_tells_the_checkers_the_steps_checkout(repo: Path) -> 
     ]
 
 
+async def test_check_results_carry_the_steps_checkouts_for_clients_and_trace(
+    repo: Path, tmp_path: Path
+) -> None:
+    """D252: `check.result` names the step's checkouts while the project has worktrees, and
+    the session trace's tool call heading names the worktree."""
+    from calu.config import Config, TracesConfig
+    from calu.protocol.messages import CheckResult
+    from tests.unit.helpers import make_session
+    from tests.unit.test_honesty_session import run_turns
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    git(plain, "init", "-q")
+    session, rec, _store = make_session(plain, [[run_in("", "ls")]])
+    await run_turns(session, rec)
+    assert [check.checkouts for check in rec.of(CheckResult)] == [[]], "no worktree, no field"
+
+    worktree(repo, "wta")
+    config = Config(traces=TracesConfig(enabled=True, redact=False))
+    session, rec, _store = make_session(
+        repo,
+        [
+            [
+                run_in(".claude/worktrees/wta", "ls"),
+                run_in("", "ls"),
+                run_in("", "cd .claude/worktrees/wta && ls"),
+            ]
+        ],
+        config,
+    )
+    await run_turns(session, rec)
+    assert [check.checkouts for check in rec.of(CheckResult)] == [
+        [".claude/worktrees/wta"],
+        ["."],
+        [".", ".claude/worktrees/wta"],
+    ]
+    (trace,) = (repo / "agent" / "traces").rglob("session_*.md")
+    headings = [line for line in trace.read_text().splitlines() if "ool call" in line]
+    assert [line for line in headings if line.startswith("### Tool call")] == [
+        "### Tool call 1: Bash (worktree wta)",
+        "### Tool call 2: Bash",
+        "### Tool call 3: Bash (main checkout, worktree wta)",
+    ]
+
+
 # ------------------------------------------------------------------ U10: write sets
 
 

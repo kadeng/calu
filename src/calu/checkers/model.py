@@ -347,6 +347,11 @@ class Step(BaseModel):
     worktree."""
     other_checkouts: str = ""
     """calu's description of the project's other checkouts; "" when there are none."""
+    checkouts: list[str] = Field(default_factory=list[str])
+    """The labels of the checkouts the call belongs to (`calu.checkouts.Checkout.label`: "."
+    for the main checkout, `.claude/worktrees/wta`, or an absolute path outside the project),
+    in the order of `checkout`; empty when the project has no worktree. The clients and the
+    trace name a step's worktree from it (`check.result`, `step.held`)."""
     notes: list[str] = Field(default_factory=list)
     """Hints from the user's rules for the checker, e.g. paths outside the allowlists."""
     narration: str = ""

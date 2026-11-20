@@ -1881,7 +1881,7 @@ Summary of the step: Reads src/cart.py to find the rounding code.
 | `### User` | the user's message. Images are not included; a line says how many were attached |
 | `### Claude, narrated` or `### Claude` | Claude's words (`traces.content`) |
 | `### Claude's thinking` | plain form only: the summary of one block of thinking, in the final version that Claude Code sent |
-| `### Tool call N: <tool>` | the tool's input, every value in a code fence; long values are cut (`traces.max_input_chars`) |
+| `### Tool call N: <tool>` | the tool's input, every value in a code fence; long values are cut (`traces.max_input_chars`). A step outside the main checkout names its worktree: `### Tool call N: <tool> (worktree <name>)` ([Worktrees](#worktrees)) |
 | `### Check of tool call N (<tool>): <DECISION>` | the route, the checkers' reason, their summary and their comment to Claude |
 | `### Escalation E: ... waits for a person`, `### Escalation E: allowed` | the reason; the person who decided, and the note. The checker's context is not included |
 | `### Result of tool call N (<tool>)` | the result, cut to `traces.max_result_chars` characters |
@@ -1890,6 +1890,9 @@ Summary of the step: Reads src/cart.py to find the rounding code.
 - Calu only appends to the file. It never shortens or summarises what the file already holds.
 - Tool calls stay numbered when turn numbers are off, because the checks and results refer to
   them.
+- Calu writes a tool call's block when the call's check has decided, when the call waits
+  behind another step's escalation, or when its result came, so that its heading can name the
+  call's worktree. Until then the blocks after it wait; none is lost.
 - With `context.narrate` off there is no narrator, and the file holds the plain form.
 - Claude Code returns thinking only as a summary, often only for the last step of a turn, and
   can revise a summary while it streams. The plain form writes each thinking block once, when
@@ -2052,6 +2055,11 @@ Other checkouts: `.` (main checkout), `.claude/worktrees/agent-aa89` (worktree, 
 The first line names every checkout the step belongs to, so a command that changes into a
 worktree has both the main checkout and that worktree on it. The second line names at most
 ten checkouts and counts the rest.
+
+The clients receive the same checkouts with each step's decision, and the session trace names
+the worktree in the heading of a step outside the main checkout:
+`### Tool call 3: Bash (worktree agent-a1b2)`, or `(main checkout, worktree b)` for a command
+that changes into worktree `b`.
 
 ### Code honesty per checkout
 

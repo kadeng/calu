@@ -309,9 +309,12 @@ from the text above, and why:
 
 Not built (open points for the owner):
 
-1. The trace's step heading does not name the checkout (point 4): the trace is rendered from
-   protocol events, which carry no working directory; it needs a protocol field
-   (`npm run gen:protocol`, the clients). The tool inputs show the worktree paths already.
+1. ~~The trace's step heading does not name the checkout (point 4).~~ *Built 2026-11-20 (the
+   owner's decision, PLAN D252):* `check.result` and `step.held` carry `checkouts` (labels,
+   empty without worktrees); the renderer keeps a tool call's block open until one of them
+   (or its `tool.result`, `escalation.request`, the turn's end) comes, because Claude Code may
+   report the call before calu's hook sees it; the heading reads "Tool call 3: Bash
+   (worktree agent-a1b2)".
 2. ~~The pre-commit hook does not resolve the main checkout for a worktree outside the project
    (point 4).~~ *Built 2026-11-20 (the owner's decision):* `calu.traces.finalize.settings_directory`
    asks `git rev-parse --git-common-dir` and looks up the settings of the main checkout's
