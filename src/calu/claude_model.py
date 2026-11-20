@@ -78,6 +78,18 @@ log = logging.getLogger(__name__)
 PREFIX = "claude:"
 """Model strings this module answers: `claude:haiku`, `claude:sonnet`, `claude:opus`, ..."""
 
+CLI_ENVIRONMENT_NOTE = (
+    "\n\nThe Claude Code CLI that runs this check adds an environment section of its own "
+    '("Primary working directory", a scratchpad directory, whether it is a git repository). '
+    "That section describes an empty temporary directory of this check, not the project and "
+    'not the session under review. Ignore it: the step\'s own lines ("Working directory:", '
+    '"Checkout:") are the only facts about where the step runs.\n'
+)
+"""Appended to a check's instructions (the system prompt file). `--system-prompt-file` keeps
+Claude Code's environment section (CLI 2.1.319, measured 2026-11-20), and a checker on
+`claude:haiku` compared the step's working directory with that empty directory and escalated
+a test run in the project as "outside the project directory" (test plan M15)."""
+
 DEFAULT_TIMEOUT_S = 180.0
 """How long one check may take before it is reported as a failure.
 
@@ -269,7 +281,7 @@ def claude_cli_model(
                 system_file = Path(scratch) / "instructions.md"
                 descriptor = os.open(system_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                    handle.write(instructions)
+                    handle.write(instructions + CLI_ENVIRONMENT_NOTE)
                 command += ["--system-prompt-file", str(system_file)]
             try:
                 with anyio.fail_after(timeout_s):

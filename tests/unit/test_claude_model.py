@@ -16,7 +16,13 @@ import pytest
 from pydantic_ai import Agent
 
 from calu.checkers import CheckDecision, Decision
-from calu.claude_model import ClaudeCliError, alias_of, claude_cli_model, is_cli_model
+from calu.claude_model import (
+    CLI_ENVIRONMENT_NOTE,
+    ClaudeCliError,
+    alias_of,
+    claude_cli_model,
+    is_cli_model,
+)
 from calu.models import resolve_model
 
 pytestmark = pytest.mark.anyio
@@ -107,7 +113,11 @@ async def test_a_check_runs_the_cli_and_returns_its_structured_answer(
     assert not [a for a in argv if "rm -rf" in a or "Never allow" in a]
     stdin = Path(f"{record}.stdin").read_text(encoding="utf-8")
     assert stdin == "Judge this command: rm -rf /"
-    assert Path(f"{record}.system").read_text() == "You check commands. Never allow deletions."
+    # The instructions, then the note that the CLI's own environment section ("Primary working
+    # directory": the empty directory below) is not the project (test plan M15).
+    system = Path(f"{record}.system").read_text()
+    assert system == "You check commands. Never allow deletions." + CLI_ENVIRONMENT_NOTE
+    assert "Primary working directory" in system and "not the project" in system
     assert Path(f"{record}.mode").read_text().strip() == "600"
     system_file = Path(argv[argv.index("--system-prompt-file") + 1])
     assert not system_file.exists(), "the instructions file is removed with its directory"
@@ -150,7 +160,9 @@ async def test_a_prompt_larger_than_one_argument_may_be_reaches_the_cli(
     result = await agent.run(prompt)
     assert result.output.decision is Decision.DENY
     assert Path(f"{record}.stdin").read_text(encoding="utf-8") == prompt
-    assert Path(f"{record}.system").read_text(encoding="utf-8") == instructions
+    assert (
+        Path(f"{record}.system").read_text(encoding="utf-8") == instructions + CLI_ENVIRONMENT_NOTE
+    )
     assert max(len(a) for a in record.read_text(encoding="utf-8").splitlines()) < 10_000
 
 
