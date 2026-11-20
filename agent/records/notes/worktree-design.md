@@ -1,4 +1,4 @@
-# Worktree support: design (2026-11-20, decided by the owner the same day)
+# Worktree support: design (2026-11-20, decided by the owner and built the same day)
 
 **The owner's decisions (2026-11-20).**
 
@@ -261,3 +261,51 @@ once not):
    any of them can probe around a denial); (b) hold only the steps of the same checkout,
    letting subagents in other worktrees go on (M; the hold no longer covers a main agent that
    moves work to another worktree).
+
+## As built (2026-11-20)
+
+Commits "Worktrees (1)" to "(6)"; the unit cases U1-U14 are in `tests/unit/test_worktrees.py`
+(several cases per number, plus the outside worktree's honesty cases). Where the build differs
+from the text above, and why:
+
+- **Registry refresh.** `git worktree list` runs at the start and before every step (a few
+  milliseconds), not on the list of triggers of point 1; `Checkouts.of` still refreshes for an
+  unknown `.claude/worktrees/<name>`. Simpler, and no trigger can be missed.
+- **Keys.** Every checkout's `HonestyState` names files relative to the session directory
+  (absolute outside it), as before; a new `root` says where git is asked. So marks, the note
+  and `honesty.update` needed no translation of paths.
+- **Shared trust.** Any verification (a checked edit, a review) adds its content to the shared
+  `trusted_hashes` at once, not only one that is stored; a content with an open mark is not
+  added, and a mark withdraws it as before. One test of `test_honesty_state.py` changed with it:
+  going back to a content the checkers judged is verified again in the same session (as it was
+  after a restart already).
+- **Outside worktree** (the owner's decision): its state takes "user" as the sufficient trust;
+  the honesty review leaves such checkouts out and its answer says that a person certifies
+  them. The shipped command and edit instructions got one rule ("Checkout:" says "worktree
+  outside the project directory": ESCALATE unless the step shows what it does); its first
+  wording made Nemotron escalate a test run in a nested worktree once in three, the present one
+  0 in 8.
+- **Combined states.** A step's checkouts are combined for the gate (clean only if each is; no
+  baseline if one lacks it). The clients' overview (`honesty.update`) takes the main
+  checkout's baseline and lists a worktree without a baseline by its label among the unreviewed
+  files, so an outside worktree does not make the whole session read "no baseline".
+- **Commit certification** runs in the commit's own checkout (its `HEAD`).
+- **Checker lines** appear only while the project has worktrees, so ordinary prompts are
+  unchanged. The route parts now say "you apply only the rules below" instead of appending
+  "and calu's own rules below": the longer sentence broke requirement 38's word limit.
+- **Snapshots.** Two snapshots of one repository are now taken one after the other: parallel
+  commands in one worktree failed with git's `index.lock` (found by U10).
+- **Fake runner.** "cwd" per scripted call; "writes" and "run" happen there.
+
+Not built (open points for the owner):
+
+1. The trace's step heading does not name the checkout (point 4): the trace is rendered from
+   protocol events, which carry no working directory; it needs a protocol field
+   (`npm run gen:protocol`, the clients). The tool inputs show the worktree paths already.
+2. The pre-commit hook does not resolve the main checkout for a worktree outside the project
+   (point 4): its settings lookup by directory falls back to the global settings there.
+   Documented as a gap.
+3. A checker cannot record a mark on a file of an outside worktree (marks must be paths inside
+   the project); with honesty on, those files need a person's certification anyway.
+4. `/trust` in a client resolves a branch or `HEAD` in the session directory, not in the step's
+   worktree; `calu honesty trust` in a terminal inside the worktree resolves there.

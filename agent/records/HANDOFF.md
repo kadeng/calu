@@ -284,7 +284,18 @@ source, a tool description is
 untrusted text (an MCP server can write anything into it): it reaches the checker marked
 as data, never as instructions, and is cut to a fixed length.
 
-#### Worktree support (needed, owner 2026-11-20)
+#### Worktree support (built 2026-11-20; the real-Claude runs L1-L6 are open)
+
+**Built** (PLAN D251, the design and its section "As built" in
+`agent/records/notes/worktree-design.md`, commits "Worktrees (1)" to "(6)"): a checkout registry
+(`calu.checkouts`), one honesty state per checkout with shared trust of contents, the gate and
+the honesty review per step's checkouts, a worktree outside the project needing a person's
+certification while honesty is on (the owner's decision), calu's fixed rule against obvious
+cross-checkout loading, the "Checkout:" lines for the checkers, snapshots and write sets per
+checkout, the rules per worktree (trace copies, `git worktree remove --force`), the user
+documentation (DOCUMENTATION.md "Worktrees") and `docs/TESTING.md` item 47. Unit cases U1-U14:
+`tests/unit/test_worktrees.py`. **Next:** item 47 (L1-L6) with a real `claude` in the Cua
+desktop; then the open points at the end of the design's "As built".
 
 The owner: calu must work with git worktrees as Claude Code commonly uses them, without asking
 about it, with and without parallel subagents. Known today: each tool call carries its own

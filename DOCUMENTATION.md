@@ -48,6 +48,7 @@ the code; this file names settings and links there.
 - [Writing checker instructions](#writing-checker-instructions)
 - [Code honesty](#code-honesty)
 - [Session traces](#session-traces)
+- [Worktrees](#worktrees)
 - [Resuming, forking and rewinding a conversation](#resuming-forking-and-rewinding-a-conversation)
 - [Several sessions and the herd](#several-sessions-and-the-herd)
 - [From another machine](#from-another-machine)
@@ -1163,7 +1164,7 @@ A checker's prompt has two parts. Calu's fixed part states the role, the tools, 
 answers and the summary. Your instructions state only the rules: when to PASS, DENY, ESCALATE
 or ALLOW. As shipped, both parts together are about 300 words per checker, because the shipped
 instructions contain only one rule for commands and edits (a step in a git worktree outside the
-project directory). General safety is left to Claude Code's auto
+project directory, see [Worktrees](#worktrees)). General safety is left to Claude Code's auto
 mode.
 
 ```bash
@@ -2005,6 +2006,120 @@ until its next step. `queue_blocks` and `redactor_timeout_s` apply from the next
   shapes it lists. Stage 2 is a model: it can miss a name or a key, and it can replace
   something harmless. Redaction lowers the risk of publishing a secret or personal data and
   gives no guarantee.
+
+## Worktrees
+
+This section describes how Calu handles git worktrees. Read it when Claude works in worktrees,
+alone or with parallel subagents. Calu needs no setting for them and asks no question about
+them.
+
+Claude Code creates worktrees in two ways: `EnterWorktree` moves the main agent into a new
+worktree `.claude/worktrees/<name>`, and a subagent started with `isolation: "worktree"` gets
+its own worktree `.claude/worktrees/agent-<id>`. Each worktree has its own branch, `HEAD`,
+index and files. Claude can also run `git worktree add`, which puts a worktree wherever it is
+told, also outside the project directory.
+
+### Checkouts
+
+Calu calls the project directory the **main checkout**, and the project directory and every
+worktree of its repository **checkouts**. Calu reads the list from `git worktree list` before
+every step. A step belongs to the checkout of its working directory. A shell command also
+belongs to the checkout of each directory it changes to: `cd .claude/worktrees/b && pytest`,
+run in the project directory, belongs to the main checkout and to `b`.
+
+While the project has worktrees, a checker reads two more lines after the working directory
+of a step:
+
+```text
+Checkout: `.claude/worktrees/wta` (worktree, branch `worktree-wta`)
+Other checkouts: `.` (main checkout), `.claude/worktrees/agent-aa89` (worktree, branch `worktree-agent-aa89`)
+```
+
+The second line names at most ten checkouts and counts the rest.
+
+### Code honesty per checkout
+
+With [code honesty](#code-honesty) on, Calu keeps the honesty state per checkout:
+
+- **Each checkout has its own baseline**: the nearest trusted ancestor of its own `HEAD`. Its
+  marks, its verified files and its unreviewed files are its own.
+- **A mark stops only its own checkout.** A dishonest edit in worktree A stops code runs and
+  commits in A. Steps in worktree B and in the main checkout go on. A step that belongs to
+  several checkouts needs each of them clean.
+- **A verified content counts everywhere.** Calu stores verifications by the file's content,
+  so a file verified in a worktree is verified in the main checkout after a merge, a
+  cherry-pick or a copy.
+- **A new session reviews what an earlier one left.** Calu keeps marks only for the session
+  that made them. A file that differs from its checkout's baseline is unreviewed, so a code run
+  in a worktree that an earlier session left with unverified files waits for an honesty review
+  first. This also holds when `.claude/worktrees/` is in `.gitignore`.
+- **The worktree directory is no file of the main checkout.** The main checkout's state leaves
+  out the worktrees inside it, whether `.claude/worktrees/` is ignored or not.
+- The honesty review that a step starts judges the files of the step's checkouts.
+  `/honesty-review` judges every checkout inside the project directory.
+- The clients show the marks and unreviewed files of all checkouts together, each with its
+  path relative to the project directory (absolute for a worktree outside it).
+
+Calu adds one rule of its own to the checkers' instructions while honesty is on: a checker
+escalates a step that obviously makes code of its checkout import, load or run code of another
+checkout, for example a path into another worktree in `PYTHONPATH` or `sys.path`. Reading,
+comparing, copying and git commands across checkouts stay free. The rule covers the cases a
+step shows plainly; it is a checker rule, not a complete detector. The rule is in the fixed
+part of the instructions (`system/honesty-state.md`), so editing a checker's instructions does
+not remove it.
+
+### Write sets
+
+With `changes.snapshot` on, Calu snapshots a command in every checkout it belongs to. The write
+set names each path relative to the project directory
+(`.claude/worktrees/wta/helper.py`). Two commands that run at the same time share a write set
+only when they run in the same checkout: parallel subagents in their own worktrees each get an
+itemised write set. A refused change is undone in its checkout.
+
+### Rules in a worktree
+
+The allow and deny lists read a path in a worktree relative to the worktree's root. So writing
+a worktree's `CLAUDE.md` or `.claude/settings.json` asks a person like writing the project's
+own. The worktree's copy of the trace directory is protected like the trace directory.
+`git worktree remove --force` (or `-f`) asks a person, built in, because it deletes the
+worktree's uncommitted work; `ExitWorktree` with `discard_changes` asks for the same reason.
+A plain `git worktree remove` stays free: git refuses it while work is at risk.
+
+Claude Code applies only the main checkout's `.claude/settings.json` and `CLAUDE.md`, also to
+an agent in a worktree. The worktree's copies matter when a merge brings them into the main
+checkout, which is why writing them asks.
+
+### A worktree outside the project directory
+
+A worktree outside the project directory (`git worktree add ../x`) is a checkout like the
+others for the rules, the write sets and the honesty state. Two things differ:
+
+- The checkers' read tools read only files inside the project directory, so a checker judges a
+  step there from what the step shows. The shipped command and edit instructions hold one rule
+  for such a step: escalate it unless the step shows what it does. Change or remove the rule
+  with `calu checker edit command` and `calu checker edit edit`.
+- With honesty on, the files of such a worktree count as verified only when a person certified
+  or trusted them, whatever `honesty.sufficient_trust` says. A step there that runs code waits
+  for a person until then. A person certifies the worktree's commit with
+  `calu honesty trust <branch>`, run in a terminal inside the worktree, or a file with
+  `calu honesty trust --file PATH` or `/trust-file PATH` in a client.
+
+With honesty off, Calu adds nothing of its own to such a step: the checkers' instructions and
+Claude Code's auto mode decide.
+
+### Known gaps
+
+- An open decision holds every checked step of every agent, also of subagents in other
+  worktrees ([An escalation holds the session](#an-escalation-holds-the-session)).
+- `/trust` in a client resolves a branch or `HEAD` in the project directory; for a worktree's
+  own `HEAD`, name its branch or commit.
+- A checker cannot record a mark on a file of a worktree outside the project directory: marks
+  name paths inside the project. That worktree's files need a person's certification anyway.
+- The pre-commit hook of the session traces looks up the project's settings by the directory
+  it runs in. In a worktree outside the project directory it does not find the project and
+  uses the global settings.
+- A session that ends while Claude works in a worktree leaves the worktree locked in
+  `git worktree list`; `git worktree unlock` releases it.
 
 ## Resuming, forking and rewinding a conversation
 
