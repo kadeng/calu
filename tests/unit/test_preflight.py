@@ -96,6 +96,22 @@ def test_missing_sandbox_tools_are_reported(monkeypatch):
     assert preflight.sandbox_warnings(Config()) == []
 
 
+def test_a_temporary_directory_too_long_for_the_sandbox_sockets_is_reported(monkeypatch):
+    """Host rehearsal (test plan M15): a TMPDIR of 120 bytes made Claude Code's sandbox fail
+    with "Failed to create bridge sockets"; every Bash command of the session failed."""
+    monkeypatch.setattr(preflight.sys, "platform", "linux")
+    long_dir = "/tmp/" + "x" * 100
+    (warning,) = preflight.sandbox_socket_warnings(Config(), {"TMPDIR": long_dir})
+    assert long_dir in warning and "TMPDIR" in warning
+    assert preflight.sandbox_socket_warnings(Config(), {}) == []  # /tmp
+    fits = "/" + "y" * (preflight.UNIX_SOCKET_PATH_MAX - preflight.SANDBOX_SOCKET_NAME_LENGTH - 1)
+    assert preflight.sandbox_socket_warnings(Config(), {"TMPDIR": fits + "/"}) == []
+    assert preflight.sandbox_socket_warnings(Config(), {"TMPDIR": fits + "z"}) != []
+    off = Config(claude=ClaudeConfig(sandbox=SandboxConfig(enabled=False)))
+    assert preflight.sandbox_socket_warnings(off, {"TMPDIR": long_dir}) == []
+    assert any(long_dir in w for w in preflight.warnings(Config(), {"TMPDIR": long_dir}))
+
+
 def test_a_disabled_sandbox_is_reported_as_well():
     config = Config(claude=ClaudeConfig(sandbox=SandboxConfig(enabled=False)))
     (warning,) = preflight.sandbox_warnings(config)

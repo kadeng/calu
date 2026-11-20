@@ -81,6 +81,55 @@ def sandbox_warnings(config: Config) -> list[str]:
     ]
 
 
+UNIX_SOCKET_PATH_MAX = 107
+"""Longest path a Linux Unix socket can be bound to (`sun_path` holds 108 bytes with the NUL)."""
+
+SANDBOX_SOCKET_NAME_LENGTH = len("/claude-socks-") + 16 + len(".sock")
+"""What Claude Code's Linux sandbox appends to the temporary directory for its proxy bridge
+sockets (`<tmpdir>/claude-socks-<16 hex digits>.sock`, the longer of its two names; seen in
+Claude Code 2.1.319)."""
+
+
+def sandbox_socket_warnings(config: Config, environ: Mapping[str, str] | None = None) -> list[str]:
+    """Report a temporary directory too long for the sandbox's bridge sockets (Linux).
+
+    Claude Code's Linux sandbox creates two Unix sockets in its temporary directory (Node's
+    `os.tmpdir()`: `TMPDIR`, else `TMP`, else `TEMP`, else `/tmp`). When the socket path is
+    longer than `UNIX_SOCKET_PATH_MAX` bytes the sandbox does not start ("Failed to create
+    bridge sockets after 5 attempts"), and with `sandbox.fail_if_unavailable` every Bash
+    command of the session fails. Under `--user` or `--sudo` Claude Code gets no `TMPDIR` from
+    calu (`calu.launch`), so the check is skipped there.
+
+    Args:
+        config: The session configuration.
+        environ: The environment Claude Code inherits; None uses `os.environ`.
+
+    Returns:
+        One warning naming the directory and the fix, or an empty list if the sandbox is off,
+        the platform is not Linux, Claude Code runs as another user, or the path fits.
+
+    Example:
+        TMPDIR of 80 bytes: 80 + 35 = 115 > 107, so a warning.
+    """
+    if not config.claude.sandbox.enabled or not sys.platform.startswith("linux"):
+        return []
+    if asuser.active() is not None:
+        return []
+    env = os.environ if environ is None else environ
+    tmpdir = next((env[name] for name in ("TMPDIR", "TMP", "TEMP") if env.get(name)), "/tmp")
+    tmpdir = tmpdir.rstrip("/") or "/"
+    length = len(tmpdir.encode()) + SANDBOX_SOCKET_NAME_LENGTH
+    if length <= UNIX_SOCKET_PATH_MAX:
+        return []
+    return [
+        f"The temporary directory {tmpdir} is too long for the sandbox: Claude Code creates its "
+        f"proxy sockets there, and their path ({length} bytes) exceeds the {UNIX_SOCKET_PATH_MAX}"
+        ' bytes a Unix socket allows. The sandbox will not start ("Failed to create bridge '
+        "sockets\"), so Claude's commands fail. Start calu with a shorter TMPDIR (at most "
+        f"{UNIX_SOCKET_PATH_MAX - SANDBOX_SOCKET_NAME_LENGTH} bytes), for example unset it."
+    ]
+
+
 def configured_models(config: Config) -> dict[str, str]:
     """List the model strings the session will call, by role.
 
@@ -1116,7 +1165,8 @@ def warnings(
             whenever the sandbox is off).
 
     Returns:
-        The warnings of `sandbox_warnings`, `sandbox_off_warnings`, `key_warnings`,
+        The warnings of `sandbox_warnings`, `sandbox_socket_warnings`,
+        `sandbox_off_warnings`, `key_warnings`,
         `unknown_provider_warnings`, `change_warnings`, `network_warnings`,
         `heartbeat_warnings`, `honesty_warnings`, `cli_model_warnings`, `bedrock_warnings`,
         `setting_source_warnings`, `settings_file_sandbox_warnings` and
@@ -1124,6 +1174,7 @@ def warnings(
     """
     return (
         sandbox_warnings(config)
+        + sandbox_socket_warnings(config, environ)
         + sandbox_off_warnings(config, protection)
         + key_warnings(config, environ)
         + unknown_provider_warnings(config, environ=environ)
