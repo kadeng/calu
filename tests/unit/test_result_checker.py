@@ -117,8 +117,10 @@ async def test_escalated_result_waits_for_the_user(tmp_path: Path):
     assert injected and "keep it small" in injected[0]
 
 
-def handback_turn(report: str, after: list[dict] | None = None) -> list[list[dict]]:
-    """A subagent that hands its report back, then ends with an empty final result."""
+def handback_turn(
+    report: str, after: list[dict] | None = None, result: str = ""
+) -> list[list[dict]]:
+    """A subagent that hands its report back, then ends with `result` (empty by default)."""
     return [
         [
             {
@@ -126,7 +128,7 @@ def handback_turn(report: str, after: list[dict] | None = None) -> list[list[dic
                     "description": "reviewer",
                     "prompt": "Review the change strictly.",
                     "background": True,
-                    "result": "",
+                    "result": result,
                     "actions": [
                         {"tool": "SubagentHandback", "input": {"message": report}, "result": "ok"},
                         *(after or []),
@@ -172,6 +174,39 @@ async def test_a_handed_back_report_is_reviewed_and_its_empty_result_passes(tmp_
     assert [row.row.tool_input.get("handback") for row in rows] == [True, None]
     assert rows[1].checker_runs == [] and rows[1].decision is not None
     assert "passed without a check" in (rows[1].decision.reason or "")
+
+
+async def test_claude_codes_pointer_to_a_handed_back_report_passes_without_a_check(
+    tmp_path: Path,
+):
+    """Dogfooding 2026-11-20: a foreground subagent's final result is Claude Code's pointer
+    to the report it handed back, not an empty text. The result checker reviewed the
+    pointer a second time and sent the main agent a confusing note about it."""
+    from calu.testing import _fake_result_review, fake_models
+
+    seen: list[str] = []
+
+    def spy(messages, info: AgentInfo) -> ModelResponse:
+        seen.append("x")
+        return _fake_result_review(messages, info)
+
+    pointer = (
+        'This agent\'s report was delivered to you as a message from "a39b9640361a8957e" '
+        "(its SubagentHandback call). Read it there; it is not repeated here."
+    )
+    session, rec, _ = make_session(
+        tmp_path,
+        handback_turn("1. fine", result=pointer),
+        checker_models={**fake_models(), "subagent": FunctionModel(spy)},
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="review it"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    assert len(seen) == 1, "only the handed-back report was reviewed"
+    checks = [c for c in rec.of(CheckResult) if c.route == "subagent"]
+    assert "handed its report back with SubagentHandback" in checks[-1].step_summary
 
 
 async def test_a_person_who_denies_a_handed_back_report_stops_the_handback(tmp_path: Path):

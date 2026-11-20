@@ -120,6 +120,7 @@ import json
 import logging
 import os
 import platform
+import re
 import socket
 from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -416,6 +417,9 @@ HANDED_BACK_EMPTY = (
 )
 """Why an empty final result of a subagent that handed its report back is not reviewed (the
 step's recorded reason, D252)."""
+HANDBACK_POINTER = re.compile(r"This agent's report was delivered to you as a message from\b")
+"""The start of the final result Claude Code (2.1.327) gives a foreground subagent that handed
+its report back: a pointer to the report, which counts as an empty result."""
 HANDBACK_REFUSED = (
     "The user does not want this report handed back. Do not hand it back again; end your work "
     "now. {note}"
@@ -3894,9 +3898,10 @@ class Session:
     async def _review_subagent_result(self, result: SubagentResult) -> tuple[str, bool]:
         """Implement `_reviewed`; the caller removes the step's per-call record.
 
-        An empty final result of a background subagent whose report was reviewed when it was
-        handed back (`RunState.handed_back`) is recorded as passed, with `HANDED_BACK_EMPTY`
-        as the reason, without a checker.
+        An empty final result of a subagent whose report was reviewed when it was handed back
+        (`RunState.handed_back`) is recorded as passed, with `HANDED_BACK_EMPTY` as the
+        reason, without a checker; so is Claude Code's pointer to that report
+        (`HANDBACK_POINTER`), the final result of a foreground subagent.
 
         Side effects: as `review_subagent_result`.
 
@@ -3927,7 +3932,7 @@ class Session:
         step_id = await self.recorder.add_step(step)
         if (
             not result.handback
-            and not result.result.strip()
+            and (not result.result.strip() or HANDBACK_POINTER.match(result.result.strip()))
             and (result.agent_id or "") in self._run_state.handed_back
         ):
             await self._pass_handed_back(step, step_id)
