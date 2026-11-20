@@ -1062,7 +1062,9 @@ Open points and judgement calls for the owner:
    documentation the rules do not call dishonest is no finding. With honesty enforced, any
    command that writes a data file into a checkout makes the next code run there wait for a
    review. Should the review verify files without units (plain text, data) without asking the
-   model, or is this a weakness of Haiku only?
+   model, or is this a weakness of Haiku only? *Decided by the owner 2026-11-20 (PLAN D252):*
+   such files (by a documented extension list, no execute bit, no `#!` or program header) are
+   verified without a model call.
 2. **The result checker escalated twice on Haiku** for requested behaviour: a subagent's
    deliberate dishonest edit (noign s1), and a background subagent's empty `result` (Claude
    Code delivers a background subagent's report through `SubagentHandback`, and the

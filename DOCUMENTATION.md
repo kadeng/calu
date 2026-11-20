@@ -1630,8 +1630,22 @@ concerned.
 A reviewer agent judges the files that are unreviewed or carry marks. For each file it gets the
 change against the baseline (the whole file when the baseline does not contain it), and it may
 read other files. A file that the reviewer finds honest counts as verified with the content the
-reviewer was shown. Calu records the reviewer's findings about a file as that file's marks. A
-change of only trailing whitespace, line endings or blank lines is verified without a model.
+reviewer was shown. Calu records the reviewer's findings about a file as that file's marks.
+Two types of file are verified without a model:
+
+- A file whose change against the baseline is only trailing whitespace, line endings or blank
+  lines.
+- A file that holds no code: plain text (`.txt`, `.text`, `.log`), tabular data (`.csv`,
+  `.tsv`), an image (`.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.ico`, `.webp`, `.tif`,
+  `.tiff`), sound, video, a font or a PDF (`.mp3`, `.wav`, `.ogg`, `.flac`, `.mp4`, `.webm`,
+  `.mov`, `.ttf`, `.otf`, `.woff`, `.woff2`, `.pdf`), at any size. Such a file still goes to
+  the reviewer when it has the execute permission, starts with `#!` or with a program header
+  (ELF, Windows, Mach-O, Java class, WebAssembly), or carries a mark.
+
+Configuration and structured data (`.json`, `.yaml`, `.toml`, `.ini`, `.env`), Markdown, SVG
+images and serialised objects (`.pkl`, `.pt`, `.npy`) stay with the reviewer: code acts on
+configuration, Markdown can hold a unit's documentation, SVG can hold scripts, and loading a
+serialised object can run code.
 
 | Aspect | Detail |
 |---|---|
@@ -1639,7 +1653,7 @@ change of only trailing whitespace, line endings or blank lines is verified with
 | Frequency | One review at a time. Calu starts none by itself while nothing changed since the last, and none within 60 seconds after a failed one. `/honesty-review` always runs one |
 | A step's waiting time | A step waits for the review for at most about seven minutes minus the time its checkers took. A review that takes longer continues to run. The step then waits for a person, and the review's result is available when Claude tries the step again |
 | The step goes to a person | The review fails; more files than `honesty.review_max_files` (300); files the review cannot judge |
-| Files it cannot judge | A file over 2,000,000 bytes; a file whose text for the reviewer is over 200,000 bytes; a file that is not UTF-8 text; a symbolic link; a submodule. A person certifies those |
+| Files it cannot judge | A file over 2,000,000 bytes; a file whose text for the reviewer is over 200,000 bytes; a file that is not UTF-8 text; a symbolic link; a submodule (a file without code is verified at any size and in any encoding). A person certifies those |
 | Model | `honesty.reviewer_model` (blank: the checkers' default). The other limits are the `honesty.review*` settings ([configuration reference](docs/CONFIGURATION.md)) |
 
 **A repository without a trusted commit.** A review that a person asks for judges every file

@@ -207,6 +207,32 @@ REVIEW_READ_BYTES = 2_000_000
 baseline's content, and the largest baseline content it reads. A larger file is skipped like
 one whose text for the reviewer is over `REVIEW_FILE_BYTES`."""
 
+NO_CODE_EXTENSIONS = frozenset(
+    {
+        # plain text
+        ".txt", ".text", ".log",
+        # tabular data
+        ".csv", ".tsv",
+        # images (not SVG: it can hold scripts)
+        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tif", ".tiff",
+        # sound, video, fonts, documents
+        ".mp3", ".wav", ".ogg", ".flac", ".mp4", ".webm", ".mov",
+        ".ttf", ".otf", ".woff", ".woff2", ".pdf",
+    }
+)  # fmt: skip
+"""File name extensions (compared in lower case) of the files that hold no code unit: the
+honesty review verifies such a file without a model call (`holds_no_code`). Configuration and
+structured data (`.json`, `.yaml`, `.toml`, `.ini`, `.env`, ...) are not listed: code may act on
+them, and a configuration that widens what a unit does counts as code (the honesty rules,
+"Configuration"). Serialised objects (`.pkl`, `.pt`, `.npy`) are not listed either: loading them
+can run code. Markdown and other markup stay reviewed too: they can hold the documentation of a
+unit, and Claude Code reads instructions from them."""
+
+PROGRAM_MAGIC = (b"#!", b"\x7fELF", b"MZ", b"\xca\xfe\xba\xbe", b"\xcf\xfa\xed\xfe", b"\0asm")
+"""The first bytes of a file that the system or a runtime runs as a program: a script with an
+interpreter line, ELF, Windows PE, Java class or universal Mach-O, 64-bit Mach-O, WebAssembly.
+A file that starts with one of them holds code, whatever its name."""
+
 REVIEWER = "the honesty review"
 """Who opens and closes marks for an honesty review (`HonestyMark.opened_by`)."""
 
@@ -399,7 +425,10 @@ class ReviewPlan:
     """The files for the reviewer agent, sorted by path."""
     shortcuts: Mapping[str, FileReview] = field(default_factory=dict[str, FileReview])
     """Files verified without a model: their change against the baseline is whitespace only
-    (`whitespace_only`)."""
+    (`whitespace_only`), or they hold no code (`holds_no_code`, listed in `no_code`)."""
+    no_code: tuple[str, ...] = ()
+    """The files of `shortcuts` that are verified because they hold no code unit (plain text,
+    data, images: `holds_no_code`), sorted."""
     skipped: tuple[tuple[str, str], ...] = ()
     """(path, why) of each file the review cannot judge; it stays as it is: a file that is
     not readable text within the size limits, and, with a baseline, a file whose working
@@ -948,6 +977,73 @@ def content_ids(path: Path, object_format: str = "sha1") -> ContentIds | None:
     if read != status.st_size:
         return None
     return ContentIds(plain.hexdigest(), blob.hexdigest())
+
+
+def holds_no_code(name: str, head: bytes, mode: int) -> bool:
+    """Tell whether a file holds no code unit, so that an honesty review verifies it unread.
+
+    A file holds no code when all three hold:
+
+        its name ends in one of `NO_CODE_EXTENSIONS` (case ignored)   e.g. `out.txt`, `logo.PNG`
+        no execute permission bit is set in `mode`
+        its content does not start with one of `PROGRAM_MAGIC`      no `#!`, no ELF, ...
+
+    So `notes.txt` holds no code, `run.txt` with the execute bit or starting with `#!/bin/sh`
+    does, and `settings.json` does (configuration stays reviewed).
+
+    Args:
+        name: The file's name or path; only its extension is read.
+        head: The first bytes of its content (at least 4 where the file has them).
+        mode: Its `st_mode`.
+
+    Returns:
+        True if the file holds no code.
+    """
+    if PurePosixPath(name).suffix.lower() not in NO_CODE_EXTENSIONS:
+        return False
+    if mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
+        return False
+    return not head.startswith(PROGRAM_MAGIC)
+
+
+def no_code_sha256(path: Path) -> str | None:
+    """Hash a file of any size that holds no code (`holds_no_code`), from one read.
+
+    The check and the hash read the same open file, so the hash is of the content that was
+    found to hold no code.
+
+    Args:
+        path: The file; a symbolic link or anything but a regular file is not followed.
+
+    Returns:
+        The SHA-256 of its content; None if it holds code, is not a regular file, cannot be
+        read, or changed in size while it was read.
+    """
+    if path.suffix.lower() not in NO_CODE_EXTENSIONS:
+        return None
+    opened = _open_regular(path)
+    if opened is None:
+        return None
+    descriptor, status = opened
+    digest = hashlib.sha256()
+    read = 0
+    try:
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            head = handle.read(8)
+            if not holds_no_code(path.name, head, status.st_mode):
+                return None
+            digest.update(head)
+            read = len(head)
+            while chunk := handle.read(1 << 20):
+                read += len(chunk)
+                digest.update(chunk)
+    except OSError:
+        return None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    return digest.hexdigest() if read == status.st_size else None
 
 
 def whitespace_only(before: str, after: str) -> bool:
@@ -1877,6 +1973,22 @@ class HonestyState:
         found.update(key for key in self.watched if os.path.lexists(self.workspace / key))
         return sorted(key for key in found if not self.left_out(key)), ""
 
+    def _holds_no_code(self, key: str, data: bytes) -> bool:
+        """Tell whether a file read for a review holds no code (`holds_no_code`).
+
+        Args:
+            key: The file, as `key` names it.
+            data: Its content, as the review read it.
+
+        Returns:
+            True if it holds no code; False also when its mode cannot be read.
+        """
+        try:
+            mode = (self.workspace / key).lstat().st_mode
+        except OSError:
+            return False
+        return holds_no_code(key, data[:8], mode)
+
     @_locked
     def review_plan(self, max_files: int) -> ReviewPlan:
         """Compute what an honesty review has to do now (specification section 4).
@@ -1894,6 +2006,12 @@ class HonestyState:
                                                                (`verified_already`)
               with a baseline (only the content the index
               holds for the path is not reviewed)           -> skipped
+            no open mark, and the file holds no code
+            (`holds_no_code`: a plain-text, data or media
+            extension, no execute bit, no `#!` or program
+            header); for a file that is not UTF-8 or
+            larger than `REVIEW_READ_BYTES` this rule
+            comes before the rules above                    -> verified without a model
             no open mark, the baseline holds the path as
             a file, and the change is whitespace only       -> verified without a model
             an open mark, a path the baseline does not
@@ -1939,11 +2057,19 @@ class HonestyState:
         shortcuts: dict[str, FileReview] = {}
         skipped: list[tuple[str, str]] = []
         seen: dict[str, FileSeen] = {}
+        no_code: list[str] = []
         already = 0
         for key in candidates:
             marks = tuple(mark for mark in self.open_marks if mark.path == key)
             mark_ids = self._mark_ids(key)
             data = read_regular(self.workspace / key, REVIEW_READ_BYTES)
+            if data is None and not marks:
+                large = no_code_sha256(self.workspace / key)
+                if large is not None:
+                    seen[key] = (large, mark_ids)
+                    shortcuts[key] = FileReview(large, marks=())
+                    no_code.append(key)
+                    continue
             if data is None:
                 now = self._content(key)
                 seen[key] = (now.sha256 if now else "", mark_ids)
@@ -1951,11 +2077,16 @@ class HonestyState:
                 skipped.append((key, why))
                 continue
             ids = hash_bytes(data, self._format())
+            unread = not marks and self._holds_no_code(key, data)
             try:
                 text = data.decode("utf-8")
             except UnicodeDecodeError:
                 seen[key] = (ids.sha256, mark_ids)
-                skipped.append((key, "not UTF-8 text"))
+                if unread:
+                    shortcuts[key] = FileReview(ids.sha256, marks=())
+                    no_code.append(key)
+                else:
+                    skipped.append((key, "not UTF-8 text"))
                 continue
             if not marks and self._reviewed_source(key, ids) is not None:
                 if base is None:
@@ -1971,6 +2102,10 @@ class HonestyState:
                 )
                 continue
             seen[key] = (ids.sha256, mark_ids)
+            if unread:
+                shortcuts[key] = FileReview(ids.sha256, marks=())
+                no_code.append(key)
+                continue
             before = self._baseline_text(top, tree, key) if top is not None else None
             whole = before is None or bool(marks)
             if before is not None and not marks and whitespace_only(before, text):
@@ -1988,6 +2123,7 @@ class HonestyState:
             files=tuple(files),
             shortcuts=shortcuts,
             skipped=tuple(skipped),
+            no_code=tuple(no_code),
             verified_already=already,
             seen=seen,
             review_required=self.review_required,

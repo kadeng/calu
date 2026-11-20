@@ -86,7 +86,9 @@ between the baseline and the present state for the files that are unreviewed or 
 - It works in batches of files run concurrently (bounded concurrency), each batch one agent
   run with a bounded request budget; it may read other files with its tools.
 - Deterministic shortcuts before any model call: a file whose change is whitespace-only is
-  verified without a model. (Further shortcuts, such as recognising a uniform rename, are
+  verified without a model, and so is a file that holds no code (plain text, tabular data,
+  media by extension; no execute bit, no `#!` or program header; `honesty.NO_CODE_EXTENSIONS`,
+  the owner's decision of 2026-11-20, PLAN D252). (Further shortcuts, such as recognising a uniform rename, are
   welcome if they are simple and tested; they are not required.)
 - Output per file: honest, or findings (symbol, reason). Honest files become verified at
   their present content; findings replace that file's marks. When no finding remains, review

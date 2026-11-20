@@ -109,13 +109,16 @@ def test_whitespace_only_ignores_line_ends_and_blank_lines_but_not_indentation()
 def test_the_plan_names_the_diff_the_whole_file_and_the_shortcut(repo: Path) -> None:
     """A changed file is shown as its diff, a new file whole; a whitespace-only change needs
     no reviewer; a file that is not text is skipped."""
+    (repo / "setup.cfg").write_text("[tool]\nname = x\n", encoding="utf-8")
+    git(repo, "add", "setup.cfg")
+    git(repo, "commit", "-q", "-m", "cfg")
     state = trusted_state(repo)
     (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
     (repo / "src" / "new.py").write_text("Y = 2\n", encoding="utf-8")
-    (repo / "README.md").write_text("# project   \n\n\n", encoding="utf-8")
+    (repo / "setup.cfg").write_text("[tool]   \nname = x\n\n\n", encoding="utf-8")
     (repo / "logo.bin").write_bytes(b"\xff\xfe\x00")
-    (repo / "big.txt").write_text("x" * (REVIEW_FILE_BYTES + 1), encoding="utf-8")
-    (repo / "huge.txt").write_text("x" * (REVIEW_READ_BYTES + 1), encoding="utf-8")
+    (repo / "big.json").write_text("x" * (REVIEW_FILE_BYTES + 1), encoding="utf-8")
+    (repo / "huge.json").write_text("x" * (REVIEW_READ_BYTES + 1), encoding="utf-8")
 
     plan = state.review_plan(300)
     assert plan.count == 6 and not plan.problem
@@ -125,16 +128,53 @@ def test_the_plan_names_the_diff_the_whole_file_and_the_shortcut(repo: Path) -> 
     assert '-    return sorted(line.split(","))' in changed.text
     assert (new.path, new.whole, new.text) == ("src/new.py", True, "Y = 2\n")
     assert changed.sha256 == state.content_sha256("src/parser.py")
-    assert list(plan.shortcuts) == ["README.md"]
-    assert plan.shortcuts["README.md"].sha256 == state.content_sha256("README.md")
+    assert list(plan.shortcuts) == ["setup.cfg"] and plan.no_code == ()
+    assert plan.shortcuts["setup.cfg"].sha256 == state.content_sha256("setup.cfg")
     assert dict(plan.skipped) == {
-        "big.txt": f"the file is larger than {REVIEW_FILE_BYTES} bytes",
-        "huge.txt": f"not a readable regular file of at most {REVIEW_READ_BYTES} bytes",
+        "big.json": f"the file is larger than {REVIEW_FILE_BYTES} bytes",
+        "huge.json": f"not a readable regular file of at most {REVIEW_READ_BYTES} bytes",
         "logo.bin": "not UTF-8 text",
     }
     assert set(plan.seen) == {one.path for one in plan.files} | set(plan.shortcuts) | set(
         dict(plan.skipped)
     )
+
+
+def test_files_without_code_are_verified_without_a_model(repo: Path) -> None:
+    """The owner's decision of 2026-11-20 (test plan L, open point 1): plain text, data and
+    media files are verified unread, at any size; a script, an executable file, a program
+    header and a configuration file stay with the reviewer, and so does a marked file."""
+    state = trusted_state(repo)
+    (repo / "out_b.txt").write_text("b\n", encoding="utf-8")
+    (repo / "README.md").write_text("# project, changed\n", encoding="utf-8")
+    (repo / "table.CSV").write_text("a,b\n1,2\n", encoding="utf-8")
+    (repo / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\xff")
+    (repo / "photo.jpg").write_bytes(b"\xff\xd8" + b"\x00" * (REVIEW_READ_BYTES + 1))
+    (repo / "run.txt").write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+    (repo / "tool.txt").write_text("echo hi\n", encoding="utf-8")
+    (repo / "tool.txt").chmod(0o755)
+    (repo / "fake.png").write_bytes(b"\x7fELF\x02\x01\x01\x00\xff")
+    (repo / "settings.json").write_text('{"hooks": ["x"]}\n', encoding="utf-8")
+    (repo / "picture.svg").write_text("<svg><script>x()</script></svg>\n", encoding="utf-8")
+
+    plan = state.review_plan(300)
+    unread = {"logo.png", "out_b.txt", "photo.jpg", "table.CSV"}
+    assert set(plan.no_code) == unread == set(plan.shortcuts)
+    for key in unread:
+        assert plan.shortcuts[key].sha256 == state.content_sha256(key), key
+    assert {one.path for one in plan.files} == {
+        "README.md",
+        "run.txt",
+        "tool.txt",
+        "settings.json",
+        "picture.svg",
+    }
+    assert dict(plan.skipped) == {"fake.png": "not UTF-8 text"}
+
+    state.record([CodeMark(path="out_b.txt", symbol="", reason="x")], [], "edit")
+    plan = state.review_plan(300)
+    assert "out_b.txt" not in plan.no_code
+    assert "out_b.txt" in {one.path for one in plan.files}, "a marked file goes to the reviewer"
 
 
 def test_a_small_change_of_a_large_file_is_reviewed_as_its_diff(repo: Path) -> None:
@@ -209,13 +249,9 @@ def test_without_a_baseline_the_plan_holds_every_file_git_lists_whole(repo: Path
     (repo / "notes.txt").write_text("todo\n", encoding="utf-8")
     plan = state.review_plan(300)
     assert plan.baseline is None
-    assert [one.path for one in plan.files] == [
-        ".gitignore",
-        "README.md",
-        "notes.txt",
-        "src/parser.py",
-    ]
+    assert [one.path for one in plan.files] == [".gitignore", "README.md", "src/parser.py"]
     assert all(one.whole for one in plan.files)
+    assert plan.no_code == ("notes.txt",), "a file without code needs no reviewer"
 
 
 def test_without_a_baseline_a_verified_file_is_not_part_of_the_next_plan(repo: Path) -> None:
@@ -499,6 +535,21 @@ async def test_a_whitespace_only_change_is_verified_without_a_model(repo: Path) 
     assert checks(rec)[0].decision is Decision.PASS
     assert [row.method for row in store.trusted_files.values()] == ["review"]
     assert "1 with a whitespace-only change" in logs(rec)
+
+
+async def test_a_data_file_is_verified_without_a_model(repo: Path) -> None:
+    """Test plan L, open point 1: a command wrote `out_b.txt`; the next code run needs no
+    reviewer, and the log names the file type."""
+    (repo / "out_b.txt").write_text("b\n", encoding="utf-8")
+    seen: list[str] = []
+    session, rec, store = await session_on(
+        repo, [[bash("make test")]], models={"honesty-review": fake_reviewer(seen=seen)}
+    )
+    await run_turns(session, rec)
+    assert seen == []
+    assert checks(rec)[0].decision is Decision.PASS
+    assert [row.method for row in store.trusted_files.values()] == ["review"]
+    assert "1 without code (plain text, data, media)" in logs(rec)
 
 
 async def test_the_gate_does_not_repeat_a_review_while_nothing_changed(repo: Path) -> None:
