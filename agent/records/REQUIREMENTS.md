@@ -345,6 +345,15 @@ broken down or extended. Derived requirements and design decisions belong in
     examples or pseudocode. Give examples, especially for usage scenarios, including example
     prompts. - Task a fable subagent with rewriting it. Try to use best practices for readable
     and useful technical documentation." (stated 2026-11-19)
+47. "Can we add an optional (disabled by default) feature to the IDE plugins to track diffs
+    introduced by manual editing? The assumption would be that if we track these, we can
+    later tell the model "See, these are the stylistic language changes I want you to make
+    all over the codebase" or "Please rewrite documentation like this" etc.. - it makes sense
+    to be able to track which edits were human and look at them separately. Let's put them
+    into agent/human-diffs by default if we do ( they should be typically gitignored, should
+    be mentioned in the docs )" Then: "No secret redactions, these diffs are left alone.
+    Also, these edits should only be tracked for files under version control and only if the
+    editing happens in the IDE." (stated 2026-11-20)
 ## Soft goals and priorities
 
 1. Simple requirements first: calu should become functional before anything else; a port to Go
