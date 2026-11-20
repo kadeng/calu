@@ -51,6 +51,7 @@ from calu.checkers.model import Step
 from calu.checkers.policy import SHELL_TOOLS
 from calu.checkers.search import searched_files
 from calu.checkers.shell import ParsedCommand, ShellPath, command_variants, parse_command
+from calu.checkouts import Checkouts
 from calu.paths import calu_private_dir_of
 
 RULE_LISTS = (
@@ -202,13 +203,22 @@ BUILT_IN_COMMAND_DENY = (
         ),
         "built-in",
     ),
+    Rule(
+        re.compile(r"^git( -[Cc] \S+)* worktree remove(?=.* (--force|-[a-zA-Z]*f[a-zA-Z]*)( |$))"),
+        "built-in (removes a worktree with its uncommitted work, D251)",
+    ),
 )
 """Claude running calu itself always asks (agent/records/PLAN.md D160). calu runs as the same OS
 user as Claude, and `calu resolve`, `calu config set`, `calu rules`, `calu checker` or a `calu
 attach` that mints its own token (D105) would let Claude decide its own escalations or switch off
 the checks. With the sandbox on, `~/.config/calu` is unreadable to Claude's commands and such a call
 fails anyway; without it, this rule is what stops it. Built in, like the `~/.config/calu` path
-rules, so that no rule list can drop it and existing installations get it at once."""
+rules, so that no rule list can drop it and existing installations get it at once.
+
+`git worktree remove --force` (or `-f`) deletes a worktree with its uncommitted work, the loss
+that `ExitWorktree` with `discard_changes` asks about (D165, D251); Claude Code guards only its
+own tool. Without `--force` git refuses a worktree with work at risk, so the plain form stays
+free."""
 
 
 def parse_rules(text: str, name: str) -> tuple[list[Rule], list[str]]:
@@ -280,6 +290,10 @@ class Rules:
         to the workspace), else None. The session sets it from `traces.directory`. Writing
         into it is covered by a built-in write deny rule (`trace_rule`), and the checkers'
         code tools do not read it (`in_trace_directory`)."""
+        self.checkouts: Checkouts | None = None
+        """The session's registry of checkouts (D251), set by the session; None reads a path
+        below `.claude/worktrees/<name>/` relative to that worktree only if it has a `.git`
+        entry (`match_form`)."""
         self._lists: dict[str, tuple[list[Rule], list[str]]] = {}
         self.replace(lists or {})
 
@@ -781,11 +795,20 @@ class Rules:
 
         Returns:
             A rule with the source "built-in (calu's session traces)" whose pattern names the
-            trace directory, for messages; None if `path` is not inside `trace_directory`.
+            trace directory, for messages; None if `path` is neither inside `trace_directory`
+            nor inside a worktree's copy of it (the same directory relative to the worktree's
+            root, `match_form`).
         """
-        if self.trace_directory is None or not self.in_trace_directory(path):
+        if self.trace_directory is None:
             return None
         shown = self.display(self.workspace / self.trace_directory)
+        own = self.in_trace_directory(path)
+        if not own:
+            # A worktree's copy of the directory (D251): its committed traces would come back
+            # into the main checkout with a merge, so they are protected the same way.
+            form = self.match_form(path)
+            if form == self.display(path) or not (form == shown or form.startswith(shown + "/")):
+                return None
         return Rule(
             re.compile("^" + re.escape(shown) + "(/|$)"), "built-in (calu's session traces)"
         )
@@ -830,14 +853,29 @@ class Rules:
         Args:
             path: An absolute path.
 
+        With the session's registry (`checkouts`, D251) this holds for every git worktree of
+        the project, also one outside the project directory, so its `CLAUDE.md` and
+        `.claude/` are protected like the project's own.
+
         Returns:
             The worktree-relative POSIX path for a path inside a worktree ("." for its root),
-            else `display(path)`. Only a directory with a `.git` entry counts as a worktree,
-            the way `git worktree add` leaves one; anything else below `.claude/` -- a file
-            next to the worktrees, a worktree that does not exist yet -- stays as it is and so
-            stays protected.
+            else `display(path)`. Without the registry only a directory with a `.git` entry
+            below `.claude/worktrees/` counts as a worktree, the way `git worktree add` leaves
+            one; anything else below `.claude/` -- a file next to the worktrees, a worktree
+            that does not exist yet -- stays as it is and so stays protected.
         """
         shown = self.display(path)
+        if self.checkouts is not None:
+            checkout = self.checkouts.of(path)
+            if checkout is not None and not checkout.main:
+                try:
+                    inside = Path(os.path.abspath(path)).relative_to(checkout.root)
+                except ValueError:
+                    try:
+                        inside = path.resolve().relative_to(checkout.root)
+                    except OSError, RuntimeError, ValueError:
+                        return shown
+                return inside.as_posix() or "."
         parts = shown.split("/")
         if (
             len(parts) >= 3

@@ -4454,6 +4454,9 @@ class Session:
     def _guard_traces(self) -> None:
         """Tell the rules, the honesty state and the write sets where the traces are.
 
+        The rules also get the registry of checkouts here (D251), because a settings reload
+        replaces them.
+
         While `traces.enabled` is on, the trace directory is calu's own output inside the
         project: a tool call that would write there waits for a person, the checkers' code
         tools do not read it, and its files are left out of the write sets and of the
@@ -4462,6 +4465,7 @@ class Session:
         cfg = self.config.traces
         directory = cfg.directory if cfg.enabled else None
         self.rules.trace_directory = None if directory is None else self.workspace / directory
+        self.rules.checkouts = self.checkouts  # worktrees are judged as checkouts (D251)
         self._trace_dir = directory
         self._exclude_from_states()
         self.write_sets.excluded = () if directory is None else (directory,)
@@ -4640,7 +4644,9 @@ class Session:
         until the commit's tool result arrives (`TraceWriter.hold`), so that the file on
         disk is what the commit records also for `git commit -a`. Any other step, a
         directory outside a git work tree and a trace directory outside the repository do
-        nothing.
+        nothing. So does a commit in a git worktree (D251): the live trace is written only in
+        the main checkout's `traces.directory`, which lies outside the worktree's working
+        tree, so such a commit records no trace and needs no pass.
 
         Side effects: model calls, rewritten and staged trace files, a `log` event with
         what was done or what failed. Never raises.

@@ -733,3 +733,168 @@ async def test_u14_a_command_in_an_outside_worktree_is_snapshotted_too(repo: Pat
     )
     await run_turns(session, rec)
     assert written(store) == [([f"{outside.resolve()}/tool.py"], False)]
+
+
+# ------------------------------------------------------------------ U8, U9, U11, U13, U14: rules
+
+
+def rules_of(repo: Path, traces: bool = False):  # type: ignore[no-untyped-def]
+    """Build a session's rules for a repository, with the registry read.
+
+    Args:
+        repo: The repository.
+        traces: Whether session traces are on (their directory is `agent/traces`).
+
+    Returns:
+        The session's `Rules`, with `checkouts` set.
+    """
+    from calu.config import Config, TracesConfig
+    from tests.unit.helpers import make_session
+
+    config = Config(traces=TracesConfig(enabled=traces))
+    session, _rec, _store = make_session(repo, [[]], config)
+    session.checkouts.refresh()
+    return session.rules
+
+
+def asks(rules, step: Step) -> bool:  # type: ignore[no-untyped-def]
+    """Tell whether the rules ask a person about a step.
+
+    Args:
+        rules: The rules.
+        step: The tool call.
+
+    Returns:
+        True if a deny rule matched.
+    """
+    return bool(rules.evaluate(step).ask)
+
+
+def test_u9_writing_a_worktrees_copy_of_the_trace_directory_asks(repo: Path) -> None:
+    inner = worktree(repo, "wta")
+    rules = rules_of(repo, traces=True)
+    target = inner / "agent" / "traces" / "2026-11-20" / "kai" / "session_001.md"
+    step = Step(tool_name="Write", tool_input={"file_path": str(target), "content": "x"}, cwd=".")
+    outcome = rules.evaluate(step)
+    assert outcome.ask and "calu's session traces" in outcome.reason
+    plain = Step(
+        tool_name="Write",
+        tool_input={"file_path": str(inner / "notes.md"), "content": "x"},
+        cwd=".",
+    )
+    assert not asks(rules, plain)
+    off = rules_of(repo, traces=False)
+    assert not asks(off, step), "with traces off the directory is an ordinary one"
+
+
+def test_u11_git_worktree_remove_asks_only_with_force(repo: Path) -> None:
+    rules = rules_of(repo)
+
+    def command(text: str) -> Step:
+        """Build a Bash step.
+
+        Args:
+            text: The command line.
+
+        Returns:
+            The step.
+        """
+        return Step(tool_name="Bash", tool_input={"command": text}, cwd=str(repo))
+
+    assert asks(rules, command("git worktree remove --force .claude/worktrees/wtc"))
+    assert asks(rules, command("git worktree remove -f .claude/worktrees/wtc"))
+    assert asks(rules, command("cd x && git -C .. worktree remove --force wtc"))
+    assert not asks(rules, command("git worktree remove .claude/worktrees/wtc"))
+    assert not asks(rules, command("git worktree list"))
+
+
+def test_u14_an_outside_worktree_is_judged_like_the_project_by_the_rules(repo: Path) -> None:
+    outside = repo.parent / "outside"
+    git(repo, "worktree", "add", "-q", "-b", "out", str(outside))
+    rules = rules_of(repo)
+    claude_md = Step(
+        tool_name="Write",
+        tool_input={"file_path": str(outside / "CLAUDE.md"), "content": "x"},
+        cwd=str(outside),
+    )
+    assert asks(rules, claude_md), "its CLAUDE.md is protected like the project's"
+    assert rules.match_form(outside / "src" / "a.py") == "src/a.py"
+    ordinary = Step(
+        tool_name="Write",
+        tool_input={"file_path": str(outside / "tool.py"), "content": "x"},
+        cwd=str(outside),
+    )
+    assert not asks(rules, ordinary)
+
+
+async def test_u14_an_outside_worktree_has_its_own_honesty_state_and_keys(repo: Path) -> None:
+    from tests.unit.helpers import make_session
+
+    outside = repo.parent / "outside"
+    git(repo, "worktree", "add", "-q", "-b", "out", str(outside))
+    session, _rec, _store = make_session(repo, [[]])
+    await session._refresh_checkouts()  # pyright: ignore[reportPrivateUsage]
+    state = session._state_for_path(outside / "tool.py")  # pyright: ignore[reportPrivateUsage]
+    assert state is not session.honesty and state.root == outside.resolve()
+    assert state.key(outside / "tool.py") == f"{outside.resolve()}/tool.py"
+    assert state.sufficient_trust == "user"
+
+
+async def test_u8_a_commit_in_a_worktree_skips_the_final_pass_and_runs(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from calu.config import Config, TracesConfig
+    from calu.protocol.messages import Log, ToolResult
+    from tests.unit.helpers import make_session
+    from tests.unit.test_honesty_session import run_turns
+
+    for role in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{role}_NAME", "t")
+        monkeypatch.setenv(f"GIT_{role}_EMAIL", "t@t")
+    inner = worktree(repo, "wta")
+    (inner / "new.py").write_text("x = 1\n", encoding="utf-8")
+    git(inner, "add", "new.py")
+    session, rec, _store = make_session(
+        repo,
+        [
+            [
+                {"text": "I will commit in the worktree."},
+                {
+                    "tool": "Bash",
+                    "input": {"command": "git commit -q -m inside"},
+                    "cwd": ".claude/worktrees/wta",
+                    "run": ["git", "commit", "-q", "-m", "inside"],
+                    "result": "",
+                },
+            ]
+        ],
+        Config(traces=TracesConfig(enabled=True, final_redaction=True)),
+    )
+    await run_turns(session, rec)
+    assert git(inner, "log", "-1", "--format=%s") == "inside", "the commit ran"
+    assert not any(result.is_error for result in rec.of(ToolResult))
+    assert not any("finalized for the commit" in event.message for event in rec.of(Log))
+    assert git(repo, "diff", "--cached", "--name-only") == "", "nothing staged in the main one"
+    (trace,) = sorted((repo / "agent" / "traces").rglob("session_*.md"))
+    assert "the final redaction pass ran" not in trace.read_text()
+
+
+def test_u13_the_pre_commit_hook_in_a_worktree_with_no_trace_staged_reads_nothing(
+    repo: Path,
+) -> None:
+    import argparse
+
+    from calu import cli
+
+    inner = worktree(repo, "wta")
+    (inner / "new.py").write_text("x = 1\n", encoding="utf-8")
+    git(inner, "add", "new.py")
+
+    class NoStore:
+        """A credential store that must not be read."""
+
+        def __getattr__(self, name: str) -> object:
+            raise AssertionError(f"the hook read the credential store ({name})")
+
+    args = argparse.Namespace(staged=True, directory=str(inner), project=None)
+    cli._traces_finalize(args, NoStore())  # type: ignore[arg-type]  # pyright: ignore[reportPrivateUsage]
