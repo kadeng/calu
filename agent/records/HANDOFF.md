@@ -1,7 +1,7 @@
 # Handoff
 
 State on 2026-11-19, in a session that began on 2026-11-18 and is still going. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D250, open
+(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D252, open
 questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here
@@ -297,10 +297,23 @@ documentation (DOCUMENTATION.md "Worktrees") and `docs/TESTING.md` item 47. Unit
 `tests/unit/test_worktrees.py`. **Item 47 (L1-L6) was run** with a real `claude` on Haiku in
 the Cua desktop, with and without `.claude/worktrees/` ignored (`spikes/worktrees_l.sh`;
 record: `agent/records/notes/test-plan.md` section L): as stated after three fixes
-(`255d577`, `63b4a40`, `8440a28`); its open points wait for the owner (the honesty
-review on a data file, the result checker's escalations on Haiku, the "Checkout:" line of a
-`cd`, a stale command in `docs/TESTING.md`). **Next:** those, then the open points at the end
-of the design's "As built".
+(`255d577`, `63b4a40`, `8440a28`).
+
+**The owner's decisions of 2026-11-20 on its open points are built** (PLAN D252, six commits,
+not pushed): trace headings name a step's worktree ("### Tool call 3: Bash (worktree
+agent-a1b2)"; `check.result` and `step.held` carry `checkouts`, VSCode types regenerated); the
+pre-commit hook in a worktree outside the project takes the main checkout's settings (`git
+rev-parse --git-common-dir`); `/trust <worktree> <ref>` in the terminal clients (Tab completes
+the names from `honesty.update`'s `worktrees`; the answer names the checkout); the honesty
+review verifies files without code (a documented extension list, no execute bit, no `#!` or
+program header) without a model; a subagent's `SubagentHandback` report goes to the
+subagent-result checker before the call runs (note to the main agent, a person's denial
+denies the handback) and the empty final result after it passes with the reason recorded;
+`docs/TESTING.md` items 43-45 no longer name `calu sessions <id>`. **Waits for the owner:** the
+wording of the shipped outside-worktree rule in `command.md`/`edit.md` (not changed). **Next:**
+`docs/TESTING.md` item 48 in the desktop, above all (c): what a denied `SubagentHandback`
+does to the subagent and the main agent (only the documentation says that "deny" blocks the
+call and its reason reaches the subagent).
 
 The owner: calu must work with git worktrees as Claude Code commonly uses them, without asking
 about it, with and without parallel subagents. Known today: each tool call carries its own
