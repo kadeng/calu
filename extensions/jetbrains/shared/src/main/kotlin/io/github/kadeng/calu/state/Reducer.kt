@@ -126,6 +126,7 @@ private fun reduceUi(state: ViewState, method: String, p: JsonObject): ViewState
         ),
     )
     "ui.usage" -> onUsage(state, p)
+    "ui.usagePanel" -> onUsagePanel(state, p)
     "ui.notice" -> {
         val level = p.str("level") ?: "info"
         val text = textOrEmpty(p["text"])
@@ -262,6 +263,42 @@ private fun onUsage(state: ViewState, p: JsonObject): ViewState {
             costUsd = p.num("cost_usd") ?: state.usage.costUsd,
             numTurns = p.int("num_turns") ?: state.usage.numTurns,
             context = context,
+        ),
+    )
+}
+
+/**
+ * Reducer case `ui.usagePanel`: the usage panel's request was sent, answered or refused.
+ *
+ * @param state The current state (not modified).
+ * @param p `{phase: "asking"}`, `{result: UsagePanelResult}` or `{error}` (untrusted).
+ * @return The new state. An answer also updates `usage` (context when it gives one, cost, turns,
+ *   and the limits when it lists some), so the chip shows the same numbers as the panel. Other params leave the
+ *   state unchanged.
+ */
+private fun onUsagePanel(state: ViewState, p: JsonObject): ViewState {
+    p.str("error")?.let { return state.copy(usagePanel = UsagePanelView("failed", error = it)) }
+    val r = p.obj("result") ?: return if (p.str("phase") == "asking") state.copy(usagePanel = UsagePanelView("asking")) else state
+    val merged = onUsage(state, JsonObject(buildMap {
+        r["context"]?.let { put("context", it) }
+        r["cost_usd"]?.let { put("cost_usd", it) }
+        r["num_turns"]?.let { put("num_turns", it) }
+        if (r["limits"].isArr() && parseRateLimits(r["limits"]).isNotEmpty()) put("rate_limits", r["limits"]!!)
+    }))
+    // An answer without a context leaves the chip's last known context as it was.
+    val withUsage = if (r.obj("context") == null) merged.copy(usage = merged.usage.copy(context = state.usage.context)) else merged
+    return withUsage.copy(
+        usagePanel = UsagePanelView(
+            phase = "ready",
+            limits = parseRateLimits(r["limits"]),
+            accountLimits = parseRateLimits(r["account_limits"]),
+            accountLimitsProblem = r.str("account_limits_problem").orEmpty(),
+            subscription = r.str("subscription").orEmpty(),
+            claudeUsage = r.str("claude_usage").orEmpty(),
+            claudeUsageProblem = r.str("claude_usage_problem").orEmpty(),
+            costUsd = r.num("cost_usd"),
+            numTurns = r.int("num_turns") ?: 0,
+            context = withUsage.usage.context.takeIf { r.obj("context") != null },
         ),
     )
 }

@@ -261,7 +261,7 @@ suspend fun ChatController.comment(input: CommentInput): Boolean {
  *     interrupt {}                  setModel {model}              setEffort {effort}
  *     setLevel {level}              rename {session_id, name}     restartBridge {}
  *     setPermissionMode {mode}
- *     unlock {}                     refreshUsage {}
+ *     unlock {}                     refreshUsage {}               usagePanel {}
  *     retryServer {}                lookForServer {}    (after "The calu server stopped": Retry, the timer)
  *     rewind {turn, uuid?}          forkAt {turn, uuid?}          forkConversation {}
  *     sideAsk {question}            honestyReview {}              honestyTrust {}
@@ -290,6 +290,7 @@ suspend fun ChatController.act(action: String, args: JsonObject = EMPTY_OBJECT):
     "restartBridge" -> { restartBridge(); true }
     "unlock" -> unlock()
     "refreshUsage" -> { refreshUsage(); true }
+    "usagePanel" -> usagePanel()
     "retryServer" -> { lookForServer(true); true }
     "lookForServer" -> { lookForServer(false); true }
     "rewind" -> args.int("turn")?.let { rewind(it, args.str("uuid")) } ?: false

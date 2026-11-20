@@ -404,7 +404,7 @@ fun formatTokens(tokens: Long): String {
  *
  * @property percent 0..100, or `null` while the context is unknown.
  * @property label e.g. "42% · 84k"; "ctx –" while unknown.
- * @property title Tooltip, e.g. "Context: 84,000 of 200,000 tokens (42%). Click for limits and cost."
+ * @property title Tooltip, e.g. "Context: 84,000 of 200,000 tokens (42%). Click for the usage panel (limits, /usage, cost)."
  * @property level "ok" below 70 %, "warn" below 90 %, else "high"; "unknown" without data.
  */
 data class UsageMeter(val percent: Int?, val label: String, val title: String, val level: String)
@@ -418,7 +418,7 @@ data class UsageMeter(val percent: Int?, val label: String, val title: String, v
  * @return The meter (see `UsageMeter`).
  */
 fun usageMeter(usage: UsageView, working: Boolean = false): UsageMeter {
-    val c = usage.context ?: return UsageMeter(null, "ctx –", "Context usage is not known yet. Click to ask.", "unknown")
+    val c = usage.context ?: return UsageMeter(null, "ctx –", "Context usage is not known yet. Click for the usage panel.", "unknown")
     val percent = Math.round(c.percent).toInt().coerceIn(0, 100)
     val asOf = if (working) " As of the last turn or usage report; it is read again when the turn ends." else ""
     val tokens = String.format(Locale.US, "%,d", c.tokens)
@@ -426,7 +426,7 @@ fun usageMeter(usage: UsageView, working: Boolean = false): UsageMeter {
     return UsageMeter(
         percent = percent,
         label = "$percent% · ${formatTokens(c.tokens.toLong())}",
-        title = "Context: $tokens of $max tokens ($percent%).$asOf Click for limits and cost.",
+        title = "Context: $tokens of $max tokens ($percent%).$asOf Click for the usage panel (limits, /usage, cost).",
         level = if (percent < 70) "ok" else if (percent < 90) "warn" else "high",
     )
 }

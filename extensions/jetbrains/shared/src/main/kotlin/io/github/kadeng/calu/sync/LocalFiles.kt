@@ -428,6 +428,7 @@ class DiskBaseContents(
  *
  *     <dir>/state.txt     SyncState.encode()
  *     <dir>/queue.txt     PendingQueue.encode()
+ *     <dir>/holds.txt     KeptHold.encode(): files held for a running turn (absent when none)
  *     <dir>/bases/<hash>  the last synchronised contents (DiskBaseContents)
  *
  * @param dir the directory (in the IDE's system directory; see [syncStoreName]).
@@ -472,6 +473,33 @@ class SyncStore(private val dir: Path) {
      * @param queue the queue.
      */
     fun saveQueue(queue: PendingQueue) = save("queue.txt", queue.encode())
+
+    /**
+     * Read the held paths stored by the last IDE run (`HoldKeeper`, B23).
+     *
+     * @return the record; null if none was stored or the file cannot be read.
+     */
+    fun loadHolds(): KeptHold? = try {
+        KeptHold.decode(Files.readString(dir.resolve("holds.txt")))
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * Store the held paths, or remove the record. Failures are ignored.
+     *
+     * @param hold the record; null removes it.
+     */
+    fun saveHolds(hold: KeptHold?) {
+        if (hold != null) {
+            save("holds.txt", hold.encode())
+        } else {
+            try {
+                Files.deleteIfExists(dir.resolve("holds.txt"))
+            } catch (_: IOException) {
+            }
+        }
+    }
 
     /**
      * Write one of the store's text files.

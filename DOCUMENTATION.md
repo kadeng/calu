@@ -681,6 +681,8 @@ you, it shows their number, for example "calu: 2 waiting".
   (Ctrl+Alt+K). The comment reaches Claude at once and is stored as potential training data
   for the checkers.
 - **Images.** A message can carry up to 4 images of at most 5 MB each.
+- **Usage.** A click on the context chip below the message field opens the usage panel
+  ([usage](#usage-cost-and-limits)).
 - **Settings dialog.** One model for every role, the checker instructions, and every other
   setting.
 
@@ -715,7 +717,9 @@ arrangements:
   chat says "1 file held until the turn ends", with "Upload now"). Starting a run or debug
   configuration while a file is held asks: "Upload now and run" (the default), "Run anyway"
   (the server runs its old version) or "Cancel". The Rerun button of a Run or Debug tab does
-  not ask; a notification with "Upload now" says that files are held.
+  not ask; a notification with "Upload now" says that files are held. A hold survives a
+  restart of the IDE: the plugin stores the held files with the session, and uploads them only
+  when it knows that the turn has ended (the session is idle again, or no longer runs).
 - A comment in a diff (Ctrl+Alt+K) names what the diff shows, as in VSCode: the edit
   (`edit:<tool_use_id>`) for the diff of one of Claude's edits, the revision for a VCS diff.
 - The server's git repository is the only one. Calu never copies `.git` in either direction.
@@ -968,7 +972,8 @@ every value unchanged.
 
 Every client shows cost, context fill and usage limits. The **usage panel** (`/usage` in the
 terminal clients, a click on the cost, context or limit cell of the full-screen client's
-status line, a click on the usage line in the web live view) shows:
+status line, a click on the usage line in the web live view, a click on the context chip below
+the message field in VSCode and PyCharm) shows:
 
 - the 5-hour and weekly limits as Claude Code reported them, each with the time of the report
   ("not reported yet by Claude Code" until then; an API key or Bedrock reports none);

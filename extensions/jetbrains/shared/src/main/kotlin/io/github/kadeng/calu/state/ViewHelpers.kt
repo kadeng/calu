@@ -326,6 +326,7 @@ fun parseRateLimits(raw: JsonElement?): List<RateLimit> =
             status = r.str("status") ?: "",
             utilization = r.num("utilization"),
             resetsAt = r.str("resets_at"),
+            reportedAt = r.str("reported_at"),
         )
     }
 

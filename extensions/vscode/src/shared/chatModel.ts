@@ -772,7 +772,7 @@ export interface UsageMeter {
   percent: number | null;
   /** e.g. "42% · 84k"; "ctx –" while unknown. */
   label: string;
-  /** Tooltip, e.g. "Context: 84,000 of 200,000 tokens (42%). Click for limits and cost." */
+  /** Tooltip, e.g. "Context: 84,000 of 200,000 tokens (42%). Click for the usage panel (limits, /usage, cost)." */
   title: string;
   /** "ok" below 70 %, "warn" below 90 %, else "high"; "unknown" without data. */
   level: 'unknown' | 'ok' | 'warn' | 'high';
@@ -788,13 +788,13 @@ export interface UsageMeter {
  */
 export function usageMeter(usage: ViewState['usage'], working = false): UsageMeter {
   const c = usage.context;
-  if (!c) return { percent: null, label: 'ctx –', title: 'Context usage is not known yet. Click to ask.', level: 'unknown' };
+  if (!c) return { percent: null, label: 'ctx –', title: 'Context usage is not known yet. Click for the usage panel.', level: 'unknown' };
   const percent = Math.max(0, Math.min(100, Math.round(c.percent)));
   const asOf = working ? ' As of the last turn or usage report; it is read again when the turn ends.' : '';
   return {
     percent,
     label: `${percent}% · ${formatTokens(c.tokens)}`,
-    title: `Context: ${c.tokens.toLocaleString('en-US')} of ${c.maxTokens.toLocaleString('en-US')} tokens (${percent}%).${asOf} Click for limits and cost.`,
+    title: `Context: ${c.tokens.toLocaleString('en-US')} of ${c.maxTokens.toLocaleString('en-US')} tokens (${percent}%).${asOf} Click for the usage panel (limits, /usage, cost).`,
     level: percent < 70 ? 'ok' : percent < 90 ? 'warn' : 'high',
   };
 }

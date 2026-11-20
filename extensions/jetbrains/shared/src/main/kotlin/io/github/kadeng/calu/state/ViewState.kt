@@ -270,6 +270,8 @@ data class HonestyInfo(
  * @property status Claude Code's status of the limit, e.g. "allowed"; "" if not given.
  * @property utilization Used share (0..1); `null` if unknown.
  * @property resetsAt ISO time the limit resets; `null` if unknown.
+ * @property reportedAt ISO time Claude Code reported the figure (or, for the plan's limits of
+ *   `get_usage`, when they were read); `null` if unknown.
  */
 @Serializable
 data class RateLimit(
@@ -277,6 +279,38 @@ data class RateLimit(
     val status: String = "",
     val utilization: Double? = null,
     @SerialName("resets_at") val resetsAt: String? = null,
+    @SerialName("reported_at") val reportedAt: String? = null,
+)
+
+/**
+ * The usage panel (`usage.panel`, opened by a click on the context chip).
+ *
+ * @property phase "asking" while the request runs, "ready" with the answer, "failed" with `error`.
+ * @property error Why the session did not answer; `null` unless "failed".
+ * @property limits The limits Claude Code reported to this session (`rate_limit_event`), each
+ *   with `reportedAt`.
+ * @property accountLimits The plan's limits Claude Code read at the request (`get_usage`).
+ * @property accountLimitsProblem Why `accountLimits` is empty although it was asked; "" if not given.
+ * @property subscription The account's plan as Claude Code names it ("pro", "max"); "" if unknown.
+ * @property claudeUsage The text of Claude Code's own `/usage` (read without a turn); "" if missing.
+ * @property claudeUsageProblem Why `claudeUsage` is missing; "" if not given.
+ * @property costUsd The session's cost as Claude Code reported it; `null` before the first turn end.
+ * @property numTurns Model calls of the last turn.
+ * @property context The context window; `null` if not known.
+ */
+@Serializable
+data class UsagePanelView(
+    val phase: String,
+    val error: String? = null,
+    val limits: List<RateLimit> = emptyList(),
+    val accountLimits: List<RateLimit> = emptyList(),
+    val accountLimitsProblem: String = "",
+    val subscription: String = "",
+    val claudeUsage: String = "",
+    val claudeUsageProblem: String = "",
+    val costUsd: Double? = null,
+    val numTurns: Int = 0,
+    val context: ContextView? = null,
 )
 
 /**
@@ -1050,6 +1084,7 @@ data class FocusRequest(val tab: String, val seq: Int)
  *   reports it with `honesty.update`; until then (or if it never does) the header shows both.
  * @property starting A session request that waits for the calu server; `null` otherwise.
  * @property usage Cost, context window and account limits.
+ * @property usagePanel The usage panel's request and answer; `null` before the first click.
  * @property focus Request to show a tab: set when an escalation arrives, so the view can switch
  *   to the tab that contains the card. The replay at attach keeps the previous value.
  * @property queue Chat messages sent but not taken in by Claude yet (`chat.queue`), oldest first.
@@ -1087,6 +1122,7 @@ data class ViewState(
     val honestyStored: String? = null,
     val starting: StartingView? = null,
     val usage: UsageView = UsageView(),
+    val usagePanel: UsagePanelView? = null,
     val focus: FocusRequest? = null,
     val queue: List<QueuedView> = emptyList(),
     val agents: List<AgentInfo> = emptyList(),
@@ -1125,6 +1161,8 @@ data class ViewState(
  * - `ui.hints` `{hints: SetupHint[]}`: replace `hints`;
  * - `ui.model` `{model?: string | null, effort?: string | null}`: the model or effort changed;
  * - `ui.usage` `{context, rate_limits, cost_usd, num_turns}`: the result of `usage.get`;
+ * - `ui.usagePanel` `{phase: "asking"}`, `{result: UsagePanelResult}` or `{error}`: the usage
+ *   panel's request was sent / answered / refused;
  * - `ui.notice` `{level: "info" | "warning" | "error", text, key?}`: a message for the user (e.g. a
  *   failed request) shown in the main list;
  * - `ui.noticeResolved` `{key}`: mark every unresolved notice of the main list with this key as

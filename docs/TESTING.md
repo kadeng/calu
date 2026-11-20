@@ -879,6 +879,15 @@ escalation resolved from the database alone.
    `tests/unit/test_runner_contract.py`, `tests/unit/test_tui_more.py`,
    `tests/unit/test_templates.py`, `tests/unit/test_protocol_side_usage.py`,
    `tests/db/test_schema.py`, `tests/db/test_cli_setup.py`).
+46. The usage panel in the IDEs and a held save across a restart (test plan A18, B24, H38). (a)
+   In VSCode and in PyCharm click the context chip below the message field: the panel shows
+   the 5-hour and weekly limits (each "reported ... ago" or "not reported yet by Claude
+   Code"), Claude Code's `/usage` text and the cost; the session gains no turn. With a real
+   `claude` on a subscription: "Your plan now" lists the plan's limits. (b) PyCharm in the SSH
+   mode: save a file that a running turn edits ("1 file held until the turn ends"), close and
+   reopen the IDE: the file stays held (the server keeps its version) until the turn has ended,
+   then it is merged and uploaded. Scripted tests: `usagePanel.test.ts`, `UsagePanelTest`,
+   `HoldKeeperTest`.
 
 ## Measuring the checkers
 

@@ -354,10 +354,10 @@ class ChatModelTest {
     @Test
     fun `the context meter says in its tooltip that the number is from the last turn while Claude works`() {
         val usage = UsageView(numTurns = 1, context = ContextView(84_000, 200_000, 42.0, "opus"))
-        assertEquals("Context: 84,000 of 200,000 tokens (42%). Click for limits and cost.", usageMeter(usage).title)
+        assertEquals("Context: 84,000 of 200,000 tokens (42%). Click for the usage panel (limits, /usage, cost).", usageMeter(usage).title)
         assertTrue(usageMeter(usage, true).title.contains("As of the last turn or usage report"))
         assertEquals(usageMeter(usage).label, usageMeter(usage, true).label)
-        assertEquals("Context usage is not known yet. Click to ask.", usageMeter(usage.copy(context = null), true).title)
+        assertEquals("Context usage is not known yet. Click for the usage panel.", usageMeter(usage.copy(context = null), true).title)
     }
 
     @Test

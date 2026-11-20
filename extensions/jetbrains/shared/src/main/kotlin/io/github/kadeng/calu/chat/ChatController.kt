@@ -484,6 +484,28 @@ class ChatController(
         }
     }
 
+    /**
+     * Ask the attached session for the usage panel (`usage.panel`): `ui.usagePanel` "asking"
+     * first, then the answer or the refusal. The request starts no turn and sends nothing to
+     * the model. Without an attached session nothing is asked.
+     *
+     * @return True if the session answered.
+     */
+    suspend fun usagePanel(): Boolean {
+        if (!isAttached(state)) return false
+        dispatch("ui.usagePanel", buildJsonObject { put("phase", JsonPrimitive("asking")) })
+        return try {
+            val result = supervisor.session("usage.panel", EMPTY_OBJECT, false).asObj() ?: EMPTY_OBJECT
+            dispatch("ui.usagePanel", buildJsonObject { put("result", result) })
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            dispatch("ui.usagePanel", buildJsonObject { put("error", JsonPrimitive(errorText(error))) })
+            false
+        }
+    }
+
     /** Ask the attached session for its usage (`usage.get`) and put it into the state. */
     suspend fun refreshUsage() {
         if (!isAttached(state)) return

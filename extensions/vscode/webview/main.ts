@@ -31,13 +31,11 @@ import {
   oneLine,
   otherOpenEscalations,
   parseImageDataUrl,
-  rateLimitLine,
   sessionActionMessage,
   sessionLabel,
   sessionMenu,
   setupCards,
   tabList,
-  usageCostLine,
   usageMeter,
   waitingElsewhere,
   linkMessage,
@@ -78,6 +76,7 @@ import {
 import { actionButton, actionLink, copyText, el, icon, iconButton, logo, reveal, sameChildren, setSection, shown } from './dom';
 import { draftOf, itemDeps, renderItem, renderSubagentHead, subagentHeadDeps, type Ctx } from './items';
 import { markdown } from './markdown';
+import { usagePanelSections } from '../src/shared/usagePanel';
 import { closePopup, closePopupIfOutside, openPopup, openPopupId, refreshPopup } from './popup';
 
 /** The API object that VSCode injects into webviews. */
@@ -1130,27 +1129,35 @@ function buildFooterControls(): HTMLElement[] {
 }
 
 /**
- * Build the usage popover: context window, account limits, cost, and "Refresh".
+ * Build the usage panel (`usage.panel`, opened by a click on the context chip): the context
+ * meter, then the sections of `usagePanelSections` (subscription limits with when Claude Code
+ * reported them, the plan's limits, Claude Code's `/usage` text, cost), and "Ask again".
  *
  * @returns A `role="dialog"` element.
  */
 function buildUsagePopover(): HTMLElement {
-  const box = el('div', 'menu usage', undefined, { role: 'dialog', 'aria-label': 'Usage' });
+  const box = el('div', 'menu usage usage-panel', undefined, { role: 'dialog', 'aria-label': 'Usage', 'data-testid': 'usage-panel' });
   const meter = usageMeter(view.usage);
-  const c = view.usage.context;
-  box.append(el('div', 'menu-heading', 'Context window'));
-  box.append(el('div', 'usage-line', c ? `${c.tokens.toLocaleString('en-US')} of ${c.maxTokens.toLocaleString('en-US')} tokens (${meter.percent}%)${c.model ? ` · ${c.model}` : ''}` : 'Not known yet.'));
   const bar = el('div', `meter-bar wide ${meter.level}`);
   const fill = el('span', 'meter-fill');
   fill.style.width = `${meter.percent ?? 0}%`;
   bar.append(fill);
-  box.append(bar);
-  box.append(el('div', 'menu-heading', 'Account limits'));
-  if (view.usage.rateLimits.length === 0) box.append(el('div', 'usage-line', 'None reported (an API key or a cloud provider has none).'));
-  for (const limit of view.usage.rateLimits) box.append(el('div', 'usage-line', rateLimitLine(limit)));
-  box.append(el('div', 'menu-heading', 'Session'));
-  box.append(el('div', 'usage-line', usageCostLine(view.usage.costUsd, view.usage.numTurns)));
-  box.append(actionButton('Refresh', 'post', { class: 'menu-item', 'data-type': 'refreshUsage' }));
+  box.append(el('div', 'menu-heading', 'Context window'), bar);
+  const panel = view.usagePanel;
+  if (!panel || panel.phase === 'asking') box.append(el('div', 'usage-line muted', 'Asking the session…'));
+  else if (panel.phase === 'failed') box.append(el('div', 'usage-line problem', `The session did not answer: ${panel.error ?? ''}`));
+  else {
+    for (const section of usagePanelSections(panel, Date.now())) {
+      const head = el('div', 'menu-heading', section.title);
+      if (section.note) head.append(el('span', 'usage-note', ` · ${section.note}`));
+      box.append(head);
+      for (const line of section.lines) box.append(el('div', `usage-line ${line.tone}`, line.text));
+      if (section.preformatted !== null) box.append(el('pre', 'usage-text', section.preformatted));
+    }
+  }
+  const footer = el('div', 'menu-footer');
+  footer.append(actionButton('Ask again', 'post', { class: 'menu-item', 'data-type': 'usagePanel' }));
+  box.append(footer);
   return box;
 }
 
@@ -1801,7 +1808,7 @@ function onClick(event: MouseEvent): void {
   switch (data.action) {
     case 'post':
       vscode.postMessage({ type: data.type } as WebviewMessage);
-      if (inPopup && data.type !== 'refreshUsage') closePopup();
+      if (inPopup && data.type !== 'refreshUsage' && data.type !== 'usagePanel') closePopup();
       return;
     case 'postJson':
       vscode.postMessage(JSON.parse(data.message ?? '{}') as WebviewMessage);
@@ -1833,7 +1840,7 @@ function onClick(event: MouseEvent): void {
       if (openPopupId() === 'usage') closePopup();
       else {
         openPopup('usage', buildUsagePopover(), { anchor: actionEl });
-        vscode.postMessage({ type: 'refreshUsage' });
+        vscode.postMessage({ type: 'usagePanel' });
       }
       return;
     case 'tab':

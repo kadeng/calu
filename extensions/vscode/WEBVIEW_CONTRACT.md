@@ -143,6 +143,7 @@ or why nobody can. `formatAnswer(questions, choices)` builds the answer text of 
 | `setEffort` | `effort` (`CLAUDE_EFFORTS`) | stores `claude.effort` in calu's settings (later sessions; a notice says so) |
 | `setLevel` | `level` (`LEVEL_IDS`) | `auto_escalate.set`; `auto_escalate.changed` follows |
 | `refreshUsage` | | `usage.get` → `ui.usage` (the host also asks after each turn) |
+| `usagePanel` | | `ui.usagePanel {phase: "asking"}`, then `usage.panel` → `ui.usagePanel {result}` or `{error}`; the webview draws the panel from `state.usagePanel` (`usagePanel.ts`) |
 | `interrupt` | | `interrupt` |
 | `openFile` | `path`, `line?` (1-based) | opens it only if a tool call listed it in `files`; the cursor goes to `line` |
 | `openToolFile` | `toolUseId`, `index`, `line?` | opens `tools[id].files[index]`, cursor at `line` |

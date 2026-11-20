@@ -67,6 +67,11 @@ closes. Passwords (sudo, calu credentials for the server) are typed into that te
 - **Honesty mode**: the menu stores `honesty.mode` in calu's settings; the running session
   reads the change and the chip follows. If the session does not report the stored mode, the
   chip shows both ("stored: track").
+- **Usage panel**: a click on the context chip below the message field asks the session
+  (`usage.panel`) and shows the 5-hour and weekly limits as Claude Code reported them, each
+  with the time of the report or "not reported yet by Claude Code", the plan's limits when
+  Claude Code can read them, Claude Code's own `/usage` text, the cost and the context fill.
+  The request makes no model call and starts no turn. **Ask again** repeats it.
 - **Images**: up to 4 per message, at most 5 MB each (what a session accepts); a larger one is
   refused with a message and nothing is sent. A click on a thumbnail shows the image large.
 - **Text direction**: invisible characters that reorder text (right-to-left override and the

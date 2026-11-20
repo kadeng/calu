@@ -62,13 +62,11 @@ import io.github.kadeng.calu.logic.buildSessionPicks
 import io.github.kadeng.calu.logic.heldByAgent
 import io.github.kadeng.calu.logic.neutraliseBidi
 import io.github.kadeng.calu.logic.otherOpenEscalations
-import io.github.kadeng.calu.logic.rateLimitLine
 import io.github.kadeng.calu.logic.resolveItemAction
 import io.github.kadeng.calu.logic.sessionLabel
 import io.github.kadeng.calu.logic.sessionMenu
 import io.github.kadeng.calu.logic.setupCards
 import io.github.kadeng.calu.logic.tabList
-import io.github.kadeng.calu.logic.usageCostLine
 import io.github.kadeng.calu.logic.usageMeter
 import io.github.kadeng.calu.logic.validateSessionName
 import io.github.kadeng.calu.state.LEVELS
@@ -258,6 +256,7 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
     private val level = ActionLink("level") { levelMenu() }.apply { setDropDownLinkIcon() }
     private val permission = ActionLink("mode") { permissionMenu() }.apply { setDropDownLinkIcon() }
     private val usage = Chip().apply { toolTipText = "" }
+    private val usagePanel = UsagePanelPopup { host.act("usagePanel") }
     private val root = JPanel(BorderLayout())
     private val header = JPanel(BorderLayout(JBUI.scale(10), 0))
     private val south = JPanel(VerticalLayout(JBUI.scale(4)))
@@ -320,6 +319,7 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
 
     override fun dispose() {
         clock.stop()
+        usagePanel.close()
     }
 
     override fun render(state: ViewState) {
@@ -365,6 +365,7 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
         renderAttention()
         renderQueue()
         renderFooter()
+        usagePanel.update(state.usagePanel)
         composer.render(state, active)
         if (focusComposerOnAttach && isAttached(state)) {
             focusComposerOnAttach = false
@@ -916,16 +917,14 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
         }
     }
 
-    /** Show the usage: context, cost and limits; a click on the line asks the session again. */
+    /**
+     * Open the usage panel above the context chip and ask the session for it (`usage.panel`):
+     * subscription limits with when they were reported, the plan's limits, Claude Code's
+     * `/usage` text, cost and context.
+     */
     private fun usageMenu() {
-        val menu = JBPopupMenu()
-        val meter = usageMeter(state.usage)
-        menu.add(meter.title.substringBefore(" Click")).isEnabled = false
-        usageCostLine(state.usage.costUsd, state.usage.numTurns).takeIf { it.isNotEmpty() }?.let { menu.add(it).isEnabled = false }
-        for (limit in state.usage.rateLimits) menu.add(rateLimitLine(limit)).isEnabled = false
-        menu.addSeparator()
-        menu.add("Ask Again").addActionListener { host.act("refreshUsage") }
-        menu.show(usage, 0, -menu.preferredSize.height)
+        usagePanel.show(usage)
+        host.act("usagePanel")
     }
 
     /** Show the honesty menu: the mode switch, the open marks (a click clears one), review and trust. */

@@ -358,6 +358,24 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
   }
 
   /**
+   * Ask the attached session for the usage panel (`usage.panel`): `ui.usagePanel` "asking"
+   * first, then the answer or the refusal. The request starts no turn and sends nothing to the
+   * model. Without an attached session nothing is asked.
+   *
+   * @returns A promise that resolves when the answer or the refusal was applied.
+   */
+  async function openUsagePanel(): Promise<void> {
+    if (!isAttached(chat.state)) return;
+    dispatch({ method: 'ui.usagePanel', params: { phase: 'asking' } });
+    try {
+      const result = await bridge.session('usage.panel', {});
+      dispatch({ method: 'ui.usagePanel', params: { result: result as unknown as Record<string, unknown> } });
+    } catch (error) {
+      dispatch({ method: 'ui.usagePanel', params: { error: errorText(error) } });
+    }
+  }
+
+  /**
    * Ask the attached session for its usage and put the answer into the chat view. Failures
    * are logged only.
    *
@@ -1074,6 +1092,9 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
         return;
       case 'refreshUsage':
         await refreshUsage();
+        return;
+      case 'usagePanel':
+        await openUsagePanel();
         return;
       case 'interrupt':
         await run('Interrupting', () => bridge.session('interrupt', {}));

@@ -84,6 +84,9 @@ Afterwards:
     a local save                   -> on the server at once (300 ms after the last change)
     a save while the agent edits   -> held ("1 file held until the turn ends", "Upload now");
       that file in a running turn     merged with the agent's change when the turn ended
+    the IDE restarts while a file  -> still held: the held paths are stored with the session id
+      is held                         (`holds.txt` beside the bases) and released when the
+                                      session is idle again or no longer listed as running
     Run or Debug while a file      -> "N files are held until Claude's turn ends; the server still
       is held                         runs the old version." Upload now and run (default) / Run
                                       anyway / Cancel; a Rerun from a Run or Debug tab only gets a
@@ -300,7 +303,7 @@ The tool window "calu" is in the right stripe (below "More tool windows" until i
     cards      Allow / Deny with a note / Why? / Show Diff; questions with one or several choices
     composer   Enter sends (queues while Claude works), Ctrl+Enter sends into the running turn,
                Shift+Enter a new line, "/" slash commands, paste or "Add image" (5 MiB, four)
-    footer     model, effort, supervision level, context usage (click: limits and cost)
+    footer     model, effort, supervision level, context usage (click: the usage panel: subscription limits, /usage, cost)
     title bar  New Session, Checker Instructions, Checker Context, Side Question, Models, calu Settings,
                Plugin Settings, Sync Now (SSH mode)
     elsewhere  editor popup "Add Comment for Claude" (Ctrl+Alt+K; also in a diff: the comment's

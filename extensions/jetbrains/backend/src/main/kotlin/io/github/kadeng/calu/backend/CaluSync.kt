@@ -86,6 +86,9 @@ import java.nio.file.Path
 /** Milliseconds the listener waits after a local change for further ones before it synchronises. */
 const val LOCAL_CHANGE_DEBOUNCE_MS: Long = 300
 
+/** Chat events after which a hold kept from before a restart may have ended (see `holdEnded`). */
+private val HOLD_STATE_EVENTS: Set<String> = setOf("ui.attached", "ui.sessions", "ui.detached", "ui.link")
+
 /** Id of the notification group (registered by the frontend module). */
 private const val SYNC_NOTIFICATION_GROUP = "calu"
 
@@ -136,6 +139,9 @@ class CaluSync(
     private val store = SyncStore(Path.of(PathManager.getSystemPath(), "calu-sync", io.github.kadeng.calu.sync.syncStoreName(root.toString(), host, remoteDir)))
     private val remote = RemoteFileStore({ method, params -> supervisor.request(method, params, interactive = false) })
 
+    /** The held paths kept across a restart of the IDE (B23), stored next to the bases. */
+    private val keeper = io.github.kadeng.calu.sync.HoldKeeper(store)
+
     /** The synchroniser; its `remotePaths` give the server's resolved root for the path mapping. */
     val sync = Synchronizer(remote, local, store, ::heldRelative, this, "$host:$remoteDir", log = log)
     private val driver = SyncDriver(sync, supervisor, scope, log) { work -> withProgress("calu: synchronising with $host", work) }
@@ -173,6 +179,14 @@ class CaluSync(
         bus.subscribe(VirtualFileManager.VFS_CHANGES, object : BulkFileListener {
             override fun after(events: List<VFileEvent>) = onVfsEvents(events)
         })
+        // A hold kept from before a restart ends when the chat learns that its turn is over:
+        // after an attach (the snapshot's state) or a new session list, not only at a session event.
+        scope.launch {
+            controller.updates().collect { update ->
+                val method = (update as? io.github.kadeng.calu.chat.ChatUpdate.Event)?.event?.method
+                if (method in HOLD_STATE_EVENTS) driver.post { sync.holdsChanged() }
+            }
+        }
         driver.start()
         scope.launch { checkDeployment() }
     }
@@ -214,13 +228,16 @@ class CaluSync(
     }
 
     /**
-     * The relative paths the agent is editing in the running turn.
+     * The relative paths whose local saves are held: those the agent is editing in the running
+     * turn, plus those held before a restart of the IDE whose turn is not known to have ended
+     * (`HoldKeeper`). Side effect: the keeper stores the answer when it changed.
      *
-     * @return the held paths of the chat's state, relative to the server's project root.
+     * @return the held paths, relative to the server's project root.
      */
     private fun heldRelative(): Set<String> {
         val mapper = PathMapper(remoteRoot = sync.remotePaths?.root ?: remoteDir)
-        return heldPaths(controller.state).mapNotNull { mapper.toRelativeRemote(it) }.toSet()
+        val state = controller.state
+        return keeper.held(state, heldPaths(state).mapNotNull { mapper.toRelativeRemote(it) }.toSet())
     }
 
     /**

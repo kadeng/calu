@@ -42,6 +42,7 @@ import type { AutoEscalateFlags } from './levels';
 import { MAX_IMAGE_BASE64 } from './messages';
 import type { ServerHelp } from './serverCommand';
 import { lostCause, type LostCause } from './serverLoss';
+import { emptyUsagePanel, parseUsagePanel, type UsagePanelView } from './usagePanel';
 
 /** Key of a message list: "main" for the main agent, otherwise the subagent's `agent_id`. */
 export type AgentKey = string;
@@ -480,6 +481,8 @@ export interface ViewState {
    */
   starting: { title: string; slow: boolean } | null;
   usage: UsageView;
+  /** The usage panel's request and answer (`usage.panel`); `null` before the first click. */
+  usagePanel: UsagePanelView | null;
   /**
    * Request to show a tab: set when an escalation arrives, so the view can switch to the tab
    * that contains the card. `seq` increases with every request; a view switches tabs only for a
@@ -543,6 +546,9 @@ export interface ViewState {
  * - `ui.hints` `{hints: SetupHint[]}`: replace `hints`;
  * - `ui.model` `{model?: string | null, effort?: string | null}`: the model or effort changed;
  * - `ui.usage` `{context, rate_limits, cost_usd, num_turns}`: the result of `usage.get`;
+ * - `ui.usagePanel` `{phase: "asking"}`, `{result}` or `{error}`: the usage panel's request was
+ *   sent / answered (also updates `usage`: context when given, cost, turns, limits when listed) /
+ *   refused;
  * - `ui.notice` `{level: "info" | "warning" | "error", text}`: a message for the user (e.g. a
  *   failed request) shown in the main list;
  * - `ui.clear` `{}`: drop messages, tool calls, escalations, subagent tabs, queued messages and
@@ -652,6 +658,7 @@ export function initialViewState(): ViewState {
     honestyStored: null,
     starting: null,
     usage: { rateLimits: [], costUsd: null, numTurns: 0, context: null },
+    usagePanel: null,
     focus: null,
     agents: [],
     subagents: Object.create(null) as IdMap<SubagentView>,
@@ -1587,6 +1594,23 @@ function reduce(state: ViewState, method: string, p: Record<string, unknown>): V
           costUsd: typeof p.cost_usd === 'number' ? p.cost_usd : state.usage.costUsd,
           numTurns: typeof p.num_turns === 'number' ? p.num_turns : state.usage.numTurns,
           context,
+        },
+      };
+    }
+    case 'ui.usagePanel': {
+      if (str(p.error)) return { ...state, usagePanel: emptyUsagePanel('failed', p.error) };
+      if (!p.result || typeof p.result !== 'object') return p.phase === 'asking' ? { ...state, usagePanel: emptyUsagePanel('asking') } : state;
+      const r = p.result as Record<string, unknown>;
+      const panel = parseUsagePanel(r);
+      const limits = parseRateLimits(r.limits);
+      return {
+        ...state,
+        usagePanel: panel,
+        usage: {
+          rateLimits: limits.length > 0 ? limits : state.usage.rateLimits,
+          costUsd: panel.costUsd ?? state.usage.costUsd,
+          numTurns: typeof r.num_turns === 'number' ? panel.numTurns : state.usage.numTurns,
+          context: panel.context ?? state.usage.context,
         },
       };
     }

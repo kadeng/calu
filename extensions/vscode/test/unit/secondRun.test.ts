@@ -70,10 +70,10 @@ describe('hints while a session is attached', () => {
 describe('the context meter', () => {
   it('says in its tooltip that the number is from the last turn while Claude works', () => {
     const usage = { rateLimits: [], costUsd: null, numTurns: 1, context: { tokens: 84_000, maxTokens: 200_000, percent: 42, model: 'opus' } };
-    expect(usageMeter(usage).title).toBe('Context: 84,000 of 200,000 tokens (42%). Click for limits and cost.');
+    expect(usageMeter(usage).title).toBe('Context: 84,000 of 200,000 tokens (42%). Click for the usage panel (limits, /usage, cost).');
     expect(usageMeter(usage, true).title).toContain('As of the last turn or usage report');
     expect(usageMeter(usage, true).label).toBe(usageMeter(usage).label);
-    expect(usageMeter({ ...usage, context: null }, true).title).toBe('Context usage is not known yet. Click to ask.');
+    expect(usageMeter({ ...usage, context: null }, true).title).toBe('Context usage is not known yet. Click for the usage panel.');
   });
 });
 

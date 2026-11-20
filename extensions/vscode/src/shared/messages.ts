@@ -100,6 +100,8 @@ export type WebviewMessage =
   | { type: 'setPermissionMode'; mode: PermissionModeId }
   /** Ask the session for its usage (`usage.get`); the answer arrives as `ui.usage`. */
   | { type: 'refreshUsage' }
+  /** Open the usage panel: ask the session `usage.panel`; the answer arrives as `ui.usagePanel`. */
+  | { type: 'usagePanel' }
   /** Interrupt the running turn. */
   | { type: 'interrupt' }
   /**
@@ -209,6 +211,7 @@ const BARE_TYPES = [
   'openSettings',
   'showContext',
   'refreshUsage',
+  'usagePanel',
   'interrupt',
   'showLog',
   'unlock',
