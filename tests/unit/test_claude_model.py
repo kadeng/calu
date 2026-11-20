@@ -79,6 +79,25 @@ def test_the_model_string_is_recognised_and_carries_the_alias() -> None:
         claude_cli_model("fireworks:x")
 
 
+async def test_without_a_path_the_check_runs_the_executable_a_session_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Not `claude` from PATH: under sudo PATH lacks ~/.local/bin, the bundled CLI is there."""
+    monkeypatch.setenv("RECORD", str(tmp_path / "argv.txt"))
+    monkeypatch.setenv("CWDFILE", str(tmp_path / "cwd.txt"))
+    script = fake_cli(tmp_path, f"cat <<'JSON'\n{json.dumps(RESULT)}\nJSON\n")
+    asked: list[str | None] = []
+
+    def claude_path(configured: str | None) -> str:
+        asked.append(configured)
+        return str(script)
+
+    monkeypatch.setattr("calu.launch.claude_path", claude_path)
+    agent = Agent(claude_cli_model("claude:haiku"), output_type=CheckDecision)
+    assert (await agent.run("Judge: ls")).output.decision is Decision.DENY
+    assert asked == [None]
+
+
 async def test_a_check_runs_the_cli_and_returns_its_structured_answer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

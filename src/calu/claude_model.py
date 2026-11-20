@@ -217,7 +217,8 @@ def claude_cli_model(
 
     Args:
         model: The configured model string, e.g. `claude:haiku`.
-        cli_path: Path to the `claude` executable; None looks it up on PATH.
+        cli_path: Path to the `claude` executable; None takes the one a session starts
+            (`calu.launch.claude_path`: the Agent SDK's bundled CLI, else `claude` on PATH).
         timeout_s: How long one call may take.
 
     Returns:
@@ -254,8 +255,19 @@ def claude_cli_model(
             )
         tool = info.output_tools[0]
         instructions, content = split_prompt(messages, info)
+        # The executable a session starts (bundled with the Agent SDK before PATH): calu
+        # started through sudo has sudo's PATH, which lacks the user's ~/.local/bin.
+        from calu.launch import LaunchError, claude_path
+
+        try:
+            executable = claude_path(cli_path)
+        except LaunchError as exc:
+            raise ClaudeCliError(
+                f"the Claude Code CLI was not found ({exc}); a claude: checker model needs "
+                "`claude` on PATH or `claude.cli_path` set"
+            ) from exc
         command = [
-            cli_path or "claude",
+            executable,
             "-p",
             "--output-format",
             "json",
