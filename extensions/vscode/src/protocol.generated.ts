@@ -668,6 +668,7 @@ export interface RateLimit {
   reported_at?: string | null;
   resets_at?: string | null;
   status?: string;
+  stored?: boolean;
   type?: string;
   utilization?: number | null;
 }
@@ -1196,19 +1197,24 @@ export interface TurnResult {
 /**
  * Result of `usage.panel`: everything the usage panel of a client shows (PLAN.md D248).
  *
- * `limits` are the usage limits calu stored from Claude Code's reports in this calu process
- * (`rate_limit_event` of the stream, each with `reported_at`); empty if Claude Code has not
- * reported one yet. `claude_usage` is the text of Claude Code's own `/usage` in a session
+ * `limits` are the usage limits Claude Code reported for this account (`rate_limit_event`
+ * of the stream, each with `reported_at`): in this calu process, or stored in the database by
+ * an earlier session (`stored` True, D250); empty if Claude Code has not reported one yet.
+ * `claude_usage` is the text of Claude Code's own `/usage` in a session
  * without a terminal, read with the control request `get_session_cost`: no model call, no
  * turn, nothing recorded and nothing shown to the checkers. `account_limits` are the plan's
  * limits that Claude Code reads from its account at this request (control request
  * `get_usage`, which Claude Code marks experimental), with `reported_at` set to now; empty
  * for an account without such limits (an API key, Bedrock, Vertex) or when Claude Code does
  * not answer it. `subscription` is the account's plan as Claude Code names it ("pro",
- * "max", ...), "" if none or not known.
+ * "max", ...), "" if none or not known. When `get_usage` fails or answers in a shape calu
+ * does not know, `account_limits` stays empty and `account_limits_problem` says so: the
+ * client then points to `limits`, the stored figures (D250).
  */
 export interface UsagePanelResult {
+  account?: string;
   account_limits?: RateLimit[];
+  account_limits_problem?: string;
   claude_usage?: string;
   claude_usage_problem?: string;
   context?: ContextUsage | null;
@@ -1222,8 +1228,10 @@ export interface UsagePanelResult {
  *
  * `context` is asked from Claude Code when the request arrives and is None when no session
  * runs or Claude Code does not answer. `rate_limits` is the newest state of each limit Claude
- * Code reported in this calu process; an account without limits (an API key, Bedrock) has
- * none. `cost_usd` and `num_turns` are those of the last `turn.result`.
+ * Code reported for this account: in this calu process, or stored in the database by an
+ * earlier session (`stored` True, D250), each with `reported_at`; an account without limits
+ * (an API key, Bedrock) has none. `cost_usd` and `num_turns` are those of the last
+ * `turn.result`.
  */
 export interface UsageResult {
   context?: ContextUsage | null;

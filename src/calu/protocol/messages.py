@@ -396,6 +396,9 @@ class RateLimit(BaseModel):
     reported_at: datetime | None = None
     """When calu received this state from Claude Code; None if not known (a session before
     D248)."""
+    stored: bool = False
+    """True if the figure was read from the database: the last one Claude Code reported for
+    the same account, perhaps in an earlier session (D250); its age is `reported_at`."""
 
 
 class ContextUsage(BaseModel):
@@ -414,8 +417,10 @@ class UsageResult(BaseModel):
 
     `context` is asked from Claude Code when the request arrives and is None when no session
     runs or Claude Code does not answer. `rate_limits` is the newest state of each limit Claude
-    Code reported in this calu process; an account without limits (an API key, Bedrock) has
-    none. `cost_usd` and `num_turns` are those of the last `turn.result`.
+    Code reported for this account: in this calu process, or stored in the database by an
+    earlier session (`stored` True, D250), each with `reported_at`; an account without limits
+    (an API key, Bedrock) has none. `cost_usd` and `num_turns` are those of the last
+    `turn.result`.
     """
 
     context: ContextUsage | None = None
@@ -427,20 +432,30 @@ class UsageResult(BaseModel):
 class UsagePanelResult(BaseModel):
     """Result of `usage.panel`: everything the usage panel of a client shows (PLAN.md D248).
 
-    `limits` are the usage limits calu stored from Claude Code's reports in this calu process
-    (`rate_limit_event` of the stream, each with `reported_at`); empty if Claude Code has not
-    reported one yet. `claude_usage` is the text of Claude Code's own `/usage` in a session
+    `limits` are the usage limits Claude Code reported for this account (`rate_limit_event`
+    of the stream, each with `reported_at`): in this calu process, or stored in the database by
+    an earlier session (`stored` True, D250); empty if Claude Code has not reported one yet.
+    `claude_usage` is the text of Claude Code's own `/usage` in a session
     without a terminal, read with the control request `get_session_cost`: no model call, no
     turn, nothing recorded and nothing shown to the checkers. `account_limits` are the plan's
     limits that Claude Code reads from its account at this request (control request
     `get_usage`, which Claude Code marks experimental), with `reported_at` set to now; empty
     for an account without such limits (an API key, Bedrock, Vertex) or when Claude Code does
     not answer it. `subscription` is the account's plan as Claude Code names it ("pro",
-    "max", ...), "" if none or not known.
+    "max", ...), "" if none or not known. When `get_usage` fails or answers in a shape calu
+    does not know, `account_limits` stays empty and `account_limits_problem` says so: the
+    client then points to `limits`, the stored figures (D250).
     """
 
     limits: list[RateLimit] = Field(default_factory=list)
     account_limits: list[RateLimit] = Field(default_factory=list)
+    account_limits_problem: str = ""
+    """Why the plan's limits could not be read now ("" if they could, or the account has none):
+    no session runs, Claude Code did not answer `get_usage`, or its answer has an unknown
+    shape. The panel shows the stored `limits` instead and says so."""
+    account: str = ""
+    """The account the stored figures belong to, as Claude Code names its login ("<email>" or
+    "<email> (<organization>)"); "" for the session's OS user and host (D250)."""
     subscription: str = ""
     claude_usage: str = ""
     """Claude Code's `/usage` text: cost, durations, code changes, tokens; "" if not read."""

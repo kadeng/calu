@@ -34,6 +34,7 @@ import json
 import secrets
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
 import psycopg
@@ -46,6 +47,7 @@ from calu.protocol.messages import (
     AgentInfo,
     CheckerRunInfo,
     EscalationContextResult,
+    RateLimit,
     SessionHistoryResult,
     SessionSummary,
     State,
@@ -268,6 +270,36 @@ class SessionStore(Protocol):
             new: Its value after the change, as a JSON object.
             actor: Who asked for it: the name of the client, or "session" when a reloaded
                 configuration brought the change.
+        """
+        ...
+
+    async def note_usage_limit(self, account: str | None, limit: RateLimit) -> str | None:
+        """Store the newest state of one usage limit of a Claude account (D250).
+
+        Called when Claude Code reports a limit (`rate_limit_event`), so that a later session
+        of the same account can show it with its age. A report older than the stored one of
+        the same account and limit changes nothing.
+
+        Args:
+            account: How Claude Code names its login ("<email>" or "<email> (<organization>)",
+                `ClaudeRunner.account`); None or "" for the session's OS user and host.
+            limit: The limit as Claude Code reported it; `reported_at` must be set.
+
+        Returns:
+            The key the figures are stored under ("claude:..." or "os:<user>@<host>"), or
+            None if the store keeps none (a database before migration 0041).
+        """
+        ...
+
+    async def usage_limits(self, account: str | None) -> list[RateLimit]:
+        """Read the stored usage limits of a Claude account (D250).
+
+        Args:
+            account: As for `note_usage_limit`.
+
+        Returns:
+            The newest stored state of each limit of the account, each with `reported_at`
+            and `stored` True; empty if none is stored or the store keeps none.
         """
         ...
 
@@ -785,6 +817,73 @@ class DatabaseSessionStore:
                     (self._address, self.session_id),
                 )
         return self.session_id
+
+    async def note_usage_limit(self, account: str | None, limit: RateLimit) -> str | None:
+        """Store one usage limit of the account (see `SessionStore.note_usage_limit`).
+
+        Through `calu_note_usage_limit` (migration 0041), which takes the OS user and host of
+        the fallback key from this session's own row.
+
+        Args:
+            account: Claude Code's name of its login, or None.
+            limit: The limit, with `reported_at`.
+
+        Returns:
+            The account key; None on a database before migration 0041 or without a session
+            row (nothing stored).
+
+        Raises:
+            psycopg.Error: On other database errors.
+        """
+        self._require_session()
+        try:
+            row = await self._db.one(
+                "SELECT calu_note_usage_limit(%s, %s, %s, %s, %s, %s)",
+                (
+                    account or None,
+                    limit.type,
+                    limit.status,
+                    limit.utilization,
+                    limit.resets_at,
+                    limit.reported_at or datetime.now(UTC),
+                ),
+            )
+        except psycopg.errors.UndefinedFunction:
+            return None  # a schema before migration 0041: the figures stay in the process
+        return str(row[0]) if row and row[0] is not None else None
+
+    async def usage_limits(self, account: str | None) -> list[RateLimit]:
+        """Read the stored usage limits of the account (see `SessionStore.usage_limits`).
+
+        Args:
+            account: Claude Code's name of its login, or None.
+
+        Returns:
+            The stored limits, newest report first; empty on a database before migration 0041.
+
+        Raises:
+            psycopg.Error: On other database errors.
+        """
+        self._require_session()
+        try:
+            rows = await self._db.all(
+                "SELECT limit_type, status, utilization, resets_at, reported_at"
+                " FROM calu_usage_limits(%s)",
+                (account or None,),
+            )
+        except psycopg.errors.UndefinedFunction:
+            return []
+        return [
+            RateLimit(
+                type=kind,
+                status=status,
+                utilization=utilization,
+                resets_at=resets_at,
+                reported_at=reported_at,
+                stored=True,
+            )
+            for kind, status, utilization, resets_at, reported_at in rows
+        ]
 
     async def heartbeat(self) -> None:
         """Stamp `last_seen` on this session's row (see `SessionStore.heartbeat`).

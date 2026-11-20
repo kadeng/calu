@@ -147,6 +147,8 @@ class FakeScript(BaseModel):
     turns: list[list[dict[str, Any]]] = Field(default_factory=list)
     permission_mode: str = "auto"
     """The permission mode the runner starts in, as calu's default start gives it."""
+    account: str | None = None
+    """How the scripted Claude Code names its login (`ClaudeRunner.account`); None: none."""
 
     @classmethod
     def load(cls, path: Path) -> FakeScript:
@@ -178,6 +180,8 @@ class FakeRunner:
         self.script = script
         self.workspace = workspace
         self.session_id: str | None = "fake-session"
+        self.account: str | None = script.account
+        """How Claude Code names its login (`ClaudeRunner.account`)."""
         self._turns = iter(script.turns)
         self._ids = itertools.count(1)
         # Tool and message ids are unique across runners, as Claude Code's are: ids that
@@ -213,6 +217,8 @@ class FakeRunner:
         """The `/usage` text `usage_report` returns ("" makes it report a problem)."""
         self.account_limits: list[RateLimit] = []
         """The plan's limits `usage_report` returns."""
+        self.account_problem = ""
+        """What `usage_report` says about `get_usage` ("" for an answer of the known shape)."""
         self.usage_reports = 0
         """How often `usage_report` was called."""
         self.model: str | None = None
@@ -384,13 +390,14 @@ class FakeRunner:
 
         Returns:
             `usage_text` and `account_limits`; with an empty `usage_text` the problem
-            "Claude Code returned no /usage text".
+            "Claude Code returned no /usage text"; `account_problem` as the test set it.
         """
         self.usage_reports += 1
         return UsageReport(
             text=self.usage_text,
             problem="" if self.usage_text else "Claude Code returned no /usage text",
             account_limits=tuple(self.account_limits),
+            account_problem=self.account_problem,
         )
 
     async def set_model(self, model: str | None) -> None:

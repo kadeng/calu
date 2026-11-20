@@ -167,6 +167,18 @@ Decided (do not ask again):
   - PyCharm mode 3: starting a run or debug while a file is held asks "Upload now and run",
     "Run anyway" or "Cancel".
   - PyCharm sync dialog "changed on the server, deleted here": no default button.
+  - **Built in the core, the CLI and the terminal clients** (PLAN D250, 2026-11-20, not
+    pushed by this agent): the template library (`src/calu/defaults/templates/`, `calu checker
+    template list|show|use`, public domain); `calu setup` without a terminal keeps outdated
+    shipped texts and lists them (`--update-instructions` replaces); usage limits stored per
+    Claude account (migration 0041, `usage_limits`; the account from Claude Code's
+    `initialize` answer, else OS user and host), shown with their age by `usage.get` and the
+    panel, which says when `get_usage` failed or answered in an unknown shape; the hook
+    answers by the mode at the answer; no auto-mode warning after a user's switch; the
+    full-screen client's diff comments carry `ref`. Open: the IDE panels do not show
+    `stored`, `account` and `account_limits_problem` yet; no `--project` for `template use`
+    (checker instructions are global); manual check `docs/TESTING.md` item 45; the owner's
+    machine needs `sudo calu setup` for migration 0041.
 - **Traces (later the same day):** a removed message keeps its turn heading by default,
   unless the redaction instructions say otherwise ("It's not important"); the redaction
   instructions are edited in the IDEs' settings dialogs only, no extra picker entry;

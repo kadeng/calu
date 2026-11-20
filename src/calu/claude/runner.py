@@ -69,6 +69,9 @@ class UsageReport:
     account without such limits or when Claude Code did not say."""
     subscription: str = ""
     """The account's plan as Claude Code names it ("pro", "max", ...); "" if none."""
+    account_problem: str = ""
+    """Why `account_limits` could not be read: `get_usage` failed or answered in a shape calu
+    does not know; "" if it answered (also when the account has no limits)."""
 
 
 class StartRefused(Exception):
@@ -266,10 +269,14 @@ class ClaudeRunner(Protocol):
     `permission_mode` is the main agent's permission mode as Claude Code last reported it, or,
     before its first report, the mode the runner started it in; None while neither is known.
     The runner reports every change of it as a `PermissionModeChanged` event (`client` None).
+    `account` is how Claude Code names its login once connected: "<email>" or "<email>
+    (<organization>)" for a claude.ai login; None if it names none (an API key, Bedrock,
+    Vertex) or before the connection. The session stores the usage limits under it (D250).
     """
 
     session_id: str | None
     agents: dict[str, AgentInfo]
+    account: str | None
 
     @property
     def permission_mode(self) -> str | None:

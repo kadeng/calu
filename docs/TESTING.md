@@ -861,6 +861,25 @@ escalation resolved from the database alone.
    runner (`tests/unit/test_permission_mode.py`, `tests/db/test_web_live.py`,
    `tests/browser/test_web_live_ui.py`, the vitest and Kotlin tests).
 
+45. The owner's answers of 2026-11-20 (PLAN D250), with a real `claude`. (a) In a long turn
+   of commands in auto mode, switch to `default` while a command is being checked (a slow
+   checker model helps): that command runs without an escalation, and no "was asked for the
+   permission mode auto" warning appears; switch before the first turn of a new session: no
+   warning either. (b) In the full-screen client open a step's diff, comment on a line: the
+   session's comment row (`calu sessions <id>`, or the web's session page) names
+   `edit:<tool call id>`. (c) `calu checker template list`, `show review-findings`, then `use
+   review-findings` on a database with the shipped subagent-result text: replaced; `use
+   edit-project-rules` over your own edit text: refused, `--append` adds it. (d) `calu setup <
+   /dev/null` with an older shipped text stored: kept and listed with `calu setup
+   --update-instructions`. (e) On a claude.ai subscription, run a turn until Claude Code
+   reports a limit, end the session, start a new one and open the usage panel at once: the
+   limit shows "reported N min ago (stored)", the heading names the account; `SELECT * FROM
+   usage_limits` as the owner shows one row per limit under `claude:<e-mail> (<organisation>)`.
+   The scripted tests cover the logic (`tests/unit/test_permission_mode.py`,
+   `tests/unit/test_runner_contract.py`, `tests/unit/test_tui_more.py`,
+   `tests/unit/test_templates.py`, `tests/unit/test_protocol_side_usage.py`,
+   `tests/db/test_usage_limits.py`, `tests/db/test_cli_setup.py`).
+
 ## Measuring the checkers
 
 `calu evals` runs the case set against the checkers of a database; `uv run python

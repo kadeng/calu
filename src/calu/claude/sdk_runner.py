@@ -202,6 +202,32 @@ def command_output(text: str) -> str:
     return fence(text.strip("\n"))
 
 
+def account_name(info: object) -> str | None:
+    """Read how Claude Code names its login from its answer to the SDK's `initialize` request.
+
+    Claude Code 2.1.319 answers `account: {email, organization, subscriptionType, tokenSource,
+    apiKeySource, apiProvider}`; `email` and `organization` are present for a claude.ai login
+    and missing for an API key (measured, D250).
+
+    Args:
+        info: `ClaudeSDKClient.get_server_info()`'s result.
+
+    Returns:
+        "<email>" or "<email> (<organization>)"; None without an email.
+
+    Example:
+        `{"account": {"email": "a@b.example", "organization": "B"}}` gives "a@b.example (B)".
+    """
+    account = info.get("account") if isinstance(info, dict) else None
+    email = account.get("email") if isinstance(account, dict) else None
+    if not isinstance(email, str) or not email.strip():
+        return None
+    organization = account.get("organization") if isinstance(account, dict) else None
+    if isinstance(organization, str) and organization.strip():
+        return f"{email.strip()} ({organization.strip()})"
+    return email.strip()
+
+
 def account_limits(answer: object) -> tuple[list[RateLimit], str]:
     """Read the plan's usage limits out of Claude Code's answer to `get_usage`.
 
@@ -242,6 +268,37 @@ def account_limits(answer: object) -> tuple[list[RateLimit], str]:
             RateLimit(type=kind, utilization=float(used) / 100, resets_at=resets, reported_at=now)
         )
     return found, subscription if isinstance(subscription, str) else ""
+
+
+def usage_shape_problem(answer: object) -> str:
+    """Say whether Claude Code's answer to `get_usage` has the shape `account_limits` reads.
+
+    Known shape: a mapping with the key `rate_limits`, whose value is null (an account without
+    such limits) or maps window names to null or to a mapping whose `utilization` is a number
+    or null. `get_usage` is experimental on Claude Code's side, so a later version may answer
+    otherwise; the usage panel then shows the stored figures instead (D250).
+
+    Args:
+        answer: The control response's payload.
+
+    Returns:
+        "" for the known shape, else one sentence that says what is unknown about it.
+    """
+    unknown = "Claude Code answered get_usage in a shape calu does not know"
+    if not isinstance(answer, dict) or "rate_limits" not in answer:
+        return f"{unknown} (no rate_limits)"
+    windows = answer["rate_limits"]
+    if windows is None:
+        return ""
+    if not isinstance(windows, dict):
+        return f"{unknown} (rate_limits is no mapping)"
+    for name, window in windows.items():
+        if window is None:
+            continue
+        used = window.get("utilization") if isinstance(window, dict) else "?"
+        if used is not None and (not isinstance(used, int | float) or isinstance(used, bool)):
+            return f"{unknown} (the window {name})"
+    return ""
 
 
 def tool_result_text(content: Any, limit: int = MAX_RESULT_CHARS) -> str:
@@ -417,6 +474,8 @@ class SdkRunner:
         self.session_id: str | None = None
         self.rate_limits: dict[str, RateLimit] = {}
         """The newest state of each usage limit Claude Code reported, by limit type."""
+        self.account: str | None = None
+        """How Claude Code names its login (`account_name`); None if it names none."""
 
     # ------------------------------------------------------------------ ClaudeRunner interface
 
@@ -488,6 +547,10 @@ class SdkRunner:
         """
         async with ClaudeSDKClient(options=options) as client:
             self._client = client
+            try:
+                self.account = account_name(await client.get_server_info())
+            except Exception:  # the SDK raises bare `Exception`; the account is information
+                log.info("Claude Code did not name its account", exc_info=True)
             self._ready.set()
             async for msg in client.receive_messages():
                 await self._forward(msg, sink)
@@ -814,11 +877,15 @@ class SdkRunner:
 
         Returns:
             The report. A request that fails or times out leaves its part empty; a failed
-            `get_session_cost` names the reason in `problem`.
+            `get_session_cost` names the reason in `problem`, a failed `get_usage` or an
+            answer of unknown shape (`usage_shape_problem`) in `account_problem`.
         """
         query: Any = getattr(self._client, "_query", None)
         if query is None:
-            return UsageReport(problem="no Claude session is running")
+            return UsageReport(
+                problem="no Claude session is running",
+                account_problem="no Claude session is running",
+            )
         text, problem = "", ""
         try:
             answer = await query._send_control_request(
@@ -830,17 +897,24 @@ class SdkRunner:
         except Exception as exc:  # the SDK raises bare `Exception` for an error and a timeout
             problem = f"Claude Code did not answer /usage: {exc}"
         limits: list[RateLimit] = []
-        subscription = ""
+        subscription, account_problem = "", ""
         try:
             answer = await query._send_control_request(
                 {"subtype": "get_usage", "skip_behaviors": True}, timeout=USAGE_TIMEOUT_S
             )
+            account_problem = usage_shape_problem(answer)
             limits, subscription = account_limits(answer)
-        except Exception:
-            # Experimental on Claude Code's side: a missing answer only leaves the part empty.
+        except Exception as exc:
+            # Experimental on Claude Code's side: a missing answer only leaves the part empty,
+            # and the panel shows the stored figures (D250).
             log.info("Claude Code did not answer get_usage", exc_info=True)
+            account_problem = f"Claude Code did not answer get_usage: {exc}"
         return UsageReport(
-            text=text, problem=problem, account_limits=tuple(limits), subscription=subscription
+            text=text,
+            problem=problem,
+            account_limits=tuple(limits),
+            subscription=subscription,
+            account_problem=account_problem,
         )
 
     async def set_model(self, model: str | None) -> None:

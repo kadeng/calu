@@ -415,3 +415,25 @@ def test_the_stored_history_shows_each_turns_input_and_marks_a_failed_call() -> 
     assert sum("failed" in line for line in lines) == 1, "the other calls are not marked"
     assert lines[-2:] == ["Steps without a turn", "PASS      Read   x"]
     assert plain(render.history_lines({}, 80, DARK_PALETTE)) == ["no stored steps"]
+
+
+def test_the_usage_panel_marks_stored_figures_and_says_why_the_plan_is_missing() -> None:
+    """D250: a figure of an earlier session is "stored"; a failed get_usage is named."""
+    from datetime import UTC, datetime, timedelta
+
+    from calu.protocol.messages import RateLimit, UsagePanelResult
+
+    now = datetime(2026, 11, 20, 12, tzinfo=UTC)
+    result = UsagePanelResult(
+        account="ada@example.org",
+        limits=[
+            RateLimit(
+                type="seven_day", utilization=0.3, reported_at=now - timedelta(hours=3), stored=True
+            )
+        ],
+        account_limits_problem="Claude Code did not answer get_usage: timeout",
+    )
+    text = "\n".join(plain(render.usage_panel_lines(result, DARK_PALETTE, 100, now)))
+    assert "LIMITS REPORTED BY CLAUDE CODE  ada@example.org" in text
+    assert "reported 3 h ago (stored)" in text
+    assert "YOUR PLAN NOW\n Claude Code did not answer get_usage: timeout" in text
