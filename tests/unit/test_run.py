@@ -284,6 +284,52 @@ async def test_a_clients_shutdown_ends_the_reading_of_the_terminal(monkeypatch):
     assert sent == []
 
 
+PROCESS_EXIT_SCRIPT = """
+import anyio
+from calu.run import read_lines_until
+
+async def main():
+    shutdown = anyio.Event()
+
+    async def later():
+        await anyio.sleep(0.2)
+        shutdown.set()
+
+    async def send(text):
+        pass
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(later)
+        print(await read_lines_until(send, shutdown), flush=True)
+
+anyio.run(main)
+"""
+
+
+def test_the_process_exits_after_a_shutdown_while_stdin_stays_open():
+    """Test plan M20: with the loop ended, `calu run` still lived until a line was typed,
+    because the abandoned wait for the stdin line held a (non-daemon) AnyIO worker thread."""
+    import subprocess
+    import sys
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", PROCESS_EXIT_SCRIPT],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        code = child.wait(timeout=10)  # stdin is still open: nothing is typed, no end of input
+        assert code == 0
+        assert child.stdout is not None and child.stdout.read().strip() == "quit"
+    finally:
+        if child.poll() is None:
+            child.kill()
+        assert child.stdin is not None
+        child.stdin.close()
+        child.wait()
+
+
 async def test_reading_without_a_shutdown_event_is_plain_read_lines(monkeypatch):
     monkeypatch.setattr("sys.stdin", io.StringIO("only\n"))
     sent: list[str] = []

@@ -736,6 +736,9 @@ def both(first: Callable[[Event], Awaitable[None]], second: Callable[[Event], Aw
     return sink
 
 
+STDIN_POLL_S = 0.05
+"""How often a reader looks whether the stdin thread has delivered its line."""
+
 _pending_line: tuple[object, concurrent.futures.Future[str]] | None = None
 """The stdin object and the line its reading thread will deliver, while nobody took it yet."""
 
@@ -745,6 +748,11 @@ async def _next_stdin_line() -> str:
 
     Side effect: starts a daemon thread that reads one line when no read of the current
     `sys.stdin` is pending; a pending read of another (replaced) stdin is dropped.
+
+    The wait polls the read's future every `STDIN_POLL_S` instead of blocking a worker thread
+    on it: AnyIO's worker threads are not daemon threads, so a wait abandoned by a cancelled
+    caller kept the process alive at its exit until a line was typed (after a client's
+    `/shutdown` of `calu run`, test plan M20).
 
     Returns:
         The line with its line end, or "" at end of input.
@@ -767,7 +775,11 @@ async def _next_stdin_line() -> str:
         threading.Thread(target=read, name="calu-stdin", daemon=True).start()
         _pending_line = (stdin, future)
     pending = _pending_line[1]
-    line = await anyio.to_thread.run_sync(pending.result, abandon_on_cancel=True)
+    # Polling on purpose: the future outlives its caller (the next reader takes it over, also
+    # under another event loop), and no worker thread may wait on it (see above).
+    while not pending.done():  # ruff: ignore[async-busy-wait]
+        await anyio.sleep(STDIN_POLL_S)
+    line = pending.result()
     if _pending_line is not None and _pending_line[1] is pending:
         _pending_line = None
     return line
