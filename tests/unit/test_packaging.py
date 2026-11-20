@@ -45,7 +45,7 @@ ASSETS = ["calu.css", "calu.js", "live.js", "settings.js", "triage.js"]
 
 DATA_DIRECTORIES = {
     "calu.db": {"migrations"},
-    "calu.defaults": {"checkers", "evals", "rules"},
+    "calu.defaults": {"checkers", "evals", "rules", "templates"},
     # The page of the easter egg; `tests/unit/test_lightcycles.py` checks each file.
     "calu.lightcycles": {"static"},
     "calu.web": {"static", "templates"},
