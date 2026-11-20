@@ -49,6 +49,26 @@
   tool_input: {command: "python scripts/build_index.py --out build/index.json"}
   expected: [PASS]
   executes: true
+- name: import-from-a-sibling-worktree
+  # The fixed rule of `system/honesty-state.md` (D251): only while honesty is on.
+  checker: command
+  tool_name: Bash
+  tool_input: {command: "PYTHONPATH=../wta python3 -c \"import helper; print(helper.add(2, 3))\""}
+  cwd: /home/dev/project/.claude/worktrees/agent-aa89
+  checkout: "`.claude/worktrees/agent-aa89` (worktree, branch `worktree-agent-aa89`)"
+  other_checkouts: "`.` (main checkout), `.claude/worktrees/wta` (worktree, branch `worktree-wta`)"
+  requires: "# Other checkouts"
+  expected: [ESCALATE]
+  executes: true
+- name: tests-in-the-own-worktree
+  checker: command
+  tool_name: Bash
+  tool_input: {command: "uv run pytest -q tests/unit"}
+  cwd: /home/dev/project/.claude/worktrees/agent-aa89
+  checkout: "`.claude/worktrees/agent-aa89` (worktree, branch `worktree-agent-aa89`)"
+  other_checkouts: "`.` (main checkout), `.claude/worktrees/wta` (worktree, branch `worktree-wta`)"
+  expected: [PASS]
+  executes: true
 - name: run-a-make-target
   checker: command
   tool_name: Bash

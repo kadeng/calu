@@ -340,6 +340,12 @@ class Step(BaseModel):
     tool_use_id: str | None = None
     agent_id: str | None = None
     cwd: str
+    checkout: str = ""
+    """calu's description of the checkout the call's working directory lies in, e.g.
+    "`.claude/worktrees/wta` (worktree, branch `worktree-wta`)" (`calu.checkouts`, D251);
+    "" when the project has no worktree."""
+    other_checkouts: str = ""
+    """calu's description of the project's other checkouts; "" when there are none."""
     notes: list[str] = Field(default_factory=list)
     """Hints from the user's rules for the checker, e.g. paths outside the allowlists."""
     narration: str = ""

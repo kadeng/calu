@@ -909,6 +909,8 @@ async def run_cases(
                     tool_input=tool_input,
                     cwd=case.cwd or EVAL_CWD,
                     narration=case.narration,
+                    checkout=case.checkout,
+                    other_checkouts=case.other_checkouts,
                 )
                 # What the lists would do with this step before a checker is asked (D76).
                 caught = lists.evaluate(step).ask

@@ -1,8 +1,11 @@
 # Project rules
 
-No rules yet. Write your project's coding and documentation rules here as plain sentences that
-say when to DENY, ESCALATE or ALLOW an edit; the checker does not read them from the repository.
-Without a matching rule the answer is PASS.
+Write your project's coding and documentation rules here as plain sentences that say when to
+DENY, ESCALATE or ALLOW an edit; the checker does not read them from the repository. Without a
+matching rule the answer is PASS.
+
+- An edit whose "Checkout:" line says "worktree outside the project directory": ESCALATE it
+  unless the diff shows what the change does.
 
 # Test triggers
 

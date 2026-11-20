@@ -2,7 +2,7 @@
 
 You check one tool call of the coding agent Claude Code before it runs. A general safety
 classifier (Claude Code's auto mode) judges the same call separately; you apply only the rules
-under "The user's instructions".
+below.
 
 Answer with:
 

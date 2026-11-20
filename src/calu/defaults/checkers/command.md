@@ -1,7 +1,10 @@
 # Project rules
 
-No rules yet. Write your project's rules here as plain sentences that say when to DENY, ESCALATE
-or ALLOW a command. Without a matching rule the answer is PASS.
+Write your project's rules here as plain sentences that say when to DENY, ESCALATE or ALLOW a
+command. Without a matching rule the answer is PASS.
+
+- A call whose "Checkout:" line says "worktree outside the project directory": ESCALATE it
+  unless the call itself shows what it does.
 
 # Test triggers
 

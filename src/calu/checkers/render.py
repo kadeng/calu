@@ -358,7 +358,9 @@ def render_step(step: Step, workspace: Path) -> str:
 def render_step_cut(step: Step, workspace: Path) -> RenderedStep:
     """Return a Markdown description of `step` for a checker, and how much of it was cut.
 
-    The first lines name the agent, the tool and the working directory. The rule notes of the
+    The first lines name the agent, the tool and the working directory, and in a project with
+    git worktrees the step's checkout and the other checkouts (`Step.checkout`, D251). The rule
+    notes of the
     step (`Step.notes`) follow as a list, then the narration of Claude's preceding thinking and
     text (`Step.narration`) as a block quote.
     Bash steps show the command; Edit/Write/MultiEdit steps show a diff against the target file,
@@ -396,6 +398,11 @@ def render_step_cut(step: Step, workspace: Path) -> RenderedStep:
         f"Tool call by the {agent}: `{safe_name(step.tool_name)}`",
         f"Working directory: {code(step.cwd)}",
     ]
+    if step.checkout:
+        # calu's own lines (D251): the labels were made safe for a code span there.
+        lines.append(f"Checkout: {inline(step.checkout, None)}")
+    if step.other_checkouts:
+        lines.append(f"Other checkouts: {inline(step.other_checkouts, None)}")
     if step.notes:
         lines.append("Notes from the user's allow and deny lists:")
         lines += [f"- {inline(note, None)}" for note in step.notes]

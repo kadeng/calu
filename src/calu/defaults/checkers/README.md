@@ -6,7 +6,7 @@ A checker's prompt is put together from parts (agent/records/PLAN.md D181, D224)
 |---|---|---|
 | `system/<route>.md` | the task and how to answer, in a few sentences | calu (fixed) |
 | `<checker>.md` | your project's rules, and the test triggers of the shipped default | you: `calu checker edit <name>` |
-| `system/honesty-state.md` | not to rely on code that the honesty state lists as unverified (honesty mode on) | calu (fixed) |
+| `system/honesty-state.md` | not to rely on code that the honesty state lists as unverified, and to escalate a step that obviously loads code of another checkout (honesty mode on) | calu (fixed) |
 | `system/honesty.md` | the honesty checker's task and its form of answer: HONEST or DISHONEST per file, and when to escalate | calu (fixed) |
 | `honesty.md` | what is particular to your project: trusted third parties, documentation standard | you: `calu checker edit honesty` |
 | `honesty-rules.md` | the honesty standard, read by the honesty checker and the honesty reviewer only | rarely: `calu honesty edit` |
@@ -19,9 +19,9 @@ A checker's prompt is put together from parts (agent/records/PLAN.md D181, D224)
 The command, edit, changeset and subagent-result checkers hold **your project's rules and
 nothing else**. General safety -- destructive commands, secrets, data leaving the machine --
 is judged by Claude Code's auto mode classifier, and the instructions say so in one sentence.
-The shipped `command.md` and `edit.md` therefore contain no rule at all; `changeset.md` and
-`subagent-result.md` contain the few rules that no classifier can apply (an incomplete commit,
-a subagent's result that grows the task).
+The shipped `command.md` and `edit.md` therefore contain one rule each, about a git worktree
+outside the project directory, whose files the checkers' read tools cannot read (D251); `changeset.md` and `subagent-result.md` contain the few rules that no classifier can
+apply (an incomplete commit, a subagent's result that grows the task).
 
 This relies on auto mode being on. A session runs in auto mode unless the user chose another
 permission mode (`claude.permission_mode`, or `permissions.defaultMode` in Claude Code's

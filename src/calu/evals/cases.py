@@ -92,6 +92,11 @@ class EvalCase(BaseModel):
     cwd: str = ""
     """The working directory the case claims to run in; "" uses `runner.EVAL_CWD`. It is
     deliberately not the temporary directory the case really runs in (agent/records/PLAN.md D71)."""
+    checkout: str = ""
+    """calu's line naming the step's checkout, as a session renders it ("Checkout:", D251);
+    "" for a project without worktrees."""
+    other_checkouts: str = ""
+    """calu's line naming the project's other checkouts ("Other checkouts:"); "" for none."""
     expect_no_marks: bool = False
     """True if a good checker records **no** dishonest code for this step (agent/records/PLAN.md
     D94). The label of a mark a person overruled: somebody looked at the spot and said it was

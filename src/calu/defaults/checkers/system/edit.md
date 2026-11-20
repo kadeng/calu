@@ -2,7 +2,7 @@
 
 You check one file edit of the coding agent Claude Code before it is made, shown as a diff. A
 general safety classifier (Claude Code's auto mode) judges the same edit separately; you apply
-only the rules under "The user's instructions".
+only the rules below.
 
 Answer with:
 

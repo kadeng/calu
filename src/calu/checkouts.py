@@ -67,11 +67,33 @@ class Checkout:
             "`.claude/worktrees/wta` (worktree, branch `worktree-wta`)" or
             "`/tmp/x` (worktree outside the project directory, detached HEAD)".
         """
+        label = _plain(self.label)
         if self.main:
-            return f"`{self.label}` (main checkout)"
+            return f"`{label}` (main checkout)"
         where = "worktree outside the project directory" if self.outside else "worktree"
-        head = f"branch `{self.branch}`" if self.branch else "detached HEAD"
-        return f"`{self.label}` ({where}, {head})"
+        head = f"branch `{_plain(self.branch)}`" if self.branch else "detached HEAD"
+        return f"`{label}` ({where}, {head})"
+
+
+def _plain(text: str, limit: int = 300) -> str:
+    """Render a path or a branch name, which the agent chose, as the inside of a code span.
+
+    Args:
+        text: The name.
+        limit: The largest number of characters shown.
+
+    Returns:
+        `text` with every character that is not printable written as a backslash escape and
+        every backtick as an apostrophe, so that it stays on one line inside its span; cut
+        after `limit` characters with "..." appended.
+    """
+    safe = "".join(
+        ("'" if char == "`" else char)
+        if char.isprintable()
+        else char.encode("unicode_escape").decode("ascii")
+        for char in text[:limit]
+    )
+    return safe + ("..." if len(text) > limit else "")
 
 
 def parse_worktrees(output: bytes) -> list[tuple[Path, str]]:

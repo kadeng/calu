@@ -1162,8 +1162,9 @@ measure the checkers. Read it after the first session.
 A checker's prompt has two parts. Calu's fixed part states the role, the tools, the possible
 answers and the summary. Your instructions state only the rules: when to PASS, DENY, ESCALATE
 or ALLOW. As shipped, both parts together are about 300 words per checker, because the shipped
-instructions contain no rules for commands and edits. General safety is left to Claude Code's
-auto mode.
+instructions contain only one rule for commands and edits (a step in a git worktree outside the
+project directory). General safety is left to Claude Code's auto
+mode.
 
 ```bash
 calu checker show command          # read the command checker's instructions
