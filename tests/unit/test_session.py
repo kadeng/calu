@@ -484,7 +484,20 @@ async def test_an_escalation_nobody_answers_stops_the_session(tmp_path: Path):
     assert result.is_error and "No decision within" in result.content
     assert "calu run --resume fake-session" in result.content
     assert [e.message for e in rec.of(Log) if "No decision" in e.message]
+    assert "No decision within 0 s." in result.content, "not rounded to 0.0 h"
     assert store.ended == "stopped"
+
+
+def test_the_timeout_is_named_in_a_readable_unit():
+    from calu.escalations import wait_text
+
+    assert [wait_text(s) for s in (0.3, 45, 90, 3599, 8 * 3600)] == [
+        "0 s",
+        "45 s",
+        "1.5 min",
+        "60.0 min",
+        "8.0 h",
+    ]
 
 
 async def test_waiting_without_a_limit_is_possible(tmp_path: Path):

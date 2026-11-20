@@ -77,6 +77,23 @@ cancelled ("interrupted"), the session stopped or the row was cancelled in the d
 ("cancelled"), the escalation timeout ran out, or the escalation could not be stored."""
 
 
+def wait_text(seconds: float) -> str:
+    """Name a waiting time for a person, in the unit that keeps it readable.
+
+    Args:
+        seconds: The time in seconds, not negative.
+
+    Returns:
+        Whole seconds below a minute, minutes with one decimal below an hour, hours with one
+        decimal from there: "45 s", "1.5 min" (for 90 s), "8.0 h".
+    """
+    if seconds < 60:
+        return f"{seconds:.0f} s"
+    if seconds < 3600:
+        return f"{seconds / 60:.1f} min"
+    return f"{seconds / 3600:.1f} h"
+
+
 class EscalationError(Exception):
     """A client's decision about an escalation was not applied; the message says why."""
 
@@ -629,7 +646,7 @@ class EscalationDesk:
         session_id = self._claude_session_id()
         resume = f"calu run --resume {session_id}" if session_id else "calu sessions"
         message = (
-            f"No decision within {seconds / 3600:.1f} h. The step was denied and the session "
+            f"No decision within {wait_text(seconds)}. The step was denied and the session "
             f"stops; take the conversation up again with `{resume}`."
         )
         esc.answer = HumanAnswer(allow=False, message=message, cancelled=True)
