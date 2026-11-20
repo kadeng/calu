@@ -272,7 +272,15 @@ can be had through Claude Code / the SDK or the project's MCP configuration (spi
 (3) the owner's fallback "if nothing else helps": ask Claude, in a separate session, for a
 full verbatim redescription of all its tools (Claude has the definitions in its context),
 turn the free-form answer into structured JSON with a model, cache it by the hash of the
-tool list and refresh when the list changes. Whatever the source, a tool description is
+tool list and refresh when the list changes. The owner's conditions for (3), because the
+answer could otherwise be steered: the session is as blank as possible - no project
+instructions read (a blank AGENTS.md/CLAUDE.md, at most an instruction to return the tool
+descriptions), no memory, no skills or hooks of the project, no tool call allowed, nothing
+else read - and it runs on a small instruction-following model such as Haiku, with little
+agenda of its own. Tension to resolve in the spike: the session must still offer the same
+tools as the real one (the same MCP servers and plugins), so it cannot simply drop the
+project's settings; it needs the tool configuration without the instructions. Whatever the
+source, a tool description is
 untrusted text (an MCP server can write anything into it): it reaches the checker marked
 as data, never as instructions, and is cut to a fixed length.
 
