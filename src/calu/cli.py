@@ -1327,12 +1327,13 @@ async def _offer_instruction_updates(db: Db, flag: bool | None) -> list[str]:
     """Say which stored instruction texts are older shipped ones, and offer to update them.
 
     Side effects: on a terminal without the option, prints the outdated checker texts and
-    asks once whether to replace them with the present shipped ones; replaces them on a yes,
-    with `--update-instructions`, or without a terminal and without the option (an unedited
-    shipped text has nothing of the user's in it, which is why `calu setup` has always done
-    so). `--no-update-instructions` keeps them. A text the user edited is never changed, and
-    a stored setting (`honesty.rules`, `traces.redactor_instructions`) is only reported, with
-    the command that resets it (agent/records/PLAN.md D248).
+    asks once whether to replace them with the present shipped ones; replaces them on a yes
+    or with `--update-instructions`. Without a terminal and without the option, and with
+    `--no-update-instructions`, it keeps them and reports each with the commands that update
+    it (the owner's decision of 2026-11-20, agent/records/PLAN.md D250: a script changes no
+    instructions unasked). A text the user edited is never changed, and a stored setting
+    (`honesty.rules`, `traces.redactor_instructions`) is only reported, with the command that
+    resets it (D248).
 
     Args:
         db: A connection of the database owner.
@@ -1361,8 +1362,6 @@ async def _offer_instruction_updates(db: Db, flag: bool | None) -> list[str]:
                 "--update-instructions or --no-update-instructions",
             ).lower()
             update = answer in ("yes", "y")
-        if update is None:
-            update = True
         for state in outdated:
             if update:
                 row = await admin.update_instructions(db, state.checker)
@@ -1371,6 +1370,11 @@ async def _offer_instruction_updates(db: Db, flag: bool | None) -> list[str]:
                 )
             else:
                 lines.append(state.sentence())
+        if not update:
+            lines.append(
+                f"{len(outdated)} outdated shipped text(s) kept; `calu setup "
+                "--update-instructions` replaces them all"
+            )
     for state in states:
         if state.status.kind == "edited" or (state.status.kind == "outdated" and not state.checker):
             lines.append(state.sentence())
@@ -6338,7 +6342,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="replace stored checker instructions that are an older shipped version, "
         "unchanged, with the present one (or keep them), instead of the question; without a "
-        "terminal they are replaced. A text you edited is never replaced",
+        "terminal they are kept and listed unless this option is given. A text you edited is "
+        "never replaced",
     )
     p.add_argument(
         "--sandbox",

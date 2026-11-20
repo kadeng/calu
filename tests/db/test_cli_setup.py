@@ -341,8 +341,9 @@ async def test_calu_setup_stores_the_sandbox_choice_and_keeps_it_on_a_rerun(
 async def test_calu_setup_offers_to_update_an_older_shipped_text_and_keeps_an_edited_one(
     db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """D248: `--no-update-instructions` keeps an old shipped text and says so; without a
-    terminal it is replaced; an edited text is reported and never replaced."""
+    """D248, D250: `--no-update-instructions` keeps an old shipped text and says so; without
+    a terminal it is kept and listed too, and `--update-instructions` replaces it; an edited
+    text is reported and never replaced."""
     from calu import admin
     from calu.defaults.instructions import default_instructions, superseded_instructions
 
@@ -378,6 +379,11 @@ async def test_calu_setup_offers_to_update_an_older_shipped_text_and_keeps_an_ed
     assert "the command checker's instructions: your own text" in said
     assert await edit_text() == old
     assert await anyio.to_thread.run_sync(setup) == 0
+    said = capsys.readouterr().out
+    assert "the edit checker's instructions: an older version calu shipped" in said
+    assert "1 outdated shipped text(s) kept; `calu setup --update-instructions`" in said
+    assert await edit_text() == old, "a setup without a terminal changes no instructions"
+    assert await anyio.to_thread.run_sync(setup, "--update-instructions") == 0
     said = capsys.readouterr().out
     assert "the edit checker's instructions: updated to the present shipped version" in said
     assert await edit_text() == default_instructions("edit")

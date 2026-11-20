@@ -1431,7 +1431,9 @@ calu checker update edit       # an unchanged older shipped text -> the present 
 - In the web interface: "Use the present version", then Save; "How it differs" shows the
   difference.
 - On a terminal, `calu setup` asks once whether to replace unchanged older texts. Without a
-  terminal it replaces them. With `--no-update-instructions` it keeps them.
+  terminal it keeps them and lists each with the command that updates it;
+  `calu setup --update-instructions` replaces them all. With `--no-update-instructions` it
+  keeps them without asking.
 - The honesty rules and the trace redaction instructions get the same report when a scope
   stores its own copy. `calu honesty reset` and `calu traces instructions reset` make the
   shipped text apply again.
