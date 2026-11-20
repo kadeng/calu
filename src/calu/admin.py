@@ -425,6 +425,54 @@ async def set_setting(db: Db, key: str, value: Any, project: str | None = None) 
     return merged
 
 
+ENABLE_OFFERS: dict[str, tuple[str, str]] = {
+    "human_diffs.enabled": (
+        "traces.enabled",
+        "Session traces are off. Switch them on as well, so that the conversation with Claude"
+        " is recorded in the project next to your own edits?",
+    ),
+}
+"""Switch -> (a related switch, the question): when a client switches the first on while the
+second is off in that scope, it offers to switch the second on too (agent/records/PLAN.md
+D253). Nothing is switched without the user's yes."""
+
+
+async def enable_offer(
+    db: Db, key: str, value: Any, project: str | None = None
+) -> dict[str, str] | None:
+    """Name a related switch to offer after a switch was set (`ENABLE_OFFERS`).
+
+    Call it after `set_setting`. Changes nothing.
+
+    Args:
+        db: A connection that may read `config`.
+        key: The dotted key that was set.
+        value: The value it was set to.
+        project: The scope it was set in, or None for the global one.
+
+    Returns:
+        `{"key": <the related switch>, "text": <the question>}` if `value` is True, `key` has
+        an offer, and the related switch is off in that scope (stored there, else inherited
+        from the global scope, else the default); otherwise None.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    offer = ENABLE_OFFERS.get(key)
+    if offer is None or value is not True:
+        return None
+    other, text = offer
+    stored = await settings(db, None)
+    if project is not None:
+        stored = merge_settings(stored, await settings(db, project))
+    try:
+        if effective_value(stored, other) is True:
+            return None
+    except AdminError:
+        return None
+    return {"key": other, "text": text}
+
+
 def effective_value(current: dict[str, Any], key: str) -> Any:
     """Return the value a session would use for `key` in a scope.
 

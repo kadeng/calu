@@ -138,6 +138,12 @@
         {% if set_added is not none %}<br>{{ set_added }} rule(s) added from the set.{% endif %}
       </div>
     {% endif %}
+    {% if offer %}
+      <div class="st-flash st-flash--ok" role="status" id="st-offer-note">
+        {{ offer[1] }}
+        <button type="submit" form="st-offer" class="primary">Switch on {{ offer[0] }}</button>
+      </div>
+    {% endif %}
     {% if errors %}
       <div class="st-flash st-flash--bad" role="alert">
         <strong>{{ errors | length }} value{{ '' if errors | length == 1 else 's' }} refused</strong>{% if saved_now %}, {{ saved_now }} saved{% endif %}.
@@ -235,6 +241,13 @@
     </div>
     <noscript><p><button class="primary" type="submit">Save changes</button></p></noscript>
   </form>
+  {% if offer %}
+  <form id="st-offer" method="post" hidden
+        action="{{ url_for('settings') }}{% if project %}?project={{ project | urlencode }}{% endif %}">
+    <input type="hidden" name="{{ offer[0] }}" value="on">
+    <input type="hidden" name="_present" value="{{ offer[0] }}">
+  </form>
+  {% endif %}
 </div>
 <script src="{{ url_for('static', path='/settings.js') }}" defer></script>
 {% endblock %}

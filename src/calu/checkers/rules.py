@@ -290,6 +290,10 @@ class Rules:
         to the workspace), else None. The session sets it from `traces.directory`. Writing
         into it is covered by a built-in write deny rule (`trace_rule`), and the checkers'
         code tools do not read it (`in_trace_directory`)."""
+        self.human_diffs_directory: Path | None = None
+        """The directory of the recorded human diffs while they are recorded (absolute), else
+        None (D253). The session sets it from `human_diffs.directory`. Writing into it is
+        covered by a built-in write deny rule (`human_diffs_rule`)."""
         self.checkouts: Checkouts | None = None
         """The session's registry of checkouts (D251), set by the session; None reads a path
         below `.claude/worktrees/<name>/` relative to that worktree only if it has a `.git`
@@ -813,6 +817,37 @@ class Rules:
             re.compile("^" + re.escape(shown) + "(/|$)"), "built-in (calu's session traces)"
         )
 
+    def human_diffs_rule(self, path: Path) -> Rule | None:
+        """Return the built-in rule that covers writing `path` as a recorded human diff (D253).
+
+        Args:
+            path: An absolute path that a tool call writes.
+
+        Returns:
+            A rule with the source "built-in (calu's record of the user's own edits)" whose
+            pattern names the directory, for messages; None if `human_diffs_directory` is
+            unset or `path` is neither that directory nor inside it (compared with and
+            without links resolved).
+        """
+        directory = self.human_diffs_directory
+        if directory is None:
+            return None
+        directory = self.workspace / directory
+        directories = {Path(os.path.abspath(directory))}
+        forms = {Path(os.path.abspath(path))}
+        try:
+            directories.add(directory.resolve())
+            forms.add(path.resolve())
+        except OSError, RuntimeError:
+            pass
+        if not any(form == d or d in form.parents for form in forms for d in directories):
+            return None
+        shown = self.display(directory)
+        return Rule(
+            re.compile("^" + re.escape(shown) + "(/|$)"),
+            "built-in (calu's record of the user's own edits)",
+        )
+
     def _deny_rule(self, path: Path, kind: str) -> Rule | None:
         """Return the first deny rule that covers reading or writing `path`.
 
@@ -831,7 +866,7 @@ class Rules:
         """
         own = built_in_path_rule(path)
         if own is None and kind == "write":
-            own = self.trace_rule(path)
+            own = self.trace_rule(path) or self.human_diffs_rule(path)
         if own is not None:
             return own
         built_in = BUILT_IN_READ_DENY if kind == "read" else BUILT_IN_WRITE_DENY

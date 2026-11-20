@@ -2240,6 +2240,8 @@ async def settings_page(request: Request, state: _State) -> Response:
                 url = request.url_for("settings").include_query_params(saved=str(saved_now))
                 if project:
                     url = url.include_query_params(project=project)
+                if result.offers:
+                    url = url.include_query_params(offer=result.offers[0])
                 add_set = posted.get("add_set")
                 if add_set:
                     added, _skipped = await admin.add_rule_set(state.db, add_set, project)
@@ -2264,6 +2266,8 @@ async def settings_page(request: Request, state: _State) -> Response:
             "project": project or "",
             "saved": request.query_params.get("saved"),
             "set_added": request.query_params.get("set_added"),
+            # A switch the save turned on offers a related one (`admin.ENABLE_OFFERS`).
+            "offer": admin.ENABLE_OFFERS.get(request.query_params.get("offer") or ""),
             "errors": errors,
             "saved_now": saved_now,
             # The pane to show first: the one with the first refused field, if any.

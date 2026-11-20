@@ -613,3 +613,15 @@ async def test_the_hook_in_a_worktree_outside_the_project_reads_the_projects_set
     assert "traces.final_redaction is off" in capsys.readouterr().out, (
         "the project's setting applies, found through the main checkout"
     )
+
+
+async def test_config_set_of_human_diffs_hints_at_the_traces(prepared, capsys) -> None:
+    """D253: the command line names the command that switches the traces on, and sets nothing."""
+    assert await run(["config", "set", "human_diffs.enabled", "true"]) == 0
+    said = capsys.readouterr().out
+    assert "hint: Session traces are off." in said
+    assert "calu config set traces.enabled true" in said
+    assert await run(["config", "set", "traces.enabled", "true"]) == 0
+    capsys.readouterr()
+    assert await run(["config", "set", "human_diffs.enabled", "true"]) == 0
+    assert "hint" not in capsys.readouterr().out

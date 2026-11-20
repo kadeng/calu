@@ -390,6 +390,9 @@ class Saved:
     """How many values were written."""
     errors: dict[str, str] = field(default_factory=dict)
     """Form field name -> why its value was refused. Fields not named here were stored."""
+    offers: list[str] = field(default_factory=list)
+    """Switches the save turned on whose related switch is still off
+    (`calu.admin.enable_offer`): the page offers to switch that one on as well."""
 
 
 async def load(db: Db, project: str | None, record: bool = True) -> Sources:
@@ -502,6 +505,9 @@ async def save(
                 await _save_field(db, src, item, posted, present, resets, checker_changes, result)
             except (admin.AdminError, ValueError) as exc:
                 result.errors[item.name] = _reason(exc)
+    for key in list(result.offers):
+        if await admin.enable_offer(db, key, True, project) is None:
+            result.offers.remove(key)
     for name, columns in checker_changes.items():
         try:
             await admin.set_checker(db, name, **columns)
@@ -592,6 +598,8 @@ async def _save_field(
     elif new != _comparable(item):
         await admin.set_setting(db, item.name, new, src.project)
         result.count += 1
+        if new is True and item.name in admin.ENABLE_OFFERS:
+            result.offers.append(item.name)
 
 
 def fingerprint(value: Any) -> str:
@@ -949,6 +957,11 @@ SECTION_PANES = {
         "Session traces",
         "The conversation as a redacted Markdown file in the project: where the files go,"
         " what their headings and header say, and the redaction agent's instructions.",
+    ),
+    "human_diffs": (
+        "Your own edits",
+        "Your saves in the IDE, recorded as diffs in the project to show Claude later: whether"
+        " they are recorded, where the files go, and how long a `.tmp.diff` file is kept.",
     ),
     "web": ("Web interface", "Settings of this interface."),
 }

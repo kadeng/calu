@@ -1383,3 +1383,30 @@ async def test_the_settings_page_says_when_a_checker_text_is_an_older_shipped_on
             assert "the text calu ships now" in current
     finally:
         await conn.close()
+
+
+async def test_switching_human_diffs_on_offers_the_traces_on_the_settings_page(
+    db_url: str,
+) -> None:
+    """D253: the page offers the session traces after the save and sets them only on a yes."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        async with await client_for(db) as client:
+            page = await client.post(
+                "/settings",
+                data={"human_diffs.enabled": "on", "_present": "human_diffs.enabled"},
+            )
+            assert "offer=human_diffs.enabled" in str(page.url)
+            assert 'form="st-offer"' in page.text and "Session traces are off" in page.text
+            assert "traces" not in await admin.settings(db)
+            await client.post(
+                "/settings", data={"traces.enabled": "on", "_present": "traces.enabled"}
+            )
+            assert (await admin.settings(db))["traces"]["enabled"] is True
+            assert (await admin.settings(db))["human_diffs"]["enabled"] is True
+            again = await client.post("/settings", data={"_present": "human_diffs.enabled"})
+            assert "offer=" not in str(again.url)
+    finally:
+        await conn.close()

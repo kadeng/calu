@@ -48,6 +48,7 @@ the code; this file names settings and links there.
 - [Writing checker instructions](#writing-checker-instructions)
 - [Code honesty](#code-honesty)
 - [Session traces](#session-traces)
+- [Recording your own edits](#recording-your-own-edits)
 - [Worktrees](#worktrees)
 - [Resuming, forking and rewinding a conversation](#resuming-forking-and-rewinding-a-conversation)
 - [Several sessions and the herd](#several-sessions-and-the-herd)
@@ -2032,6 +2033,91 @@ until its next step. `queue_blocks` and `redactor_timeout_s` apply from the next
   shapes it lists. Stage 2 is a model: it can miss a name or a key, and it can replace
   something harmless. Redaction lowers the risk of publishing a secret or personal data and
   gives no guarantee.
+
+## Recording your own edits
+
+This section describes the optional record of your own edits: every save of a file in the
+editor of VSCode or PyCharm adds a diff of that save to a file in the project. Read it when you
+want to show Claude how you edit, for example the style of your documentation.
+
+**Status: off by default.**
+
+```bash
+calu config set human_diffs.enabled true                   # every project
+calu config set human_diffs.enabled true --project shop    # one project
+```
+
+The settings dialogs of both extensions and the web interface show the switch in the pane
+"Your own edits". When the session traces are off, each of them offers to switch them on as
+well, and the command line prints the command that does it. Nothing else is switched on
+without your yes. An editor that is attached to a session notices a change of the setting
+within a minute.
+
+### What is recorded
+
+```
+you save src/app.py in the editor
+   ├─ is an editor attached to a session, and is the setting on?   no ──► nothing
+   ├─ does git track src/app.py?                                    no ──► nothing
+   └─ yes: the diff between the file before the save and the saved text
+           is appended to agent/human-diffs/<date>/<user>/src__app.py.tmp.diff
+```
+
+- Only saves through the editor are recorded. Claude's edits, the terminal, git and other
+  programs change the file on disk; the editor reloads it and does not save it. The writes of
+  the PyCharm synchronisation over SSH are not recorded either.
+- Only files that git tracks are recorded: untracked files, ignored files and new files before
+  their first commit are not.
+- "Before the save" is the file as the editor last loaded or saved it, so a save after Claude
+  changed the file records only your change.
+- PyCharm records the same way in all three modes. In the SSH mode the save goes to the local
+  copy, and the diff is the one of that save.
+- Saves while no session is attached are not recorded.
+- The diffs are written as they are. Calu does not redact them: a secret you type into a
+  tracked file is in the diff. The files stay on your machine and out of git.
+
+### The files
+
+Calu writes one file per changed file, user and day; each save adds one block:
+
+```
+agent/human-diffs/2026-11-20/kai/doc__guide.md.tmp.diff
+
+# doc/guide.md: saved 2026-11-20 14:03:12 UTC in vscode, calu session 4f1c2b...
+--- a/doc/guide.md
++++ b/doc/guide.md
+@@ -3,3 +3,3 @@
+ Install the package.
+-Then you can run it in order to see the output.
++Run it to see the output.
+```
+
+The date is the day of the save (UTC); the user is the OS user the session works for; the file
+name is the file's path with "/" written as "__". `git apply` and `patch` skip the comment
+lines, so a block can be applied again.
+
+To show Claude your edits, name the files in a message, for example: "Read the diffs in
+`agent/human-diffs/2026-11-20/kai/`. Rewrite the other guides in `doc/` the same way."
+
+| Setting | Values | Effect |
+|---|---|---|
+| `human_diffs.enabled` | `false` (default), `true` | record the saves |
+| `human_diffs.directory` | a path inside the project (default `agent/human-diffs`) | where the files go |
+| `human_diffs.keep_days` | days (default 14); 0 keeps every file | when a `.tmp.diff` file is deleted |
+
+### Keeping a diff, and git
+
+- Calu deletes a `*.tmp.diff` file 14 days after its last change (`human_diffs.keep_days`), when
+  a session starts and once a day while one runs. To keep a file, rename it to `<name>.diff`:
+  Calu never deletes a plain `.diff` file. The cleanup deletes only regular files named
+  `*.tmp.diff` inside the directory and follows no link; the log names every file it deleted.
+- When Calu creates the directory, it writes a `.gitignore` into it with the lines `*.tmp.diff`
+  and `.gitignore`. The temporary diffs stay out of every commit without a change to your own
+  `.gitignore`; a file you renamed to `.diff` shows up in `git status`, and you can commit it.
+  An existing directory is left as it is: if you deleted the `.gitignore`, Calu does not write
+  it again.
+- While the setting is on, a tool call of Claude that would write into the directory waits for
+  a person, and the files are left out of the write sets and of the code honesty state.
 
 ## Worktrees
 

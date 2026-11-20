@@ -5243,8 +5243,17 @@ def cmd_config(args: argparse.Namespace, store: CredentialStore) -> None:
             return json.dumps(values, indent=2, sort_keys=True)
         scope = f"the {args.project or 'global'} scope"
         if args.action == "set":
-            await admin.set_setting(db, args.key, admin.parse_value(args.value), args.project)
-            return f"set {args.key} in {scope}"
+            value = admin.parse_value(args.value)
+            await admin.set_setting(db, args.key, value, args.project)
+            done = f"set {args.key} in {scope}"
+            offer = await admin.enable_offer(db, args.key, value, args.project)
+            if offer is not None:
+                where = f" --project {shlex.quote(args.project)}" if args.project else ""
+                done += (
+                    f"\nhint: {offer['text']} Switch them on with:\n"
+                    f"  calu config set {offer['key']} true{where}"
+                )
+            return done
         if args.action in ("add", "remove"):
             entry = admin.parse_value(args.value)
             if args.action == "add":

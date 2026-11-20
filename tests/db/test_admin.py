@@ -578,3 +578,25 @@ async def test_a_template_is_not_stored_over_a_change_made_meanwhile(db_url: str
     finally:
         await other.close()
         await conn.close()
+
+
+async def test_switching_human_diffs_on_offers_the_traces_only_while_they_are_off(
+    db_url: str,
+) -> None:
+    """D253: the related switch is offered, never set; an inherited `on` needs no offer."""
+    db, conn = await prepared(db_url)
+    try:
+        await admin.add_project(db, "demo")
+        await admin.set_setting(db, "human_diffs.enabled", True)
+        offer = await admin.enable_offer(db, "human_diffs.enabled", True)
+        assert offer is not None and offer["key"] == "traces.enabled"
+        assert "traces" not in await admin.settings(db), "nothing is switched by the offer"
+        assert await admin.enable_offer(db, "human_diffs.enabled", False) is None
+        assert await admin.enable_offer(db, "claude.model", True) is None
+        await admin.set_setting(db, "traces.enabled", True)
+        assert await admin.enable_offer(db, "human_diffs.enabled", True) is None
+        assert await admin.enable_offer(db, "human_diffs.enabled", True, "demo") is None
+        await admin.set_setting(db, "traces.enabled", False, project="demo")
+        assert await admin.enable_offer(db, "human_diffs.enabled", True, "demo") is not None
+    finally:
+        await conn.close()

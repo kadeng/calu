@@ -631,6 +631,36 @@ class HonestyConfig(ConfigModel):
     review's result is there when the step is tried again."""
 
 
+def project_relative(directory: str, setting: str) -> str:
+    """Check a directory setting that names a path inside the project directory.
+
+    Args:
+        directory: The configured path.
+        setting: The setting's dotted name, for the message.
+
+    Returns:
+        The path with forward slashes, without a trailing slash and without `.` components.
+
+    Raises:
+        ValueError: If the path is empty, absolute, starts with `~`, holds a `..` component
+            or a NUL character, or names the project directory itself.
+    """
+    text = directory.strip().replace("\\", "/")
+    parts = [part for part in text.split("/") if part not in ("", ".")]
+    if (
+        not parts
+        or text.startswith(("/", "~"))
+        or ".." in parts
+        or "\0" in text
+        or (len(parts[0]) == 2 and parts[0][1] == ":")
+    ):
+        raise ValueError(
+            f"{setting} is a path inside the project directory, and {directory!r} "
+            'is not one: it must be relative, not empty, and without a ".." component'
+        )
+    return "/".join(parts)
+
+
 class TracesConfig(ConfigModel):
     """Session traces: the conversation written to a Markdown file inside the project (D232).
 
@@ -741,20 +771,53 @@ class TracesConfig(ConfigModel):
             ValueError: If the path is empty, absolute, starts with `~`, holds a `..`
                 component or a NUL character, or names the project directory itself.
         """
-        text = directory.strip().replace("\\", "/")
-        parts = [part for part in text.split("/") if part not in ("", ".")]
-        if (
-            not parts
-            or text.startswith(("/", "~"))
-            or ".." in parts
-            or "\0" in text
-            or (len(parts[0]) == 2 and parts[0][1] == ":")
-        ):
-            raise ValueError(
-                f"traces.directory is a path inside the project directory, and {directory!r} "
-                'is not one: it must be relative, not empty, and without a ".." component'
-            )
-        return "/".join(parts)
+        return project_relative(directory, "traces.directory")
+
+
+class HumanDiffsConfig(ConfigModel):
+    """The user's own edits in the IDE, recorded as diffs inside the project (D253).
+
+    With `enabled` on, every save of a file in the editor of VSCode or PyCharm that is attached
+    to a session adds a unified diff of that save to a file below `directory`, so that a later
+    prompt can show Claude how the user edits ("rewrite the documentation like this"). Only
+    files that git tracks are recorded; Claude's edits, the writes of other programs and of
+    the PyCharm synchronisation are not. The diffs are written as they are, without
+    redaction.
+    """
+
+    enabled: bool = False
+    """Record the user's saves in the IDE. Each save appends one block to
+    `<directory>/<date>/<user>/<path>.tmp.diff` (the UTC date, the OS user the session works
+    for, the file's path with "/" written as "__"). An editor that is attached to a session
+    notices a change of this setting within a minute."""
+    directory: str = "agent/human-diffs"
+    """Where the diffs go, relative to the project directory. An absolute path, and a path
+    with a `..` component, are refused. When calu creates the directory, it writes a
+    `.gitignore` into it that keeps the `*.tmp.diff` files out of git. While `enabled` is on,
+    a tool call of Claude that would write into this directory waits for a person, and the
+    files are left out of the write sets and of the code honesty state."""
+    keep_days: int = Field(default=14, ge=0)
+    """Days a `*.tmp.diff` file is kept after its last change; then calu deletes it (when a
+    session starts, and once a day while one runs). A file renamed to `<name>.diff` is never
+    deleted. 0 keeps every file."""
+
+    @field_validator("directory")
+    @classmethod
+    def _inside_the_project(cls, directory: str) -> str:
+        """Accept only a relative path that stays inside the project directory.
+
+        Args:
+            directory: The configured path.
+
+        Returns:
+            The path with forward slashes, without a trailing slash and without `.`
+            components.
+
+        Raises:
+            ValueError: If the path is empty, absolute, starts with `~`, holds a `..`
+                component or a NUL character, or names the project directory itself.
+        """
+        return project_relative(directory, "human_diffs.directory")
 
 
 class ClockConfig(ConfigModel):
@@ -847,6 +910,9 @@ class Config(ConfigModel):
     traces: TracesConfig = Field(default_factory=TracesConfig)
     """Session traces: the conversation as a redacted Markdown file inside the project, for
     version control and review (agent/records/PLAN.md D232); off by default."""
+    human_diffs: HumanDiffsConfig = Field(default_factory=HumanDiffsConfig)
+    """The user's own edits in the IDE, recorded as diffs inside the project, to show Claude
+    later (agent/records/PLAN.md D253); off by default."""
 
     @field_validator("hidden_env")
     @classmethod

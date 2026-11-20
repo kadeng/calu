@@ -273,6 +273,41 @@ class FilesUserEditResult(BaseModel):
     (the session traces while `traces.enabled` is on): an editor leaves them alone."""
 
 
+HUMAN_DIFF_MAX_CHARS = 1_000_000
+"""The longest text `human_diffs.add` carries in `before` or `after`."""
+
+
+class HumanDiffAddParams(BaseModel):
+    """`human_diffs.add`: the user saved a file in an editor (agent/records/PLAN.md D253).
+
+    An editor extension sends it after each save through its editor (not for files that
+    another program, Claude or the editor's file synchronisation wrote). The session records
+    the diff of `before` and `after` while `human_diffs.enabled` is on and git tracks the file;
+    otherwise it records nothing. Both texts have their line ends normalised to newlines.
+    """
+
+    path: str = Field(min_length=1, max_length=4096)
+    """The file, relative to the workspace, with "/" separators; no `..` segment."""
+    before: str = Field(max_length=HUMAN_DIFF_MAX_CHARS)
+    """The file's text as the editor last loaded or saved it, before this save."""
+    after: str = Field(max_length=HUMAN_DIFF_MAX_CHARS)
+    """The saved text."""
+
+
+class HumanDiffAddResult(BaseModel):
+    """Result of `human_diffs.add`."""
+
+    enabled: bool
+    """`human_diffs.enabled`. An editor that hears False may send nothing for a while."""
+    recorded: bool = False
+    """True if a diff was written."""
+    file: str | None = None
+    """The file the diff was appended to, relative to the workspace; None if none."""
+    reason: str = ""
+    """Why nothing was recorded: "off", "not tracked by git", "unchanged", "binary",
+    "calu's own output", or the error of a failed write."""
+
+
 class HonestyTrustResult(BaseModel):
     """Result of `honesty.trust`: what was recorded."""
 
@@ -781,6 +816,7 @@ REQUESTS: dict[str, type[BaseModel]] = {
     "honesty.trust": HonestyTrustParams,
     "honesty.review": EmptyParams,
     "files.user_edit": FilesUserEditParams,
+    "human_diffs.add": HumanDiffAddParams,
     "interrupt": EmptyParams,
     "context.get": EmptyParams,
     "side.ask": SideAskParams,

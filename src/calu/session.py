@@ -133,7 +133,7 @@ from anyio.abc import TaskGroup
 from pydantic_ai import UsageLimits
 from pydantic_ai.models import Model
 
-from calu import __version__, asuser, machine
+from calu import __version__, asuser, human_diffs, machine
 from calu.changes import default_root
 from calu.checkers import (
     CheckContext,
@@ -261,6 +261,7 @@ from calu.protocol.messages import (
     HonestyTrustResult,
     HonestyUnitStatus,
     HonestyUpdate,
+    HumanDiffAddResult,
     InitializeResult,
     Log,
     PermissionModeChanged,
@@ -573,6 +574,11 @@ class Session:
         self._trace_dir: str | None = None
         """The trace directory relative to a checkout's root while tracing is on, else None;
         no checkout's honesty state judges it (`_exclude_from_states`)."""
+        self._human_diffs_dir: str | None = None
+        """`human_diffs.directory` while `human_diffs.enabled` is on, else None (D253): calu's
+        own output like the trace directory (`_guard_traces`)."""
+        self._human_diffs_cleaned = 0.0
+        """`anyio.current_time()` of the last cleanup of the human diffs; 0 before the first."""
         self._honesty_lock = anyio.Lock()
         """Held while the honesty state is refreshed, read as a snapshot or changed, so that a
         snapshot never sees half of a tool result's changes."""
@@ -974,6 +980,8 @@ class Session:
         excluded: list[str] = []
         if self._trace_dir is not None:
             excluded.append(self.checkouts.label(checkout.root / self._trace_dir))
+        if self._human_diffs_dir is not None and checkout.main:
+            excluded.append(self._human_diffs_dir)
         if checkout.main:
             excluded += self.checkouts.nested()
         return tuple(excluded)
@@ -1170,6 +1178,93 @@ class Session:
                 )
             )
         return FilesUserEditResult(excluded=list(self.write_sets.excluded))
+
+    async def human_diff(
+        self, path: str, before: str, after: str, client: str = "unknown"
+    ) -> HumanDiffAddResult:
+        """Record the diff of one save of the user in an editor (`human_diffs.add`, D253).
+
+        Records nothing unless `human_diffs.enabled` is on and git tracks the file in its
+        checkout; never for a file inside calu's own output (the human diffs, the traces),
+        for equal texts or for text with a NUL character. The diff is written as it is,
+        without redaction (`calu.human_diffs.record`). Side effects: appends a block to the
+        file of that path, user and day; creates the directory with its `.gitignore`; runs
+        the cleanup of old `*.tmp.diff` files when the last one is more than a day ago.
+
+        Args:
+            path: The file, relative to the workspace, with "/" separators.
+            before: The file's text before the save.
+            after: The saved text.
+            client: The client's name, written into the block.
+
+        Returns:
+            Whether the feature is on, whether a diff was written, the file and the reason.
+
+        Raises:
+            SessionError: If `path` is absolute, empty or has a `..` segment.
+        """
+        cfg = self.config.human_diffs
+        if not path or path.startswith("/") or ".." in path.split("/") or "\x00" in path:
+            raise SessionError(f"{path!r} is not a path relative to the workspace")
+        if not cfg.enabled:
+            return HumanDiffAddResult(enabled=False, reason="off")
+        own = [cfg.directory, *([self._trace_dir] if self._trace_dir else [])]
+        if any(path == mine or path.startswith(mine + "/") for mine in own):
+            return HumanDiffAddResult(enabled=True, reason="calu's own output")
+        if before == after:
+            return HumanDiffAddResult(enabled=True, reason="unchanged")
+        if "\x00" in before or "\x00" in after:
+            return HumanDiffAddResult(enabled=True, reason="binary")
+        file = self.workspace / path
+        if not await anyio.to_thread.run_sync(human_diffs.is_tracked, file):
+            return HumanDiffAddResult(enabled=True, reason="not tracked by git")
+        saved = human_diffs.Saved(
+            path=path,
+            before=before,
+            after=after,
+            when=datetime.now(UTC),
+            user=_os_user(),
+            session_id=self.store.session_id,
+            client=client,
+        )
+        try:
+            written = await anyio.to_thread.run_sync(
+                human_diffs.record, self.workspace, cfg.directory, saved
+            )
+        except human_diffs.HumanDiffError as exc:
+            log.warning("human diffs: %s", exc)
+            return HumanDiffAddResult(enabled=True, reason=str(exc))
+        if anyio.current_time() - self._human_diffs_cleaned > human_diffs.CLEANUP_INTERVAL_S:
+            await self._clean_human_diffs()
+        if written is None:
+            return HumanDiffAddResult(enabled=True, reason="unchanged")
+        return HumanDiffAddResult(
+            enabled=True, recorded=True, file=written.relative_to(self.workspace).as_posix()
+        )
+
+    async def _clean_human_diffs(self) -> None:
+        """Delete the `*.tmp.diff` files older than `human_diffs.keep_days`; never raises.
+
+        Side effects: `calu.human_diffs.cleanup` in a worker thread; one `log` event with
+        the count when files were deleted; sets `_human_diffs_cleaned`.
+        """
+        self._human_diffs_cleaned = anyio.current_time()
+        cfg = self.config.human_diffs
+        try:
+            removed = await anyio.to_thread.run_sync(
+                human_diffs.cleanup, self.workspace, cfg.directory, cfg.keep_days
+            )
+        except Exception:
+            log.exception("the cleanup of the human diffs failed")
+            return
+        if removed:
+            await self._emit_safely(
+                Log(
+                    level="info",
+                    message=f"human diffs: deleted {len(removed)} file(s) older than "
+                    f"{cfg.keep_days} days below {cfg.directory}",
+                )
+            )
 
     async def honesty_review(
         self,
@@ -2797,6 +2892,8 @@ class Session:
         # After the runner is set and without an await in between: the end of an earlier run
         # closes the trace only while its own runner is the current one (`_run`).
         self._start_traces(tg, resume_id, fork is not None, chosen)
+        if self.config.human_diffs.enabled:
+            tg.start_soon(self._clean_human_diffs)
         tg.start_soon(self._run, runner, resume_id, fork, chosen)
 
         ready = anyio.Event()
@@ -4662,8 +4759,15 @@ class Session:
         self.rules.trace_directory = None if directory is None else self.workspace / directory
         self.rules.checkouts = self.checkouts  # worktrees are judged as checkouts (D251)
         self._trace_dir = directory
+        # The human diffs (D253) are calu's own output too, while they are recorded.
+        diffs = self.config.human_diffs
+        self._human_diffs_dir = diffs.directory if diffs.enabled else None
+        self.rules.human_diffs_directory = (
+            None if self._human_diffs_dir is None else self.workspace / self._human_diffs_dir
+        )
         self._exclude_from_states()
-        self.write_sets.excluded = () if directory is None else (directory,)
+        own = [path for path in (directory, self._human_diffs_dir) if path is not None]
+        self.write_sets.excluded = tuple(own)
 
     def _trace_settings(self) -> tuple[object, ...]:
         """Return what decides which trace file is written and how.

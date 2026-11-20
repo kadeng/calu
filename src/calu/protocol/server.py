@@ -87,6 +87,7 @@ from calu.protocol.messages import (
     FilesUserEditParams,
     HonestyClearParams,
     HonestyTrustParams,
+    HumanDiffAddParams,
     InitializeParams,
     ModelSetParams,
     PermissionModeSetParams,
@@ -1350,6 +1351,11 @@ class Client:
             case "files.user_edit":
                 assert isinstance(params, FilesUserEditParams)
                 return await session.user_edit(params.paths, client=self.name or "unknown")
+            case "human_diffs.add":
+                assert isinstance(params, HumanDiffAddParams)
+                return await session.human_diff(
+                    params.path, params.before, params.after, client=self.name or "unknown"
+                )
             case "interrupt":
                 await session.interrupt()
                 return {}

@@ -1069,7 +1069,9 @@ class Bridge:
             params: `key` (dotted), `value` (the JSON value to store), `project`, `password`.
 
         Returns:
-            `{value}`: the value as it is stored after the change.
+            `{value}`: the value as it is stored after the change; `offer` (`{key, text}`,
+            `calu.admin.enable_offer`) when the editor should offer to switch a related
+            setting on as well (it asks the user and sends its own `ide.settings.set`).
 
         Raises:
             RpcError: `INVALID_PARAMS` if `Config` refuses the value (the message names the
@@ -1087,10 +1089,15 @@ class Bridge:
                 db: The connection.
 
             Returns:
-                `{value}`.
+                `{value}`, and `offer` (`calu.admin.enable_offer`) when a related switch is
+                still off.
             """
             stored = await admin.set_setting(db, key, value, project)
-            return {"value": _lookup(stored, key)}
+            answer: dict[str, Any] = {"value": _lookup(stored, key)}
+            offer = await admin.enable_offer(db, key, value, project)
+            if offer is not None:
+                answer["offer"] = offer
+            return answer
 
         return await self.access.change(work, _password(params))
 

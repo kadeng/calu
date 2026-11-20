@@ -1,7 +1,7 @@
 # Handoff
 
 State on 2026-11-19, in a session that began on 2026-11-18 and is still going. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D252, open
+(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D253, open
 questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here
@@ -391,6 +391,22 @@ parallel subagents:
    *Measured (today's checkers, one obvious case):* `PYTHONPATH=../wta python3 -c "import
    helper; ..."` in a subagent worktree: command checker PASS, its summary said "It executes
    the helper module from the wta worktree"; the import left `__pycache__/` in `wta`.
+
+#### Recording the user's own IDE edits (built 2026-11-20, PLAN D253, requirement 47)
+
+Off by default (`human_diffs.enabled`, `.directory` = `agent/human-diffs`, `.keep_days` = 14).
+Each save in the VSCode or PyCharm editor (all three PyCharm modes) of a git-tracked file,
+while the editor is attached to a session, sends `human_diffs.add {path, before, after}`; the
+core (`calu.human_diffs`, `Session.human_diff`) appends the unified diff to
+`<dir>/<date>/<user>/<path with "__">.tmp.diff`, without redaction (the owner). The PyCharm
+synchronisation's own saves are marked (`OwnSaves`) and skipped. `*.tmp.diff` files older than
+`keep_days` are deleted at a session start and once a day; a renamed `.diff` is kept. A new
+directory gets a `.gitignore` (`*.tmp.diff`, `.gitignore`). Claude's writes there meet a
+built-in deny rule; write sets and honesty leave the directory out. Switching it on offers
+`traces.enabled` in both IDE dialogs and on the web page, and `calu config set` prints a hint
+(`admin.enable_offer`). Not run by hand in the desktop yet: docs/TESTING.md item 49. Open for
+the owner: saves while no session is attached are not recorded; VSCode's auto-save makes one
+block per save; whether a command or the diff screen should list the recorded diffs.
 
 #### Claude Code as a whole inside namespaces (backlog, owner 2026-11-19)
 
@@ -985,7 +1001,7 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
 **2713 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. about 470 commits, ~83k lines of Python in `src` (~88k with the SQL, templates and
 default instructions), ~49k of tests, 40 migrations, 28 CLI commands (27 in `calu --help` and the hidden easter egg
-`calu lightcycles`), 25 protocol requests,
+`calu lightcycles`), 26 protocol requests,
 21 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
 there.

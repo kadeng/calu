@@ -935,6 +935,22 @@ escalation resolved from the database alone.
    the worktree, and the commit is the worktree's `HEAD`. (f) A command writes `out.txt`
    into a checkout with honesty enforced: the next code run there does not wait for a model
    review (the log line counts it "without code").
+49. Recording your own edits (PLAN D253), with the scripted server or a real session, in a git
+   project. (a) `calu config set human_diffs.enabled true` prints the hint with
+   `calu config set traces.enabled true` while the traces are off; switching it on in the
+   VSCode settings panel, in PyCharm's settings dialog and on the web settings page asks
+   whether to switch on the traces too, and "Not now" leaves them off. (b) Attached in VSCode,
+   edit and save a tracked file: `agent/human-diffs/<date>/<user>/<path>.tmp.diff` gets one
+   block (`# <path>: saved ... in vscode`, then the diff); the directory has a `.gitignore`,
+   and `git status` shows nothing new. A second save appends a second block. Saving an
+   untracked file, a change Claude makes, and `echo x >> file` in the terminal add nothing.
+   (c) The same in PyCharm in each mode (local, WSL, SSH with calu's synchronisation): a
+   local save is recorded; a change of Claude that the synchronisation writes into the local
+   copy is not. (d) Rename a file to `<name>.diff`, set `human_diffs.keep_days 1`, age both
+   files with `touch -d '3 days ago'` and start a session: the `.tmp.diff` file is deleted and
+   named in the log, the `.diff` file stays. (e) Claude's `Write` into `agent/human-diffs/`
+   waits for a person. The unit tests are `tests/unit/test_human_diffs.py`, the editors'
+   `test/unit/humanDiffs.test.ts` and `HumanDiffsTest.kt`.
 
 ## Measuring the checkers
 

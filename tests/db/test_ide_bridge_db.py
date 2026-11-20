@@ -108,6 +108,11 @@ async def test_settings_are_read_set_validated_and_unset(
         assert await editor.request(
             "ide.settings.set", {"key": "claude.model", "value": "sonnet", "project": None}
         ) == {"value": "sonnet"}
+        # D253: switching human diffs on offers the traces; the editor asks the user.
+        offered = await editor.request(
+            "ide.settings.set", {"key": "human_diffs.enabled", "value": True, "project": None}
+        )
+        assert offered["value"] is True and offered["offer"]["key"] == "traces.enabled"
         again = {r["key"]: r for r in (await editor.request("ide.settings.get"))["rows"]}
         assert (again["claude.model"]["value"], again["claude.model"]["is_set"]) == (
             "sonnet",
