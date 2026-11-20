@@ -1171,3 +1171,34 @@ way is to run that layer in your own terminal, or the session with the sandbox o
 says it works on macOS only, and a session start on Linux warns when it is set
 (`preflight.network_warnings`, `test_preflight.py`). Documented: `UV_CACHE_DIR=$TMPDIR/uv-cache`
 for `uv` under the sandbox (DOCUMENTATION.md "Developing Calu inside Calu").
+
+#### M, continued: the database tests through an excluded command (2026-11-20, night)
+
+Run by an agent in the same desktop with the sandbox **on**: Calu as installed for M9-M11,
+Claude Code 2.1.329 (the Agent SDK's bundled CLI) on Haiku, every Calu role on Haiku, auto
+mode, honesty `track`, `calu run .` as `cua` in tmux with a `calu attach --plain` client as
+the log. The project `~/work/calu-dogfood` got `scripts/db-tests.sh` as a commit of its own
+(the version with `-m 'db and not live'`; the committed script adds `and not browser`). The
+test server: a new `calu-dogfood-pg` (`postgres:17`) on `calu-uitest-net`,
+`CALU_TEST_DSN=postgresql://calu_owner:calu-dev@calu-dogfood-pg:5432/calu` in the environment
+of `calu run`, and `calu config add --project calu-dogfood claude.sandbox.excluded_commands
+"scripts/db-tests.sh *"`; `allow_unsandboxed_commands` at its default `false`. Nobody decided
+an escalation (none came up). Evidence in `~/.cache/calu-uitest/share/dogfood-excluded/`:
+`attach.log`, `run.log` (client token removed), `trace-session_004.md`. The leak check found
+no secret value; its one key shape is the test password in the DSN. The container was removed
+afterwards.
+
+| # | Step | Result |
+|---|---|---|
+| M12 | One message: run `scripts/db-tests.sh -q -rs tests/db/test_least_privilege.py` | ok: `4 passed in 2.64s` against `calu-dogfood-pg` by name. The command ran outside the sandbox: it reached the server over TCP and wrote uv's default cache, which is read-only inside. Command checker PASS: "Runs the project script scripts/db-tests.sh ... The call does not edit files itself, though the script's behaviour is not reviewed here" |
+| M13 | One message: (1) `UV_CACHE_DIR=$TMPDIR/uv-cache uv run pytest -q -rs -m "db and not live" tests/db/test_least_privilege.py`, (2) `./scripts/db-tests.sh -q -rs tests/db/test_least_privilege.py` | ok, both stayed in the sandbox: (1) `4 skipped`, "failed to resolve host 'calu-dogfood-pg'"; (2) `Could not acquire lock ... Read-only file system` at `~/.cache/uv`: the `./` form does not match the entry. Both PASS by the command checker, which again noted that it did not review the script |
+| M14 | Code reading of the CLI (2.1.319, bundled with the host's Agent SDK) | an entry is a Bash permission rule; a single trailing ` *` also matches the bare command. A call leaves the sandbox only when every command in it matches an entry; a `cd`, a command substitution, a redirect other than a descriptor duplication such as `2>&1`, and an argument with `*`, `?`, `[`, `\` or `~` keep it sandboxed. Exclusions do not depend on `allowUnsandboxedCommands` (that switch governs `dangerouslyDisableSandbox`), as M12 shows |
+
+Cost: 2 user messages in the Calu session (3 command checks, all PASS).
+
+Result: the database tests run in a sandboxed Calu session on Linux through one excluded
+command, without opening Unix sockets. Recipe in DOCUMENTATION.md "Developing Calu inside
+Calu"; `scripts/db-tests.sh` in the repository; `AGENTS.md` names the form. Observation for
+the owner, not built: the command checker is not told that a command leaves the sandbox
+(Calu knows its `excluded_commands`); a note in the checker's input could make it weigh such a
+call accordingly.

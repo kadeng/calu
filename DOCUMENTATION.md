@@ -2891,20 +2891,44 @@ calu run .
   The first such run in a session downloads the packages again (about a minute). Calu has no
   setting that makes `~/.cache/uv` writable, on purpose: your own unsandboxed `uv` commands
   use that cache, and a sandboxed command could change what they install.
-- **The database tests do not run in a sandboxed session on Linux.** The sandbox does not
-  proxy TCP, and Claude Code's Linux sandbox refuses to create any Unix socket (Python:
-  `PermissionError: [Errno 1] Operation not permitted`). `claude.sandbox.allow_unix_sockets`
-  does not change that: Claude Code applies the list on macOS only, and a session start on
-  Linux warns when it is set. Without a reachable server the database tests are skipped
-  ("test database not reachable"). Run `uv run pytest -m 'db and not live'` in your own
-  terminal, or run the session with the sandbox off ([On or off](#on-or-off), with the
-  protections described there).
+- **The database tests in a sandboxed session on Linux: `scripts/db-tests.sh`.** A sandboxed
+  command cannot reach the test server: the sandbox does not proxy TCP, and Claude Code's
+  Linux sandbox refuses to create any Unix socket (Python: `PermissionError: [Errno 1]
+  Operation not permitted`). `claude.sandbox.allow_unix_sockets` does not change that (Claude
+  Code applies the list on macOS only; a session start on Linux warns when it is set). A
+  sandboxed run skips the database tests ("test database not reachable"). The repository
+  holds a script for the database layer, and that one command can run outside the sandbox:
+
+  ```bash
+  calu config add --project calu claude.sandbox.excluded_commands "scripts/db-tests.sh *"
+  ```
+
+  Claude runs the tests as `scripts/db-tests.sh [pytest arguments]`, for example
+  `scripts/db-tests.sh -q tests/db/test_least_privilege.py` (`AGENTS.md` names the command,
+  so Claude finds it). The entry uses the syntax of Claude Code's Bash permission rules:
+  `scripts/db-tests.sh *` matches the command alone and with arguments. Claude Code matches
+  the command line as written, so only that form leaves the sandbox. `./scripts/db-tests.sh`,
+  a chain or pipe with another command, a `cd`, a redirect other than `2>&1`, and an argument
+  with `*`, `?`, `[` or `~` stay in the sandbox, where the command fails at uv's read-only
+  cache.
+  - What runs unsandboxed: the script, uv, pytest and every test module and `conftest.py`
+    it loads, with the session user's full file and network access. Calu's checkers still
+    judge each call, and each edit of the script or a test goes through the edit checker.
+    The command checker sees the command line, not the script's content, and is not told
+    that the command leaves the sandbox.
+  - `claude.sandbox.allow_unsandboxed_commands` stays `false`. It concerns
+    `dangerouslyDisableSandbox`, not the excluded commands.
+  - Outside the sandbox uv uses its own cache, so the script needs no `UV_CACHE_DIR`.
+
+  Without the entry, run `scripts/db-tests.sh` in your own terminal, or run the session with
+  the sandbox off ([On or off](#on-or-off), with the protections described there).
 
 ### What to expect
 
 | Step | Behaviour |
 |---|---|
 | `uv run pytest -q tests/unit/<file>` | passes the checkers. The first run creates `.venv` and installs about 90 packages (about a minute). With the sandbox on, only with `UV_CACHE_DIR` as above |
+| `scripts/db-tests.sh -q tests/db/<file>` | passes the command checker; with the `excluded_commands` entry above the tests run against the test server; without it the command stays in the sandbox and fails at uv's read-only cache |
 | an edit of code or tests | the edit checker passes it when the user asked for it |
 | `git commit` | the commit review compares the staged change with what the user asked for. It can refuse a commit whose change drifted from the request (a renamed test, for example); say in a message what the commit should hold, and Claude commits again |
 | the trace files | with traces on, the final redaction pass stages the session's trace files for each commit of Claude's, and Calu tells Claude that they belong there. List `agent/traces/` in `.gitignore` to keep them out of git |

@@ -32,6 +32,7 @@ READMEs). This file stays at the top level, where every agent looks first.
 | `pyproject.toml` | Package, dependencies, ruff, pyright and pytest settings |
 | `docker-compose.yml`, `docker/dev.Dockerfile` | Development system `dev` and test database `caludb` |
 | `scripts/wsl-test.sh` | Format check, lint, type check and tests in WSL |
+| `scripts/db-tests.sh` | The database layer (`uv run pytest -m 'db and not live and not browser'`, extra pytest arguments passed on); the form a sandboxed Calu session can run outside the sandbox (DOCUMENTATION.md, "Developing Calu inside Calu") |
 | `.github/workflows/checks.yml` | CI: the same checks, the database and browser layers, and the installed wheel |
 | `.github/workflows/release.yml` | Builds the wheel for a `v*` tag and publishes it to PyPI; needs a one-time PyPI and environment setup, described at the top of the file |
 | `spikes/` | Experiments on Claude Code behaviour, including the question tool (results in `spikes/RESULTS.md`) and `smoke_session.py`, a manual end-to-end run with the real `claude` |
@@ -117,6 +118,9 @@ outside the Windows checkout: `UV_PROJECT_ENVIRONMENT=$HOME/.cache/calu-venv`).
   (a headless browser; `scripts/get-browser.sh` installs it without root), `uv run pytest -m live`
   (a real `claude` or API keys). `docs/TESTING.md` explains the layers, the spikes and the
   manual checklist.
+- In a Calu session with Claude Code's sandbox on, run the database tests exactly as
+  `scripts/db-tests.sh [pytest args]` (one command, no `./`, no `cd` or chain): only that form
+  can reach the test server there.
 - A new configuration field needs a docstring **under** it (`ConfigModel` turns those into
   descriptions, which the reference, the web settings form and the JSON schema read) and a
   regenerated `docs/CONFIGURATION.md`; `tests/unit/test_configdoc.py` says how.

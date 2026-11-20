@@ -31,10 +31,12 @@ every case); `agent/records/notes/worktree-design.md`; the skill
   **Status 2026-11-20 night:** rehearsed end to end on Haiku in the Cua desktop (test plan M):
   reading AGENTS.md, unit tests, edits, a subagent, honesty, a commit with traces all work;
   fixes D254 and the "Developing Calu inside Calu" section of DOCUMENTATION.md record the
-  setup. Under Claude Code's sandbox on Linux, uv needs `UV_CACHE_DIR=$TMPDIR/uv-cache` and
-  the database tests cannot run inside the session (no Unix sockets, no TCP): run that layer
-  in your own terminal or with the sandbox off. Open owner decision (not urgent): an opt-in
-  setting for Claude Code's `allowAllUnixSockets` (recommended: leave it out).
+  setup. Under Claude Code's sandbox on Linux, uv needs `UV_CACHE_DIR=$TMPDIR/uv-cache`, and
+  the database tests run through one excluded command: `scripts/db-tests.sh`, with
+  `claude.sandbox.excluded_commands "scripts/db-tests.sh *"` for the project (test plan
+  M12-M14, run on Haiku with the sandbox on: 4 passed; an ordinary command stayed sandboxed).
+  Your own terminal or the sandbox off remain the fallback. This makes a setting for Claude
+  Code's `allowAllUnixSockets` unnecessary for the database tests.
   The owner's next step: reinstall from GitHub, `sudo calu setup` (migrations to 0042),
   `calu project add` for the calu checkout, then work.
 
@@ -491,13 +493,19 @@ default, a warning at every start), for hosts that are not containers. It would 
 sandboxed command reach every Unix socket of the user: the X/Wayland display, D-Bus, an SSH
 agent, the Docker socket if the user may use it, Calu's own session sockets (which still ask a
 token). Alternatively nothing: the database tests stay outside the session.
+**Solved afterwards without sockets (test plan M12-M14):** `scripts/db-tests.sh` listed in the
+project's `claude.sandbox.excluded_commands` (`"scripts/db-tests.sh *"`) runs outside the
+sandbox and passed against the test server over TCP; the same tests as a plain `uv run` and
+the `./scripts/db-tests.sh` form stayed sandboxed; the command checker passed all three and
+said it had not reviewed the script. `allow_unsandboxed_commands` stays `false`.
 
 #### Next, in this order
 
 1. **Support the owner's dogfooding** (developing Calu inside Calu): fix what he reports first.
-   One proposal waits for his say: a setting for `allowAllUnixSockets`, or the database
-   tests stay outside a sandboxed session (section above; the Unix socket recipe was tried
-   and does not work on Linux).
+   The database tests in a sandboxed session: solved with `scripts/db-tests.sh` as an
+   excluded command (test plan M12-M14, DOCUMENTATION.md "Developing Calu inside Calu"); the
+   `allowAllUnixSockets` proposal is no longer needed for them. Open idea for the owner: tell
+   the command checker when a command matches `excluded_commands` (it runs unsandboxed).
 2. **Hand checks still to run** (docs/TESTING.md): item 46 (usage panel with a real
    subscription), 48 (the subagent handback review with a real Claude Code, incl. 48(c)
    what happens after a denied handback), 49 (human diffs in both IDEs, incl. (f) the

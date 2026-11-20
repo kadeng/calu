@@ -138,7 +138,7 @@ for the disk (recreate it once: `docker compose up -d caludb --wait`).
 | A quick loop: no process starts, no waited-out timers | `uv run pytest -n 8 -m 'not slow and not live and not db and not browser'` | about 25 s |
 | The full-screen client only | `uv run pytest -n 8 tests/unit/test_tui_*.py` | about 25 s |
 | The database layer without the slow ones | `uv run pytest -m 'db and not browser and not slow'` | about 100 s |
-| The database layer | `uv run pytest -m 'db and not live and not browser'` | about 2.5 min |
+| The database layer | `uv run pytest -m 'db and not live and not browser'`, or `scripts/db-tests.sh` (the same; the form for a sandboxed Calu session, DOCUMENTATION.md "Developing Calu inside Calu") | about 2.5 min |
 | The browser layer (every test marked `browser`; those of the web interface are also marked `db`, the easter egg's are not) | `uv run pytest -m browser` | about 1 min |
 | One area | by path, e.g. `tests/unit/test_web_*.py tests/db/test_web*.py tests/browser`, or `-k 'honesty or trust'` | under a minute |
 | Everything before a push | `uv run pytest -n 8 && uv run pytest -m 'db and not live and not browser' && uv run pytest -m browser` | about 4 min |
