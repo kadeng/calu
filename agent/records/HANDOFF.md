@@ -267,6 +267,26 @@ and leaving it is an approval calu does not present yet); the condensed skill
 `../.claude/skills/claude-code-integration` does not mention the measured status message yet
 (it lies outside `calu/`).
 
+#### Capability requests instead of an all-or-nothing sandbox (backlog, owner 2026-11-20)
+
+The owner: for now the execution sandbox need not be enforced (a session may run with it
+off). Idea for later, two ways to run a command: (1) the regular sandboxed Bash tool; (2) a
+special command through which the agent asks for privileges - read/write certain paths,
+connect to certain hosts/ports - with a reason; the checker judges the request; a command
+that fails because it touched a path or host outside what was granted reports that back, so
+the agent can ask for more and retry, and the checker decides again. Claude Code already has
+a coarse form (a sandboxed command that fails may be retried with `dangerouslyDisableSandbox`,
+which asks for permission; calu has `allow_unsandboxed_commands` off), but that is all or
+nothing. Candidate engine: nono (github.com/nolabs-ai/nono, Apache-2.0, Rust, no root):
+Landlock for paths and TCP ports (ports need kernel 6.7+; this WSL host runs 6.18),
+seccomp-bpf, an HTTP(S) proxy for host names; `nono why` reports denials; host filtering
+covers HTTP(S) only, raw TCP is filterable by port on any IP, not by host. Or calu's own
+wrapper on the same kernel features. Design questions: replace Claude Code's sandbox entirely
+(every Bash call through the wrapper with the project's default grant) or add a second tool
+(an MCP tool `run_with_capabilities(command, read, write, net, reason)`); how grants persist
+(per call, per session, per project); how a denial is reported to the agent. Spike first:
+nono on this host with calu's own test suite (database tests on TCP port 5432).
+
 #### Tool documentation for the checkers (backlog, owner 2026-11-20)
 
 The command checker sees a non-shell tool call as its name, the working directory, list
