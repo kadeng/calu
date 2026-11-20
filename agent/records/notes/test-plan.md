@@ -98,6 +98,8 @@ in a real VSCode, `docs/TESTING.md`), vitest for every pure change.
 | A16 | the owner's decision: "Waiting for you" counts from the session's `opened_at` of the oldest open step: 6 s, then after a window reload 1m 28s, after `calu ide` was killed and Restart bridge 1m 53s (03-06) | built (this round; the field was already in `escalation.request` and the snapshot); vitest `waitingSince` |
 | A17 | the server stopped, seen over Remote-SSH | fixed 4e0eb4c (section J, J-V3); before that: - (not run: the SSH box was in use by another agent; the extension's logic is the same there, since the bridge, the server and `ide.status` all run on the box. A difference: the webview's clock is the laptop's, the step's time the box's; a box clock ahead counts as "now", one behind lengthens the timer) |
 
+| A18 | the usage panel (2026-11-20, `usage1/21-22`, `agent/records/notes/screenshots/usage1-vscode-panel.png`): `tour` locally against `uitest/fake_server.py`, a click on the context chip while the escalation waited: context bar, "5-hour: 37% used · reported just now", "weekly: not reported yet by Claude Code", Claude Code's `/usage` text in a code block, "This session" with cost and context, "Ask again"; no turn added | built (985dcb4); vitest `usagePanel.test.ts`. "Your plan now" not seen (the scripted runner gives no `get_usage` limits) |
+
 **Remote (Remote-SSH).** Microsoft's Remote-SSH 0.128.0 installed from the marketplace in the
 desktop's VSCode; "Connect Current Window to Host" `sshbox` (key login, the test key); VS Code
 Server downloaded on the box; calu's `.vsix` installed on the remote side
@@ -220,7 +222,8 @@ actions, the edit's `ref` on the diff request and from `diffOfText`).
 | B20 | Cancel: nothing starts, the server file unchanged (07); Run anyway: `run_demo.py` runs on the box, the file stays held, no notification (08, 15); Debug, Enter: the file is uploaded (server has the local line), the hold ends, the debugger runs on the box (12, 13) | ok |
 | B21 | Rerun button of the Run or Debug tab while a file is held: no dialog (the tab keeps PyCharm's own runner), a notification "calu: run_demo started with held files" with "Upload now" (14) | ok (by design: `ExecutionListener` cannot stop a start) |
 | B22 | a comment in the diff of an edit carries `ref` `edit:<tool_use_id>` (local IDE and mode 3: from the diff request; remote development: from the backend, `diffOfText`), in a VCS diff the left side's revision | built, unit-tested (`CommentPayloadTest`, `PluginFlowTest`); not walked through by hand this round |
-| B23 | an IDE restart while a save is held and the turn still runs | open (found in this round, not changed): after the restart the held save was uploaded at once (the first comparison runs before the transcript of the running turn has arrived, so no file counts as held) |
+| B23 | an IDE restart while a save is held and the turn still runs | fixed (985dcb4): before, the held save was uploaded at once after the restart (the first comparison ran before the transcript of the running turn arrived, so no file counted as held). Now the held paths are stored with the session id (`holds.txt`, `HoldKeeper`) and stay held until the turn is known to have ended. Run by hand as H38 |
+| B24 | the usage panel (2026-11-20, mode 3 against the SSH box, `usage1/04`, `13`, `14`, `agent/records/notes/screenshots/usage1-pycharm-panel.png`): a click on the context chip opens a popup "Usage" above the chip with "Subscription limits" (5-hour reported, weekly "not reported yet by Claude Code"), "Claude Code's /usage" in a code block, "This session"; "Ask again" asks once more. The first build placed the popup from the chip's left edge, so it was cut at the screen's right edge (04); it is right-aligned to the chip now (13) | built (985dcb4); `UsagePanelTest`. Seen: "cost: no turn has ended yet" after a finished `tour` turn (the scripted turn reports no cost; core, not the panel). "Your plan now" not seen (no `get_usage` limits in the scripted runner) |
 
 ### C. Full-screen client and line client (`calu attach`)
 
@@ -662,6 +665,12 @@ Seventh round (2026-11-20), screenshots `~/.cache/calu-uitest/share/held/` (see 
 |---|---|---|
 | H36 | "changed on the server, deleted here" (network cut, `k_b.txt` deleted locally, changed on the box, network back): the dialog "Keep Mine / Take Theirs / Cancel" has no default button and the focus on Cancel; Enter closes it and changes nothing (the conflict stays, the box keeps its file); "Take Theirs" then restores the file locally (18 to 23) | fixed (judgement call 5 of section K): `ChoiceDialog` with `sideChoice`; before, "Keep Mine" was the default |
 | H37 | the other questions of the synchronisation: every side choice (deletion either way, binary, too large) has no default; the plan of a first synchronisation keeps "Apply" as the default unless it deletes files on either side, then none and the focus on "Not Now"; the three-way merge dialog is the platform's own (its "Apply" asks before it leaves changes unresolved) | fixed; unit-tested (`QuestionsTest`); a deleting plan not seen by hand |
+
+Eighth round (2026-11-20), screenshots `~/.cache/calu-uitest/share/usage1/` (see B23, B24):
+
+| # | Case | Status |
+|---|---|---|
+| H38 | B23 by hand: `tour` in a new session on the box, its escalation waiting; `greeter.py` saved locally (a line appended): "1 file held until the turn ends", `holds.txt` names the session and the file (07). PyCharm killed and started again with a new build: after a minute the box's file was still the old one; no session attached, the list showed the session "escalated", the file still held (08). Attached to it: still running, still held (09). Allow, then the question answered: "turn done", the save merged and on the box within seconds, `holds.txt` gone (12) | fixed (985dcb4); `HoldKeeperTest` (restart before the turn ended: held until the session is idle; a session list without the session, or with it stale, releases it; a failed list does not) |
 
 Measurements (the box and the desktop are containers on one host): the first clone of the 307
 files 1.3 s in the IDE after the confirmation (8 s before the VFS was refreshed once instead
