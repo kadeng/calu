@@ -117,7 +117,7 @@ async def test_a_check_runs_the_cli_and_returns_its_structured_answer(
     # directory": the empty directory below) is not the project (test plan M15).
     system = Path(f"{record}.system").read_text()
     assert system == "You check commands. Never allow deletions." + CLI_ENVIRONMENT_NOTE
-    assert "Primary working directory" in system and "not the project" in system
+    assert "Primary working directory" in system and "nothing about the project" in system
     assert Path(f"{record}.mode").read_text().strip() == "600"
     system_file = Path(argv[argv.index("--system-prompt-file") + 1])
     assert not system_file.exists(), "the instructions file is removed with its directory"
