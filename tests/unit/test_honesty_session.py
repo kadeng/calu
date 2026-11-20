@@ -862,6 +862,7 @@ async def test_a_client_certifies_and_asks_for_a_review_over_the_protocol(repo: 
                 "content_sha256": None,
                 "path": None,
                 "recorded": True,
+                "checkout": ".",
             }
             row = run.store.trusted_commits[head]
             assert (row.method, row.certified_by) == ("user", "zed")

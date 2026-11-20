@@ -2277,7 +2277,7 @@ def honesty_page(model: SessionModel, view: View) -> list[Text]:
             lines.append(Text("  " + cut(state.unreviewed_problem, width - 2), palette.red))
 
     commands = (
-        ("t", "/trust [commit or branch]", "certify a commit, after a yes (t: HEAD)"),
+        ("t", "/trust [worktree] [commit or branch]", "certify a commit, after a yes (t: HEAD)"),
         ("", "/trust-file <path>", "certify one file as it is now"),
         ("r", "/honesty-review", "review the unreviewed files now"),
         ("x", "/clear-mark <id>", "close a mark by hand, after a yes"),

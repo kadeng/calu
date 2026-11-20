@@ -507,9 +507,9 @@ export interface HonestyClearParams {
 /**
  * The code honesty state of a session as a client shows it (`calu.honesty`).
  *
- * With the mode "off" every other field has its default. The state is clean when there is a
- * baseline, no open mark, no unreviewed file and no review is required; with the mode
- * "enforce" a command that executes project code and a commit need a clean state.
+ * With the mode "off" every other field but `worktrees` has its default. The state is clean
+ * when there is a baseline, no open mark, no unreviewed file and no review is required; with
+ * the mode "enforce" a command that executes project code and a commit need a clean state.
  */
 export interface HonestyInfo {
   baseline?: string | null;
@@ -522,6 +522,7 @@ export interface HonestyInfo {
   unreviewed?: string[];
   unreviewed_all?: boolean;
   unreviewed_count?: number;
+  worktrees?: string[];
 }
 /**
  * One open mark of the session's honesty state, for a client.
@@ -551,15 +552,17 @@ export interface HonestyReviewResult {
 /**
  * `honesty.trust`: certify a commit, or one file's present content, as honest.
  *
- * Without `path`: `rev` is resolved in the session's workspace to the commit it names now (a
- * branch is resolved to its present head; the branch itself is not remembered), and that
- * commit is recorded as trusted with the source "user" and the client's name. With `path`:
+ * Without `path`: `rev` is resolved to the commit it names now in the main checkout, or with
+ * `checkout` in that worktree (a branch is resolved to its present head; the branch itself is
+ * not remembered), and that commit is recorded as trusted with the source "user" and the
+ * client's name. With `path`:
  * the SHA-256 of that file's present content is recorded the same way, and `rev` is ignored.
  * The session then looks up its baseline again and sends `honesty.update`. Result:
  * `HonestyTrustResult`; a `rev` that names no commit and a file that cannot be read are
  * errors.
  */
 export interface HonestyTrustParams {
+  checkout?: string | null;
   note?: string;
   path?: string | null;
   rev?: string;
@@ -568,6 +571,7 @@ export interface HonestyTrustParams {
  * Result of `honesty.trust`: what was recorded.
  */
 export interface HonestyTrustResult {
+  checkout?: string;
   commit_id?: string | null;
   content_sha256?: string | null;
   path?: string | null;
@@ -588,6 +592,7 @@ export interface HonestyUpdate {
   unreviewed?: string[];
   unreviewed_all?: boolean;
   unreviewed_count?: number;
+  worktrees?: string[];
 }
 /**
  * First request of a client; every other request is refused before it.

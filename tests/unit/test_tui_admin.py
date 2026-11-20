@@ -317,7 +317,11 @@ async def test_trust_and_review_requests_and_a_session_without_them() -> None:
         )
         assert not (await actions.honesty_review()).ok
         session.honesty_requests = True
-        assert (await actions.trust()).data == {"commit_id": "4f2a9c1d07", "recorded": True}
+        assert (await actions.trust()).data == {
+            "commit_id": "4f2a9c1d07",
+            "recorded": True,
+            "checkout": ".",
+        }
         await actions.trust("main")
         await actions.trust_file("notes/plan.md")
         assert (await actions.honesty_review()).ok
@@ -483,7 +487,7 @@ async def test_the_honesty_page_shows_mode_baseline_and_what_is_not_clean() -> N
             "the docstring is old",
             "UNREVIEWED (2)",
             "  notes/plan.md",
-            "/trust [commit or branch]",
+            "/trust [worktree] [commit or branch]",
         ):
             assert expected in page.text
         await run.session.emit(
@@ -522,7 +526,9 @@ async def test_trust_asks_names_the_commit_and_only_y_certifies() -> None:
         await run.press("y")
         await run.pilot.pause()
         assert run.session.sent("honesty.trust") == [{}]
-        assert "trusted: 4f2a9c1d07 is certified as honest" in run.line("composer-head")
+        assert "trusted: 4f2a9c1d07 (main checkout) is certified as honest" in run.line(
+            "composer-head"
+        )
         assert "baseline 4f2a9c1d · by user" in run.line("panel-lines")
 
 
@@ -547,6 +553,41 @@ async def test_trust_of_a_branch_a_file_and_a_review() -> None:
         assert run.session.sent("honesty.trust") == [{"rev": "release"}, {"path": "notes/plan.md"}]
         assert run.session.sent("honesty.review") == [{}]
         assert "the honesty review ran" in run.line("composer-head")
+
+
+async def test_trust_in_a_worktree_completes_its_name_and_names_the_checkout() -> None:
+    """D252: `/trust <worktree> <ref>` resolves in that worktree; Tab completes the names the
+    session sent in `honesty.update`, and the answer names the checkout."""
+    async with running("simple_turn") as run:
+        run.session.honesty_requests = True
+        run.session.honesty_extra = {"worktrees": ["agent-a1b2", "wta"]}
+        await run.session.emit(
+            "honesty.update", {"mode": "track", "marks": [], "worktrees": ["agent-a1b2", "wta"]}
+        )
+        await run.pilot.pause()
+        assert run.app.model.honesty.worktrees == ["agent-a1b2", "wta"]
+        run.app.composer.set_text("/trust ag")
+        await run.press("tab")
+        assert run.app.composer.text == "/trust agent-a1b2"
+        run.app.composer.set_text("")
+        seen: list[tuple[str, str]] = []
+
+        def described(workspace: str, rev: str) -> str:
+            seen.append((workspace, rev))
+            return "4f2a9c1 Add the helper"
+
+        run.app.describe_commit = described
+        await command(run, "/trust agent-a1b2 HEAD")
+        box = run.app.screen
+        assert isinstance(box, ConfirmScreen)
+        assert box.consequences[0] == "4f2a9c1 Add the helper in worktree agent-a1b2"
+        assert seen[-1][0].endswith("/.claude/worktrees/agent-a1b2") and seen[-1][1] == "HEAD"
+        await run.press("y")
+        await run.pilot.pause()
+        assert run.session.sent("honesty.trust") == [{"rev": "HEAD", "checkout": "agent-a1b2"}]
+        assert "trusted: 4f2a9c1d07 (worktree agent-a1b2) is certified" in run.line("composer-head")
+        await command(run, "/trust a b c")
+        assert "usage: /trust [worktree] [commit or branch]" in run.line("composer-head")
 
 
 async def test_a_session_without_certification_says_so() -> None:
@@ -736,7 +777,7 @@ async def test_help_and_palette_name_the_new_commands() -> None:
         assert isinstance(page, TextScreen)
         text = " ".join(page.text.split())
         for expected in (
-            "/trust [commit or branch]",
+            "/trust [worktree] [commit or branch]",
             "/trust-file <path>",
             "/honesty-review",
             "/honesty [off | track | enforce]",

@@ -28,7 +28,8 @@ Commands typed instead of a message:
     /inject <text>        send the text so Claude reads it after its running tool calls
     /state                print the state again
     /honesty              print the code honesty state (baseline, marks, unreviewed files)
-    /trust [REV]          certify a commit or a branch's present head as honest (default HEAD)
+    /trust [WT] [REV]     certify a commit or a branch's present head as honest (default HEAD;
+                          with a worktree name WT from `/honesty`, resolved in that worktree)
     /trust-file PATH      certify the present content of one file as honest
     /honesty-review       ask for an honesty review of the unreviewed and marked files
     /clear-mark <id>      close one open honesty mark by hand
@@ -64,6 +65,7 @@ from typing import Any
 import anyio
 from anyio.abc import TaskGroup
 
+from calu.checkouts import checkout_name
 from calu.controls import visible
 from calu.herd import age_text
 from calu.homes import short_path
@@ -103,7 +105,7 @@ HELP = (
     "/allow <id> [note]  /deny <id> [note]  /answer <id> <text>  "
     "/inject <text>  /to <agent> <text>  /comment <path> <from> <to> <text>  /state  "
     "/checker-context  /checkers  /usage  /sessions  /history [id]  /honesty  "
-    "/trust [commit-or-branch]  /trust-file <path>  /honesty-review  /clear-mark <id>  "
+    "/trust [worktree] [commit-or-branch]  /trust-file <path>  /honesty-review  /clear-mark <id>  "
     "/running  /switch <id>  "
     "/new [text]  /fork [text]  /shutdown  (any other /word goes to Claude Code)"
 )
@@ -477,9 +479,21 @@ class Console:
                 await self._decide(command.removeprefix("/"), rest)
             case "/trust":
                 # A person certifies a commit; a branch means the commit it points at now.
-                done = await self.client.request("honesty.trust", {"rev": rest or "HEAD"})
+                # Two words: a worktree, and the commit or branch resolved there (D252).
+                words = rest.split()
+                if len(words) > 2:
+                    say("[error] usage: /trust [worktree] [commit-or-branch]", flush=True)
+                    return
+                params = {"rev": words[-1] if words else "HEAD"}
+                if len(words) == 2:
+                    params["checkout"] = words[0]
+                done = await self.client.request("honesty.trust", params)
                 state = "certified" if done.get("recorded") else "was already certified"
-                say(f"[honesty] commit {str(done.get('commit_id'))[:12]} {state}", flush=True)
+                where = checkout_name(str(done.get("checkout") or "."))
+                say(
+                    f"[honesty] commit {str(done.get('commit_id'))[:12]} ({where}) {state}",
+                    flush=True,
+                )
             case "/trust-file":
                 if not rest:
                     say("[error] /trust-file needs a path", flush=True)

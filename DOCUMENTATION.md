@@ -1668,6 +1668,7 @@ In a client attached to the session:
 ```
 /honesty                    baseline, marks, unreviewed files
 /trust                      certify HEAD; or /trust <commit-or-branch>
+/trust wta HEAD             resolve the commit or branch in worktree wta (Tab completes the name)
 /trust-file path/to/file    certify the present content of one file
 /honesty-review             run the review now
 /clear-mark 3               clear mark 3 by hand, when the mark is wrong
@@ -2056,6 +2057,14 @@ The first line names every checkout the step belongs to, so a command that chang
 worktree has both the main checkout and that worktree on it. The second line names at most
 ten checkouts and counts the rest.
 
+`/trust` in the terminal clients (`calu attach`) resolves a commit or branch in the main
+checkout. With a worktree's name first, it resolves it in that worktree:
+`/trust agent-a1b2 HEAD` certifies the commit the worktree's `HEAD` names. The full-screen
+client completes the names with Tab, the line client lists them in `/honesty`, and the answer
+names the checkout Calu used. A worktree inside `.claude/worktrees/` goes by its directory name,
+any other by its path. The "Trust HEAD" buttons of the web interface and the IDE extensions
+certify the main checkout's `HEAD`.
+
 The clients receive the same checkouts with each step's decision, and the session trace names
 the worktree in the heading of a step outside the main checkout:
 `### Tool call 3: Bash (worktree agent-a1b2)`, or `(main checkout, worktree b)` for a command
@@ -2125,7 +2134,8 @@ others for the rules, the write sets and the honesty state. Two things differ:
 - With honesty on, the files of such a worktree count as verified only when a person certified
   or trusted them, whatever `honesty.sufficient_trust` says. A step there that runs code waits
   for a person until then. A person certifies the worktree's commit with
-  `calu honesty trust <branch>`, run in a terminal inside the worktree, or a file with
+  `/trust <worktree> <commit-or-branch>` in a terminal client, with
+  `calu honesty trust <branch>` run in a terminal inside the worktree, or a file with
   `calu honesty trust --file PATH` or `/trust-file PATH` in a client.
 
 With honesty off, Calu adds nothing of its own to such a step: the checkers' instructions and
@@ -2139,8 +2149,6 @@ every worktree. In a worktree outside the project directory it finds the main ch
 
 - An open decision holds every checked step of every agent, also of subagents in other
   worktrees ([An escalation holds the session](#an-escalation-holds-the-session)).
-- `/trust` in a client resolves a branch or `HEAD` in the project directory; for a worktree's
-  own `HEAD`, name its branch or commit.
 - A checker cannot record a mark on a file of a worktree outside the project directory: marks
   name paths inside the project. That worktree's files need a person's certification anyway.
 - A session that ends while Claude works in a worktree leaves the worktree locked in

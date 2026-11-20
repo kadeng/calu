@@ -96,6 +96,43 @@ def _plain(text: str, limit: int = 300) -> str:
     return safe + ("..." if len(text) > limit else "")
 
 
+WORKTREES = ".claude/worktrees/"
+"""Where Claude Code puts its worktrees, relative to the session directory."""
+
+
+def worktree_name(label: str) -> str:
+    """Return the short name of a checkout, as a person types it after `/trust`.
+
+    Args:
+        label: The checkout's label (`Checkout.label`).
+
+    Returns:
+        "." for the main checkout; `<name>` for `.claude/worktrees/<name>`; the label itself
+        for any other worktree (a path outside the project, or elsewhere inside it).
+
+    Example:
+        `worktree_name(".claude/worktrees/agent-a1b2")` is "agent-a1b2".
+    """
+    if label.startswith(WORKTREES) and "/" not in label[len(WORKTREES) :].strip("/"):
+        return label[len(WORKTREES) :].strip("/") or label
+    return label
+
+
+def checkout_name(label: str) -> str:
+    """Name a checkout in a sentence or a heading for people.
+
+    Args:
+        label: The checkout's label (`Checkout.label`).
+
+    Returns:
+        "main checkout" for "."; "worktree <worktree_name>" otherwise.
+
+    Example:
+        `checkout_name(".claude/worktrees/b")` is "worktree b".
+    """
+    return "main checkout" if label == "." else f"worktree {worktree_name(label)}"
+
+
 def parse_worktrees(output: bytes) -> list[tuple[Path, str]]:
     """Read the output of `git worktree list --porcelain -z`.
 
@@ -315,6 +352,26 @@ class Checkouts:
         except ValueError:
             return False
         return len(parts) >= 3 and parts[:2] == WORKTREES_DIR
+
+    def named(self, name: str) -> Checkout | None:
+        """Find a checkout by what a person typed (`/trust <worktree> <ref>`).
+
+        Args:
+            name: "." (or "") for the main checkout, a worktree's short name
+                (`worktree_name`, e.g. "agent-a1b2"), or its label.
+
+        Returns:
+            The checkout; None if no known checkout has that name or label. The registry is
+            not read again here; the caller refreshes it first.
+        """
+        wanted = name.strip()
+        if wanted in ("", "."):
+            return self.main
+        wanted = wanted.rstrip("/")
+        for checkout in self._others:
+            if wanted in (checkout.label, worktree_name(checkout.label)):
+                return checkout
+        return None
 
     def step_checkouts(
         self, cwd: str | Path | None, directories: Sequence[Path] = ()

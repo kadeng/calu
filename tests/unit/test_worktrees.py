@@ -659,6 +659,52 @@ async def test_check_results_carry_the_steps_checkouts_for_clients_and_trace(
     ]
 
 
+def test_checkouts_go_by_their_short_names(repo: Path, tmp_path: Path) -> None:
+    from calu.checkouts import checkout_name, worktree_name
+
+    assert worktree_name(".claude/worktrees/agent-a1b2") == "agent-a1b2"
+    assert worktree_name("/tmp/x") == "/tmp/x" and worktree_name(".") == "."
+    assert checkout_name(".") == "main checkout"
+    assert checkout_name(".claude/worktrees/wta") == "worktree wta"
+    worktree(repo, "wta")
+    outside = tmp_path / "x"
+    git(repo, "worktree", "add", "-q", "--detach", str(outside))
+    registry = Checkouts(repo)
+    registry.refresh()
+    found = registry.named("wta")
+    assert found is not None and found.label == ".claude/worktrees/wta"
+    assert registry.named(".claude/worktrees/wta/") == registry.named("wta")
+    assert registry.named(str(outside.resolve())) is not None
+    assert registry.named(".") == registry.main == registry.named("")
+    assert registry.named("nope") is None
+
+
+async def test_trust_resolves_in_the_named_worktree_and_lists_the_worktrees(repo: Path) -> None:
+    """D252: `honesty.trust` with `checkout` resolves the commit in that worktree; the answer
+    names it; an unknown name is refused with the known names; `honesty.update` names the
+    worktrees in every honesty mode."""
+    from calu.protocol.messages import HonestyUpdate
+    from calu.session import SessionError
+    from tests.unit.helpers import make_session
+    from tests.unit.test_honesty_session import run_turns
+
+    inner = worktree(repo, "wta")
+    (inner / "helper.py").write_text(HONEST, encoding="utf-8")
+    git(inner, "commit", "-q", "-am", "in the worktree")
+    in_worktree = git(inner, "rev-parse", "HEAD")
+    session, rec, store = make_session(repo, [[run_in("", "ls")]])
+    await run_turns(session, rec)
+    assert rec.of(HonestyUpdate)[-1].worktrees == ["wta"], "sent with honesty.mode off too"
+
+    done = await session.trust("HEAD", checkout="wta", client="tui")
+    assert (done.commit_id, done.checkout) == (in_worktree, ".claude/worktrees/wta")
+    assert in_worktree in store.trusted_commits
+    main = await session.trust("HEAD", client="tui")
+    assert (main.commit_id, main.checkout) == (git(repo, "rev-parse", "HEAD"), ".")
+    with pytest.raises(SessionError, match="no worktree is named nope; the worktrees are: wta"):
+        await session.trust("HEAD", checkout="nope")
+
+
 # ------------------------------------------------------------------ U10: write sets
 
 

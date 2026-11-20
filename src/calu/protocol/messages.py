@@ -228,9 +228,10 @@ class HonestyClearParams(BaseModel):
 class HonestyTrustParams(BaseModel):
     """`honesty.trust`: certify a commit, or one file's present content, as honest.
 
-    Without `path`: `rev` is resolved in the session's workspace to the commit it names now (a
-    branch is resolved to its present head; the branch itself is not remembered), and that
-    commit is recorded as trusted with the source "user" and the client's name. With `path`:
+    Without `path`: `rev` is resolved to the commit it names now in the main checkout, or with
+    `checkout` in that worktree (a branch is resolved to its present head; the branch itself is
+    not remembered), and that commit is recorded as trusted with the source "user" and the
+    client's name. With `path`:
     the SHA-256 of that file's present content is recorded the same way, and `rev` is ignored.
     The session then looks up its baseline again and sends `honesty.update`. Result:
     `HonestyTrustResult`; a `rev` that names no commit and a file that cannot be read are
@@ -241,6 +242,11 @@ class HonestyTrustParams(BaseModel):
     """A commit id or its prefix, a branch, a tag, or "HEAD"."""
     path: str | None = None
     """A file, absolute or relative to the workspace; None certifies a commit."""
+    checkout: str | None = None
+    """The checkout to resolve `rev` in (agent/records/PLAN.md D252): a worktree's name as
+    `HonestyInfo.worktrees` lists it (`agent-a1b2` for `.claude/worktrees/agent-a1b2`), its
+    label, or "." for the main checkout; None is the main checkout. A name that no worktree
+    has is an error. Ignored with `path`."""
     note: str = ""
 
 
@@ -278,6 +284,9 @@ class HonestyTrustResult(BaseModel):
     """The file as the session names it; None when a commit was certified."""
     recorded: bool = True
     """False if a record of the same strength existed already, so nothing was written."""
+    checkout: str = "."
+    """The label of the checkout `rev` was resolved in ("." the main checkout,
+    `.claude/worktrees/<name>`, or an absolute path); "." when a file was certified."""
 
 
 class HonestyReviewResult(BaseModel):
@@ -671,9 +680,9 @@ class HonestyMarkInfo(BaseModel):
 class HonestyInfo(BaseModel):
     """The code honesty state of a session as a client shows it (`calu.honesty`).
 
-    With the mode "off" every other field has its default. The state is clean when there is a
-    baseline, no open mark, no unreviewed file and no review is required; with the mode
-    "enforce" a command that executes project code and a commit need a clean state.
+    With the mode "off" every other field but `worktrees` has its default. The state is clean
+    when there is a baseline, no open mark, no unreviewed file and no review is required; with
+    the mode "enforce" a command that executes project code and a commit need a clean state.
     """
 
     mode: str = "off"
@@ -698,6 +707,11 @@ class HonestyInfo(BaseModel):
     review_running: bool = False
     """True while an honesty review runs."""
     clean: bool = False
+    worktrees: list[str] = Field(default_factory=list[str])
+    """The project's worktrees by name, sorted (`calu.checkouts.worktree_name`: `agent-a1b2` for
+    `.claude/worktrees/agent-a1b2`, the absolute path for one outside the project); empty
+    without worktrees. Sent in every mode, also "off", so that `/trust <worktree> <ref>` can
+    complete the names (agent/records/PLAN.md D252)."""
 
 
 class SessionSnapshot(BaseModel):

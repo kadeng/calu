@@ -87,6 +87,7 @@ from pathlib import Path
 from typing import Any
 
 from calu.checkers.policy import Route
+from calu.checkouts import checkout_name
 from calu.context.narrator import ClaudeOutput
 from calu.markdown import fence
 from calu.protocol.messages import (
@@ -406,10 +407,6 @@ def session_marker(claude_session_id: str) -> str:
     return f"Claude session: `{one_line(claude_session_id)}`"
 
 
-WORKTREES_PREFIX = ".claude/worktrees/"
-"""Where Claude Code puts its worktrees; a heading names such a worktree by its name only."""
-
-
 def checkout_names(labels: list[str]) -> str:
     """Name the checkouts of a step for the heading of its tool call.
 
@@ -419,24 +416,16 @@ def checkout_names(labels: list[str]) -> str:
 
     Returns:
         "" when the step belongs to the main checkout only or the list is empty; else the
-        names in order, comma-separated: "main checkout", "worktree <name>" for a worktree of
-        Claude Code, "worktree <path>" for any other. Each name is one line of at most 120
-        characters.
+        names in order (`calu.checkouts.checkout_name`), comma-separated: "main checkout",
+        "worktree <name>" for a worktree of Claude Code, "worktree <path>" for any other. Each
+        name is one line of at most 130 characters.
 
     Example:
         `[".", ".claude/worktrees/b"]` gives "main checkout, worktree b".
     """
     if not labels or labels == ["."]:
         return ""
-    names: list[str] = []
-    for label in labels:
-        if label == ".":
-            names.append("main checkout")
-        elif label.startswith(WORKTREES_PREFIX) and len(label) > len(WORKTREES_PREFIX):
-            names.append(f"worktree {one_line(label[len(WORKTREES_PREFIX) :], 120)}")
-        else:
-            names.append(f"worktree {one_line(label, 120)}")
-    return ", ".join(names)
+    return ", ".join(one_line(checkout_name(label), 130) for label in labels)
 
 
 class TraceRenderer:

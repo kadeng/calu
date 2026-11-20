@@ -143,7 +143,7 @@ async def test_the_honesty_commands_become_requests_and_print_their_answers(caps
         ("honesty.trust", {"path": "build/gen.py"}),
     ]
     out = capsys.readouterr().out
-    assert out.count("[honesty] commit aaaaaaaaaaaa certified") == 2
+    assert out.count("[honesty] commit aaaaaaaaaaaa (main checkout) certified") == 2
     assert "[honesty] the review ran\n" in out
     assert "*** code honesty (enforce): clean" in out
     assert "[error] /trust-file needs a path" in out

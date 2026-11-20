@@ -157,7 +157,7 @@ from calu.checkers.policy import EDIT_TOOLS, SHELL_TOOLS
 from calu.checkers.render import changed_lines, edited_file, inline, safe_name
 from calu.checkers.shell import parse_command
 from calu.checkers.tools import StepTime
-from calu.checkouts import Checkout, Checkouts
+from calu.checkouts import Checkout, Checkouts, checkout_name, worktree_name
 from calu.claude.runner import (
     NOT_FROM_USER_LABEL,
     ClaudeRunner,
@@ -1039,12 +1039,18 @@ class Session:
         return closed
 
     async def trust(
-        self, rev: str = "HEAD", path: str | None = None, note: str = "", client: str = "unknown"
+        self,
+        rev: str = "HEAD",
+        path: str | None = None,
+        note: str = "",
+        client: str = "unknown",
+        checkout: str | None = None,
     ) -> HonestyTrustResult:
         """Certify a commit or one file's present content for a person (`honesty.trust`).
 
-        Without `path`, `rev` is resolved with git in the workspace to the commit it names now,
-        and that commit is recorded as trusted with the source "user". With `path`, the SHA-256
+        Without `path`, `rev` is resolved with git to the commit it names now, in the main
+        checkout or, with `checkout`, in that worktree (the registry is read again first), and
+        that commit is recorded as trusted with the source "user". With `path`, the SHA-256
         of the file's present content is recorded with the source "user", and the file is
         watched from now on. Works in every `honesty.mode`.
 
@@ -1057,13 +1063,15 @@ class Session:
             path: A file, absolute or relative to the workspace; None certifies a commit.
             note: An optional note, stored with the record.
             client: The client's name, stored as who certified.
+            checkout: Where `rev` is resolved: a worktree's name or label, or "." (or None)
+                for the main checkout (`Checkouts.named`). Ignored with `path`.
 
         Returns:
-            What was recorded.
+            What was recorded, with the label of the checkout `rev` was resolved in.
 
         Raises:
-            SessionError: If `rev` names no commit, the file cannot be read, or the database
-                refused the record.
+            SessionError: If `rev` names no commit, `checkout` names no known checkout, the
+                file cannot be read, or the database refused the record.
         """
         by = client or "unknown"
         try:
@@ -1077,14 +1085,27 @@ class Session:
                 result = HonestyTrustResult(content_sha256=sha256, path=key, recorded=recorded)
                 what = f"the content of {key} ({sha256[:12]})"
             else:
-                commit = await anyio.to_thread.run_sync(
-                    resolve_commit, self.workspace, rev or "HEAD"
-                )
+                where = self.checkouts.main
+                if checkout and checkout.strip() not in ("", "."):
+                    await self._refresh_checkouts()
+                    found = self.checkouts.named(checkout)
+                    if found is None:
+                        known = ", ".join(
+                            worktree_name(other.label) for other in self.checkouts.others
+                        )
+                        raise SessionError(
+                            f"no worktree is named {inline(checkout, 200)}; "
+                            + (f"the worktrees are: {known}" if known else "there is none")
+                        )
+                    where = found
+                commit = await anyio.to_thread.run_sync(resolve_commit, where.root, rev or "HEAD")
                 recorded = await self.store.certify_commit(
                     commit.commit_id, commit.tree_id, "user", by, note
                 )
-                result = HonestyTrustResult(commit_id=commit.commit_id, recorded=recorded)
-                what = f"commit {commit.short}"
+                result = HonestyTrustResult(
+                    commit_id=commit.commit_id, recorded=recorded, checkout=where.label
+                )
+                what = f"commit {commit.short} ({checkout_name(where.label)})"
         except GitError as exc:
             raise SessionError(str(exc)) from exc
         except SessionError:
@@ -1859,6 +1880,26 @@ class Session:
         self.honesty.trusted_hashes = hashes
         self._honesty_heads = heads
 
+    def _worktree_names(self) -> list[str]:
+        """Name the project's worktrees for the clients (`HonestyInfo.worktrees`).
+
+        Returns:
+            `worktree_name` of each worktree the registry knows, sorted.
+        """
+        return sorted(worktree_name(checkout.label) for checkout in self.checkouts.others)
+
+    async def _announce_worktrees(self) -> None:
+        """Send `honesty.update` with the new list of worktrees, when it changed.
+
+        The rest of the honesty state is the one last sent; it is computed again at the next
+        checked step as before. Never raises.
+        """
+        names = self._worktree_names()
+        if names == self._honesty_sent.worktrees:
+            return
+        self._honesty_sent = self._honesty_sent.model_copy(update={"worktrees": names})
+        await self._emit_safely(HonestyUpdate(**self._honesty_sent.model_dump()))
+
     async def _emit_honesty(self, snapshot: HonestySnapshot | None) -> None:
         """Tell the clients the honesty state, unless they already have exactly this.
 
@@ -1867,7 +1908,11 @@ class Session:
         Args:
             snapshot: The state as computed; None sends only the mode (for the mode "off").
         """
-        info = HonestyInfo(mode=self.config.honesty.mode, review_running=self._review_running)
+        info = HonestyInfo(
+            mode=self.config.honesty.mode,
+            review_running=self._review_running,
+            worktrees=self._worktree_names(),
+        )
         if snapshot is not None:
             base = snapshot.baseline
             info = info.model_copy(
@@ -3253,12 +3298,14 @@ class Session:
 
         Called at the start and before every step: one `git worktree list` costs a few
         milliseconds, and so a worktree that `EnterWorktree`, a subagent, `ExitWorktree` or a
-        shell command created or removed is known when the next step is judged (D251). Never
+        shell command created or removed is known when the next step is judged (D251). When
+        the list changed, the clients get the new worktree names (`_announce_worktrees`). Never
         raises; when git cannot be asked the registry keeps what it had.
         """
         try:
             if await anyio.to_thread.run_sync(self.checkouts.refresh):
                 self._exclude_from_states()
+                await self._announce_worktrees()
         except Exception:
             log.exception("reading the worktrees failed")
 

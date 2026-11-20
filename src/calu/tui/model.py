@@ -543,6 +543,9 @@ class Honesty:
     """True once more marks are open than `honesty.max_open_marks` allows."""
     review_running: bool = False
     """True while calu's honesty review judges the unreviewed files."""
+    worktrees: list[str] = field(default_factory=list[str])
+    """The project's worktrees by name (`HonestyInfo.worktrees`), for `/trust <worktree> <ref>`;
+    empty without worktrees or from a session that does not send them."""
 
 
 def honesty_from(raw: dict[str, Any]) -> Honesty:
@@ -606,6 +609,9 @@ def honesty_from(raw: dict[str, Any]) -> Honesty:
         state.unreviewed_all = True
     state.review_required = field_of("review_required") is True
     state.review_running = field_of("review_running") is True
+    worktrees = field_of("worktrees")
+    if isinstance(worktrees, list):
+        state.worktrees = [str(name) for name in worktrees if isinstance(name, str) and name]
     return state
 
 

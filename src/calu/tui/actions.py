@@ -356,20 +356,27 @@ class Actions:
         """
         return await self.request("honesty.clear", {"mark_id": mark_id})
 
-    async def trust(self, rev: str = "") -> Outcome:
+    async def trust(self, rev: str = "", checkout: str = "") -> Outcome:
         """Certify a commit as honest (`honesty.trust`).
 
-        The session resolves the name in its project directory, records the commit as trusted
-        by the user and looks its baseline up again.
+        The session resolves the name in its project directory (the main checkout) or in the
+        named worktree, records the commit as trusted by the user and looks its baseline up
+        again. The outcome's data names the checkout it used (`checkout`, a label).
 
         Args:
             rev: A commit id or a branch name; "" means HEAD.
+            checkout: A worktree's name (`HonestyInfo.worktrees`); "" means the main checkout.
 
         Returns:
             The outcome; a session without this request answers "this session does not
             support it".
         """
-        return await self.request("honesty.trust", {"rev": rev} if rev else {})
+        params: dict[str, str] = {}
+        if rev:
+            params["rev"] = rev
+        if checkout:
+            params["checkout"] = checkout
+        return await self.request("honesty.trust", params)
 
     async def trust_file(self, path: str) -> Outcome:
         """Certify the present content of one file as honest (`honesty.trust` with `path`).

@@ -1339,7 +1339,11 @@ class Client:
             case "honesty.trust":
                 assert isinstance(params, HonestyTrustParams)
                 return await session.trust(
-                    params.rev, params.path, params.note, client=self.name or "unknown"
+                    params.rev,
+                    params.path,
+                    params.note,
+                    client=self.name or "unknown",
+                    checkout=params.checkout,
                 )
             case "honesty.review":
                 return await session.request_review(client=self.name or "unknown")

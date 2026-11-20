@@ -321,5 +321,7 @@ Not built (open points for the owner):
    project.
 3. A checker cannot record a mark on a file of an outside worktree (marks must be paths inside
    the project); with honesty on, those files need a person's certification anyway.
-4. `/trust` in a client resolves a branch or `HEAD` in the session directory, not in the step's
-   worktree; `calu honesty trust` in a terminal inside the worktree resolves there.
+4. ~~`/trust` in a client resolves a branch or `HEAD` in the session directory only.~~ *Built
+   2026-11-20 (the owner's decision, PLAN D252):* `/trust <worktree> <ref>` in the terminal
+   clients resolves in that worktree (`honesty.trust` with `checkout`); the answer names the
+   checkout.

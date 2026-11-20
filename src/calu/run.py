@@ -266,10 +266,20 @@ def honesty_lines(info: HonestyInfo) -> list[str]:
     Returns:
         One line with the mode, whether the state is clean, the baseline (12 characters of its
         id and the source of its trust) and the counts; then one line per open mark with its
-        id, and one line naming the first unreviewed files. For the mode "off": one line.
+        id, one line naming the first unreviewed files, and one naming the project's worktrees
+        (for `/trust <worktree> <ref>`) if it has any. For the mode "off": one line, and the
+        worktrees.
     """
+    worktrees = (
+        [
+            "    worktrees (/trust <worktree> <ref>): "
+            + ", ".join(one_line(n) for n in info.worktrees)
+        ]
+        if info.worktrees
+        else []
+    )
     if info.mode == "off":
-        return ["*** code honesty: off"]
+        return ["*** code honesty: off", *worktrees]
     base = (
         f"baseline {info.baseline[:12]} ({info.baseline_source})"
         if info.baseline
@@ -297,7 +307,7 @@ def honesty_lines(info: HonestyInfo) -> list[str]:
         rest = info.unreviewed_count - len(info.unreviewed)
         names = ", ".join(one_line(path) for path in info.unreviewed)
         lines.append(f"    unreviewed: {names}" + (f", and {rest} more" if rest > 0 else ""))
-    return lines
+    return lines + worktrees
 
 
 def limit_text(limit: RateLimit) -> str:

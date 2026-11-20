@@ -18,7 +18,7 @@ calu's usage panel, which shows Claude Code's own `/usage` text inside it.
 """
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
@@ -214,8 +214,12 @@ COMMANDS: tuple[Command, ...] = (
         "trust",
         "Certify a commit as honest",
         "",
-        "/trust [commit or branch]",
-        about="Without an argument: HEAD. Asks first; only y certifies.",
+        "/trust [worktree] [commit or branch]",
+        about=(
+            "Without an argument: HEAD of the main checkout. With a worktree name (Tab "
+            "completes it) and a commit or branch: resolved in that worktree. Asks first; "
+            "only y certifies."
+        ),
     ),
     Command(
         "trust_file",
@@ -463,21 +467,26 @@ ARGUMENTS: dict[str, Sequence[str]] = {"/mode": SWITCHABLE_PERMISSION_MODES}
 """Slash words whose argument is one of a fixed list, which Tab completes."""
 
 
-def argument_completions(text: str) -> list[str]:
+def argument_completions(text: str, known: Mapping[str, Sequence[str]] | None = None) -> list[str]:
     """List the arguments of a slash command that start like the typed one.
 
     Args:
         text: The composer's text, e.g. `/mode ac`.
+        known: Arguments that the session names, by slash word, in addition to `ARGUMENTS`:
+            `{"/trust": <the worktree names>}` completes the first argument of `/trust`.
 
     Returns:
-        The matching arguments in the order of `ARGUMENTS`; empty if the command takes no
-        argument from a fixed list or the text has more than one argument.
+        The matching arguments in the order of `ARGUMENTS` (or of `known`); empty if the
+        command takes no argument from a list or the text has more than one argument.
 
     Example:
-        `argument_completions("/mode a")` is `["acceptEdits", "auto"]`.
+        `argument_completions("/mode a")` is `["acceptEdits", "auto"]`;
+        `argument_completions("/trust ag", {"/trust": ["agent-a1", "wta"]})` is `["agent-a1"]`.
     """
     word, _, typed = text.partition(" ")
     choices = ARGUMENTS.get(word)
+    if choices is None and known is not None:
+        choices = known.get(word) or None
     if choices is None or " " in typed:
         return []
     return [choice for choice in choices if choice.lower().startswith(typed.lower())]

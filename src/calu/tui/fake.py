@@ -591,11 +591,15 @@ class FakeSession:
 
         Args:
             method: `honesty.trust` or `honesty.review`.
-            params: `{rev}` or `{path}` for a trust; nothing for a review.
+            params: `{rev, checkout}` or `{path}` for a trust; nothing for a review.
 
         Returns:
-            `HonestyTrustResult` as a dict for a trust (`commit_id` or `path`, `recorded`),
-            `HonestyReviewResult` for a review (`ran`, `problem`).
+            `HonestyTrustResult` as a dict for a trust (`commit_id` or `path`, `recorded`; for
+            a commit `checkout`, the label of a worktree that `honesty_extra["worktrees"]`
+            names), `HonestyReviewResult` for a review (`ran`, `problem`).
+
+        Raises:
+            RequestFailed: For a trust in a worktree that `honesty_extra` does not name.
         """
         extra = dict(self.honesty_extra)
         result: dict[str, Any]
@@ -609,7 +613,12 @@ class FakeSession:
         else:
             commit = "4f2a9c1d07" if params.get("rev") in {None, "", "HEAD"} else "9e8d7c6b5a"
             extra.update(baseline=commit, baseline_source="user")
-            result = {"commit_id": commit, "recorded": True}
+            where = str(params.get("checkout") or ".")
+            if where != ".":
+                if where not in (extra.get("worktrees") or []):
+                    raise self._refuse(f"no worktree is named {where}")
+                where = f".claude/worktrees/{where}"
+            result = {"commit_id": commit, "recorded": True, "checkout": where}
         await self.emit(
             "honesty.update",
             {"marks": list(self.honesty_marks), "mode": self.honesty_mode, **extra},

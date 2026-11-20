@@ -431,6 +431,8 @@ async def test_attach_sends_the_honesty_commands(capsys: pytest.CaptureFixture[s
     )
     await con.line("/trust")
     await con.line("/trust feature/x")
+    await con.line("/trust wta HEAD")
+    await con.line("/trust a b c")
     await con.line("/honesty-review")
     await con.line("/honesty")
     await con.line("/clear-mark 3")
@@ -438,12 +440,14 @@ async def test_attach_sends_the_honesty_commands(capsys: pytest.CaptureFixture[s
     assert client.sent == [
         ("honesty.trust", {"rev": "HEAD"}),
         ("honesty.trust", {"rev": "feature/x"}),
+        ("honesty.trust", {"rev": "HEAD", "checkout": "wta"}),
         ("honesty.review", {}),
         ("state.get", {}),
         ("honesty.clear", {"mark_id": 3}),
     ]
     out = capsys.readouterr().out
-    assert "[honesty] commit cccccccccccc certified" in out
+    assert "[honesty] commit cccccccccccc (main checkout) certified" in out
+    assert "usage: /trust [worktree] [commit-or-branch]" in out
     assert "[honesty] no review ran: An honesty review is needed." in out
     assert "*** code honesty (enforce): not clean" in out
     assert "/trust-file needs a path" in out

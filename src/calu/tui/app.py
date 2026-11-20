@@ -56,6 +56,7 @@ from textual.widgets import Static
 
 from calu import asuser, herd
 from calu.acp.modes import LADDER, PERMISSION_NAMES
+from calu.checkouts import WORKTREES, checkout_name
 from calu.homes import short_path
 from calu.protocol.messages import (
     ENDED_WITH_SESSION,
@@ -2430,7 +2431,7 @@ class CaluApp(App[None]):
             if found:
                 self.composer.set_text(found[0] + " ")
             return
-        arguments = argument_completions(text)
+        arguments = argument_completions(text, {"/trust": self.model.honesty.worktrees})
         if text.startswith("/") and arguments:
             word = text.partition(" ")[0]
             grown = arguments[0] if len(arguments) == 1 else completion.common_prefix(arguments)
@@ -4057,30 +4058,42 @@ class CaluApp(App[None]):
         )
 
     def _cmd_trust(self, rest: str) -> None:
-        """Certify a commit as honest after a yes (`/trust [commit or branch]`).
+        """Certify a commit as honest after a yes (`/trust [worktree] [commit or branch]`).
+
+            /trust                  HEAD of the main checkout
+            /trust REV              REV resolved in the main checkout
+            /trust WORKTREE REV     REV resolved in that worktree (D252; Tab completes the
+                                    worktree names the session sent)
 
         The question (a confirmation box) names the commit: its short id and subject line if
-        the project directory is on this machine, else the name as typed (HEAD without
-        one). Only `y` certifies; `n`, Enter and Escape do not.
+        the checkout is on this machine, else the name as typed (HEAD without one), and the
+        worktree. Only `y` certifies; `n`, Enter and Escape do not. The answer names the
+        checkout the session used.
 
         Args:
-            rest: A commit id or a branch name; empty means HEAD.
+            rest: The arguments: none, a commit id or branch name, or a worktree name and one.
         """
-        rev = rest.strip()
-        if len(rev.split()) > 1:
-            self.flash("usage: /trust [commit or branch]", error=True)
+        words = rest.split()
+        if len(words) > 2:
+            self.flash("usage: /trust [worktree] [commit or branch]", error=True)
             return
-        named = self.describe_commit(self.model.workspace, rev or "HEAD") or (rev or "HEAD")
+        checkout, rev = (words[0], words[1]) if len(words) == 2 else ("", "".join(words))
+        place = worktree_directory(self.model.workspace, checkout)
+        named = self.describe_commit(place, rev or "HEAD") or (rev or "HEAD")
+        if checkout and checkout != ".":
+            named = f"{named} in worktree {checkout}"
 
         def certify() -> None:
             """Send the certification and report what the session recorded."""
 
             async def run() -> None:
                 """Await the request and show the trusted commit or the refusal."""
-                outcome = await self.actions.trust(rev)
+                outcome = await self.actions.trust(rev, checkout)
                 if outcome.ok:
-                    commit = str((outcome.data or {}).get("commit_id") or "")[:10]
-                    self.flash(f"trusted: {commit or named} is certified as honest")
+                    data = outcome.data or {}
+                    commit = str(data.get("commit_id") or "")[:10]
+                    where = checkout_name(str(data.get("checkout") or "."))
+                    self.flash(f"trusted: {commit or named} ({where}) is certified as honest")
                 else:
                     self.flash(f"/trust: {outcome.message}", error=True)
                 self.render_all()
@@ -5008,6 +5021,25 @@ def client_os_user() -> str:
         return getpass.getuser() or "unknown"
     except OSError, KeyError:
         return "unknown"
+
+
+def worktree_directory(workspace: str, name: str) -> str:
+    """Return the directory of a worktree as `/trust` names it, for `describe_commit`.
+
+    Args:
+        workspace: The project directory.
+        name: A worktree's name (`calu.checkouts.worktree_name`): "" or "." for the main
+            checkout, `<name>` for `.claude/worktrees/<name>`, a path relative to the project
+            or an absolute path otherwise.
+
+    Returns:
+        The directory; it may not exist on this machine.
+    """
+    if not name or name == "." or not workspace:
+        return workspace
+    if "/" in name:
+        return str(Path(workspace) / name)
+    return str(Path(workspace) / WORKTREES / name)
 
 
 def describe_commit(workspace: str, rev: str) -> str:
