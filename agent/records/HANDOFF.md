@@ -146,6 +146,27 @@ Decided (do not ask again):
     instructions (`shipped.json`, `calu checker diff|update`), the web's recorded turns,
     `~` paths, the small points of J O5. Open: the editor plugins; the manual check
     `docs/TESTING.md` item 44 with a real `claude` (the panel on a subscription account).
+- **The owner's answers of 2026-11-20 (to build):**
+  - The review-findings rules (weigh against complexity; security usually heavy, not
+    absolute; the user outranks a subagent's verdict) stay a documentation example and go
+    into a new library of example/template checker prompts; later the UI may load one.
+  - `calu setup` without a terminal updates outdated shipped instructions only with
+    `--update-instructions`; it prints which texts are outdated.
+  - The last reported usage limits are stored in the database per Claude account (migration);
+    the panel shows them with their age. The panel also asks `get_usage` and falls back to the
+    stored figures when it fails or its shape is unknown. Rate-limit messages are information;
+    Anthropic's servers enforce the limits.
+  - The line client keeps passing every unknown `/word` to Claude Code.
+  - `~` for remote sessions: the `/home/<user>` guess is fine.
+  - A mode switch that lands while a step is checked: Calu answers by the mode Claude Code is
+    in when the answer goes out.
+  - The bridge keeps the name `calu ide` for both editors in the record.
+  - No "started in auto but runs in …" warning after a switch the user made.
+  - Every client sends the edit id or git reference of the diff a comment was made on (the
+    full-screen client and PyCharm too).
+  - PyCharm mode 3: starting a run or debug while a file is held asks "Upload now and run",
+    "Run anyway" or "Cancel".
+  - PyCharm sync dialog "changed on the server, deleted here": no default button.
 - **Traces (later the same day):** a removed message keeps its turn heading by default,
   unless the redaction instructions say otherwise ("It's not important"); the redaction
   instructions are edited in the IDEs' settings dialogs only, no extra picker entry;
