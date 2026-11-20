@@ -1202,12 +1202,6 @@ class CheckResult(Event):
     """Non-empty if the honesty checker asked for a person, with its reason: something in the
     step looks like a deliberate backdoor or malicious behaviour. `decision` is then
     ESCALATE (unless another checker denied the step)."""
-    checkouts: list[str] = Field(default_factory=list[str])
-    """The checkouts of the project's repository that the step belongs to, by label: "." for
-    the main checkout, `.claude/worktrees/<name>` for a worktree inside the project, an absolute
-    path for one outside it; the checkout of its working directory first, then those its `cd`
-    targets lie in (agent/records/PLAN.md D251). Empty when the project has no worktree. The
-    session trace names a worktree in the heading of the step's tool call from it."""
 
 
 class EscalationRequest(Event):
@@ -1264,12 +1258,6 @@ class StepHeld(Event):
     """True when the wait begins, False when it ends."""
     reason: str = ""
     """What holds the step, e.g. "escalation 4" ("" in the event that ends the wait)."""
-    checkouts: list[str] = Field(default_factory=list[str])
-    """The checkouts of the project's repository that the step belongs to, by label: "." for
-    the main checkout, `.claude/worktrees/<name>` for a worktree inside the project, an absolute
-    path for one outside it; the checkout of its working directory first, then those its `cd`
-    targets lie in (agent/records/PLAN.md D251). Empty when the project has no worktree. The
-    session trace names a worktree in the heading of the step's tool call from it."""
 
 
 class EditDiff(Event):

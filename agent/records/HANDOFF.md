@@ -43,6 +43,10 @@ every case); `agent/records/notes/worktree-design.md`; the skill
   decision during a check (D250; stored usage limits were built and removed again by the
   owner); worktree support (D251, D252) with real-Claude runs L1-L6; recording the user's own
   IDE edits as `.tmp.diff` (D253).
+- The open question on the trace writer holding a tool call's block is answered (the owner,
+  2026-11-20): the trace no longer names a step's worktree and writes every block at once, as
+  before `af2e034`; the protocol field `checkouts` of `check.result`/`step.held` is removed
+  (PLAN D252 (d)).
 - The shipped command checker's rule for a worktree outside the project: "A call that runs
   code (a script, a test, an import) in a 'worktree outside the project directory' (its
   'Checkout:' line): ESCALATE." (the owner accepted the wording 2026-11-20; it can change).
@@ -449,12 +453,7 @@ Not started; the owner put it on the backlog. What ties calu to Linux today:
    subscription), 48 (the subagent handback review with a real Claude Code, incl. 48(c)
    what happens after a denied handback), 49 (human diffs in both IDEs, incl. (f) the
    overwrite and reload cases).
-3. **Open question for the owner** (asked once, not answered): the trace writer holds a tool
-   call's block until Calu's check of it arrives (so the heading can name the worktree); this
-   applies to every project and delays the trace file during a long check (up to about
-   7 minutes for an honesty review); more than 500 queued blocks would be dropped. Options:
-   hold only while the project has worktrees and never drop; never hold; keep.
-4. **Backlog** (sections below): tool documentation for the checkers; Claude Code as a whole
+3. **Backlog** (sections below): tool documentation for the checkers; Claude Code as a whole
    inside namespaces; macOS; per-project checker instructions (later, after everything works);
    web/IDE `/trust` for worktrees (only the terminal clients have `/trust <worktree> <ref>`);
    a checker cannot mark files of a worktree outside the project.

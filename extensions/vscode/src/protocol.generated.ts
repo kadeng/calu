@@ -193,7 +193,6 @@ export interface ChatSendParams {
  */
 export interface CheckResult {
   agent_id?: string | null;
-  checkouts?: string[];
   comment?: string;
   decision: Decision;
   git_head?: string | null;
@@ -600,7 +599,7 @@ export interface HonestyUpdate {
  * An editor extension sends it after each save through its editor (not for files that
  * another program, Claude or the editor's file synchronisation wrote). The session records
  * the diff of `before` and `after` while `human_diffs.enabled` is on and git tracks the file;
- * otherwise it records nothing. Both texts have their line ends normalised to "\n".
+ * otherwise it records nothing. Both texts have their line ends normalised to newlines.
  */
 export interface HumanDiffAddParams {
   after: string;
@@ -1167,7 +1166,6 @@ export interface SideAskResult {
  */
 export interface StepHeld {
   agent_id?: string | null;
-  checkouts?: string[];
   held: boolean;
   reason?: string;
   seq?: number;

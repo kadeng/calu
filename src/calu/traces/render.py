@@ -15,9 +15,7 @@ Everything here is rendering without input or output, except `create_trace_file`
                                      (`_PendingThinking`)
     assistant.text, .thinking        narrated: one block per run of them up to the agent's
                                      next tool call or the end of the turn; the narration
-    tool.use                         "Tool call N: <tool>"; every input value in a code fence;
-                                     a step outside the main checkout: "Tool call N: <tool>
-                                     (worktree <name>)" (`checkout_names`)
+    tool.use                         "Tool call N: <tool>"; every input value in a code fence
     check.result                     "Check of tool call N (<tool>): <DECISION>"; route,
                                      reason, summary, comment to Claude (for a subagent's
                                      result: "check of the result handed back by ...")
@@ -33,19 +31,6 @@ Everything here is rendering without input or output, except `create_trace_file`
 Headings are calu's own words. Text that a person, Claude or a checker wrote stands below
 them, quoted line by line (`quote`) or in a code fence that it cannot close
 (`calu.markdown.fence`), so that it cannot pass for a heading of the trace.
-
-Worktrees (agent/records/PLAN.md D251, D252). Claude Code reports a tool call (`tool.use`) before
-or after calu's hook sees it, and only the hook knows the call's working directory: the session
-sends the step's checkouts in `check.result` and `step.held`. So the block of a tool call whose
-checkouts are not known yet stays open (`Block.closed` False; the writer writes nothing after
-it meanwhile) until the first of: its `check.result`, `step.held`, `escalation.request` or
-`tool.result`, the end of the turn, the end of the trace. Its heading then names the worktree:
-
-    ### Tool call 3: Bash (worktree agent-a1b2)
-    ### Tool call 4: Bash (main checkout, worktree b)      `cd .claude/worktrees/b && pytest`
-
-A call in the main checkout only, and every call of a project without worktrees, keeps the
-plain heading.
 
 Subagents: the tool call that starts a subagent numbers it ("starts subagent 2"), and every
 block of that subagent is headed "Subagent 2: ..." one heading level below the blocks of the
@@ -87,7 +72,6 @@ from pathlib import Path
 from typing import Any
 
 from calu.checkers.policy import Route
-from calu.checkouts import checkout_name
 from calu.context.narrator import ClaudeOutput
 from calu.markdown import fence
 from calu.protocol.messages import (
@@ -100,7 +84,6 @@ from calu.protocol.messages import (
     EscalationResolved,
     Event,
     SessionState,
-    StepHeld,
     ToolResult,
     ToolUse,
     TurnResult,
@@ -407,27 +390,6 @@ def session_marker(claude_session_id: str) -> str:
     return f"Claude session: `{one_line(claude_session_id)}`"
 
 
-def checkout_names(labels: list[str]) -> str:
-    """Name the checkouts of a step for the heading of its tool call.
-
-    Args:
-        labels: The step's checkouts by label (`check.result`'s `checkouts`): "." for the main
-            checkout, `.claude/worktrees/<name>`, or an absolute path.
-
-    Returns:
-        "" when the step belongs to the main checkout only or the list is empty; else the
-        names in order (`calu.checkouts.checkout_name`), comma-separated: "main checkout",
-        "worktree <name>" for a worktree of Claude Code, "worktree <path>" for any other. Each
-        name is one line of at most 130 characters.
-
-    Example:
-        `[".", ".claude/worktrees/b"]` gives "main checkout, worktree b".
-    """
-    if not labels or labels == ["."]:
-        return ""
-    return ", ".join(one_line(checkout_name(label), 130) for label in labels)
-
-
 class TraceRenderer:
     """Turns the events of one session into the blocks of its trace, in order.
 
@@ -472,12 +434,6 @@ class TraceRenderer:
         self._escalations: dict[str, tuple[str | None, bool]] = {}
         """Id of an open escalation -> (the agent of its step, whether it is a question of the
         agent)."""
-        self._checkouts: dict[str, list[str]] = {}
-        """tool_use_id -> the step's checkouts, from a `check.result` or `step.held` that came
-        before its `tool.use`."""
-        self._unnamed: dict[str, tuple[Block, str | None, str]] = {}
-        """tool_use_id -> (its open tool call block, the agent, the heading's text), for a call
-        whose checkouts are not known yet."""
 
     def render(self, event: Event, resolved_by: str = "") -> list[Block]:
         """Return the blocks that `event` adds to the trace.
@@ -514,15 +470,11 @@ class TraceRenderer:
                 blocks += self._start_turn()
                 blocks.append(self._tool_use(event))
             case CheckResult():
-                self._name_checkouts(event.tool_use_id, event.checkouts)
                 self._close(event.agent_id)
                 blocks += self._flush_thinking(event.agent_id)
                 blocks += self._start_turn()
                 blocks.append(self._check(event))
-            case StepHeld():
-                self._name_checkouts(event.tool_use_id, event.checkouts)
             case EscalationRequest():
-                self._name_checkouts(event.tool_use_id, None)
                 self._close(event.agent_id)
                 blocks += self._flush_thinking(event.agent_id)
                 blocks += self._start_turn()
@@ -530,7 +482,6 @@ class TraceRenderer:
             case EscalationResolved():
                 blocks.append(self._resolved(event, resolved_by))
             case ToolResult():
-                self._name_checkouts(event.tool_use_id, None)
                 blocks.append(self._tool_result(event))
             case AgentsUpdate():
                 for agent in event.agents:
@@ -548,8 +499,7 @@ class TraceRenderer:
     def close_all(self) -> list[Block]:
         """Close every open block (the end of a turn or of the trace).
 
-        Side effects: closes the open blocks of the narrated form and the tool call blocks
-        that wait for their checkouts (with the plain heading), and forgets the pending
+        Side effects: closes the open blocks of the narrated form and forgets the pending
         thinking of every agent (plain form).
 
         Returns:
@@ -559,8 +509,6 @@ class TraceRenderer:
         for block in self._open.values():
             block.closed = True
         self._open.clear()
-        for tool_use_id in list(self._unnamed):
-            self._name_checkouts(tool_use_id, None)
         blocks: list[Block] = []
         for agent in sorted(self._thinking, key=lambda a: a is not None):
             blocks += self._flush_thinking(agent)
@@ -801,49 +749,7 @@ class TraceRenderer:
             started = self._agents.setdefault(event.tool_use_id, (len(self._agents) + 1, depth + 1))
             title += f" (starts subagent {started[0]})"
         body = render_input(event.name, event.input, self.max_input_chars)
-        known = self._checkouts.pop(event.tool_use_id, None)
-        if known is not None:
-            return Block(self._heading(event.agent_id, self._with_checkouts(title, known)), body)
-        block = Block(self._heading(event.agent_id, title), body, closed=False)
-        self._unnamed[event.tool_use_id] = (block, event.agent_id, title)
-        return block
-
-    @staticmethod
-    def _with_checkouts(title: str, labels: list[str]) -> str:
-        """Add the step's checkouts to the text of a tool call's heading.
-
-        Args:
-            title: E.g. "tool call 3: Bash".
-            labels: The step's checkouts by label.
-
-        Returns:
-            `title` with " (<checkout_names>)" appended, or `title` for the main checkout only.
-        """
-        names = checkout_names(labels)
-        return f"{title} ({names})" if names else title
-
-    def _name_checkouts(self, tool_use_id: str | None, labels: list[str] | None) -> None:
-        """Complete and close the block of a tool call that waits for its checkouts.
-
-        Side effects: closes that block (its heading names the worktree when `labels` do);
-        when the call's `tool.use` has not come yet, keeps `labels` for it.
-
-        Args:
-            tool_use_id: The call; None does nothing.
-            labels: The step's checkouts by label; None when the event does not carry them
-                (the block keeps its plain heading).
-        """
-        if not tool_use_id:
-            return
-        waiting = self._unnamed.pop(tool_use_id, None)
-        if waiting is None:
-            if labels is not None and tool_use_id not in self._calls:
-                self._checkouts[tool_use_id] = labels
-            return
-        block, agent_id, title = waiting
-        if labels:
-            block.heading = self._heading(agent_id, self._with_checkouts(title, labels))
-        block.closed = True
+        return Block(self._heading(event.agent_id, title), body)
 
     def _check(self, event: CheckResult) -> Block:
         """Render the decision about a tool call.

@@ -917,8 +917,8 @@ escalation resolved from the database alone.
    the open points in `agent/records/notes/test-plan.md`, section L.
 48. The owner's decisions on the worktree round (PLAN D252), with a real `claude` (for the
    agent in the Cua desktop, on Haiku), in a project like item 47's with `traces.enabled`.
-   (a) A worktree subagent runs a test: the trace's heading reads `### Tool call N: Bash
-   (worktree agent-...)`; a step in the main checkout keeps the plain heading. (b) Two
+   (a) Dropped: the trace's headings no longer name a step's worktree (the owner, 2026-11-20).
+   (b) Two
    background subagents hand their reports back: each `SubagentHandback` is reviewed by the
    subagent-result checker (the `steps` row "SubagentResult" with `"handback": true`, a
    `checker_runs` row "subagent-result", no command checker run), the checker's note reaches

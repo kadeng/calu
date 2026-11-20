@@ -614,49 +614,24 @@ async def test_the_session_tells_the_checkers_the_steps_checkout(repo: Path) -> 
     ]
 
 
-async def test_check_results_carry_the_steps_checkouts_for_clients_and_trace(
-    repo: Path, tmp_path: Path
-) -> None:
-    """D252: `check.result` names the step's checkouts while the project has worktrees, and
-    the session trace's tool call heading names the worktree."""
+async def test_the_trace_headings_name_no_worktree(repo: Path) -> None:
+    """The owner's reversal of D252 (d): a tool call's heading in the session trace is the
+    same in every checkout; the trace does not wait for a step's check to write it."""
     from calu.config import Config, TracesConfig
-    from calu.protocol.messages import CheckResult
     from tests.unit.helpers import make_session
     from tests.unit.test_honesty_session import run_turns
-
-    plain = tmp_path / "plain"
-    plain.mkdir()
-    git(plain, "init", "-q")
-    session, rec, _store = make_session(plain, [[run_in("", "ls")]])
-    await run_turns(session, rec)
-    assert [check.checkouts for check in rec.of(CheckResult)] == [[]], "no worktree, no field"
 
     worktree(repo, "wta")
     config = Config(traces=TracesConfig(enabled=True, redact=False))
     session, rec, _store = make_session(
         repo,
-        [
-            [
-                run_in(".claude/worktrees/wta", "ls"),
-                run_in("", "ls"),
-                run_in("", "cd .claude/worktrees/wta && ls"),
-            ]
-        ],
+        [[run_in(".claude/worktrees/wta", "ls"), run_in("", "cd .claude/worktrees/wta && ls")]],
         config,
     )
     await run_turns(session, rec)
-    assert [check.checkouts for check in rec.of(CheckResult)] == [
-        [".claude/worktrees/wta"],
-        ["."],
-        [".", ".claude/worktrees/wta"],
-    ]
     (trace,) = (repo / "agent" / "traces").rglob("session_*.md")
-    headings = [line for line in trace.read_text().splitlines() if "ool call" in line]
-    assert [line for line in headings if line.startswith("### Tool call")] == [
-        "### Tool call 1: Bash (worktree wta)",
-        "### Tool call 2: Bash",
-        "### Tool call 3: Bash (main checkout, worktree wta)",
-    ]
+    headings = [line for line in trace.read_text().splitlines() if line.startswith("### Tool")]
+    assert headings == ["### Tool call 1: Bash", "### Tool call 2: Bash"]
 
 
 def test_checkouts_go_by_their_short_names(repo: Path, tmp_path: Path) -> None:

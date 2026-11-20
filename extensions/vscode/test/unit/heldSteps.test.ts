@@ -55,17 +55,6 @@ describe('held steps', () => {
     expect(heldTools(after).size).toBe(0);
   });
 
-  it('takes check.result and step.held with the checkouts of a step in a worktree (PLAN D252) as before', () => {
-    const inWorktree = (event: ViewEvent): ViewEvent => ({
-      method: event.method,
-      params: { ...(event.params as Record<string, unknown>), checkouts: ['.claude/worktrees/agent-a1b2'] },
-    } as ViewEvent);
-    const plain = stateOf(attached, agents, use('a1', 'A'), check('a1', 'A'), use('b1', 'B'), escalate('b1', 'B'), held('a1', 'A', true));
-    const named = stateOf(attached, agents, use('a1', 'A'), inWorktree(check('a1', 'A')), use('b1', 'B'), escalate('b1', 'B'), inWorktree(held('a1', 'A', true)));
-    expect([...heldTools(named)]).toEqual([...heldTools(plain)]);
-    expect(heldByAgent(named)).toEqual(heldByAgent(plain));
-  });
-
   it('holds nothing once the session ended with its server', () => {
     const lost: ViewEvent = {
       method: 'ui.link',
