@@ -79,7 +79,7 @@ def test_the_fixed_part_of_the_command_checker_holds_the_rule():
     """The rule is calu's fixed text: it reaches the checker whatever the user's part says."""
     assert "# Commands outside the sandbox" in system_part("command")
     prompt = compose_instructions("command", "Only my own rules.")
-    assert "Judge such a call more strictly" in prompt
+    assert "Judge it strictly" in prompt
     assert "# Commands outside the sandbox" not in system_part("edit")
 
 

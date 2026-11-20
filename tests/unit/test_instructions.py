@@ -74,7 +74,7 @@ def test_the_shipped_instructions_are_short(name: str) -> None:
     """
     route = "subagent" if name == "subagent-result" else name
     words = len(compose_instructions(route, default_instructions(name)).split())
-    assert words < (460 if name == "command" else 360), f"{name}: {words} words"
+    assert words < (410 if name == "command" else 360), f"{name}: {words} words"
     assert "auto mode" in system_part(route) or route == "subagent"
 
 
