@@ -801,6 +801,45 @@ async def read_lines(send: Callable[[str], Awaitable[None]]) -> Literal["eof", "
         await send(text)
 
 
+async def read_lines_until(
+    send: Callable[[str], Awaitable[None]], shutdown: anyio.Event | None
+) -> Literal["eof", "quit"]:
+    """Read lines from stdin as `read_lines` does, and stop early when `shutdown` is set.
+
+    `calu run` reads its own terminal and serves clients at the same time. A client's
+    `shutdown` request (`/shutdown`) sets the protocol server's event; the run must then end
+    without waiting for a line typed in its own terminal. The stdin read that is still waiting
+    stays pending (see `read_lines`) and does not keep the process alive (daemon thread).
+
+    Args:
+        send: Called with each line (without the line end).
+        shutdown: The protocol server's `shutdown` event, or None when the run serves no
+            clients (then this is `read_lines`).
+
+    Returns:
+        "quit" if a quit command was typed or `shutdown` was set, "eof" if stdin was closed.
+    """
+    if shutdown is None:
+        return await read_lines(send)
+    ended: Literal["eof", "quit"] = "quit"
+    async with anyio.create_task_group() as tg:
+
+        async def read() -> None:
+            """Read until end of input or a quit command, then stop the wait for `shutdown`."""
+            nonlocal ended
+            ended = await read_lines(send)
+            tg.cancel_scope.cancel()
+
+        async def wait() -> None:
+            """Stop the reading when a client asked the process to stop."""
+            await shutdown.wait()
+            tg.cancel_scope.cancel()
+
+        tg.start_soon(read)
+        tg.start_soon(wait)
+    return ended
+
+
 def harden_process() -> bool:
     """Make this process unreadable for other processes of the same user (Linux).
 
@@ -1267,7 +1306,9 @@ async def _run(
                         sent = True
                         await session.send_chat(ChatSendParams(text=text))
 
-                    ended = await read_lines(send)
+                    ended = await read_lines_until(
+                        send, server.shutdown if server is not None else None
+                    )
                     if ended == "eof" and sent:
                         # A closed stdin only means that no further message comes (a password
                         # piped in, a service unit, nohup). Stopping here ended the session

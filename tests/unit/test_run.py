@@ -24,7 +24,7 @@ from calu.protocol.messages import (
     TurnResult,
     UserInput,
 )
-from calu.run import Activity, Console, IdleSignal, format_event, read_lines
+from calu.run import Activity, Console, IdleSignal, format_event, read_lines, read_lines_until
 
 pytestmark = pytest.mark.anyio
 
@@ -265,6 +265,35 @@ async def test_a_line_typed_while_no_reader_waits_reaches_the_next_reader(monkey
         with anyio.fail_after(5):
             assert await read_lines(lambda text: _collect(second, text)) == "quit"
     assert first == [] and second == ["are you there"]
+
+
+async def test_a_clients_shutdown_ends_the_reading_of_the_terminal(monkeypatch):
+    """A client's `/shutdown` must end an interactive `calu run` although nothing is typed in
+    its own terminal (the host rehearsal found the process waiting there for minutes)."""
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(read_fd, "r") as stdin, os.fdopen(write_fd, "w") as typing:
+        monkeypatch.setattr("sys.stdin", stdin)
+        shutdown = anyio.Event()
+        sent: list[str] = []
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(_set_later, shutdown)
+                assert await read_lines_until(lambda t: _collect(sent, t), shutdown) == "quit"
+        typing.write("/quit\n")  # ends the pending read of this pipe for the next test
+        typing.flush()
+    assert sent == []
+
+
+async def test_reading_without_a_shutdown_event_is_plain_read_lines(monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO("only\n"))
+    sent: list[str] = []
+    assert await read_lines_until(lambda t: _collect(sent, t), None) == "eof"
+    assert sent == ["only"]
+
+
+async def _set_later(event: anyio.Event) -> None:
+    await anyio.sleep(0.2)
+    event.set()
 
 
 async def _collect(sink: list, text: str) -> None:

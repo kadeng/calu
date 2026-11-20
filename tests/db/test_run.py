@@ -831,6 +831,54 @@ async def test_the_session_role_finds_a_fork_point(
 # ------------------------------------------------------------------ end of input (cs5)
 
 
+async def test_a_clients_shutdown_ends_an_interactive_run(
+    db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`calu run` in a terminal (interactive, the default) ends on a client's `shutdown`
+    although nothing is typed in that terminal (test plan M15: it kept waiting for a line)."""
+    import os
+
+    session_url = await prepare(db_url, tmp_path)
+    read_fd, write_fd = os.pipe()
+    serving: list[tuple[str, str]] = []
+    ready = anyio.Event()
+
+    async def on_serving(address: str, token: str) -> None:
+        serving.append((address, token))
+        ready.set()
+
+    async def on_event(method: str, params: dict) -> None:
+        pass
+
+    codes: list[int] = []
+    with os.fdopen(read_fd, "r") as stdin, os.fdopen(write_fd, "w"):
+        monkeypatch.setattr("sys.stdin", stdin)
+
+        async def run() -> None:
+            codes.append(
+                await run_session(
+                    session_url,
+                    RunOptions(workspace=tmp_path, interactive=True),
+                    runner_factory=lambda w, _c, _h: FakeRunner(CHAT_SCRIPT, w),
+                    checker_models=fake_models(),
+                    on_serving=on_serving,
+                )
+            )
+
+        async def client_work() -> None:
+            with anyio.fail_after(20):
+                await ready.wait()
+            address, token = serving[0]
+            async with connect_client(address, token, "test-client", on_event) as client:
+                await client.request("shutdown")
+
+        with anyio.fail_after(30):
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(run)
+                tg.start_soon(client_work)
+    assert codes == [0]
+
+
 async def test_a_closed_stdin_does_not_stop_a_session_that_has_work(
     db_url: str, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
