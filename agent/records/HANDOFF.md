@@ -173,6 +173,11 @@ Decided (do not ask again):
     received, with `reported_at`. No account identity is read, stored or shown. Migration
     0042 drops what 0041 created; `stored`, `account` and the storing code are gone,
     `account_limits_problem` stays.
+  - Human diffs (D253), the owner's answers: recorded only while an IDE is attached to a
+    session; one block per save (VSCode's auto-save is off by default, backups are no saves);
+    no list/show command for now; a save that overwrites a version Claude wrote meanwhile is
+    diffed against the version the user's buffer started from, so only the user's own edits
+    appear (the IDEs already ask before such an overwrite; mode 3 merges).
   - Checker instructions stay global for now; per-project instructions (a global default with
     per-project overrides, perhaps merged) come later, after everything works.
   - **Built in the core, the CLI and the terminal clients** (PLAN D250, 2026-11-20, not
