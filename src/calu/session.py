@@ -2932,8 +2932,12 @@ class Session:
             raise SessionError(f"Claude session was not ready within {START_TIMEOUT_S} s")
         # As early as possible: a session that stops before its first turn (an escalation that
         # timed out, for example) must still be resumable by its Claude session id (D27). An
-        # id calu chose is known now; Claude Code reports it with the first turn only.
-        await self._record_claude_session(runner.session_id or chosen)
+        # id calu chose is known now, and so is the id of a plain resume, which Claude Code
+        # keeps; Claude Code reports it with the first turn only. Without the resumed id, a
+        # timeout in the first turn of a resumed run named `calu sessions` instead of
+        # `calu run --resume <id>` (test plan M15).
+        plain_resume = resume_id if fork is None else None
+        await self._record_claude_session(runner.session_id or chosen or plain_resume)
         if self._permission_mode is None and runner.permission_mode is not None:
             # Claude Code reports its mode with the first turn; until then the mode calu
             # started it in is the best a client can be shown.

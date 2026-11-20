@@ -41,9 +41,10 @@ from calu.session import (
     SessionError,
     combine_decisions,
 )
+from calu.store import MemorySessionStore
 from calu.store.config import CheckerDefinition
 from calu.testing import fake_models, fixed_checker
-from tests.unit.helpers import default_settings, make_session
+from tests.unit.helpers import Recorder, default_settings, make_session
 
 pytestmark = pytest.mark.anyio
 
@@ -336,6 +337,36 @@ async def test_a_resumed_session_restores_turns_and_summary(tmp_path: Path):
         await rec.wait_for(TurnResult)
         await session.stop()
     assert [t.index for t in session.context.turns] == [1, 2]
+
+
+class _SilentRunner(FakeRunner):
+    """A runner that reports no session id before the first turn, as Claude Code does."""
+
+    session_id: str | None
+
+    async def wait_ready(self) -> None:
+        """Return once `run` has started, with the id still unknown."""
+        await super().wait_ready()
+        self.session_id = None
+
+
+async def test_a_plain_resume_knows_its_session_id_before_the_first_turn(tmp_path: Path):
+    """Host rehearsal (test plan M15): an escalation that timed out in the first turn of a
+    resumed run named `calu sessions` instead of `calu run --resume <id>`, because the id
+    was recorded only when Claude Code reported it at the end of a turn."""
+    session = Session(
+        tmp_path,
+        default_settings(tmp_path, None),
+        MemorySessionStore(),
+        lambda: _SilentRunner(FakeScript(turns=[]), tmp_path),
+        Recorder(),
+        checker_models=fake_models(),
+        snapshot_root=tmp_path.parent / f"{tmp_path.name}-snapshots",
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg, resume_id="old-session")
+        assert session.session_id == "old-session"
+        await session.stop()
 
 
 async def test_requests_need_a_running_session(tmp_path: Path):
