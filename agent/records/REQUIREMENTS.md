@@ -358,7 +358,9 @@ broken down or extended. Derived requirements and design decisions belong in
     of time. For this reason we need to have a very clear way of marking them. For example
     they could have an extension of <whatever>.tmp.diff - renaming them to <whatever>.diff
     would mean they would not be cleaned. We can then also .gitignore .tmp.diff easily."
-    (stated 2026-11-20)
+    "Default timeout could be 2 weeks." "Also, this is an optional feature, disabled by
+    default. In the settings, when enabling the traces, it's offered to also switch it on
+    (if possible)." (stated 2026-11-20)
 ## Soft goals and priorities
 
 1. Simple requirements first: calu should become functional before anything else; a port to Go
