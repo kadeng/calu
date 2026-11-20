@@ -26,6 +26,10 @@ Each user message starts the next scripted turn; when the script is exhausted, t
     {"tool": "Bash", "run": ["git", "commit", ...]}   ... and the call really runs that program
                                                       in the workspace, after its "writes"
                                                       (no shell; its exit code is ignored)
+    {"tool": "Bash", "cwd": "sub/dir", ...}           ... the call's working directory
+                                                      (`Step.cwd`): relative to the workspace,
+                                                      or absolute; "writes" and "run" then
+                                                      happen there (default: the workspace)
     {"tool": "Edit", "input": {...}, "fails": true}   ... the approved call fails: it writes
                                                       nothing and reports an error result
     {"tool": "Bash", "input": {...}, "duration": 2}   ... the approved call takes that many
@@ -698,14 +702,15 @@ class FakeRunner:
         message as an error result, and an allowed call with "fails" reports its "result" as an
         error result without writing anything.
 
-        Side effect: an action with "writes" writes (or deletes) those files in the workspace,
-        and an action with "run" runs that program in the workspace, after the gate approved
-        the call, which is how a scripted command stands in for one that
+        Side effect: an action with "writes" writes (or deletes) those files in the call's
+        working directory, and an action with "run" runs that program there, after the gate
+        approved the call, which is how a scripted command stands in for one that
         edits files (`sed -i`, a formatter, a script).
 
         Args:
-            action: The action dict with "tool", optional "input", "writes", "run", "fails"
-                and "result".
+            action: The action dict with "tool", optional "input", "cwd" (the call's working
+                directory, relative to the workspace or absolute; default the workspace),
+                "writes", "run", "fails" and "result".
             agent: Protocol id of the calling subagent, or None for the main agent.
             gate: Decides about the call; `ask` is awaited for an ASK verdict.
             sink: Receives the events.
@@ -714,12 +719,13 @@ class FakeRunner:
         name, tool_input = str(action["tool"]), dict(action.get("input", {}))
         await sink(ToolUse(agent_id=agent, tool_use_id=tool_use_id, name=name, input=tool_input))
         self.tool_modes.append((name, self.permission_mode))
+        cwd = self.workspace / str(action.get("cwd", ""))
         step = Step(
             tool_name=name,
             tool_input=tool_input,
             tool_use_id=tool_use_id,
             agent_id=agent,
-            cwd=str(self.workspace),
+            cwd=str(cwd),
         )
         gate_result = await gate.pre_tool_use(step)
         # As the SDK runner's hook: the mode Claude Code is in when the answer goes out decides
@@ -752,11 +758,9 @@ class FakeRunner:
         elif allowed and action.get("duration") and await self._cut_short(action["duration"]):
             content, is_error = INTERRUPTED_TOOL_RESULT, True
         elif allowed:
-            _write_files(self.workspace, action.get("writes") or {})
+            _write_files(cwd, action.get("writes") or {})
             if action.get("run"):
-                await anyio.run_process(
-                    [str(word) for word in action["run"]], cwd=self.workspace, check=False
-                )
+                await anyio.run_process([str(word) for word in action["run"]], cwd=cwd, check=False)
             content, is_error = str(action.get("result", "")), False
             await gate.tool_succeeded(step)  # as the PostToolUse hook does for edits
             note = await gate.review_write_set(step)  # as the PostToolUse hook does for Bash
@@ -786,7 +790,7 @@ def _write_files(workspace: Path, writes: dict[str, str]) -> None:
     """Write or delete the files of a scripted call's "writes" mapping.
 
     Args:
-        workspace: The workspace root; every path is relative to it.
+        workspace: The call's working directory; every path is relative to it.
         writes: Path -> content; an empty content deletes the file.
     """
     for relative, content in writes.items():

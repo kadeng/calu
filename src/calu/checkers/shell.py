@@ -132,6 +132,10 @@ class ParsedCommand:
     Same length and order as `commands`."""
     paths: list[ShellPath] = field(default_factory=list)
     error: str | None = None
+    directories: list[Path] = field(default_factory=list[Path])
+    """Every directory the command line may run a command in: the start directory and each
+    `cd`/`pushd` target that could be resolved, in the order they appear. A target that
+    cannot be resolved (a variable, `-`) is left out."""
 
 
 WRAPPERS: dict[str, tuple[frozenset[str], int]] = {
@@ -321,6 +325,7 @@ def parse_command(command: str, cwd: Path, home: Path | None = None) -> ParsedCo
     walker = _Walker(command.encode("utf-8"), cwd, home if home is not None else Path.home())
     tree = _PARSER.parse(walker.source)
     walker.visit(tree.root_node)
+    walker.result.directories = [cwd for cwd in walker.cwds if cwd is not None]
     if tree.root_node.has_error:
         walker.result.error = "The command has a syntax error that the parser cannot resolve."
     return walker.result

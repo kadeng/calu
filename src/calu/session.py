@@ -153,9 +153,11 @@ from calu.checkers import (
 )
 from calu.checkers.changeset import CommitKind, classify_commit
 from calu.checkers.honesty_review import HonestyReviewer, batches
-from calu.checkers.policy import EDIT_TOOLS
+from calu.checkers.policy import EDIT_TOOLS, SHELL_TOOLS
 from calu.checkers.render import changed_lines, edited_file, inline, safe_name
+from calu.checkers.shell import parse_command
 from calu.checkers.tools import StepTime
+from calu.checkouts import Checkout, Checkouts
 from calu.claude.runner import (
     NOT_FROM_USER_LABEL,
     ClaudeRunner,
@@ -535,6 +537,9 @@ class Session:
         self._last_cost: float | None = None
         self._last_turns = 0
         """Cost and turn count of the last `turn.result`, for `usage.get`."""
+        self.checkouts = Checkouts(workspace)
+        """The main checkout and the git worktrees of the project (`calu.checkouts`, D251);
+        read again at the start and before every step (`_refresh_checkouts`)."""
         self.honesty = HonestyState(
             workspace, self.config.honesty.max_open_marks, self.config.honesty.sufficient_trust
         )
@@ -2459,6 +2464,7 @@ class Session:
         await self._set_state("starting")
         inherited = await self._restore_context(resume_id, fork)
         chosen = session_id if resume_id is None or fork is not None else None
+        await self._refresh_checkouts()
         # The baseline of this run: the nearest trusted ancestor of HEAD as it is now.
         self._trust_stale = True
         await self.announce_honesty()
@@ -2980,6 +2986,36 @@ class Session:
 
     # ------------------------------------------------------------------ ToolGate
 
+    async def _refresh_checkouts(self) -> None:
+        """Read the project's worktrees again (`Checkouts.refresh`, in a worker thread).
+
+        Called at the start and before every step: one `git worktree list` costs a few
+        milliseconds, and so a worktree that `EnterWorktree`, a subagent, `ExitWorktree` or a
+        shell command created or removed is known when the next step is judged (D251). Never
+        raises; when git cannot be asked the registry keeps what it had.
+        """
+        try:
+            await anyio.to_thread.run_sync(self.checkouts.refresh)
+        except Exception:
+            log.exception("reading the worktrees failed")
+
+    def step_checkouts(self, step: Step) -> list[Checkout]:
+        """Name the checkouts a tool call belongs to (`Checkouts.step_checkouts`, D251).
+
+        Args:
+            step: The tool call.
+
+        Returns:
+            The checkout of its working directory first, then for a shell command
+            (`SHELL_TOOLS`) the checkout of each `cd`/`pushd` target, each once.
+        """
+        cwd = Path(step.cwd or self.workspace)
+        directories: list[Path] = []
+        command = step.tool_input.get("command")
+        if step.tool_name in SHELL_TOOLS and isinstance(command, str) and command:
+            directories = parse_command(command, cwd).directories
+        return self.checkouts.step_checkouts(cwd, directories)
+
     async def pre_tool_use(self, step: Step) -> GateResult:
         """Decide about a tool call before it runs (ToolGate).
 
@@ -3017,6 +3053,7 @@ class Session:
         step_id: int | None = None
         expected: str | None = None
         try:
+            await self._refresh_checkouts()
             step_id = await self.recorder.add_step(step)
             expected = await self._expect_edit(step)
             decided = await self.gate.decide(step, pending)
