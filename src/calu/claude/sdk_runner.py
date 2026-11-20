@@ -202,32 +202,6 @@ def command_output(text: str) -> str:
     return fence(text.strip("\n"))
 
 
-def account_name(info: object) -> str | None:
-    """Read how Claude Code names its login from its answer to the SDK's `initialize` request.
-
-    Claude Code 2.1.319 answers `account: {email, organization, subscriptionType, tokenSource,
-    apiKeySource, apiProvider}`; `email` and `organization` are present for a claude.ai login
-    and missing for an API key (measured, D250).
-
-    Args:
-        info: `ClaudeSDKClient.get_server_info()`'s result.
-
-    Returns:
-        "<email>" or "<email> (<organization>)"; None without an email.
-
-    Example:
-        `{"account": {"email": "a@b.example", "organization": "B"}}` gives "a@b.example (B)".
-    """
-    account = info.get("account") if isinstance(info, dict) else None
-    email = account.get("email") if isinstance(account, dict) else None
-    if not isinstance(email, str) or not email.strip():
-        return None
-    organization = account.get("organization") if isinstance(account, dict) else None
-    if isinstance(organization, str) and organization.strip():
-        return f"{email.strip()} ({organization.strip()})"
-    return email.strip()
-
-
 def account_limits(answer: object) -> tuple[list[RateLimit], str]:
     """Read the plan's usage limits out of Claude Code's answer to `get_usage`.
 
@@ -276,7 +250,7 @@ def usage_shape_problem(answer: object) -> str:
     Known shape: a mapping with the key `rate_limits`, whose value is null (an account without
     such limits) or maps window names to null or to a mapping whose `utilization` is a number
     or null. `get_usage` is experimental on Claude Code's side, so a later version may answer
-    otherwise; the usage panel then shows the stored figures instead (D250).
+    otherwise; the usage panel then says so (D250).
 
     Args:
         answer: The control response's payload.
@@ -474,8 +448,6 @@ class SdkRunner:
         self.session_id: str | None = None
         self.rate_limits: dict[str, RateLimit] = {}
         """The newest state of each usage limit Claude Code reported, by limit type."""
-        self.account: str | None = None
-        """How Claude Code names its login (`account_name`); None if it names none."""
 
     # ------------------------------------------------------------------ ClaudeRunner interface
 
@@ -547,10 +519,6 @@ class SdkRunner:
         """
         async with ClaudeSDKClient(options=options) as client:
             self._client = client
-            try:
-                self.account = account_name(await client.get_server_info())
-            except Exception:  # the SDK raises bare `Exception`; the account is information
-                log.info("Claude Code did not name its account", exc_info=True)
             self._ready.set()
             async for msg in client.receive_messages():
                 await self._forward(msg, sink)
@@ -906,7 +874,7 @@ class SdkRunner:
             limits, subscription = account_limits(answer)
         except Exception as exc:
             # Experimental on Claude Code's side: a missing answer only leaves the part empty,
-            # and the panel shows the stored figures (D250).
+            # and the panel says why (D250).
             log.info("Claude Code did not answer get_usage", exc_info=True)
             account_problem = f"Claude Code did not answer get_usage: {exc}"
         return UsageReport(

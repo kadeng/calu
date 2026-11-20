@@ -531,9 +531,6 @@ class Session:
         self._models = dict(checker_models or {})
         self.startup_warnings = tuple(startup_warnings)
         self._rate_limits: list[RateLimit] = []
-        self._account: str | None = None
-        """How Claude Code last named its login (`ClaudeRunner.account`); the usage limits are
-        stored under it (D250). Kept after the runner stopped, for the usage panel."""
         """The newest state of each usage limit Claude Code reported (`usage.update`)."""
         self._last_cost: float | None = None
         self._last_turns = 0
@@ -2627,74 +2624,20 @@ class Session:
         except SideQuestionFailed as exc:
             raise SessionError(str(exc)) from exc
 
-    def _claude_account(self) -> str | None:
-        """Return how Claude Code names its login, remembering the last name it gave.
-
-        Returns:
-            The runner's `account` if it names one, else the last one seen in this session;
-            None if Claude Code never named one (the store then uses the OS user and host).
-        """
-        named = getattr(self.runner, "account", None)
-        if isinstance(named, str) and named:
-            self._account = named
-        return self._account
-
-    async def _store_limits(self, limits: Sequence[RateLimit]) -> None:
-        """Store each usage limit that is new or changed since the last report (D250).
-
-        Side effects: one `note_usage_limit` per such limit, through `recorder.attempt` (a
-        failure is a `log` error and counts as a failed write, D59).
-
-        Args:
-            limits: The limits of a `usage.update` event.
-        """
-        before = {limit.type: limit for limit in self._rate_limits}
-        account = self._claude_account()
-        for limit in limits:
-            if before.get(limit.type) == limit or limit.reported_at is None:
-                continue
-            await self.recorder.attempt(
-                "storing a usage limit", self.store.note_usage_limit(account, limit)
-            )
-
-    async def _limits(self) -> list[RateLimit]:
-        """Return the newest state of each usage limit: this process's report or the stored one.
-
-        A limit Claude Code reported in this process wins over the stored figure of the same
-        type unless the stored one is newer (another session of the account reported later).
-        A failed read is logged and leaves the stored figures out.
-
-        Returns:
-            One `RateLimit` per type, in the order of this process's reports, then the stored
-            ones of other types.
-        """
-        try:
-            stored = await self.store.usage_limits(self._claude_account())
-        except Exception:
-            log.warning("the stored usage limits could not be read", exc_info=True)
-            stored = []
-        newest = {limit.type: limit for limit in self._rate_limits}
-        never = datetime.min.replace(tzinfo=UTC)
-        for limit in stored:
-            mine = newest.get(limit.type)
-            if mine is None or (limit.reported_at or never) > (mine.reported_at or never):
-                newest[limit.type] = limit
-        return list(newest.values())
-
     async def usage(self) -> UsageResult:
         """Return what the session knows about cost, context fill and usage limits (`usage.get`).
 
         Returns:
             The context fill as Claude Code counts it now (None when no session runs), the
-            newest state of each usage limit (this process's reports and the figures stored
-            for the account, `_limits`), and cost and turn count of the last turn result.
+            newest state of each usage limit Claude Code reported in this calu process, and cost
+            and turn count of the last turn result.
         """
         context = None
         if self.runner is not None and self.state not in ("stopped", "failed", "starting"):
             context = await self.runner.context_usage()
         return UsageResult(
             context=context,
-            rate_limits=await self._limits(),
+            rate_limits=list(self._rate_limits),
             cost_usd=self._last_cost,
             num_turns=self._last_turns,
         )
@@ -2705,16 +2648,16 @@ class Session:
         Claude Code's `/usage` text and the account's limits are read with control requests
         (`ClaudeRunner.usage_report`), not sent as a chat message: no turn starts, nothing is
         recorded in the history, no event is published, and the checkers see nothing of it.
-        The stored limits are not changed by it.
+        The limits kept from Claude Code's reports are not changed by it.
 
         Returns:
-            The limits Claude Code reported for the account, in this calu process or stored
-            by an earlier session, each with when it was reported; Claude Code's `/usage` text
-            and the account's limits as it reads them now (empty, with the reason in
-            `claude_usage_problem`, when no session runs); when the account's limits cannot
-            be read now (`get_usage` failed or answered in an unknown shape, or no session
-            runs), the reason in `account_limits_problem`, saying that the stored figures are
-            shown instead (D250); the context fill, cost and turn count of `usage`.
+            The limits Claude Code reported in this calu process, each with when it was
+            reported; Claude Code's `/usage` text and the account's limits as it reads them
+            now (empty, with the reason in `claude_usage_problem`, when no session runs); when
+            the account's limits cannot be read now (`get_usage` failed or answered in an
+            unknown shape, or no session runs), the reason in `account_limits_problem`,
+            pointing to the reported limits (D250); the context fill, cost and turn count of
+            `usage`.
         """
         usage = await self.usage()
         stopped = "no Claude session is running"
@@ -2724,15 +2667,14 @@ class Session:
         problem = report.account_problem
         if problem:
             problem += (
-                "; the limits above are the last ones Claude Code reported"
+                "; the limits above are the last ones Claude Code reported in this session"
                 if usage.rate_limits
-                else "; Claude Code has not reported a limit of this account yet either"
+                else "; Claude Code has not reported a limit in this session yet either"
             )
         return UsagePanelResult(
             limits=usage.rate_limits,
             account_limits=[] if report.account_problem else list(report.account_limits),
             account_limits_problem=problem,
-            account=self._claude_account() or "",
             subscription=report.subscription,
             claude_usage=report.text,
             claude_usage_problem=report.problem,
@@ -3750,7 +3692,6 @@ class Session:
                     self._last_turns = event.num_turns
                     await self._on_turn_result(event)
                 case UsageUpdate():
-                    await self._store_limits(event.rate_limits)
                     self._rate_limits = list(event.rate_limits)
                 case _:
                     pass

@@ -1102,9 +1102,8 @@
   // ------------------------------------------------------------------ the usage panel
 
   // One request (`usage.panel`) gives the limits calu stored from Claude Code's reports, each
-  // with when it came ("stored": a figure of an earlier session of the account, D250), and
-  // Claude Code's own /usage, which the session reads without a turn: nothing of it is
-  // recorded or shown to the checkers.
+  // with when it came, and Claude Code's own /usage, which the session reads without a turn:
+  // nothing of it is recorded or shown to the checkers.
   const LIMIT_WORDS = {
     five_hour: "5-hour", seven_day: "weekly", seven_day_opus: "weekly Opus",
     seven_day_sonnet: "weekly Sonnet", overage: "extra usage",
@@ -1124,8 +1123,7 @@
       ? (limit.status || "").replace(/_/g, " ")
       : `${Math.round(limit.utilization * 100)} % used`;
     const resets = limit.resets_at ? `, resets ${new Date(limit.resets_at).toLocaleString()}` : "";
-    const stored = limit.stored ? " (stored)" : "";
-    row.textContent = `${name}: ${used}${resets}` + (stamped ? ` · reported ${ago(limit.reported_at)}${stored}` : "");
+    row.textContent = `${name}: ${used}${resets}` + (stamped ? ` · reported ${ago(limit.reported_at)}` : "");
     if (limit.status && limit.status !== "allowed") row.className = "problem";
     return row;
   }
@@ -1142,7 +1140,7 @@
   }
   function renderUsagePanel(result) {
     const body = el("usage-body");
-    body.replaceChildren(panelSection("Limits reported by Claude Code", visible(result.account || "")));
+    body.replaceChildren(panelSection("Limits reported by Claude Code"));
     if (!(result.limits || []).length) {
       const none = document.createElement("p");
       none.className = "muted";
@@ -1155,7 +1153,7 @@
       body.appendChild(panelSection(`Your plan now${result.subscription ? ` (${result.subscription})` : ""}`));
       for (const limit of result.account_limits) body.appendChild(limitRow(limit, false));
     } else if (result.account_limits_problem) {
-      // get_usage failed or answered in an unknown shape: the limits above are the stored ones.
+      // get_usage failed or answered in an unknown shape: the panel says why.
       body.appendChild(panelSection("Your plan now"));
       const why = document.createElement("p");
       why.className = "muted";

@@ -661,3 +661,20 @@ async def test_the_honesty_register_is_not_a_table(db_url: str) -> None:
         assert row == (True,)
     finally:
         await conn.close()
+
+
+async def test_no_usage_limits_are_stored(db_url: str) -> None:
+    """D250: migration 0042 drops the table and the functions of migration 0041 again."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        row = await (
+            await conn.execute(
+                "SELECT to_regclass('public.usage_limits') IS NULL,"
+                " (SELECT count(*) FROM pg_proc WHERE proname IN"
+                "  ('calu_usage_limits', 'calu_note_usage_limit', 'calu_usage_account'))"
+            )
+        ).fetchone()
+        assert row == (True, 0)
+    finally:
+        await conn.close()

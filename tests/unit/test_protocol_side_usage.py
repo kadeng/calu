@@ -254,72 +254,37 @@ def test_the_plan_limits_of_get_usage_are_read_and_odd_shapes_skipped():
     assert account_limits("nonsense") == ([], "")
 
 
-async def test_usage_limits_are_stored_per_account_and_read_by_a_later_session(tmp_path: Path):
-    """D250: a reported limit is stored under Claude Code's name of its login; a session that
-    has no report of its own shows the stored figure with its age, marked as stored."""
-    from datetime import timedelta
-
-    from calu.claude import FakeScript
+async def test_the_usage_panel_says_why_get_usage_gave_no_plan_limits(tmp_path: Path):
+    """D250: `get_usage` failed or answered in an unknown shape: no plan limits, the reason,
+    and a pointer to the limits Claude Code reported in this process."""
     from calu.protocol.messages import ChatSendParams, RateLimit, TurnResult
     from tests.unit.helpers import make_session
 
     turns = [[{"rate_limit": {"type": "five_hour", "utilization": 0.4}}, {"text": "ok"}]]
-    session, rec, store = make_session(tmp_path, turns)
-    script = FakeScript(turns=turns, account="ada@example.org (Example)")
-    session.runner_factory = lambda: FakeRunner(script, tmp_path)
-    earlier = datetime.now(UTC) - timedelta(hours=3)
-    store.usage["claude:ada@example.org (Example)", "seven_day"] = RateLimit(
-        type="seven_day", utilization=0.3, reported_at=earlier, stored=True
-    )
-    store.usage["claude:bob@example.org", "seven_day"] = RateLimit(
-        type="seven_day", utilization=0.9, reported_at=earlier, stored=True
-    )
-    async with anyio.create_task_group() as tg:
-        await session.start(tg)
-        usage = await session.usage()
-        assert [(limit.type, limit.stored) for limit in usage.rate_limits] == [("seven_day", True)]
-        assert usage.rate_limits[0].utilization == pytest.approx(0.3), "not another account's"
-        await session.send_chat(ChatSendParams(text="go"))
-        await rec.wait_for(TurnResult)
-        kept = store.usage["claude:ada@example.org (Example)", "five_hour"]
-        assert kept.utilization == pytest.approx(0.4) and kept.stored
-        usage = await session.usage()
-        assert {(limit.type, limit.stored) for limit in usage.rate_limits} == {
-            ("five_hour", False),
-            ("seven_day", True),
-        }
-        panel = await session.usage_panel()
-        assert panel.account == "ada@example.org (Example)"
-        assert panel.account_limits_problem == ""
-        await session.stop()
-        tg.cancel_scope.cancel()
-
-
-async def test_the_usage_panel_says_when_it_shows_stored_figures_instead_of_get_usage(
-    tmp_path: Path,
-):
-    """D250: `get_usage` failed or answered in an unknown shape: no plan limits, the reason."""
-    from calu.protocol.messages import RateLimit
-    from tests.unit.helpers import make_session
-
-    session, _rec, store = make_session(tmp_path, [])
-    store.usage["os:?@?", "five_hour"] = RateLimit(type="five_hour", utilization=0.5)
+    session, rec, _store = make_session(tmp_path, turns)
     async with anyio.create_task_group() as tg:
         await session.start(tg)
         runner = session.runner
         assert isinstance(runner, FakeRunner)
-        store.usage[store.usage_account(None), "five_hour"] = RateLimit(
-            type="five_hour", utilization=0.5, reported_at=datetime.now(UTC), stored=True
-        )
         runner.account_limits = [RateLimit(type="seven_day", utilization=0.1)]
         runner.account_problem = "Claude Code answered get_usage in a shape calu does not know"
         panel = await session.usage_panel()
         assert panel.account_limits == [], "no figures of an answer calu cannot read"
         assert panel.account_limits_problem == (
-            "Claude Code answered get_usage in a shape calu does not know; the limits above "
-            "are the last ones Claude Code reported"
+            "Claude Code answered get_usage in a shape calu does not know; Claude Code has "
+            "not reported a limit in this session yet either"
         )
-        assert [limit.stored for limit in panel.limits] == [True]
+        await session.send_chat(ChatSendParams(text="go"))
+        await rec.wait_for(TurnResult)
+        panel = await session.usage_panel()
+        assert [limit.type for limit in panel.limits] == ["five_hour"]
+        assert panel.account_limits_problem.endswith(
+            "; the limits above are the last ones Claude Code reported in this session"
+        )
+        runner.account_problem = ""
+        panel = await session.usage_panel()
+        assert panel.account_limits_problem == ""
+        assert [limit.type for limit in panel.account_limits] == ["seven_day"]
         await session.stop()
         tg.cancel_scope.cancel()
     stopped = await session.usage_panel()
@@ -335,14 +300,3 @@ def test_the_shape_of_get_usage_is_checked():
     assert "no mapping" in usage_shape_problem({"rate_limits": [1]})
     assert "five_hour" in usage_shape_problem({"rate_limits": {"five_hour": {"utilization": "4"}}})
     assert "five_hour" in usage_shape_problem({"rate_limits": {"five_hour": 4}})
-
-
-def test_claude_codes_name_of_its_login_is_read_from_the_initialize_answer():
-    from calu.claude.sdk_runner import account_name
-
-    assert account_name({"account": {"email": "a@b.example", "organization": "B"}}) == (
-        "a@b.example (B)"
-    )
-    assert account_name({"account": {"email": "a@b.example"}}) == "a@b.example"
-    assert account_name({"account": {"tokenSource": "claude.ai", "apiKeySource": "x"}}) is None
-    assert account_name(None) is None

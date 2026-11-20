@@ -978,12 +978,10 @@ status line, a click on the usage line in the web live view) shows:
 - Claude Code's own `/usage` text (cost, durations, tokens by model);
 - cost and context fill.
 
-Calu stores the last reported limits in the database, per Claude account. A new session
-shows them with their age ("reported 3 h ago", marked "stored") until Claude Code reports
-again. The account is the one Claude Code names at its start: the e-mail address of a
-claude.ai login, with its organisation. Without such a name (an API key, Bedrock, Vertex) the
-figures are kept per OS user and host. The figures are information only: Anthropic's servers
-enforce the limits.
+The reported limits are kept in the memory of the session process only: a new session shows
+"not reported yet by Claude Code" until Claude Code reports again. Calu reads, stores and
+shows nothing about the Claude account itself. The figures are information only: Anthropic's
+servers enforce the limits.
 
 Calu reads the `/usage` text with a request of Claude Code's control protocol. That request
 makes no model call and no turn, records nothing, and is invisible to the checkers. `/usage`

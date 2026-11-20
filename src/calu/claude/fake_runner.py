@@ -147,8 +147,6 @@ class FakeScript(BaseModel):
     turns: list[list[dict[str, Any]]] = Field(default_factory=list)
     permission_mode: str = "auto"
     """The permission mode the runner starts in, as calu's default start gives it."""
-    account: str | None = None
-    """How the scripted Claude Code names its login (`ClaudeRunner.account`); None: none."""
 
     @classmethod
     def load(cls, path: Path) -> FakeScript:
@@ -180,8 +178,6 @@ class FakeRunner:
         self.script = script
         self.workspace = workspace
         self.session_id: str | None = "fake-session"
-        self.account: str | None = script.account
-        """How Claude Code names its login (`ClaudeRunner.account`)."""
         self._turns = iter(script.turns)
         self._ids = itertools.count(1)
         # Tool and message ids are unique across runners, as Claude Code's are: ids that

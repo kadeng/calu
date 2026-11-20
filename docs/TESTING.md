@@ -872,13 +872,13 @@ escalation resolved from the database alone.
    edit-project-rules` over your own edit text: refused, `--append` adds it. (d) `calu setup <
    /dev/null` with an older shipped text stored: kept and listed with `calu setup
    --update-instructions`. (e) On a claude.ai subscription, run a turn until Claude Code
-   reports a limit, end the session, start a new one and open the usage panel at once: the
-   limit shows "reported N min ago (stored)", the heading names the account; `SELECT * FROM
-   usage_limits` as the owner shows one row per limit under `claude:<e-mail> (<organisation>)`.
-   The scripted tests cover the logic (`tests/unit/test_permission_mode.py`,
+   reports a limit and open the usage panel: the limit shows "reported N min ago", no account
+   name appears; a new session shows "not reported yet by Claude Code" again; after `calu
+   setup` (migration 0042) the owner's `SELECT to_regclass('usage_limits')` gives NULL. The
+   scripted tests cover the logic (`tests/unit/test_permission_mode.py`,
    `tests/unit/test_runner_contract.py`, `tests/unit/test_tui_more.py`,
    `tests/unit/test_templates.py`, `tests/unit/test_protocol_side_usage.py`,
-   `tests/db/test_usage_limits.py`, `tests/db/test_cli_setup.py`).
+   `tests/db/test_schema.py`, `tests/db/test_cli_setup.py`).
 
 ## Measuring the checkers
 

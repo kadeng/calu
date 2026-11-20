@@ -16,7 +16,6 @@ from calu.context.turns import TurnRecord
 from calu.protocol.messages import (
     AgentInfo,
     EscalationContextResult,
-    RateLimit,
     SessionHistoryResult,
     SessionSummary,
     State,
@@ -79,9 +78,6 @@ class MemorySessionStore:
     write_sets: dict[int, dict[str, Any]] = field(default_factory=dict)
     """What each step wrote, as `record_changes` recorded it (agent/records/PLAN.md D31)."""
     address: str = ""
-    usage: dict[tuple[str, str], RateLimit] = field(default_factory=dict)
-    """The stored usage limits by (account key, limit type), as `note_usage_limit` keeps them;
-    a test may fill it to stand for figures an earlier session stored (D250)."""
     heartbeats: int = 0
     """How often `heartbeat` was called (agent/records/PLAN.md D56)."""
 
@@ -166,57 +162,6 @@ class MemorySessionStore:
             actor: Who asked for it.
         """
         self.setting_changes.append((setting, old, new, actor))
-
-    def usage_account(self, account: str | None) -> str:
-        """Return the key the figures of an account are kept under, as the database forms it.
-
-        Args:
-            account: Claude Code's name of its login, or None.
-
-        Returns:
-            "claude:<account>", or "os:<user>@<host>" of the session's identity ("os:?@?"
-            before `start`).
-        """
-        if account and account.strip():
-            return f"claude:{account.strip()}"
-        who = self.identity
-        return f"os:{who.os_user}@{who.hostname}" if who else "os:?@?"
-
-    async def note_usage_limit(self, account: str | None, limit: RateLimit) -> str | None:
-        """Keep one usage limit in `usage` unless a newer report of it is kept already.
-
-        Args:
-            account: Claude Code's name of its login, or None.
-            limit: The limit, with `reported_at`.
-
-        Returns:
-            The account key.
-        """
-        key = self.usage_account(account)
-        kept = self.usage.get((key, limit.type))
-        new = limit.reported_at or datetime.now(UTC)
-        if kept is None or kept.reported_at is None or kept.reported_at <= new:
-            self.usage[key, limit.type] = limit.model_copy(
-                update={"stored": True, "reported_at": new}
-            )
-        return key
-
-    async def usage_limits(self, account: str | None) -> list[RateLimit]:
-        """Return the kept usage limits of an account, newest report first.
-
-        Args:
-            account: Claude Code's name of its login, or None.
-
-        Returns:
-            The limits, each with `stored` True.
-        """
-        key = self.usage_account(account)
-        found = [limit for (owner, _), limit in self.usage.items() if owner == key]
-        return sorted(
-            found,
-            key=lambda limit: limit.reported_at or datetime.min.replace(tzinfo=UTC),
-            reverse=True,
-        )
 
     async def heartbeat(self) -> None:
         """Count a heartbeat in `heartbeats`."""

@@ -253,10 +253,10 @@ def usage_text(result: dict[str, Any]) -> str:
         result: The result as the session sent it.
 
     Returns:
-        `[usage]` lines: the account, each limit with when Claude Code reported it and
-        whether it is a stored figure of an earlier session (or that none was reported yet),
-        the plan's limits Claude Code read now (or why they could not be read), Claude Code's
-        `/usage` text (or why it is missing), cost and context fill.
+        `[usage]` lines: each limit with when Claude Code reported it in this calu process
+        (or that none was reported yet), the plan's limits Claude Code read now (or why they
+        could not be read), Claude Code's `/usage` text (or why it is missing), cost and
+        context fill.
     """
     panel = UsagePanelResult.model_validate(result)
     now = datetime.now(UTC)
@@ -280,12 +280,9 @@ def usage_text(result: dict[str, Any]) -> str:
         resets = f", resets {limit.resets_at:%a %H:%M} UTC" if limit.resets_at else ""
         when = ""
         if stamped and limit.reported_at:
-            stored = ", stored" if limit.stored else ""
-            when = f" (reported {age_text((now - limit.reported_at).total_seconds())} ago{stored})"
+            when = f" (reported {age_text((now - limit.reported_at).total_seconds())} ago)"
         return f"[usage] {limit.type or 'limit'}: {used}{resets}{when}"
 
-    if panel.account:
-        lines.append(f"[usage] account: {visible(panel.account)}")
     if not panel.limits:
         lines.append("[usage] limits: not reported yet by Claude Code")
     lines += [limit_line(limit, True) for limit in panel.limits]

@@ -678,23 +678,20 @@ async def test_usage_prints_the_usage_panel(capsys):
     said = capsys.readouterr().out
     assert "limits: not reported yet by Claude Code" in said
     assert "no Claude session is running" in said
-    # D250: a stored figure of an earlier session, and why get_usage gave nothing.
+    # D250: a reported figure with its age, and why get_usage gave nothing.
     client.results["usage.panel"] = {
-        "account": "ada@example.org",
         "limits": [
             {
                 "type": "seven_day",
                 "utilization": 0.3,
                 "reported_at": "2026-11-19T10:00:00+00:00",
-                "stored": True,
             }
         ],
         "account_limits_problem": "Claude Code did not answer get_usage: timeout",
     }
     await con.line("/usage")
     said = capsys.readouterr().out
-    assert "[usage] account: ada@example.org" in said
-    assert "seven_day: 30% used (reported " in said and " ago, stored)" in said
+    assert "seven_day: 30% used (reported " in said and " ago)" in said
     assert "your plan now: Claude Code did not answer get_usage: timeout" in said
 
 

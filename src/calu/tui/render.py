@@ -2455,9 +2455,8 @@ def usage_panel_lines(
 ) -> list[Text]:
     """Render the usage panel (`usage.panel`, agent/records/PLAN.md D248).
 
-        LIMITS REPORTED BY CLAUDE CODE      one row per limit, with when it came ("stored"
-                                            for a figure of an earlier session, D250), or
-                                            "not reported yet by Claude Code"
+        LIMITS REPORTED BY CLAUDE CODE      one row per limit reported in this process, with
+                                            when it came, or "not reported yet by Claude Code"
         YOUR PLAN NOW (max)                 only if Claude Code read the plan's limits now;
                                             otherwise why not, if it failed
         CLAUDE CODE'S /usage                its text, or why it is missing
@@ -2499,16 +2498,12 @@ def usage_panel_lines(
         row = Text.assemble((f" {name:<14} ", palette.muted), (value, style))
         if stamped:
             when = ago_text(limit.reported_at, now) if limit.reported_at else "time not known"
-            stored = " (stored)" if limit.stored else ""
-            row.append(f" · reported {when}{stored}", palette.faint)
+            row.append(f" · reported {when}", palette.faint)
         lines.append(row)
         if limit.utilization is not None:
             lines.append(Text(" " * 16 + meter(limit.utilization, width - 18), palette.accent))
 
-    heading = Text("LIMITS REPORTED BY CLAUDE CODE", f"bold {palette.fg}")
-    if result.account:
-        heading.append(f"  {result.account}", palette.faint)
-    lines.append(heading)
+    lines.append(Text("LIMITS REPORTED BY CLAUDE CODE", f"bold {palette.fg}"))
     if not result.limits:
         lines.append(Text(" not reported yet by Claude Code", palette.faint))
         lines.append(
