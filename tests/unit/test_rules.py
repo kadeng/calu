@@ -387,6 +387,22 @@ def test_a_write_named_by_an_option_or_by_git_reaches_the_write_deny_list(
     assert default_rules(tmp_path).evaluate(bash(command, str(tmp_path))).ask, command
 
 
+@pytest.mark.parametrize(
+    ("command", "asks"),
+    [
+        ("git restore --staged AGENTS.md", False),  # the index only
+        ("git restore -S AGENTS.md", False),
+        ("git restore --staged --worktree AGENTS.md", True),
+        ("git restore -SW AGENTS.md", True),
+        ("git restore -sSTABLE AGENTS.md", True),  # `-s` takes a value: a source, no `-S`
+    ],
+)
+def test_unstaging_a_file_does_not_write_it(tmp_path: Path, command: str, asks: bool) -> None:
+    """Dogfooding 2026-11-20: Claude's `git restore --staged <trace file>` escalated as a write
+    of the trace file, although it changes only the index."""
+    assert bool(default_rules(tmp_path).evaluate(bash(command, str(tmp_path))).ask) is asks, command
+
+
 def test_reading_git_config_is_not_a_write(tmp_path: Path) -> None:
     """D148: only a `git config` that sets a value writes `.git/config`."""
     rules = default_rules(tmp_path)

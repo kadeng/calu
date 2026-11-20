@@ -193,6 +193,29 @@ also when they follow the wrapper's positional argument (`flock FILE -c CMD`, D1
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
 
+def _restores_index_only(options: list[str]) -> bool:
+    """Say whether a `git restore` with these options changes only the index.
+
+    `--staged` (`-S`) restores the index; the working tree is written only with `--worktree`
+    (`-W`) as well. A short-option cluster that holds `s` (`--source`, whose value can follow
+    in the same word) is not read for `S` or `W`, so `-sSTABLE` still counts as a write.
+
+    Args:
+        options: The words of the `git restore` call that start with "-".
+
+    Returns:
+        True if the call names the index and not the working tree, so it writes no file.
+
+    Example:
+        `["--staged"]` and `["-S"]` give True; `["-SW"]`, `["--staged", "--worktree"]` and
+        `[]` give False.
+    """
+    clusters = [o[1:] for o in options if re.fullmatch(r"-[A-Za-z]+", o) and "s" not in o]
+    staged = "--staged" in options or any("S" in c for c in clusters)
+    worktree = "--worktree" in options or any("W" in c for c in clusters)
+    return staged and not worktree
+
+
 def command_variants(command: str, words: list[str] | None = None) -> list[str]:
     """Return a simple command and the forms of it a deny rule must also see.
 
@@ -546,7 +569,8 @@ class _Walker:
 
         `git config KEY VALUE` writes `.git/config` (or `~/.gitconfig` with `--global`), which
         decides which hooks and programs git runs; `git checkout -- PATH` and `git restore PATH`
-        overwrite PATH with another version. All other arguments stay reads.
+        overwrite PATH with another version; `git restore --staged PATH` without `--worktree`
+        changes only the index and writes no file. All other arguments stay reads.
 
         Args:
             args: The arguments after `git`.
@@ -630,6 +654,8 @@ class _Walker:
                 and any(cwd is not None and (cwd / plain[0].value).exists() for cwd in self.cwds)
             )
         ):
+            if sub == "restore" and _restores_index_only(options):
+                return
             if "--" in values:
                 after = rest[[a.value for a in rest].index("--") + 1 :]
             elif sub == "checkout":
