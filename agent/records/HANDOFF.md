@@ -467,11 +467,28 @@ and `EnterWorktree` runs without a checker (it was unrouted and went to the comm
 The dogfood PostgreSQL container `calu-dogfood-pg` was removed; the clone
 `~/work/calu-dogfood` stays in the desktop.
 
+**The sandbox and the database tests, tried afterwards (test plan M9-M11):** the desktop now
+runs Claude Code's sandbox (`calu-uitest` recreated with `seccomp=unconfined` from a commit of
+the old container, `uitest/run.sh`; the old one is kept stopped as `calu-uitest-old`). The
+Unix socket recipe does **not** work on Linux: Claude Code's Linux sandbox refuses to create
+any Unix socket (EPERM) and ignores `allowUnixSockets` there (macOS only, says its own
+schema). The only Linux switch, `allowAllUnixSockets`, opens every socket and in a Docker
+container breaks the sandbox (`--disable-userns` needs a writable `/proc/sys`). Fixed: the
+setting's description, and a start-up warning on Linux when it is set. Also found: uv's cache
+is read-only under the sandbox; `UV_CACHE_DIR=$TMPDIR/uv-cache` works (documented). The
+documented way for the database layer stays your own terminal, or the sandbox off.
+**Proposal for the owner, not built:** a Calu setting for `allowAllUnixSockets` (off by
+default, a warning at every start), for hosts that are not containers. It would let a
+sandboxed command reach every Unix socket of the user: the X/Wayland display, D-Bus, an SSH
+agent, the Docker socket if the user may use it, Calu's own session sockets (which still ask a
+token). Alternatively nothing: the database tests stay outside the session.
+
 #### Next, in this order
 
 1. **Support the owner's dogfooding** (developing Calu inside Calu): fix what he reports first.
-   One proposal from the rehearsal waits for his say: the database tests under the sandbox
-   (section above).
+   One proposal waits for his say: a setting for `allowAllUnixSockets`, or the database
+   tests stay outside a sandboxed session (section above; the Unix socket recipe was tried
+   and does not work on Linux).
 2. **Hand checks still to run** (docs/TESTING.md): item 46 (usage panel with a real
    subscription), 48 (the subagent handback review with a real Claude Code, incl. 48(c)
    what happens after a denied handback), 49 (human diffs in both IDEs, incl. (f) the
@@ -568,6 +585,10 @@ repository as he asked.
   `calu-uitest` in two files of user `cua`; `uitest/setup-real.sh --remove-key` deletes
   them. Never print it, never put any part of it on a command line (an agent once passed a
   prefix to `grep`).
+- **Recreating `calu-uitest` loses what is inside it**: the owner's key files, his accepted
+  PyCharm agreement, calu, Claude Code, `~/work`. A new `docker run` option needs a new
+  container: commit the old one first and move the key files out of it while it is committed
+  (`uitest/README.md`, "Start and stop").
 - In the desktop: no sign-ins, no agreements accepted for the owner. He accepted PyCharm's
   user agreement himself (a trial runs; he has a Pro subscription).
 - The owner's rulings on wording: no first person and no origin story in the README, facts
@@ -575,7 +596,9 @@ repository as he asked.
 
 #### Containers and directories this session left
 
-`calu-uitest` (the Cua desktop; running), `calu-sshbox` (SSH test server; agent 2 leaves it
+`calu-uitest` (the Cua desktop; running, since 2026-11-20 with `seccomp=unconfined` from the
+image `calu-uitest:state`; the previous container `calu-uitest-old` is stopped and can be
+removed with `docker rm` once nobody misses anything), `calu-sshbox` (SSH test server; agent 2 leaves it
 stopped), `calu-rootbox` (stopped; `uitest/rootbox/run.sh`), `calu-prepush-pg`, `calu-fix-pg`
 (agent 1 removes it), `calu-dev-caludb-1` (the test suite's server), and the owner's
 `calu-db-postgres-1`, which nothing here touches. A worktree for pre-push runs under the

@@ -2877,17 +2877,34 @@ calu run .
   names in Calu's env file).
 - **The session needs no Docker socket.** Start the test server yourself; Claude's commands
   reach it by its address.
-- **The sandbox:** Claude Code's sandbox lets a command reach only the domains on the
-  project's allow list, through a proxy. The starter list holds PyPI, so `uv sync` and the
-  first `uv run` work. A TCP connection to the test server is not proxied, so with the
-  sandbox on the database tests are skipped inside the session; run that layer in your own
-  terminal. The rehearsal ran with the sandbox off (a container without user namespaces).
+- **The sandbox and uv.** Claude Code's sandbox lets a command reach only the domains on the
+  project's allow list, through a proxy. The starter list holds PyPI, so uv can download the
+  packages. But uv's cache (`~/.cache/uv`) is read-only for a sandboxed command, and `uv run`
+  stops with `Could not acquire lock ... Read-only file system`. A command may write in the
+  project directory and in its temporary directory, so put the cache there. Say this in your
+  first message to Claude, or in the project's `CLAUDE.md`:
+
+  ```bash
+  UV_CACHE_DIR=$TMPDIR/uv-cache uv run pytest -q tests/unit/<file>
+  ```
+
+  The first such run in a session downloads the packages again (about a minute). Calu has no
+  setting that makes `~/.cache/uv` writable, on purpose: your own unsandboxed `uv` commands
+  use that cache, and a sandboxed command could change what they install.
+- **The database tests do not run in a sandboxed session on Linux.** The sandbox does not
+  proxy TCP, and Claude Code's Linux sandbox refuses to create any Unix socket (Python:
+  `PermissionError: [Errno 1] Operation not permitted`). `claude.sandbox.allow_unix_sockets`
+  does not change that: Claude Code applies the list on macOS only, and a session start on
+  Linux warns when it is set. Without a reachable server the database tests are skipped
+  ("test database not reachable"). Run `uv run pytest -m 'db and not live'` in your own
+  terminal, or run the session with the sandbox off ([On or off](#on-or-off), with the
+  protections described there).
 
 ### What to expect
 
 | Step | Behaviour |
 |---|---|
-| `uv run pytest -q tests/unit/<file>` | passes the checkers. The first run creates `.venv` and installs about 90 packages (about a minute) |
+| `uv run pytest -q tests/unit/<file>` | passes the checkers. The first run creates `.venv` and installs about 90 packages (about a minute). With the sandbox on, only with `UV_CACHE_DIR` as above |
 | an edit of code or tests | the edit checker passes it when the user asked for it |
 | `git commit` | the commit review compares the staged change with what the user asked for. It can refuse a commit whose change drifted from the request (a renamed test, for example); say in a message what the commit should hold, and Claude commits again |
 | the trace files | with traces on, the final redaction pass stages the session's trace files for each commit of Claude's, and Calu tells Claude that they belong there. List `agent/traces/` in `.gitignore` to keep them out of git |
@@ -3279,6 +3296,10 @@ calu project network --name demo --network none
   every connection, and the session says so at its start.
 - **Raw TCP is blocked** whatever the policy says, so a program that ignores the proxy
   variables reaches nothing.
+- **Unix sockets are blocked on Linux.** A command cannot create one, so it reaches no local
+  server through a socket either (a database, an SSH agent, the desktop session).
+  `claude.sandbox.allow_unix_sockets` lets sockets through on macOS only; Claude Code ignores
+  it on Linux.
 - `claude.sandbox.denied_domains` blocks its domains under every policy, including `full`.
 
 ### Sandbox entries in Claude Code's settings files

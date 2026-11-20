@@ -1124,10 +1124,8 @@ Open points:
 
 1. **The sandbox and the database tests.** With the sandbox on, a command reaches only
    proxied HTTP(S) domains, so the database tests cannot reach a TCP port and are skipped
-   inside a session (`-q` shows `s`). Not run here (no sandbox in this container). Proposal,
-   not built: a documented recipe with the test server's Unix socket in a directory the
-   sandbox may use (`claude.sandbox.allow_unix_sockets`), checked on a machine with a
-   working sandbox.
+   inside a session (`-q` shows `s`). The Unix socket recipe was tried afterwards (M9-M11
+   below): it does not work on Linux.
 2. **`--sudo`/`--user` drop `CALU_TEST_DSN`** (the launcher keeps a fixed set of
    variables). The tests then fall back to `127.0.0.1:55432`. Fixed afterwards: the setting
    `claude.pass_env` (PLAN D254; unit tests in `test_launch.py`, `test_config.py`,
@@ -1140,3 +1138,36 @@ Open points:
 5. The tools without a route at the session start include `EnterWorktree` (it goes to the
    command checker). Fixed afterwards: it runs without a checker (PLAN D254 (b);
    `test_checkers.py`, `test_worktrees.py`).
+
+#### M, continued: the sandbox on, the database tests through a Unix socket (2026-11-20, later)
+
+Run by an agent in the same desktop, now with Claude Code's sandbox **on**: `calu-uitest`
+was recreated with `--security-opt seccomp=unconfined` from a commit of the old container
+(`uitest/run.sh`, `uitest/README.md`); `bwrap --unshare-user --unshare-net` works there. Calu
+as installed from `9997488`, Claude Code 2.1.329 (the Agent SDK's bundled CLI) on Haiku,
+`calu run .` as `cua` in tmux, the project `~/work/calu-dogfood` (network policy `proxy`, the
+starter list), `.venv` removed before the start. The test server: the container
+`calu-dogfood-pg` (`postgres:17`) on `calu-uitest-net` with its socket directory bind-mounted
+from the host's `~/.cache/calu-uitest/share/pgsock` (`/share/pgsock` in the desktop),
+`CALU_TEST_DSN=postgresql://calu_owner:calu-dev@/calu?host=/share/pgsock` in the environment of
+`calu run`, and `calu config add --project calu-dogfood claude.sandbox.allow_unix_sockets
+/share/pgsock/.s.PGSQL.5432`. Outside the sandbox `psql` with that DSN connects. Nobody
+decided an escalation (none came up). Evidence in `~/.cache/calu-uitest/share/dogfood-sandbox/`:
+`trace-session_003.md` (the session trace), `run.log` (calu's terminal, client token removed),
+`allow-all-sockets.json` and `.jsonl` (M11). The leak check found no secret value; its one
+"key shape" is the test password in the DSN.
+
+| # | Step | Result |
+|---|---|---|
+| M9 | One message: `uv run --refresh-package pluggy pytest -q tests/unit/test_shipped_instructions.py`, then `uv run pytest -q -rs -m "db and not live" tests/db/test_least_privilege.py` | unit tests ok, with a workaround: both commands first failed with `Could not acquire lock ... Read-only file system (os error 30) at path "/home/cua/.cache/uv/..."` (uv's cache is read-only in the sandbox). Claude retried on its own with `export UV_CACHE_DIR="$TMPDIR/uv-cache"`: `.venv` created, 93 packages downloaded from PyPI through the proxy (the starter list), 11 passed. The database tests: 4 skipped, "test database not reachable: connection is bad: no error details available". All four commands PASS by the checkers |
+| M10 | One message: a Python one-liner that creates an `AF_UNIX` socket and connects it to `/share/pgsock/.s.PGSQL.5432` | `socket.socket(socket.AF_UNIX)` itself fails: `PermissionError: [Errno 1] Operation not permitted`. Claude Code's Linux sandbox blocks the creation of every Unix socket (a seccomp filter); the path list cannot open one. Claude Code's own settings schema says so: `allowUnixSockets` is "macOS only ... Ignored on Linux (seccomp cannot filter by path)" |
+| M11 | Outside Calu, one `claude -p` (Haiku) with a settings document that holds `allowAllUnixSockets: true` (the only Linux switch; Calu pins it to false) | the sandbox does not start: `bwrap: cannot open /proc/sys/user/max_user_namespaces: Read-only file system`. Without the seccomp helper Claude Code runs bubblewrap with `--disable-userns`, which needs a writable `/proc/sys`, and Docker mounts it read-only. Not tried further (it would need yet another container option, and the switch opens every socket of the machine) |
+
+Cost: 2 user messages in the Calu session (5 command checks, all PASS), 1 `claude -p` ($0.004).
+
+Result: on Linux the database tests cannot run in a sandboxed Calu session; the documented
+way is to run that layer in your own terminal, or the session with the sandbox off. Fixed:
+`claude.sandbox.allow_unix_sockets` said "e.g. a local database socket"; its description now
+says it works on macOS only, and a session start on Linux warns when it is set
+(`preflight.network_warnings`, `test_preflight.py`). Documented: `UV_CACHE_DIR=$TMPDIR/uv-cache`
+for `uv` under the sandbox (DOCUMENTATION.md "Developing Calu inside Calu").
