@@ -296,6 +296,13 @@ the network against a set (static, not a runtime denial log), the proxy reports 
 events (`drain_audit_events`). Not found in the docs read: a per-port rule in the Python API
 and a runtime "why was this denied" for `sandboxed_exec`; denials would have to be inferred
 from the command's error output plus `QueryContext`.
+Raw TCP (e.g. PostgreSQL): per nono's docs, host filtering covers HTTP(S) through the proxy
+only; raw TCP is either blocked or allowed per port on any address (Landlock V4). Proxy
+mode's seccomp `connect()` check reads as forcing connections to the proxy, not as a raw-TCP
+host filter - to verify in the spike. If raw TCP to named hosts is needed: calu runs a small
+TCP forwarder (`127.0.0.1:<local> -> host:port`, approved by the checker) and the sandbox
+allows only that local port; works for configurable targets such as `CALU_TEST_DSN`, not for
+programs with hard-coded targets.
 
 #### Tool documentation for the checkers (backlog, owner 2026-11-20)
 
