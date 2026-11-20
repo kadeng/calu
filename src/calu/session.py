@@ -3315,7 +3315,7 @@ class Session:
         expected: str | None = None
         try:
             await self._refresh_checkouts()
-            own = (await anyio.to_thread.run_sync(self.step_checkouts, step))[0]
+            own = await anyio.to_thread.run_sync(self.step_checkouts, step)
             step.checkout, step.other_checkouts = self.checkouts.header(own)
             step_id = await self.recorder.add_step(step)
             expected = await self._expect_edit(step)

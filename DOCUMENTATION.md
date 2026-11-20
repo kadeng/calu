@@ -2035,7 +2035,9 @@ Checkout: `.claude/worktrees/wta` (worktree, branch `worktree-wta`)
 Other checkouts: `.` (main checkout), `.claude/worktrees/agent-aa89` (worktree, branch `worktree-agent-aa89`)
 ```
 
-The second line names at most ten checkouts and counts the rest.
+The first line names every checkout the step belongs to, so a command that changes into a
+worktree has both the main checkout and that worktree on it. The second line names at most
+ten checkouts and counts the rest.
 
 ### Code honesty per checkout
 

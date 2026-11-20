@@ -341,9 +341,10 @@ class Step(BaseModel):
     agent_id: str | None = None
     cwd: str
     checkout: str = ""
-    """calu's description of the checkout the call's working directory lies in, e.g.
-    "`.claude/worktrees/wta` (worktree, branch `worktree-wta`)" (`calu.checkouts`, D251);
-    "" when the project has no worktree."""
+    """calu's description of the checkouts the call belongs to: the one its working directory
+    lies in, e.g. "`.claude/worktrees/wta` (worktree, branch `worktree-wta`)", then, comma
+    separated, those its `cd` targets lie in (`calu.checkouts`, D251); "" when the project has no
+    worktree."""
     other_checkouts: str = ""
     """calu's description of the project's other checkouts; "" when there are none."""
     notes: list[str] = Field(default_factory=list)

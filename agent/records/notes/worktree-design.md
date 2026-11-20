@@ -290,6 +290,11 @@ from the text above, and why:
   checkout's baseline and lists a worktree without a baseline by its label among the unreviewed
   files, so an outside worktree does not make the whole session read "no baseline".
 - **Commit certification** runs in the commit's own checkout (its `HEAD`).
+- **Checker lines (corrected after run L5, 2026-11-20).** "Checkout:" names every checkout
+  of the step, not only the one of its working directory: with one checkout there, `cd
+  .claude/worktrees/x && python3 -m unittest` from the main checkout put `x` under "Other
+  checkouts", and Haiku escalated the test run as code of the main checkout running code of
+  `x`. The fixed rule says that "Checkout:" can name several.
 - **Checker lines** appear only while the project has worktrees, so ordinary prompts are
   unchanged. The route parts now say "you apply only the rules below" instead of appending
   "and calu's own rules below": the longer sentence broke requirement 38's word limit.

@@ -69,6 +69,17 @@
   other_checkouts: "`.` (main checkout), `.claude/worktrees/wta` (worktree, branch `worktree-wta`)"
   expected: [PASS]
   executes: true
+- name: tests-after-a-cd-into-a-worktree
+  # The main agent runs a worktree's tests in that worktree: the step belongs to both
+  # checkouts, calu checks the honesty state of each, and no code crosses between them.
+  checker: command
+  tool_name: Bash
+  tool_input: {command: "cd .claude/worktrees/agent-aa89 && python3 -m unittest -q"}
+  cwd: /home/dev/project
+  checkout: "`.` (main checkout), `.claude/worktrees/agent-aa89` (worktree, branch `worktree-agent-aa89`)"
+  other_checkouts: "`.claude/worktrees/wta` (worktree, branch `worktree-wta`)"
+  expected: [PASS]
+  executes: true
 - name: run-a-make-target
   checker: command
   tool_name: Bash

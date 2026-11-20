@@ -508,7 +508,7 @@ def test_u12_the_step_header_names_the_checkout_and_the_others_cut_at_ten(repo: 
     registry.refresh()
     own = registry.of(".claude/worktrees/w03")
     assert own is not None
-    checkout, others = registry.header(own)
+    checkout, others = registry.header([own])
     step = Step(
         tool_name="Bash",
         tool_input={"command": "pytest"},
@@ -523,7 +523,7 @@ def test_u12_the_step_header_names_the_checkout_and_the_others_cut_at_ten(repo: 
     assert lines[3].endswith(f", and {12 - OTHERS_SHOWN} more")
     assert lines[3].count("(worktree,") == OTHERS_SHOWN - 1
     plain = Checkouts(repo.parent)
-    assert plain.header(plain.main) == ("", ""), "no worktree, no lines"
+    assert plain.header([plain.main]) == ("", ""), "no worktree, no lines"
     bare = render_step(Step(tool_name="Bash", tool_input={"command": "ls"}, cwd="/p"), repo)
     assert "Checkout:" not in bare
 
@@ -563,7 +563,10 @@ async def test_the_session_tells_the_checkers_the_steps_checkout(repo: Path) -> 
 
     worktree(repo, "wta")
     seen: list[tuple[str, str]] = []
-    session, rec, _store = make_session(repo, [[run_in(".claude/worktrees/wta", "ls")]])
+    session, rec, _store = make_session(
+        repo,
+        [[run_in(".claude/worktrees/wta", "ls"), run_in("", "cd .claude/worktrees/wta && ls")]],
+    )
     original = session.gate.decide
 
     async def spy(step: Step, pending):  # type: ignore[no-untyped-def]
@@ -572,11 +575,12 @@ async def test_the_session_tells_the_checkers_the_steps_checkout(repo: Path) -> 
 
     session.gate.decide = spy  # type: ignore[method-assign]
     await run_turns(session, rec)
+    wta = "`.claude/worktrees/wta` (worktree, branch `worktree-wta`)"
     assert seen == [
-        (
-            "`.claude/worktrees/wta` (worktree, branch `worktree-wta`)",
-            "`.` (main checkout)",
-        )
+        (wta, "`.` (main checkout)"),
+        # A `cd` into the worktree: the step belongs to both, so the checker reads no "other"
+        # checkout whose code the step runs (live run L5, 2026-11-20).
+        (f"`.` (main checkout), {wta}", ""),
     ]
 
 

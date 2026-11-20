@@ -345,21 +345,29 @@ class Checkouts:
                 found.append(checkout)
         return found
 
-    def header(self, own: Checkout) -> tuple[str, str]:
-        """Render the two lines a checker reads about a step's checkout.
+    def header(self, own: Sequence[Checkout]) -> tuple[str, str]:
+        """Render the two lines a checker reads about a step's checkouts.
 
         Args:
-            own: The checkout of the step's working directory.
+            own: The checkouts the step belongs to (`step_checkouts`: the checkout of its
+                working directory first, then those its `cd` targets lie in); not empty.
 
         Returns:
-            (the step's checkout, the other checkouts) as `Checkout.describe` names them; the
-            second names at most `OTHERS_SHOWN` and then "and N more". ("", "") when the
-            registry knows no worktree: a project without worktrees gets no such lines.
+            (the step's checkouts, the other checkouts) as `Checkout.describe` names them, each
+            line a comma-separated list; the second names at most `OTHERS_SHOWN` and then
+            "and N more". ("", "") when the registry knows no worktree: a project without
+            worktrees gets no such lines.
+
+        Example:
+            `cd .claude/worktrees/b && pytest` from the session directory: the first line names
+            "`.` (main checkout), `.claude/worktrees/b` (worktree, branch ...)", so a checker
+            does not read the test run in `b` as code of the main checkout loading `b`'s code.
         """
         if not self._others:
             return "", ""
-        rest = [checkout for checkout in self.all() if checkout != own]
+        mine = list(dict.fromkeys(own))
+        rest = [checkout for checkout in self.all() if checkout not in mine]
         shown = ", ".join(checkout.describe() for checkout in rest[:OTHERS_SHOWN])
         if len(rest) > OTHERS_SHOWN:
             shown += f", and {len(rest) - OTHERS_SHOWN} more"
-        return own.describe(), shown
+        return ", ".join(checkout.describe() for checkout in mine), shown
