@@ -823,6 +823,31 @@ async def test_claudes_commit_takes_the_trace_along_after_the_final_pass(git_rep
     assert any("finalized for the commit" in log.message for log in rec.of(Log))
 
 
+async def test_claude_is_told_that_the_staged_trace_belongs_in_its_commit(git_repo: Path):
+    """Dogfooding 2026-11-20: Claude saw a trace file in its commit that it had not staged,
+    took it for a mistake and undid the commit; the approval now says why it is there."""
+    models = fake_models()
+    models["trace-redactor"], _ = final_pass_model()
+    session, _rec, _ = make_session(git_repo, [], traced(), checker_models=models)
+    commit = Step(
+        tool_name="Bash",
+        tool_input={"command": "git commit -q -m work"},
+        tool_use_id="c1",
+        cwd=str(git_repo),
+    )
+    results = []
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        results.append(await session.pre_tool_use(commit))
+        await session.stop()
+    (result,) = results
+    (path,) = trace_files(git_repo)
+    relative = path.relative_to(git_repo).as_posix()
+    assert result.verdict.name in ("PASS", "ALLOW")
+    assert f"`{relative}`" in result.context and "intended" in result.context
+    assert relative in git_out(git_repo, "diff", "--cached", "--name-only")
+
+
 async def test_a_failing_final_pass_refuses_claudes_commit(git_repo: Path):
     models = fake_models()
     models["trace-redactor"], read = final_pass_model(fail=True)

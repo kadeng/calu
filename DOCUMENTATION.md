@@ -1980,7 +1980,7 @@ file after the pass   committed part | new part, redacted as a whole | marker li
 
 | The pass runs when | Detail | On failure |
 |---|---|---|
-| Claude runs `git commit` in a session | Calu runs the pass before the commit, writes the files back and stages them, so the commit includes the finalized trace files (Calu leaves out a trace directory that `.gitignore` excludes). The session's trace writer waits until the commit is over | the commit is refused; Claude is told why |
+| Claude runs `git commit` in a session | Calu runs the pass before the commit, writes the files back and stages them, so the commit includes the finalized trace files (Calu leaves out a trace directory that `.gitignore` excludes). Calu tells Claude that it staged them and that they belong in the commit. The session's trace writer waits until the commit is over | the commit is refused; Claude is told why |
 | you commit outside Calu, with the hook installed | the pre-commit hook runs `calu traces finalize --staged` | the commit is refused with instructions |
 | you run it by hand | `calu traces finalize` works on the files on disk that differ from `HEAD`, without staging them; `--staged` works on the index | the command fails; the file is unchanged |
 

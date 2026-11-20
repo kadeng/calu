@@ -337,6 +337,16 @@ FINAL_PASS_FAILED = (
 )
 """Reason of the denial of a commit whose final trace redaction failed (D246)."""
 
+TRACES_STAGED_NOTE = (
+    "[calu] Before this commit, calu redacted the session trace file(s) {paths} once more and "
+    "staged them, so the commit records them together with your change. This is intended: "
+    "the project keeps its session traces in git (traces.enabled; a project that does not "
+    "want that lists the trace directory in .gitignore). Leave them in the commit unless the "
+    "user asks otherwise."
+)
+"""What Claude is told when the final pass staged trace files for its commit: in a dogfooding
+run Claude took them for files it had not meant to commit and undid the commit (D246)."""
+
 TRACE_BLOCK_EVENTS = (
     UserInput,
     AssistantText,
@@ -3519,8 +3529,9 @@ class Session:
                 source = "internal"
                 self._run_state.peek(step.tool_use_id or "").running = False
                 self._run_state.release(step.tool_use_id or "")
+        traces_note = ""
         if result.decision.approves:
-            refused = await self._finalize_for_commit(step)
+            refused, traces_note = await self._finalize_for_commit(step)
             if refused:
                 result = CheckDecision(
                     decision=Decision.DENY, reason=refused, step_summary=result.step_summary
@@ -3544,10 +3555,14 @@ class Session:
             Decision.DENY: Verdict.DENY,
             Decision.ESCALATE: Verdict.ASK,
         }[result.decision]
-        context = ""
+        notes: list[str] = []
         if comment:
-            context = CHECKER_COMMENT_TEMPLATE.format(route=decided.route.value, comment=comment)
-        return GateResult(verdict=verdict, reason=result.reason, context=context)
+            notes.append(
+                CHECKER_COMMENT_TEMPLATE.format(route=decided.route.value, comment=comment)
+            )
+        if traces_note and result.decision.approves:
+            notes.append(traces_note)
+        return GateResult(verdict=verdict, reason=result.reason, context="\n\n".join(notes))
 
     async def _held_late(
         self,
@@ -3736,7 +3751,7 @@ class Session:
         """
         answer = (await self._ask(step)).answer
         if answer.allow:
-            refused = await self._finalize_for_commit(step)
+            refused, _ = await self._finalize_for_commit(step)
             if refused:
                 return HumanAnswer(allow=False, message=refused, note=answer.note)
         return answer
@@ -4936,7 +4951,7 @@ class Session:
         self._trace_secrets.update(Secrets.from_environment(names))
         return self._trace_secrets
 
-    async def _finalize_for_commit(self, step: Step) -> str:
+    async def _finalize_for_commit(self, step: Step) -> tuple[str, str]:
         """Run the final redaction pass of the trace files before a commit of Claude's (D246).
 
         For a plain `git commit` (`classify_commit`) while `traces.final_redaction` is on:
@@ -4957,24 +4972,27 @@ class Session:
             step: The approved tool call.
 
         Returns:
-            "" if the commit may run; otherwise the reason for Claude why it is refused: the
-            pass failed for a file, and committing it unfinalized is not allowed.
+            (refusal, note). `refusal` is "" if the commit may run; otherwise the reason for
+            Claude why it is refused: the pass failed for a file, and committing it
+            unfinalized is not allowed. `note` is `TRACES_STAGED_NOTE` naming the files when
+            the pass staged trace files for the commit, else "": a note for Claude, so that it
+            does not take those files for a mistake.
         """
         cfg = self.config.traces
         if not cfg.final_redaction or step.tool_name != "Bash":
-            return ""
+            return "", ""
         cwd = Path(step.cwd or self.workspace)
         try:
             line = classify_commit(str(step.tool_input.get("command") or ""), cwd)
             if line.kind is not CommitKind.PLAIN:
-                return ""
+                return "", ""
             repo = await anyio.to_thread.run_sync(repository_of, cwd)
             if repo is None:
-                return ""
+                return "", ""
             directory = (self.workspace / cfg.directory).resolve()
             relative = directory.relative_to(repo.resolve()).as_posix()
         except Exception:
-            return ""
+            return "", ""
         writer = self.traces
         if writer is not None and step.tool_use_id:
             writer.hold(cfg.final_timeout_s + COMMIT_HOLD_S)
@@ -4982,7 +5000,7 @@ class Session:
         try:
             found = await anyio.to_thread.run_sync(plans, repo, "worktree", relative)
             if not found:
-                return ""
+                return "", ""
             redactor: Redactor | None = None
             if cfg.redact:
                 model = self._models.get("trace-redactor") or (
@@ -5002,12 +5020,16 @@ class Session:
             problem = f"{type(exc).__name__}: {exc}"
             outcome = None
         if not problem:
+            note = ""
             if outcome is not None and outcome.results:
                 summary = "; ".join(outcome.summary().splitlines())
                 await self._emit_safely(
                     Log(level="info", message=f"session traces finalized for the commit: {summary}")
                 )
-            return ""
+                staged = [f"`{result.path}`" for result in outcome.results if result.staged]
+                if staged:
+                    note = TRACES_STAGED_NOTE.format(paths=", ".join(staged))
+            return "", note
         self._release_commit_hold(step.tool_use_id)
         await self._emit_safely(
             Log(
@@ -5018,7 +5040,7 @@ class Session:
                 ),
             )
         )
-        return FINAL_PASS_FAILED.format(problem=problem)
+        return FINAL_PASS_FAILED.format(problem=problem), ""
 
     def _release_commit_hold(self, tool_use_id: str | None) -> None:
         """Let the trace writer append again once the commit it was held for is over.
