@@ -221,6 +221,41 @@ and leaving it is an approval calu does not present yet); the condensed skill
 `../.claude/skills/claude-code-integration` does not mention the measured status message yet
 (it lies outside `calu/`).
 
+#### Worktree support (needed, owner 2026-11-20)
+
+The owner: calu must work with git worktrees as Claude Code commonly uses them, without asking
+about it, with and without parallel subagents. Known today: each tool call carries its own
+`cwd` (hook input), relative paths resolve against it, and the path rules read a path inside
+`<project>/.claude/worktrees/<name>/` (where `EnterWorktree` and `Agent` with `isolation:
+"worktree"` put them) relative to the worktree's root (`checkers/rules.py`); `ExitWorktree`
+with `discard_changes` has a rule. Everything else is open. Answer each question by
+measuring (a spike with the real Claude Code), then design, then test with and without
+parallel subagents:
+1. Which tool creates worktrees: Claude Code's `EnterWorktree` and `Agent(isolation:
+   "worktree")`, plain `git worktree add` through Bash, or both? Where do they land: inside
+   the project (`.claude/worktrees/`) or outside (`../x`, `/tmp/x`)? A worktree outside the
+   project: are its files project files and local edits for calu (snapshots, write sets,
+   honesty, traces, the checkers' read tools, which are confined to the project)?
+2. For a subagent in a worktree: is the worktree its working directory and "project root"
+   for the checkers, the rules and the context (AGENTS.md, CLAUDE.md of the worktree or of
+   the main checkout)?
+3. Which `.claude/settings.json` applies to a subagent in a worktree: the main checkout's or
+   the worktree's own copy (which may differ, or be older)? Same for calu's own project
+   settings and the sandbox entries calu checks.
+4. Honesty status: today it is project-wide (`gate.py`: open marks anywhere make a step that
+   executes project code DENY), keyed by path relative to the project. Are worktree files
+   tracked as separate paths (`.claude/worktrees/a/src/x.py` vs `src/x.py`), or should status
+   be kept per checkout? Can a dishonest edit by a subagent in worktree A block a subagent in
+   worktree B from running code in B's still honest state (it would today, if A is inside the
+   project)? What should hold?
+5. Can the main agent or other subagents run code in any worktree, and which checkout's
+   honesty state then applies?
+6. Snapshots and write sets of a command run in a worktree; the trusted-commit list
+   (`honesty trust`) per checkout; traces and the final redaction pass per checkout; merging a
+   worktree back (a commit in a worktree, then a merge/cherry-pick in the main checkout).
+7. Removing a worktree (with or without uncommitted work), and a worktree whose branch is
+   checked out elsewhere.
+
 #### Claude Code as a whole inside namespaces (backlog, owner 2026-11-19)
 
 Today only Claude's Bash commands run in Claude Code's sandbox; Claude Code itself (Read,
