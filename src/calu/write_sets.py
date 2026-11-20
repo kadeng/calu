@@ -206,6 +206,7 @@ class WriteSets:
         wrote: Callable[[Sequence[str]], None] | None = None,
         checkouts: Callable[[Step], Sequence[Checkout]] | None = None,
         nested: Callable[[], Sequence[str]] | None = None,
+        refresh: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """Remember the collaborators; no snapshot repository exists before `prepare`.
 
@@ -235,6 +236,10 @@ class WriteSets:
                 (`Session.step_checkouts`, D251); None snapshots the project directory only.
             nested: Names the worktrees inside the project directory, relative to it, which
                 the main checkout's snapshots leave out; None for none.
+            refresh: Reads the project's worktrees again (`Session._refresh_checkouts`); it
+                is awaited before the "after" snapshots, so that a worktree the call itself
+                created (`EnterWorktree`, `git worktree add`) is left out of the main
+                checkout's write set. Must not raise; None reads nothing again.
         """
         self._workspace = workspace
         self._store = store
@@ -250,6 +255,7 @@ class WriteSets:
         self._wrote = wrote
         self._checkouts = checkouts
         self._nested = nested
+        self._refresh = refresh
         self._creating = anyio.Lock()
         """Held while a worktree's snapshot repository is created, so that two commands that
         start at once in a new worktree create it once."""
@@ -492,8 +498,14 @@ class WriteSets:
         written: list[Change] = []
         patches: list[str] = []
         cut = False
+        if self._refresh is not None:
+            await self._refresh()
+        nested = tuple(self._nested()) if self._nested is not None else ()
         try:
             for window in windows:
+                if window.store is self._snapshots:
+                    # A worktree the call created is a checkout of its own (D251), no write.
+                    window.store.exclude = (*self.excluded, *nested)
                 after = await window.store.take()
                 # Read after the snapshot, so that a report from while it was taken counts.
                 part = await window.store.changes(

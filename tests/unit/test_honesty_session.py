@@ -108,6 +108,7 @@ async def session_on(
     *,
     trusted: bool = True,
     models: dict[str, str | Model] | None = None,
+    snapshots: bool = False,
     **honesty: Any,
 ) -> tuple[Session, Recorder, MemorySessionStore]:
     """Build a session on a test repository whose HEAD a person certified.
@@ -120,12 +121,16 @@ async def session_on(
         models: Checker models that replace the defaults: the command checker says that a
             command with one of `EXECUTING` executes project code, the honesty checker
             (enabled here, key "honesty") calls every edited file HONEST, the others pass.
+        snapshots: Whether `changes.snapshot` is on (write sets, D31).
         honesty: Further `honesty.*` settings.
 
     Returns:
         The session, the event recorder and the store.
     """
-    config = Config(honesty=HonestyConfig(mode=mode, **honesty))  # type: ignore[arg-type]
+    config = Config(
+        honesty=HonestyConfig(mode=mode, **honesty),  # type: ignore[arg-type]
+        changes=ChangesConfig(snapshot=snapshots),
+    )
     session, rec, store = make_session(
         root,
         turns,

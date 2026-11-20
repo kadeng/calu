@@ -300,6 +300,11 @@ from the text above, and why:
   "and calu's own rules below": the longer sentence broke requirement 38's word limit.
 - **Snapshots.** Two snapshots of one repository are now taken one after the other: parallel
   commands in one worktree failed with git's `index.lock` (found by U10).
+- **A worktree the step itself creates (corrected after run L1, worktrees not ignored).** The
+  "after" snapshot of `EnterWorktree` (or `git worktree add`) still had the old list of nested
+  worktrees, so the write set named `.claude/worktrees/wta`, the new worktree's own state
+  watched its root as a file, and the first code run there escalated ("not a readable regular
+  file"). The write sets now read the worktrees again before the "after" snapshots.
 - **Fake runner.** "cwd" per scripted call; "writes" and "run" happen there.
 
 Not built (open points for the owner):

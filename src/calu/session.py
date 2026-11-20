@@ -676,6 +676,7 @@ class Session:
             wrote=self._watch_written,
             checkouts=self.step_checkouts,
             nested=self.checkouts.nested,
+            refresh=self._refresh_checkouts,
         )
         """Measures what each command wrote, has it reviewed and undoes a refused change
         (`calu.write_sets`, agent/records/PLAN.md D31)."""

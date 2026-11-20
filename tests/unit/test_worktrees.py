@@ -331,6 +331,36 @@ async def test_u4_an_unignored_worktree_is_no_unreviewed_file_of_the_main_checko
     assert ".claude/worktrees/wta" in session.honesty.excluded
 
 
+async def test_u4_a_worktree_a_step_creates_is_no_write_and_no_unreviewed_file(
+    repo: Path,
+) -> None:
+    """Live run L1, worktrees not ignored, snapshots on (2026-11-20): the "after" snapshot of
+    EnterWorktree named the new worktree as a written path, its own state watched its root,
+    and the first test run in it escalated as "not a readable regular file"."""
+    from tests.unit.test_honesty_session import run_turns, session_on
+
+    session, rec, store = await session_on(
+        repo,
+        [
+            [
+                {
+                    "tool": "Bash",
+                    "input": {"command": "git worktree add .claude/worktrees/wta"},
+                    "run": ["git", "worktree", "add", "-q", ".claude/worktrees/wta"],
+                    "result": "ok",
+                },
+                run_in(".claude/worktrees/wta"),
+            ]
+        ],
+        snapshots=True,
+    )
+    await run_turns(session, rec)
+    assert decisions(rec)[-1] == "pass"
+    assert written(store) == [], "the new worktree is a checkout, not a written path"
+    state = await session.honesty_snapshot()
+    assert state.clean, state
+
+
 async def test_u5_a_dishonest_file_left_in_an_ignored_worktree_is_reviewed_again(
     repo: Path,
 ) -> None:
