@@ -293,7 +293,12 @@ allowlists through `start_proxy(ProxyConfig(allowed_hosts=[...]))`), `sandboxed_
 command, cwd, timeout_secs, env, ...)` runs one command in a sandboxed child while calu stays
 unsandboxed (so calu can build a new set for each retry), `QueryContext` pre-checks a path or
 the network against a set (static, not a runtime denial log), the proxy reports network
-events (`drain_audit_events`). Not found in the docs read: a per-port rule in the Python API
+events (`drain_audit_events`). Per-port rules DO exist in nono-py since v0.13.0 (PR #102; PyPI 0.16.0):
+`CapabilitySet.allow_localhost_port(port)`, `allow_tcp_connect_port(port)`,
+`allow_bind_port(port)` (Landlock V4+, port only, fail closed, TCP only); the docs page on
+nono.sh is out of date. The Python SDK is a separate repository, nolabs-ai/nono-py (the
+owner's fork kadeng/nono is the Rust core; a clone is in /home/klondenberg/projects/nono).
+Earlier note, now corrected: "not found in the docs read: a per-port rule in the Python API"
 and a runtime "why was this denied" for `sandboxed_exec`; denials would have to be inferred
 from the command's error output plus `QueryContext`.
 Raw TCP (e.g. PostgreSQL): per nono's docs, host filtering covers HTTP(S) through the proxy
