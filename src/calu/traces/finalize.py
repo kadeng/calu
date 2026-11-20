@@ -298,6 +298,44 @@ def repository_of(directory: Path) -> Path | None:
     return Path(done.stdout.decode().strip())
 
 
+def settings_directory(workspace: Path, repo: Path) -> Path:
+    """Return the directory whose project settings apply to a final pass in `workspace`.
+
+    A git worktree outside the project directory (`git worktree add ../x`) lies below no
+    registered project directory, so the lookup by directory would fall back to the global
+    settings. Such a worktree belongs to the project of its main checkout, which git names
+    through the common directory of the repository (D251):
+
+        `git rev-parse --path-format=absolute --git-common-dir`  ->  <main checkout>/.git
+
+        workspace inside the main checkout (also `.claude/worktrees/x`)   -> workspace
+        workspace in a worktree outside it                                 -> the main checkout
+        common directory not named `.git` (bare repository, separate
+        git directory) or git fails                                        -> workspace
+
+    Args:
+        workspace: The directory the pass was started in, resolved.
+        repo: The top-level directory of the work tree that holds `workspace`
+            (`repository_of`).
+
+    Returns:
+        The directory for `project_for_directory`; `workspace` when no main checkout is found.
+    """
+    try:
+        done = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    except FinalizeError:
+        return workspace
+    if done.returncode != 0:
+        return workspace
+    common = Path(done.stdout.decode().strip()).resolve()
+    if common.name != ".git":
+        return workspace
+    main = common.parent
+    if workspace == main or main in workspace.parents:
+        return workspace
+    return main
+
+
 def _has_head(repo: Path) -> bool:
     """Tell whether the repository has a commit at HEAD.
 

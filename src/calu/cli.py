@@ -6052,7 +6052,9 @@ def _traces_finalize(args: argparse.Namespace, store: CredentialStore) -> None:
     finalized on disk (not staged). With `--staged` (the pre-commit hook): the trace files
     the index adds or changes are finalized in the index, and on disk where the file holds
     the staged text. Settings and credentials are read only if a file has something to
-    redact, so a commit without a new trace part needs neither.
+    redact, so a commit without a new trace part needs neither. The settings are those of the
+    project of the directory; in a git worktree outside the project, those of the project of
+    its main checkout (`settings_directory`).
 
         nothing to finalize                 -> nothing printed, exit 0
         `traces.final_redaction` off        -> one line, exit 0, files unchanged
@@ -6077,7 +6079,14 @@ def _traces_finalize(args: argparse.Namespace, store: CredentialStore) -> None:
     from calu.models import resolve_model
     from calu.store.config import ConfigStore
     from calu.store.projects import project_for_directory
-    from calu.traces.finalize import FinalizeError, final_redactor, finalize, plans, repository_of
+    from calu.traces.finalize import (
+        FinalizeError,
+        final_redactor,
+        finalize,
+        plans,
+        repository_of,
+        settings_directory,
+    )
     from calu.traces.redact import Secrets
 
     workspace = Path(args.directory).resolve()
@@ -6103,8 +6112,10 @@ def _traces_finalize(args: argparse.Namespace, store: CredentialStore) -> None:
         Returns:
             The configuration.
         """
-        project = args.project or await project_for_directory(db, workspace, socket.gethostname())
-        return (await ConfigStore(db, workspace, project).load()).config
+        # A worktree outside the project takes its main checkout's settings (D251).
+        home = settings_directory(workspace, repo)
+        project = args.project or await project_for_directory(db, home, socket.gethostname())
+        return (await ConfigStore(db, home, project).load()).config
 
     try:
         config = _herd_value(store, read, may_ask=sys.stdin.isatty())

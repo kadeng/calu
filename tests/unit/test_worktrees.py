@@ -932,3 +932,27 @@ def test_u13_the_pre_commit_hook_in_a_worktree_with_no_trace_staged_reads_nothin
 
     args = argparse.Namespace(staged=True, directory=str(inner), project=None)
     cli._traces_finalize(args, NoStore())  # type: ignore[arg-type]  # pyright: ignore[reportPrivateUsage]
+
+
+def test_u13_the_hook_in_an_outside_worktree_takes_the_main_checkouts_settings(
+    repo: Path, tmp_path: Path
+) -> None:
+    """The owner's decision 2026-11-20: the pre-commit hook in a worktree outside the project
+    finds the main checkout through `git rev-parse --git-common-dir`."""
+    from calu.traces.finalize import settings_directory
+
+    inner = worktree(repo, "wta")
+    outside = tmp_path / "x"
+    git(repo, "worktree", "add", "-q", "--detach", str(outside))
+    main = repo.resolve()
+    assert settings_directory(main, main) == main
+    assert settings_directory(main / "src", main) == main / "src"
+    nested = inner.resolve()
+    assert settings_directory(nested, nested) == nested, "inside: the lookup by parents finds it"
+    far = outside.resolve()
+    assert settings_directory(far, far) == main
+    assert settings_directory(far / "sub", far) == main
+    plain = tmp_path / "other"
+    plain.mkdir()
+    git(plain, "init", "-q")
+    assert settings_directory(plain.resolve(), plain.resolve()) == plain.resolve()

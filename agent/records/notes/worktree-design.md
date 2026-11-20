@@ -312,9 +312,10 @@ Not built (open points for the owner):
 1. The trace's step heading does not name the checkout (point 4): the trace is rendered from
    protocol events, which carry no working directory; it needs a protocol field
    (`npm run gen:protocol`, the clients). The tool inputs show the worktree paths already.
-2. The pre-commit hook does not resolve the main checkout for a worktree outside the project
-   (point 4): its settings lookup by directory falls back to the global settings there.
-   Documented as a gap.
+2. ~~The pre-commit hook does not resolve the main checkout for a worktree outside the project
+   (point 4).~~ *Built 2026-11-20 (the owner's decision):* `calu.traces.finalize.settings_directory`
+   asks `git rev-parse --git-common-dir` and looks up the settings of the main checkout's
+   project.
 3. A checker cannot record a mark on a file of an outside worktree (marks must be paths inside
    the project); with honesty on, those files need a person's certification anyway.
 4. `/trust` in a client resolves a branch or `HEAD` in the session directory, not in the step's

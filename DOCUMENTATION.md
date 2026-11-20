@@ -2109,6 +2109,10 @@ others for the rules, the write sets and the honesty state. Two things differ:
 With honesty off, Calu adds nothing of its own to such a step: the checkers' instructions and
 Claude Code's auto mode decide.
 
+The pre-commit hook of the session traces (`calu traces finalize --staged`) runs for commits in
+every worktree. In a worktree outside the project directory it finds the main checkout through
+`git rev-parse --git-common-dir` and uses that project's settings.
+
 ### Known gaps
 
 - An open decision holds every checked step of every agent, also of subagents in other
@@ -2117,9 +2121,6 @@ Claude Code's auto mode decide.
   own `HEAD`, name its branch or commit.
 - A checker cannot record a mark on a file of a worktree outside the project directory: marks
   name paths inside the project. That worktree's files need a person's certification anyway.
-- The pre-commit hook of the session traces looks up the project's settings by the directory
-  it runs in. In a worktree outside the project directory it does not find the project and
-  uses the global settings.
 - A session that ends while Claude works in a worktree leaves the worktree locked in
   `git worktree list`; `git worktree unlock` releases it.
 

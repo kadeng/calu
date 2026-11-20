@@ -569,3 +569,47 @@ async def test_the_final_pass_reads_the_projects_settings_from_the_database(
     # Nothing new is staged: the hook's run reads no setting and prints nothing.
     assert await run(["traces", "finalize", "--staged", "--directory", str(repo)]) == 0
     assert capsys.readouterr().out == ""
+
+
+async def test_the_hook_in_a_worktree_outside_the_project_reads_the_projects_settings(
+    prepared, capsys, tmp_path, monkeypatch
+) -> None:
+    """D251, the owner's decision of 2026-11-20: a commit in a worktree outside the project
+    directory takes the settings of the main checkout's project, not the global ones."""
+    import subprocess
+
+    for name in list(os.environ):
+        if name.startswith("GIT_"):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "gitconfig"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    db, _session_id, _escalation = prepared
+
+    class Terminal:
+        """Standard input that is a terminal, so the stand-in credential may be "asked"."""
+
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr(cli.sys, "stdin", Terminal())
+    repo = tmp_path / "shop"
+    repo.mkdir()
+    ident = ["-c", "user.email=a@b", "-c", "user.name=a"]
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "README.md").write_text("# shop\n")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), *ident, "commit", "-q", "-m", "first"], check=True)
+    outside = tmp_path / "shop-wt"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", str(outside)], check=True)
+    assert await run(["project", "add", str(repo), "--name", "shopwt"]) == 0
+    await admin.set_setting(db, "traces.final_redaction", True)
+    await admin.set_setting(db, "traces.final_redaction", False, project="shopwt")
+    capsys.readouterr()
+    trace = outside / "agent" / "traces" / "session_001.md"
+    trace.parent.mkdir(parents=True)
+    trace.write_text("# calu session trace\n\nsome text\n\n")
+    subprocess.run(["git", "-C", str(outside), "add", "-A"], check=True)
+    assert await run(["traces", "finalize", "--staged", "--directory", str(outside)]) == 0
+    assert "traces.final_redaction is off" in capsys.readouterr().out, (
+        "the project's setting applies, found through the main checkout"
+    )
