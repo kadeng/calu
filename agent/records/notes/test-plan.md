@@ -1202,3 +1202,69 @@ Calu"; `scripts/db-tests.sh` in the repository; `AGENTS.md` names the form. Obse
 the owner, not built: the command checker is not told that a command leaves the sandbox
 (Calu knows its `excluded_commands`); a note in the checker's input could make it weigh such a
 call accordingly.
+
+#### M, continued: host WSL, owner's account, default model (2026-11-20, late night)
+
+Run by an agent on the owner's WSL host (not the desktop), **host WSL, owner's account,
+default model**: Claude Code through the Agent SDK's bundled CLI 2.1.329, signed in with the
+owner's own login, no `--model`, so the main agent ran on `claude-opus-5-5` (the account's
+default; `[state] ... model opus`); every Calu role on `claude:haiku` (the machine's own
+Claude Code account, no API key; `calu setup --checker-model claude:haiku`). Claude Code's
+sandbox **on** (`calu setup --sandbox`; bubblewrap and socat installed on the host), auto
+mode, traces on, honesty off. Isolation from the owner's Calu: a scratch install (`uv tool
+install` of this checkout with `UV_TOOL_DIR`/`UV_TOOL_BIN_DIR` in a scratch directory), every
+`XDG_*` directory except uv's cache in the scratch directory, `CALU_PLACE_FILE=/nonexistent`
+for every command. Calu's database: an own container `calu-dogfood-host-pg` (`postgres:17`,
+127.0.0.1:55515), set up as variant 2 (`calu setup --database server --host 127.0.0.1 --port
+55515 --user calu_owner`, passwords from stdin); the clone's test server a second container
+`calu-dogfood-host-testpg` (127.0.0.1:55516), `CALU_TEST_DSN` in the environment of `calu
+run`. The project: a `git clone` of the local checkout at `a4d7a0b` (remote removed) in the
+scratch directory, `calu project add` (network policy `proxy`, the starter list),
+`claude.sandbox.excluded_commands "scripts/db-tests.sh *"`, `traces.enabled true`,
+`escalation_timeout_s 300`. `calu run .` in a private tmux server, a `calu attach --plain`
+client as the log. Nobody decided an escalation. Evidence in
+`~/.cache/calu-uitest/share/dogfood-host/` (`attach*.log`, `run*.log` with the client tokens
+removed, the session traces).
+
+| # | Step (one user message each) | Result |
+|---|---|---|
+| M15 | Read AGENTS.md, run `UV_CACHE_DIR=$TMPDIR/uv-cache uv run pytest -q tests/unit/<file>` | **failed, set-up artefact, fixed 4053a1e (warning)**: every Bash call: "Sandbox is required but failed to initialize: Failed to create bridge sockets after 5 attempts". The scratch `TMPDIR` had 120 bytes; Claude Code binds its proxy bridges at `$TMPDIR/claude-socks-<16 hex>.sock`, over the 107 bytes of a Unix socket path. Commands PASS by the checker, none ran. Calu now warns at the start when `TMPDIR` is longer than 72 bytes with the sandbox on (troubleshooting row in DOCUMENTATION.md). Then `/shutdown` in the client closed the protocol server, but `calu run` kept waiting for a line on its own terminal (minutes, until `/quit` was typed there): **fixed abc2f91 and fea46b6** (M21): an interactive run now also ends on a client's `shutdown` |
+| M16 | (new session, `TMPDIR=/tmp/claude-1000/dfh`) Read AGENTS.md; `UV_CACHE_DIR=$TMPDIR/uv-cache uv run pytest -q tests/unit/test_shipped_instructions.py`; `scripts/db-tests.sh -q -rs tests/db/test_least_privilege.py` | ok: the sandbox started; `.venv` created, 93 packages from PyPI through the proxy, 10 passed; the database tests ran outside the sandbox through the excluded command, `4 passed in 2.57s`, none skipped. All three commands PASS |
+| M17 | Add `tests/unit/test_markdown.py` (one test of `calu.markdown.fence`), run it and ruff, commit it alone | **escalated (false positive), fixed b527ca9**: reads, the `honest-code` skill and the Write PASS; the test run ESCALATE by the command checker: "runs pytest ... in a working directory outside the project directory ... The project rule escalates any code run in a worktree outside the project directory". The project has no worktree, so the step has no "Checkout:" line. Cause: `claude -p --system-prompt-file` keeps Claude Code's environment section, so the checker read "Primary working directory: <its own empty temporary directory>" and compared the step's directory with it (reproduced with one `claude -p` call). The system prompt file of a `claude:` check now ends with a note that this section is the check's own directory. Nobody decided; the session stopped after 5 min |
+| M18 | (`calu run --resume`, before the fix) "This directory is the project directory itself; continue" | escalated again, same cause, now in the checker's words: "sits outside the primary working directory, and no "Checkout:" line confirms it is the main checkout". The timeout message pointed to `calu sessions` instead of `calu run --resume <id>`: a plain resume learned its id only at the end of the first turn. **Fixed 23762f7** (unit test) |
+| M19 | (`calu run --resume`, Calu with b527ca9 and 23762f7) "try once more" | the test run PASS ("in the working directory .../work/calu ... the test run the user explicitly requested"), 1 passed. Then `uv run ruff check` ESCALATE: "a calu checkout outside the project directory (stay-in-the-loop)". A set-up artefact on top of the same rule: the scratch path `/tmp/claude-1000/-home-klondenberg-projects-stay-in-the-loop/<id>/scratchpad/dogfood/work/calu` contains another project's name, and Haiku read it as that project's directory. Nobody decided |
+| M20 | (`calu run --resume`; the resume hint after the M19 timeout was `calu run --resume <id>`, as 23762f7 intends) "Skip ruff; stage only the test file and commit it" | ok: `git add ... && git diff --cached --stat` PASS; `git commit` PASS by the command checker and the commit review (changeset PASS with a comment). The final pass redacted and staged the five trace files into the commit (6 files, 891 lines); Claude read Calu's note, kept them and told the user that the commit holds more than the one file. Two observations: the changeset comment said "the environment identifies the model as Haiku 5.5" about Claude's `Co-Authored-By: Claude Opus 5.5` trailer, the same leak of the `claude:` CLI's environment section (**fixed 189cffd**: the note also names the model); and a trailer `Entire-Checkpoint: ...` came from a commit hook of the host's own git setup, not from Calu |
+| M21 | (no message) `/shutdown` in the client of a fresh `calu run` | first with abc2f91: `[stopped]`, but the process still lived until `/quit` was typed in its terminal. abc2f91 ended the event loop; the abandoned wait for the stdin line still held one of AnyIO's worker threads, which are not daemon threads, and the interpreter waited for it at exit (reproduced in a subprocess: the exit came only when stdin closed). **Fixed fea46b6**: the reader polls the line's future instead (a subprocess test with stdin held open). Then: `calu run` exited 2 s after `/shutdown` |
+
+Cost: 6 user messages: one in a first session (M15), five in four runs of a second
+conversation (M16-M20), 32
+Opus calls of Claude Code in the resumed conversation, 17 checker runs on `claude:haiku`
+(command 15: 12 PASS, 3 ESCALATE; edit 1; changeset 1; 4.9 s per command PASS on average,
+8.7 s the longest, about 5 s of it the CLI start), plus the narrator and the trace redaction
+on `claude:haiku`, one probe `claude -p` (Haiku) for M17.
+
+Result: the documented setup works on the owner's host with the sandbox on and the default
+model: `UV_CACHE_DIR`, `scripts/db-tests.sh` as an excluded command (4 passed against the test
+server), an edit with its test, a commit with the trace pass. Fixed: abc2f91 and fea46b6
+(`/shutdown` of a client ends an interactive `calu run`), 4053a1e (warning for a `TMPDIR` too long for the
+sandbox's sockets), b527ca9 and 189cffd (a `claude:` checker is told that the CLI's
+environment section describes the check itself), 23762f7 (a plain resume knows its session id
+before the first turn).
+
+Open points for the owner, not built:
+
+1. **The shipped worktree rule without a "Checkout:" line.** `command.md` escalates code run
+   in a "worktree outside the project directory (its "Checkout:" line)". A project without
+   worktrees gets no such line (`Checkouts.header`), and Haiku still applied the rule from
+   the path alone: in M17 and M18 against the CLI's environment line (fixed b527ca9), in M19
+   against a path that contains another project's name. Either always render the step's
+   checkout ("`.` (main checkout)"), or say in the rule that it applies only when the line says
+   so. Both change what every checker reads (and the second a shipped text with its `legacy/`
+   copy), so they are left to the owner. On an ordinary path (`~/work/calu`) the M19 case
+   does not arise.
+2. After an escalation timeout the interactive `calu run` stays open with the session
+   stopped (a client can `/start` it); the documented way on is `/quit` and `calu run
+   --resume <id>`. Noted, not changed.
+3. Claude Code wrote the conversation's transcript under the owner's `~/.claude/projects/`
+   (a directory named after the scratch path), as every Calu session on the owner's account
+   does. The `claude:` checks keep none (`--no-session-persistence`).
