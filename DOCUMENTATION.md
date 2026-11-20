@@ -289,8 +289,16 @@ them.
 | command checker (`command`) | one Bash command, and every tool call that no other route covers (reads, searches, MCP tools, tools a Claude Code update adds; a session names such new tools at its start) | the command or tool input, the notes of the rules, the narrated conversation | yes |
 | edit checker (`edit`) | one `Edit`, `Write` or `MultiEdit` before it is written | the diff, the file before the change | yes |
 | changeset checker (`changeset`) | a whole `git commit`: whether the change is complete, whether it contains work nobody asked for, whether it weakens a test, and whether the message fits the change | the full diff, the message, and the session step in which each file last changed | yes |
-| subagent-result checker (`subagent-result`) | what a subagent hands back, against the task it was given | the subagent's task and result | yes (`check_subagent_results`) |
+| subagent-result checker (`subagent-result`) | what a subagent hands back, against the task it was given | the subagent's task and result, or the report it hands back with `SubagentHandback` | yes (`check_subagent_results`) |
 | honesty checker (`honesty`) | whether names and documentation still match the code after an edit; answers HONEST or DISHONEST per file | the edit and the file around it | no ([code honesty](#code-honesty)) |
+
+A background subagent of Claude Code delivers its report with the tool `SubagentHandback` and
+ends with an empty final result. Calu reviews that report with the subagent-result checker
+before the tool call runs: the checker's remark reaches the main agent as a message, and a
+report the checker escalates waits for a person. A person's denial stops the handback: the
+subagent reads that the user does not want the report, and the main agent reads the remark and
+the decision. The empty final result after a reviewed report passes without a check; the step
+records why.
 
 Two more models work for the checkers and decide nothing:
 

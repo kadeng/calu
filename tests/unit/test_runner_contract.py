@@ -365,6 +365,30 @@ async def test_a_denied_command_stays_denied_and_other_tools_are_not_held(tmp_pa
     assert out["permissionDecision"] == "allow"
 
 
+async def test_the_hook_sends_a_note_for_the_main_agent_before_it_answers(tmp_path: Path):
+    """D252: a verdict's `main_note` (the review of a handed-back report) goes to the main
+    agent as calu's own priority "next" message; the hook's answer is the verdict's."""
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    sent: list[str] = []
+
+    async def note(text: str, human: bool = False) -> None:
+        if text:
+            sent.append(text)
+
+    runner._send_note = note  # type: ignore[method-assign]
+
+    class Noting(AllowAll):
+        """Passes a handback with a note for the main agent."""
+
+        async def pre_tool_use(self, step):
+            return GateResult(Verdict.DENY, reason="for the subagent", main_note="for main")
+
+    out = await hook_answer(runner, Noting(), tool="SubagentHandback")
+    assert sent == ["for main"]
+    assert out["permissionDecision"] == "deny"
+    assert out["permissionDecisionReason"] == "for the subagent"
+
+
 # ---------------------------------------------------------------- a switch of the mode (D250)
 
 

@@ -106,12 +106,16 @@ class GateResult:
     """Verdict on a tool call.
 
     `reason` is shown to Claude for DENY. `context` is extra text that Claude receives together
-    with the verdict (used for remarks of a checker on an allowed step); empty for none.
+    with the verdict (used for remarks of a checker on an allowed step); empty for none. Both
+    reach the agent that made the call. `main_note` is for the main agent instead: the runner
+    sends it as a priority "next" message before it answers (the review of a report a subagent
+    hands back with `SubagentHandback`, D252); empty for none.
     """
 
     verdict: Verdict
     reason: str = ""
     context: str = ""
+    main_note: str = ""
 
 
 def hook_decision(verdict: Verdict, mode: str | None, require_auto_mode: bool) -> str | None:

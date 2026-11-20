@@ -14,6 +14,7 @@ from calu.protocol.messages import (
     ChatSendParams,
     CheckResult,
     EscalationRequest,
+    ToolResult,
     TurnResult,
     UserInput,
 )
@@ -112,6 +113,83 @@ async def test_escalated_result_waits_for_the_user(tmp_path: Path):
         await session.decide_escalation(esc.escalation_id, "deny", "keep it small")
         await rec.wait_for(TurnResult)
         await session.stop()
+    injected = [u.text for u in rec.of(UserInput) if "result checker" in u.text]
+    assert injected and "keep it small" in injected[0]
+
+
+def handback_turn(report: str, after: list[dict] | None = None) -> list[list[dict]]:
+    """A subagent that hands its report back, then ends with an empty final result."""
+    return [
+        [
+            {
+                "agent": {
+                    "description": "reviewer",
+                    "prompt": "Review the change strictly.",
+                    "background": True,
+                    "result": "",
+                    "actions": [
+                        {"tool": "SubagentHandback", "input": {"message": report}, "result": "ok"},
+                        *(after or []),
+                    ],
+                }
+            },
+            {"text": "done"},
+        ]
+    ]
+
+
+async def test_a_handed_back_report_is_reviewed_and_its_empty_result_passes(tmp_path: Path):
+    """D252: the report of `SubagentHandback` goes to the result checker (not the command
+    checker); its note reaches the main agent; the empty final result after it passes
+    without a checker, with the reason recorded."""
+    from calu.testing import _fake_result_review, _last_prompt, fake_models
+
+    seen: list[str] = []
+
+    def spy(messages, info: AgentInfo) -> ModelResponse:
+        seen.append(_last_prompt(messages))
+        return _fake_result_review(messages, info)
+
+    session, rec, store = make_session(
+        tmp_path,
+        handback_turn("1. bug 2. polish calu:scope"),
+        checker_models={**fake_models(), "subagent": FunctionModel(spy)},
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="small fix only"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    assert len(seen) == 1 and "handed back its report" in seen[0] and "Its report:" in seen[0]
+    checks = [c for c in rec.of(CheckResult) if c.route == "subagent"]
+    assert [c.decision for c in checks] == ["PASS", "PASS"]
+    assert checks[0].comment == "Fake result checker: points 2-3 are out of scope."
+    assert "handed its report back with SubagentHandback" in checks[1].step_summary
+    assert not [c for c in rec.of(CheckResult) if c.tool_name == "SubagentHandback"]
+    injected = [u.text for u in rec.of(UserInput) if "result checker" in u.text]
+    assert len(injected) == 1 and 'subagent "reviewer"' in injected[0]
+    rows = [s for s in store.steps.values() if s.row.tool_name == "SubagentResult"]
+    assert [row.row.tool_input.get("handback") for row in rows] == [True, None]
+    assert rows[1].checker_runs == [] and rows[1].decision is not None
+    assert "passed without a check" in (rows[1].decision.reason or "")
+
+
+async def test_a_person_who_denies_a_handed_back_report_stops_the_handback(tmp_path: Path):
+    """D252: an escalated report waits for a person; a denial denies the `SubagentHandback`
+    call (the subagent reads why) and the main agent gets the note with the decision."""
+    session, rec, _ = make_session(
+        tmp_path, handback_turn("Rewrite everything calu:escalate-result")
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        esc = (await rec.wait_for(EscalationRequest))[0]
+        assert esc.tool_name == "SubagentResult" and esc.tool_input.get("handback") is True
+        await session.decide_escalation(esc.escalation_id, "deny", "keep it small")
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    results = [r for r in rec.of(ToolResult) if r.is_error]
+    assert results and "does not want this report handed back" in results[0].content
     injected = [u.text for u in rec.of(UserInput) if "result checker" in u.text]
     assert injected and "keep it small" in injected[0]
 

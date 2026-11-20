@@ -1003,8 +1003,9 @@ class SdkRunner:
             a sandbox entry beyond calu's configuration (`_sandbox_blockers`, read again for every
             command), so a human decides whether it runs.
 
-            Side effect: the first mode seen for the calling agent, and every change of it, is
-            reported as a `log` event (`_mode_events`).
+            Side effects: the first mode seen for the calling agent, and every change of it, is
+            reported as a `log` event (`_mode_events`); a `main_note` of the verdict (the review
+            of a handed-back report, D252) is sent to the main agent first (`_send_note`).
 
             Args:
                 input_data: The hook input (dict with tool_name, tool_input, agent_id, cwd...).
@@ -1020,6 +1021,8 @@ class SdkRunner:
             for event in self._mode_events(input_data.get("permission_mode"), agent):
                 await self._emit(event)
             result = await gate.pre_tool_use(step)
+            # The review of a handed-back report is for the main agent (D252).
+            await self._send_note(result.main_note)
             # The check can take minutes; a switch that landed meanwhile decides (D250).
             mode = self._mode_now(agent, input_data.get("permission_mode"))
             if step.tool_use_id and result.verdict is Verdict.ASK:

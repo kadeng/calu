@@ -154,10 +154,15 @@ class ResultChecker:
         # Claude wrote the description: one line in a code span, so it cannot add a heading or
         # a user turn to the prompt (`calu.checkers.render`, rule 1).
         description = code(result.description, 300) if result.description else "no description"
+        done, what = (
+            ("handed back its report", "Its report")
+            if result.handback
+            else ("finished", "Its final result")
+        )
         parts.append(
-            f"# Result to review\n\nA {kind} ({description}) finished.\n\n"
+            f"# Result to review\n\nA {kind} ({description}) {done}.\n\n"
             f"Task Claude gave it:\n{fence(_cut_middle(result.prompt, 10_000))}\n\n"
-            f"Its final result:\n{fence(_cut_middle(result.result))}"
+            f"{what}:\n{fence(_cut_middle(result.result))}"
         )
         return parts
 

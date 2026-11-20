@@ -372,7 +372,9 @@ class SubagentResult:
     """The final result of a subagent and the task it was given.
 
     `agent_id` is the protocol agent id (id of the Agent tool call); `prompt` is the task text
-    Claude gave the subagent; `background` tells whether it ran in the background.
+    Claude gave the subagent; `background` tells whether it ran in the background; `handback`
+    tells that `result` is the report the subagent handed back with Claude Code's
+    `SubagentHandback` tool, reviewed before the tool call runs (agent/records/PLAN.md D252).
     """
 
     agent_id: str | None
@@ -380,3 +382,4 @@ class SubagentResult:
     prompt: str
     result: str
     background: bool = False
+    handback: bool = False

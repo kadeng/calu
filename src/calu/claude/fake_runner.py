@@ -51,6 +51,12 @@ Each user message starts the next scripted turn; when the script is exhausted, t
                                                       a subagent runs the nested actions
     {"agent": {..., "fails": true}}                   ... and ends with the status "failed" and
                                                       an error result
+    {"agent": {..., "result": "", "actions": [..., {"tool": "SubagentHandback", "input":
+        {"message": "..."}}]}}                        ... a subagent that hands its report back
+                                                      as Claude Code's background subagents do:
+                                                      the gate reviews the report, its
+                                                      `main_note` goes to the main agent, and
+                                                      the final result is empty
     {"agent": {..., "background": true, "detach": true}}
                                                       ... as Claude Code runs a background
                                                       subagent: the Agent call returns at once
@@ -728,6 +734,9 @@ class FakeRunner:
             cwd=str(cwd),
         )
         gate_result = await gate.pre_tool_use(step)
+        if gate_result.main_note:
+            # As the SDK runner's hook: the note for the main agent goes out before the answer.
+            await sink(UserInput(text=gate_result.main_note, source=NOT_FROM_USER))
         # As the SDK runner's hook: the mode Claude Code is in when the answer goes out decides
         # what a PASS means (D250), not the one the call started in.
         decision = hook_decision(gate_result.verdict, self.permission_mode, False)

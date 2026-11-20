@@ -1069,7 +1069,9 @@ Open points and judgement calls for the owner:
    deliberate dishonest edit (noign s1), and a background subagent's empty `result` (Claude
    Code delivers a background subagent's report through `SubagentHandback`, and the
    `SubagentResult` it sends at the end has `"result": ""`). Both stopped the session here.
-   Model judgement, not changed.
+   Model judgement, not changed. *Decided by the owner 2026-11-20 (PLAN D252):* the report of `SubagentHandback` is
+   reviewed by the subagent-result checker before the call runs, and the empty result after it
+   passes without a checker, with the reason recorded.
 3. **Judgement call (fixed, 63b4a40):** a `cd` into a worktree and a run there is the step's
    own checkout now, not "other". So `cd .claude/worktrees/x && python3 ../../../tool.py` is
    code of two of the step's checkouts and outside the rule's wording; the rule covers obvious

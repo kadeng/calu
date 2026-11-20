@@ -915,6 +915,26 @@ escalation resolved from the database alone.
    message, `63b4a40` the "Checkout:" line of a `cd` into a worktree, `8440a28` a worktree the
    step creates), with two observations that are model judgements, not calu's; details and
    the open points in `agent/records/notes/test-plan.md`, section L.
+48. The owner's decisions on the worktree round (PLAN D252), with a real `claude` (for the
+   agent in the Cua desktop, on Haiku), in a project like item 47's with `traces.enabled`.
+   (a) A worktree subagent runs a test: the trace's heading reads `### Tool call N: Bash
+   (worktree agent-...)`; a step in the main checkout keeps the plain heading. (b) Two
+   background subagents hand their reports back: each `SubagentHandback` is reviewed by the
+   subagent-result checker (the `steps` row "SubagentResult" with `"handback": true`, a
+   `checker_runs` row "subagent-result", no command checker run), the checker's note reaches
+   the main agent, and the empty final result after it is passed with the reason "handed its
+   report back" and no checker run. (c) **Not measured yet:** make the result checker
+   escalate a handed-back report (`calu:escalate-result` does that only with the stand-in
+   checker; with a real one, a report that asks for something the user did not ask for) and
+   deny it in a client: record what the subagent does after the denied `SubagentHandback`
+   (it retries, ends, or answers in text), what the main agent receives (a task notification,
+   an empty result), and whether calu's note arrives before or after it. (d) In a worktree
+   outside the project (`git worktree add ../x`), commit a staged trace file with the hook
+   installed: the final pass uses the project's settings. (e) `/trust <worktree> HEAD` in the
+   full-screen client (Tab completes the name) and in `calu attach --plain`: the answer names
+   the worktree, and the commit is the worktree's `HEAD`. (f) A command writes `out.txt`
+   into a checkout with honesty enforced: the next code run there does not wait for a model
+   review (the log line counts it "without code").
 
 ## Measuring the checkers
 

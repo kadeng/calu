@@ -154,6 +154,12 @@ class RunState:
     claude_outputs: dict[str | None, list[ClaudeOutput]] = field(
         default_factory=dict[str | None, list[ClaudeOutput]]
     )
+    agent_prompts: dict[str, str] = field(default_factory=dict[str, str])
+    """Subagent id (the id of its Agent call) -> the task Claude gave it, from the call's input;
+    the review of a report it hands back reads it (D252)."""
+    handed_back: set[str] = field(default_factory=set[str])
+    """The subagents whose report was reviewed when they handed it back (`SubagentHandback`,
+    D252): an empty final result of theirs then needs no review."""
 
     # The fields below are not reset by a start: `following` carries them into the next run.
     queue: list[tuple[QueuedMessage, str]] = field(default_factory=list[tuple[QueuedMessage, str]])

@@ -153,7 +153,7 @@ from calu.checkers import (
 )
 from calu.checkers.changeset import CommitKind, classify_commit
 from calu.checkers.honesty_review import HonestyReviewer, batches
-from calu.checkers.policy import EDIT_TOOLS, SHELL_TOOLS
+from calu.checkers.policy import EDIT_TOOLS, HANDBACK_TOOL, SHELL_TOOLS
 from calu.checkers.render import changed_lines, edited_file, inline, safe_name
 from calu.checkers.shell import parse_command
 from calu.checkers.tools import StepTime
@@ -408,6 +408,21 @@ SUBAGENT_NOTE_TEMPLATE = (
     "user, who sees the whole conversation] {note}"
 )
 """How the result checker's note is framed for Claude (sent as a priority "next" message)."""
+HANDED_BACK_EMPTY = (
+    "The final result is empty because the subagent handed its report back with "
+    "SubagentHandback, and the result checker reviewed that report then; this empty result "
+    "was passed without a check."
+)
+"""Why an empty final result of a subagent that handed its report back is not reviewed (the
+step's recorded reason, D252)."""
+HANDBACK_REFUSED = (
+    "The user does not want this report handed back. Do not hand it back again; end your work "
+    "now. {note}"
+)
+"""The reason a subagent reads when a person denied its handed-back report (D252)."""
+HANDBACK_REPORT_CHARS = 60_000
+"""The longest handed-back report the result checker reads, as for a final result
+(`calu.claude.sdk_runner.SUBAGENT_RESULT_CHARS`)."""
 DECISION_NOTE_TEMPLATE = (
     "[The user {decision} a {tool} step of this turn that waited for approval, and wrote this "
     "note to Claude]\n{note}"
@@ -3352,6 +3367,9 @@ class Session:
                                                                        only after `HOLD_BUDGET_S`
                                           exception while it waits     ASK
 
+        A subagent's `SubagentHandback` call is not routed: its report is reviewed by the
+        subagent-result checker instead (`_handback`, D252).
+
         Args:
             step: The tool call.
 
@@ -3359,6 +3377,8 @@ class Session:
             ALLOW, DENY (with the reason for Claude) or ASK. Any internal error yields ASK, so
             a human decides instead of the call running unchecked.
         """
+        if step.tool_name == HANDBACK_TOOL and step.agent_id is not None:
+            return await self._handback(step)
         pending = PendingNarration(self._run_state.claude_outputs.pop(step.agent_id, []))
         step_id: int | None = None
         expected: str | None = None
@@ -3701,6 +3721,20 @@ class Session:
             The note for the main agent ("" if the result was accepted without remarks or the
             review is disabled by `check_subagent_results = false`).
         """
+        return (await self._reviewed(result))[0]
+
+    async def _reviewed(self, result: SubagentResult) -> tuple[str, bool]:
+        """Review a subagent's result or report and remove the step's per-call record after.
+
+        Side effects: as `review_subagent_result`.
+
+        Args:
+            result: The subagent's task and its final result or handed-back report.
+
+        Returns:
+            (the note for the main agent, as `review_subagent_result` returns it; True if a
+            person denied the result after an escalation).
+        """
         try:
             return await self._review_subagent_result(result)
         finally:
@@ -3711,8 +3745,63 @@ class Session:
             with anyio.CancelScope(shield=True):
                 await self._refresh_state()
 
-    async def _review_subagent_result(self, result: SubagentResult) -> str:
-        """Implement `review_subagent_result`; the caller removes the step's per-call record.
+    async def _handback(self, step: Step) -> GateResult:
+        """Review the report a subagent hands back with `SubagentHandback` (D252).
+
+        Claude Code delivers a background subagent's report through this tool call, and the
+        subagent's final result after it is empty (measured with CLI 2.1.327, test plan L3).
+        So the report is reviewed here, before the call runs, like a final result
+        (`review_subagent_result`): the result checker's note goes to the main agent
+        (`GateResult.main_note`), an escalation waits for a person, and a person's denial
+        denies the call, so the report is not handed back. The subagent is remembered as
+        having handed back (`RunState.handed_back`).
+
+            review                          verdict      main_note
+            accepted, with or without note  PASS         the note ("" for none)
+            escalated, person allowed       PASS         the note and the decision
+            escalated, nobody decided       PASS         the note: do not act on it yet
+            escalated, person denied        DENY         the note and the decision; the
+                                                         subagent reads `HANDBACK_REFUSED`
+            internal error                  ASK          ""
+
+        Args:
+            step: The `SubagentHandback` call of a subagent (`agent_id` set); its input
+                `message` is the report.
+
+        Returns:
+            The verdict for the call.
+        """
+        agent_id = step.agent_id or ""
+        try:
+            info = self.runner.agents.get(agent_id) if self.runner is not None else None
+            result = SubagentResult(
+                agent_id=agent_id,
+                description=info.description if info is not None else "",
+                prompt=self._run_state.agent_prompts.get(agent_id, ""),
+                result=str(step.tool_input.get("message", ""))[:HANDBACK_REPORT_CHARS],
+                background=info.background if info is not None else True,
+                handback=True,
+            )
+            note, denied = await self._reviewed(result)
+            self._run_state.handed_back.add(agent_id)
+        except Exception as exc:
+            log.exception("reviewing a handed-back report failed")
+            return GateResult(
+                Verdict.ASK,
+                reason=f"Reviewing the handed-back report failed ({type(exc).__name__}: {exc}).",
+            )
+        if denied:
+            return GateResult(
+                Verdict.DENY, reason=HANDBACK_REFUSED.format(note=note).strip(), main_note=note
+            )
+        return GateResult(Verdict.PASS, main_note=note)
+
+    async def _review_subagent_result(self, result: SubagentResult) -> tuple[str, bool]:
+        """Implement `_reviewed`; the caller removes the step's per-call record.
+
+        An empty final result of a background subagent whose report was reviewed when it was
+        handed back (`RunState.handed_back`) is recorded as passed, with `HANDED_BACK_EMPTY`
+        as the reason, without a checker.
 
         Side effects: as `review_subagent_result`.
 
@@ -3720,12 +3809,13 @@ class Session:
             result: The subagent's task and final result.
 
         Returns:
-            The note for the main agent, as `review_subagent_result` returns it.
+            (the note for the main agent, as `review_subagent_result` returns it; True if a
+            person denied the result after an escalation).
         """
         # The subagent's text after its last tool call is its result, reviewed below.
         self._run_state.claude_outputs.pop(result.agent_id, None)
         if not self.config.check_subagent_results:
-            return ""
+            return "", False
         label = result.description or "subagent"
         step = Step(
             tool_name="SubagentResult",
@@ -3733,12 +3823,20 @@ class Session:
                 "description": label,
                 "background": result.background,
                 "result": result.result[:4_000],
+                **({"handback": True} if result.handback else {}),
             },
             tool_use_id=f"result-{result.agent_id}",
             agent_id=result.agent_id,
             cwd=str(self.workspace),
         )
         step_id = await self.recorder.add_step(step)
+        if (
+            not result.handback
+            and not result.result.strip()
+            and (result.agent_id or "") in self._run_state.handed_back
+        ):
+            await self._pass_handed_back(step, step_id)
+            return "", False
         outcome = await self._review(result)
         review = outcome.review
         if self.config.auto_escalate.subagents and review.verdict is not ResultVerdict.ESCALATE:
@@ -3802,6 +3900,7 @@ class Session:
             )
         )
         note = review.note.strip()
+        denied = False
         if step_id is not None and not escalated:
             await self.recorder.attempt(
                 "recording a step result",
@@ -3815,8 +3914,9 @@ class Session:
             asked = await self._ask(step)
             answer = asked.answer
             if asked.outcome in ("interrupted", "cancelled"):
-                return ""  # the turn or the session is over; there is nobody to tell
+                return "", False  # the turn or the session is over; there is nobody to tell
             if asked.outcome in ("allowed", "denied"):
+                denied = not answer.allow
                 if answer.allow:
                     decision = "The user accepts the result; act on it as appropriate."
                 else:
@@ -3836,8 +3936,48 @@ class Session:
                     "recording a step result", self.store.finish_step(step_id, note)
                 )
         if not note:
-            return ""
-        return SUBAGENT_NOTE_TEMPLATE.format(label=label, note=note)
+            return "", denied
+        return SUBAGENT_NOTE_TEMPLATE.format(label=label, note=note), denied
+
+    async def _pass_handed_back(self, step: Step, step_id: int | None) -> None:
+        """Record an empty final result after a reviewed handback as passed without a check.
+
+        Side effects: records the decision and the step's result (`HANDED_BACK_EMPTY`), emits
+        `check.result` (route "subagent", PASS, the reason as the summary) and a `log` line.
+
+        Args:
+            step: The "SubagentResult" step of the empty result.
+            step_id: Its recorded id; None if recording it failed.
+        """
+        if step_id is not None:
+            await self.recorder.attempt(
+                "recording a decision",
+                self.store.decide_step(
+                    step_id,
+                    StepDecision(
+                        decision="pass", reason=HANDED_BACK_EMPTY, summary=HANDED_BACK_EMPTY
+                    ),
+                ),
+            )
+            await self.recorder.attempt(
+                "recording a step result", self.store.finish_step(step_id, HANDED_BACK_EMPTY)
+            )
+        await self._emit_safely(
+            CheckResultEvent(
+                tool_use_id=step.agent_id,
+                agent_id=step.agent_id,
+                tool_name="Agent",
+                route=Route.SUBAGENT,
+                decision=Decision.PASS,
+                step_summary=HANDED_BACK_EMPTY,
+            )
+        )
+        await self._emit_safely(
+            Log(
+                level="info",
+                message=f"subagent {step.agent_id}: empty final result passed: {HANDED_BACK_EMPTY}",
+            )
+        )
 
     async def _review(self, result: SubagentResult) -> ResultOutcome:
         """Run the result checker; never raises.
@@ -4005,6 +4145,10 @@ class Session:
                     outputs.append(ClaudeOutput(kind, event.text))
                     del outputs[:-MAX_PENDING_OUTPUTS]
                 case ToolUse() if event.name in AGENT_TOOLS:
+                    # The task, for the review of a report the subagent hands back (D252).
+                    self._run_state.agent_prompts[event.tool_use_id] = str(
+                        event.input.get("prompt", "")
+                    )
                     # The subagent's own id is this call's id; the caller is its parent (D29).
                     await self.recorder.attempt(
                         "recording a subagent",

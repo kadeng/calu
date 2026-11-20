@@ -129,8 +129,15 @@ class ToolPolicy(BaseModel):
         return self.default
 
 
+HANDBACK_TOOL = "SubagentHandback"
+"""The tool with which a subagent of Claude Code hands its report back to its caller (input
+`message`; measured with CLI 2.1.327 for background subagents). The session reviews that report
+with the subagent-result checker instead of routing the call (`Session.pre_tool_use`, D252)."""
+
 KNOWN_TOOLS = (
-    frozenset({"AskUserQuestion", "WebFetch", "WebSearch", "DesignSync", "ExitWorktree"})
+    frozenset(
+        {"AskUserQuestion", "WebFetch", "WebSearch", "DesignSync", "ExitWorktree", HANDBACK_TOOL}
+    )
     | SHELL_TOOLS
     | EDIT_TOOLS
     | READ_ONLY_TOOLS
