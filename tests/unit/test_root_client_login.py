@@ -158,6 +158,19 @@ def test_the_line_client_and_a_password_free_admin_login_ask_nothing(
     assert prompts == [] and cli._held == [admin]
 
 
+def test_after_setup_no_password_a_held_operator_login_asks_nothing(
+    store: CredentialStore, prompts: list[str]
+) -> None:
+    """`calu start --sudo` holds `calu_operator`; `--no-password` left `calu_admin` open."""
+    store.save("admin", bytearray(OWNER), None)
+    store.save(cli.ADMIN_ENTRY, bytearray(b"postgresql://calu_admin:gen@127.0.0.1:5433/calu"), None)
+    cli._held[:] = [Target.parse(OPERATOR)]
+    assert cli._hold_for_client(store, may_ask=True) is None
+    assert prompts == []
+    assert cli._held[0].user == "calu_admin" and password_of(cli._held[0]) == "gen"
+    assert cli._admin_place[0].user == "calu_admin"
+
+
 def test_without_a_database_to_open_nothing_is_asked(
     store: CredentialStore, prompts: list[str]
 ) -> None:

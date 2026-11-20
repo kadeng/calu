@@ -2966,7 +2966,28 @@ def _hold_password_free(store: CredentialStore) -> None:
     """
     if not _hold or _held:
         return
-    for name in (ADMIN_ENTRY, "admin", "operator"):
+    target = _password_free_login(store, (ADMIN_ENTRY, "admin", "operator"))
+    if target is not None:
+        _held[:] = [target]
+        with contextlib.suppress(ValueError):
+            _admin_place[:] = [admin_login(target, "")]
+
+
+def _password_free_login(store: CredentialStore, names: tuple[str, ...]) -> Target | None:
+    """Return the login of the first entry in `names` that root's store keeps without a password.
+
+    `sudo calu setup --no-password` stores `calu_admin` (`ADMIN_ENTRY`) and `admin` that way.
+    An entry that needs a password, cannot be read or holds no usable login is skipped (and
+    logged); the decrypted connection string is wiped.
+
+    Args:
+        store: Root's credential store.
+        names: The entry names, most preferred first.
+
+    Returns:
+        The login, or None if no entry in `names` qualifies.
+    """
+    for name in names:
         try:
             if name not in store or store.needs_password(name):
                 continue
@@ -2975,16 +2996,13 @@ def _hold_password_free(store: CredentialStore) -> None:
             _log.info("the %r credential could not be read: %s", name, exc)
             continue
         try:
-            target = Target.parse(url)
+            return Target.parse(url)
         except ValueError as exc:
             _log.info("the %r credential holds no usable login: %s", name, exc)
             continue
         finally:
             wipe(url)
-        _held[:] = [target]
-        with contextlib.suppress(ValueError):
-            _admin_place[:] = [admin_login(target, "")]
-        return
+    return None
 
 
 def _changes_settings(login: Target) -> bool:
@@ -3024,6 +3042,9 @@ def _hold_for_client(store: CredentialStore, may_ask: bool) -> str | None:
                                                          owner login is dropped
         `_held` is the owner without a password      ──► kept (each action narrows it,
                                                          `calu.db.roles.narrow`)
+        nothing held, or `calu_operator`, and root's
+          store keeps `calu_admin` or `admin`
+          without a password (`--no-password`)       ──► that login, nothing asked
         nothing held, or `calu_operator` (may_ask)   ──► the admin password is asked here,
                                                          up to `ADMIN_ATTEMPTS` times:
                                                          `calu_admin` with it, or, where
@@ -3055,6 +3076,12 @@ def _hold_for_client(store: CredentialStore, may_ask: bool) -> str | None:
             narrower = _admin_if_accepted(_held[0], typed)
             if narrower is not None:
                 _held[:] = [narrower]
+        return None
+    free = _password_free_login(store, (ADMIN_ENTRY, "admin"))
+    if free is not None:
+        _held[:] = [free]
+        with contextlib.suppress(ValueError):
+            _admin_place[:] = [admin_login(free, "")]
         return None
     if not may_ask or not ("admin" in store or _held or _place_or_none() is not None):
         return None
