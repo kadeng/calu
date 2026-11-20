@@ -257,25 +257,59 @@ parallel subagents:
    the project (`.claude/worktrees/`) or outside (`../x`, `/tmp/x`)? A worktree outside the
    project: are its files project files and local edits for calu (snapshots, write sets,
    honesty, traces, the checkers' read tools, which are confined to the project)?
+   *Measured:* both create them. `EnterWorktree` creates `.claude/worktrees/<name>`, `Agent`
+   creates `.claude/worktrees/agent-<agentId>`, each on a new branch `worktree-<that name>`
+   from `HEAD`; Claude Code adds no ignore entry. `git worktree add ../x` lands where it is told; a
+   `cd` there does not persist. Outside the project: the read tools refuse its files, the
+   snapshots never see it, the honesty key is the absolute path, the root-anchored write rules
+   (`CLAUDE.md`) do not apply there (a note only) (`spikes/RESULTS.md`, "Worktrees, 2026-11-20").
 2. For a subagent in a worktree: is the worktree its working directory and "project root"
    for the checkers, the rules and the context (AGENTS.md, CLAUDE.md of the worktree or of
    the main checkout)?
+   *Measured:* every tool call of a worktree subagent (and of the main agent after
+   EnterWorktree) has `cwd` = the worktree; the Agent result names `worktreePath`. calu keeps
+   the main checkout as project root: rules match worktree-relative, checkers read the worktree
+   files as `.claude/worktrees/...`, the context holds no project file. Claude Code loaded only
+   the main checkout's `CLAUDE.md`, once at session start; subagent and main agent in a
+   worktree answered from it, not from the worktree's copy.
 3. Which `.claude/settings.json` applies to a subagent in a worktree: the main checkout's or
    the worktree's own copy (which may differ, or be older)? Same for calu's own project
    settings and the sandbox entries calu checks.
+   *Measured:* the main checkout's working copy of `.claude/settings.json` applied (hooks and
+   a permission deny rule) to the worktree subagent; the worktree's committed copy was not
+   loaded. calu's preflight reads the session directory's files, i.e. the same ones.
 4. Honesty status: today it is project-wide (`gate.py`: open marks anywhere make a step that
    executes project code DENY), keyed by path relative to the project. Are worktree files
    tracked as separate paths (`.claude/worktrees/a/src/x.py` vs `src/x.py`), or should status
    be kept per checkout? Can a dishonest edit by a subagent in worktree A block a subagent in
    worktree B from running code in B's still honest state (it would today, if A is inside the
    project)? What should hold?
+   *Measured:* separate paths (`.claude/worktrees/agent-.../calc.py`). Yes: a mark in a
+   subagent's worktree denied code runs in the main checkout and in another subagent's
+   worktree (runs 3 and 4). Worktrees not ignored: right after EnterWorktree the directory
+   entry `.claude/worktrees/wta` is unreviewed and unjudgeable, so the next commit escalated.
+   Marks are per session: a second session ran the first one's dishonest code left in an
+   ignored worktree.
 5. Can the main agent or other subagents run code in any worktree, and which checkout's
    honesty state then applies?
+   *Measured:* yes, by `cd` (inside the project the `cwd` persists, and ExitWorktree then
+   restores that worktree, not the project) or by paths; the one project-wide state applies.
 6. Snapshots and write sets of a command run in a worktree; the trusted-commit list
    (`honesty trust`) per checkout; traces and the final redaction pass per checkout; merging a
    worktree back (a commit in a worktree, then a merge/cherry-pick in the main checkout).
+   *Measured:* writes inside a worktree have no write set (ignored: none; not ignored: the
+   worktree as one path). A commit in a worktree ran the changeset checker on the worktree's
+   diff; the final redaction pass skipped it (trace directory not in that repository). One
+   trace file in the main checkout. The fast-forward merge had the write set `helper.py`; its
+   verification under the worktree path does not carry over (code). Not measured: `honesty
+   trust` and the pre-commit hook in a worktree.
 7. Removing a worktree (with or without uncommitted work), and a worktree whose branch is
    checked out elsewhere.
+   *Measured:* `ExitWorktree remove` with uncommitted work is refused by Claude Code until
+   `discard_changes: true`, which removes worktree and branch. `git worktree remove --force`
+   with uncommitted, marked work passed rules and checker. A worktree subagent without changes
+   has its worktree removed at its end. A branch checked out in a worktree cannot be checked
+   out or added elsewhere (git refuses).
 8. **Cross-worktree loading (the owner's safety rule, 2026-11-20):** the checkers escalate a
    step in which code of one worktree obviously tries to import or run code from another
    worktree (or from the main checkout). This is a checker rule, stated in the checkers'
@@ -283,6 +317,9 @@ parallel subagents:
    detection cannot be had against a determined agent, so the rule covers the obvious cases
    only. It lets honesty status be kept per checkout without blocking every worktree when
    one is dishonest.
+   *Measured (today's checkers, one obvious case):* `PYTHONPATH=../wta python3 -c "import
+   helper; ..."` in a subagent worktree: command checker PASS, its summary said "It executes
+   the helper module from the wta worktree"; the import left `__pycache__/` in `wta`.
 
 #### Claude Code as a whole inside namespaces (backlog, owner 2026-11-19)
 
