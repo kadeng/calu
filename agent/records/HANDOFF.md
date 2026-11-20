@@ -255,15 +255,13 @@ parallel subagents:
    worktree back (a commit in a worktree, then a merge/cherry-pick in the main checkout).
 7. Removing a worktree (with or without uncommitted work), and a worktree whose branch is
    checked out elsewhere.
-8. **Cross-worktree loading (the owner's safety rule, 2026-11-20):** if honesty status is kept
-   per checkout, a step that runs code in one worktree but imports or loads code from another
-   worktree (or from the main checkout) must ESCALATE. Otherwise dishonest code written in
-   worktree A could be executed from worktree B. The alternative, blocking every worktree as
-   soon as one is dishonest, is what happens today and is too coarse. To design: how to detect
-   it (paths in the command and its arguments, `PYTHONPATH`/`sys.path` changes, `pip install
-   -e`/`uv` path dependencies, symlinks, relative imports reaching outside the checkout,
-   `cd` into another worktree), what the checkers are told, and what stays possible (reading
-   another worktree's files, diffing them).
+8. **Cross-worktree loading (the owner's safety rule, 2026-11-20):** the checkers escalate a
+   step in which code of one worktree obviously tries to import or run code from another
+   worktree (or from the main checkout). This is a checker rule, stated in the checkers'
+   instructions, not a detector that claims completeness: the owner ruled that complete
+   detection cannot be had against a determined agent, so the rule covers the obvious cases
+   only. It lets honesty status be kept per checkout without blocking every worktree when
+   one is dishonest.
 
 #### Claude Code as a whole inside namespaces (backlog, owner 2026-11-19)
 
