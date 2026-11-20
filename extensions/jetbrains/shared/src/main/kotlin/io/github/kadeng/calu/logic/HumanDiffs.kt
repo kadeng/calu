@@ -2,15 +2,23 @@
  * Recording the user's own saves as diffs (agent/records/PLAN.md D253): the parts without the
  * IDE, shared with the tests. The backend's `HumanDiffSaveListener` uses them.
  *
- *     beforeDocumentSaving ── gate.wanted()? ── before: the file as the VFS holds it (last load
- *                             or save), after: the document's text
+ *     fileContentLoaded / fileContentReloaded / a save ──► SaveBases: base = the document's text
+ *     beforeDocumentSaving ── gate.wanted()? ── before: the base (the text the buffer started
+ *                             from; if unknown, the file as the VFS holds it), after: the
+ *                             document's text
  *                          ── humanDiffParams ──► session.call human_diffs.add {path, before, after}
  *     answer {enabled: false} ──► gate.heard(false): nothing is sent for OFF_PAUSE_MS
  *
  * The session decides everything else (the setting, git-tracked files only, the file layout).
+ *
+ * The base is not the file on disk at the save: when Claude wrote the file while the buffer had
+ * unsaved edits and the user kept them ("Keep Memory Changes", then a save that overwrites
+ * Claude's version), the diff shows only the user's own edits (the owner's decision, D253).
  */
 package io.github.kadeng.calu.logic
 
+import java.util.Collections
+import java.util.WeakHashMap
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -47,6 +55,43 @@ class HumanDiffGate {
     fun heard(enabled: Boolean, now: Long) {
         offUntil = if (enabled) 0L else now + HUMAN_DIFF_OFF_PAUSE_MS
     }
+}
+
+/**
+ * The text each loaded document started from: its text when the IDE last loaded it, reloaded it
+ * from disk or saved it, without the user's unsaved edits since. Thread-safe; the keys are held
+ * weakly (a document the IDE drops is forgotten, and loading it again sets a new base).
+ *
+ * Example: `loaded(d, "v1")`; the user types; Claude writes "v2" on disk and the user keeps the
+ * memory changes; `saving(d, "v1+mine")` returns "v1". Had the user loaded Claude's version
+ * (`loaded(d, "v2")`), it would return "v2".
+ *
+ * @param K the document type (the IDE's `Document`; strings in tests).
+ */
+class SaveBases<K : Any> {
+    private val texts: MutableMap<K, CharSequence> = Collections.synchronizedMap(WeakHashMap())
+
+    /**
+     * Take note of a load, a reload from disk, or a save that is not the user's: `text` becomes
+     * the base.
+     *
+     * @param key the document.
+     * @param text its text now; pass an immutable snapshot (`Document.immutableCharSequence`),
+     *   which is kept without a copy.
+     */
+    fun loaded(key: K, text: CharSequence) {
+        texts[key] = text
+    }
+
+    /**
+     * Take note of a save of the user: return the base before it, and make `text` the new base.
+     *
+     * @param key the document.
+     * @param text the text being saved (an immutable snapshot, as for `loaded`).
+     * @return the base before the save, or null if the document was loaded before this tracker
+     *   heard of it.
+     */
+    fun saving(key: K, text: CharSequence): CharSequence? = texts.put(key, text)
 }
 
 /**

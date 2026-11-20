@@ -177,7 +177,10 @@ Decided (do not ask again):
     session; one block per save (VSCode's auto-save is off by default, backups are no saves);
     no list/show command for now; a save that overwrites a version Claude wrote meanwhile is
     diffed against the version the user's buffer started from, so only the user's own edits
-    appear (the IDEs already ask before such an overwrite; mode 3 merges).
+    appear (the IDEs already ask before such an overwrite; mode 3 merges). Built 2026-11-20:
+    both IDEs keep that base per document (`SaveBases`, PLAN D253), with vitest and Kotlin
+    tests for a normal save, an overwrite of Claude's version and a reload of it; not yet
+    checked by hand in the IDEs.
   - Checker instructions stay global for now; per-project instructions (a global default with
     per-project overrides, perhaps merged) come later, after everything works.
   - **Built in the core, the CLI and the terminal clients** (PLAN D250, 2026-11-20, not

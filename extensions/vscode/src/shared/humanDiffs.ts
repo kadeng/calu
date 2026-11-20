@@ -2,10 +2,16 @@
  * Recording the user's own saves as diffs (agent/records/PLAN.md D253): the parts without
  * `vscode`, shared with the tests.
  *
- *     onWillSaveTextDocument ── gate.wanted()? ── read the file on disk ──► before (kept per uri)
+ *     open / save / reload or revert (document not dirty) ──► SaveBases: base = document text
+ *     onWillSaveTextDocument ── gate.wanted()? ── base (or, if unknown, the file on disk)
+ *                                                 ──► before (kept per uri)
  *     onDidSaveTextDocument  ── before + document text ──► humanDiffParams ──► session.call
  *                                                          human_diffs.add {path, before, after}
  *     answer {enabled: false} ──► gate.heard(false): nothing is sent for OFF_PAUSE_MS
+ *
+ * The base is the text the user's buffer started from, not the file on disk at the save: when
+ * Claude wrote the file while the buffer had unsaved edits and the user chose to overwrite it,
+ * the diff shows only the user's own edits (the owner's decision, D253).
  *
  * The session decides everything else (the setting, git-tracked files only, the file layout).
  */
@@ -96,6 +102,88 @@ export function humanDiffParams(folder: string, file: string, before: string | u
   const saved = normaliseLineEnds(after);
   if (old === saved) return null;
   return { path, before: old, after: saved };
+}
+
+/**
+ * The text each open document started from: the text it had when it was last opened, saved,
+ * reloaded from disk or reverted, without the user's unsaved edits since.
+ *
+ * Keys are document URIs as strings. A document opened with unsaved edits (e.g. restored by hot
+ * exit) or longer than `MAX_CHARS` has no known base until its next save or reload. Example:
+ *
+ *     opened(k, "v1", false); changed(k, "v1+mine", true)   // Claude writes "v2" on disk meanwhile
+ *     base(k) == "v1"                                       // the user overwrites: diff v1 -> v1+mine
+ *     changed(k, "v2", false)                               // the user reloaded Claude's version instead
+ *     base(k) == "v2"
+ */
+export class SaveBases {
+  private readonly texts = new Map<string, string>();
+
+  /**
+   * Take note of an opened document.
+   *
+   * @param key The document's URI.
+   * @param text Its text.
+   * @param dirty Whether it has unsaved edits already; then its base is unknown.
+   */
+  opened(key: string, text: string, dirty: boolean): void {
+    if (dirty) this.texts.delete(key);
+    else this.keep(key, text);
+  }
+
+  /**
+   * Take note of a change of a document. A change that leaves the document without unsaved
+   * edits (a reload from disk, a revert, a save, an undo back to the saved text) makes its text
+   * the base; a change that leaves unsaved edits keeps the base.
+   *
+   * @param key The document's URI.
+   * @param text Its text after the change.
+   * @param dirty Whether it has unsaved edits after the change.
+   */
+  changed(key: string, text: string, dirty: boolean): void {
+    if (!dirty) this.keep(key, text);
+  }
+
+  /**
+   * Take note of a save: the saved text becomes the base.
+   *
+   * @param key The document's URI.
+   * @param text The saved text.
+   */
+  saved(key: string, text: string): void {
+    this.keep(key, text);
+  }
+
+  /**
+   * Forget a closed document.
+   *
+   * @param key The document's URI.
+   */
+  closed(key: string): void {
+    this.texts.delete(key);
+  }
+
+  /**
+   * Read a document's base.
+   *
+   * @param key The document's URI.
+   * @returns The text the document started from, or undefined if it is not known.
+   */
+  base(key: string): string | undefined {
+    return this.texts.get(key);
+  }
+
+  /**
+   * Make a text the base; a text longer than `MAX_CHARS` is not kept (its save is not sent
+   * anyway), so the base becomes unknown.
+   *
+   * @param key The document's URI.
+   * @param text The new base.
+   */
+  private keep(key: string, text: string): void {
+    if (text.length > MAX_CHARS) this.texts.delete(key);
+    else this.texts.set(key, text);
+  }
 }
 
 /** The offer of `ide.settings.set`: a related switch to turn on as well. */

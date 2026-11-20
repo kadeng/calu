@@ -949,7 +949,12 @@ escalation resolved from the database alone.
    copy is not. (d) Rename a file to `<name>.diff`, set `human_diffs.keep_days 1`, age both
    files with `touch -d '3 days ago'` and start a session: the `.tmp.diff` file is deleted and
    named in the log, the `.diff` file stays. (e) Claude's `Write` into `agent/human-diffs/`
-   waits for a person. The unit tests are `tests/unit/test_human_diffs.py`, the editors'
+   waits for a person. (f) In each IDE, edit a tracked file without saving, let Claude (or
+   `echo x >> file`) change it on disk, then save and choose to overwrite (VSCode
+   "Overwrite", PyCharm "Keep Memory Changes" and save): the block shows only your edits, not
+   the removal of Claude's line. Repeat but load the disk version first (VSCode "Revert File",
+   PyCharm "Load File System Changes"), edit and save: the block is diffed against Claude's
+   version. The unit tests are `tests/unit/test_human_diffs.py`, the editors'
    `test/unit/humanDiffs.test.ts` and `HumanDiffsTest.kt`.
 
 ## Measuring the checkers

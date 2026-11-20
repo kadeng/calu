@@ -54,4 +54,34 @@ class HumanDiffsTest {
         assertNull(enableOffer(JsonObject(mapOf("offer" to buildJsonObject { put("key", JsonPrimitive(3)) }))))
         assertNull(enableOffer(null))
     }
+
+    @Test
+    fun `a normal save is diffed against the loaded text, the next against the saved one`() {
+        val bases = SaveBases<String>()
+        bases.loaded("a.md", "v1\n")
+        val first = humanDiffParams("/w", "/w/a.md", bases.saving("a.md", "v1 mine\n")?.toString(), "v1 mine\n")!!
+        assertEquals(JsonPrimitive("v1\n"), first["before"])
+        val second = humanDiffParams("/w", "/w/a.md", bases.saving("a.md", "v2\n")?.toString(), "v2\n")!!
+        assertEquals(JsonPrimitive("v1 mine\n"), second["before"])
+    }
+
+    @Test
+    fun `a save that overwrites the version Claude wrote meanwhile is diffed against the buffer's start`() {
+        val bases = SaveBases<String>()
+        bases.loaded("a.md", "a\nb\n")
+        // Claude writes "a\nb claude\n" on disk; the user keeps the memory changes and saves.
+        val params = humanDiffParams("/w", "/w/a.md", bases.saving("a.md", "a mine\nb\n")?.toString(), "a mine\nb\n")!!
+        assertEquals(JsonPrimitive("a\nb\n"), params["before"])
+        assertEquals(JsonPrimitive("a mine\nb\n"), params["after"])
+    }
+
+    @Test
+    fun `a save after the user loaded Claude's version is diffed against that version`() {
+        val bases = SaveBases<String>()
+        bases.loaded("a.md", "a\nb\n")
+        bases.loaded("a.md", "a\nb claude\n") // fileContentReloaded
+        val params = humanDiffParams("/w", "/w/a.md", bases.saving("a.md", "a\nb claude mine\n")?.toString(), "a\nb claude mine\n")!!
+        assertEquals(JsonPrimitive("a\nb claude\n"), params["before"])
+        assertNull(SaveBases<String>().saving("unknown.md", "x"))
+    }
 }

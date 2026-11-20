@@ -2068,8 +2068,10 @@ you save src/app.py in the editor
   the PyCharm synchronisation over SSH are not recorded either.
 - Only files that git tracks are recorded: untracked files, ignored files and new files before
   their first commit are not.
-- "Before the save" is the file as the editor last loaded or saved it, so a save after Claude
-  changed the file records only your change.
+- "Before the save" is the text your editor buffer started from: the file as the editor last
+  loaded, reloaded or saved it. If Claude changed the file while you had unsaved edits and you
+  overwrite Claude's version when the editor asks, the diff shows only your own edits; if you
+  load Claude's version first, the diff is against Claude's version.
 - PyCharm records the same way in all three modes. In the SSH mode the save goes to the local
   copy, and the diff is the one of that save.
 - Saves while no session is attached are not recorded.
