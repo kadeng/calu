@@ -284,7 +284,7 @@ source, a tool description is
 untrusted text (an MCP server can write anything into it): it reaches the checker marked
 as data, never as instructions, and is cut to a fixed length.
 
-#### Worktree support (built 2026-11-20; the real-Claude runs L1-L6 are open)
+#### Worktree support (built 2026-11-20; the real-Claude runs L1-L6 done the same day)
 
 **Built** (PLAN D251, the design and its section "As built" in
 `agent/records/notes/worktree-design.md`, commits "Worktrees (1)" to "(6)"): a checkout registry
@@ -294,8 +294,13 @@ certification while honesty is on (the owner's decision), calu's fixed rule agai
 cross-checkout loading, the "Checkout:" lines for the checkers, snapshots and write sets per
 checkout, the rules per worktree (trace copies, `git worktree remove --force`), the user
 documentation (DOCUMENTATION.md "Worktrees") and `docs/TESTING.md` item 47. Unit cases U1-U14:
-`tests/unit/test_worktrees.py`. **Next:** item 47 (L1-L6) with a real `claude` in the Cua
-desktop; then the open points at the end of the design's "As built".
+`tests/unit/test_worktrees.py`. **Item 47 (L1-L6) was run** with a real `claude` on Haiku in
+the Cua desktop, with and without `.claude/worktrees/` ignored (`spikes/worktrees_l.sh`;
+record: `agent/records/notes/test-plan.md` section L): as stated after three fixes
+(`255d577`, `63b4a40`, `8440a28`); its open points wait for the owner (the honesty
+review on a data file, the result checker's escalations on Haiku, the "Checkout:" line of a
+`cd`, a stale command in `docs/TESTING.md`). **Next:** those, then the open points at the end
+of the design's "As built".
 
 The owner: calu must work with git worktrees as Claude Code commonly uses them, without asking
 about it, with and without parallel subagents. Known today: each tool call carries its own
