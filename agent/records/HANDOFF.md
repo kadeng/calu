@@ -6,63 +6,46 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
 
 ## Pick up here
 
-### State of the repository (updated 2026-11-19, about 03:00, by the lead's stand-in)
+### State of the repository (updated 2026-11-20 evening, by the lead)
 
-**Read first:** `PLAN.md` D233 (what the test campaign changed and the decisions that wait
-for the owner) and D234 (server and setup side); `agent/records/notes/test-plan.md` (the record of
-the cases, sections A-H and the table C1-C23); the skill
-`.claude/skills/ui-testing-with-cua/SKILL.md` (how the IDE tests are run). The owner's words
-are in `REQUIREMENTS.md` 34-40.
+**Read first:** this section and "Next, in this order" below; `PLAN.md` D238-D253 (the
+decisions of 2026-11-19/20); `agent/records/notes/test-plan.md` (sections A-L, the record of
+every case); `agent/records/notes/worktree-design.md`; the skill
+`.claude/skills/ui-testing-with-cua/SKILL.md`. The owner's words are in `REQUIREMENTS.md`
+34-47.
 
-#### CI and what is on GitHub (updated 2026-11-19, about 04:00, by the lead)
+#### CI and what is on GitHub
 
-- **Everything is pushed.** `origin/main` is `7aed9c0` (or later); no agent is running and
-  no agent has uncommitted work. CI was last seen green on `fdf1e89` (run 44433852933, all
-  four jobs); the commits after it touch only `extensions/jetbrains/`, `uitest/` and
-  documents (no Python), passed the repo-wide `ruff format --check . && ruff check .`
-  locally, and their Gradle build (`./gradlew check buildPlugin verifyPlugin`) passed on the
-  agent's side. Check `gh run list --limit 3` for the run of the tip.
-- Done since the handoff of 02:30: the seven core defects (PLAN D235; held steps, which
-  database the settings commands change, start-up in about 0.45 s, trace files, the
-  revoked-token race, honesty after a denied commit and a cleared mark, migration 0037 with
-  who decided in `calu resolve`); the honesty checker's per-file result in all five clients;
-  an honest-code review of the code since 2026-11-17 with three real defects fixed
-  (`calu login` passed checker keys to Claude Code; the trace writer could create
-  directories outside the project; a dropped token revocation in `calu ide`); the PyCharm
-  plugin's SSH mode (PLAN D236; test plan section H).
-- **The owner accepted the "JetBrains Team Tools User Agreement"** of the JetBrains Client
-  in the desktop (2026-11-19). Remote development of the PyCharm plugin can now be tested:
-  `$D shell 'setsid -f bash /workspace/calu/uitest/pycharm-split.sh >/tmp/pycharm-split.log 2>&1'`
-  (close the ordinary PyCharm first; `--stop` ends it). It was started once more at about
-  03:55 and may still be running in the desktop (tmux session `calu-split`).
+- Everything finished is pushed and CI is green (last checked on `4104c04`, then the
+  shipped-rule commit below). No agent is running. Check `gh run list --limit 3`.
+- The owner's machine needs a reinstall from GitHub and `sudo calu setup` (migrations up to
+  0042, the sandbox question, D239-D253).
 
-#### The owner's finish line (2026-11-19) and who is running
+#### The owner's goal and milestone
 
-The owner's goal: every workflow and user interface test-driven in Cua and refined into a
-well-rounded, tested, robust and convenient application with a modern UI. The terminal
-client, the web interface, the VSCode extension and the PyCharm plugin are each tested
-locally and remotely. The PyCharm plugin supports JetBrains remote development (split mode)
-and also a local IDE that syncs files over SSH, with remote run and debug through
-PyCharm's SSH interpreter.
+- **Goal:** every workflow and user interface test-driven in Cua and refined into a
+  well-rounded, tested, robust and convenient application with a modern UI; every front end
+  tested locally and remotely (requirements 37, 41). Done in rounds A-L of the test plan.
+- **Milestone (2026-11-19):** develop Calu inside Calu. The owner does this himself ("Developing
+  calu inside calu is of course my task"); the lead supports with fixes as he finds them.
 
-The three agents of 07:00 have finished and their work is pushed: the PyCharm plugin's
-three modes (PLAN D236 and the owner's REQUIREMENTS 41 addendum: local; JetBrains remote
-development with the backend on the SSH box; a local copy synchronised with calu on the
-server, `.git` on the server only, conflicts always resolved, run and debug through the SSH
-interpreter), test plan sections B and H; the core defects (PLAN D237); the terminal clients
-and the web interface used remotely through SSH (test plan section I).
+#### Built on 2026-11-19/20 (one line each; details in PLAN and the sections below)
 
-**The system of records moved to `agent/records/`** (PLAN D238, about 11:00): done, with the
-traces' default `agent/traces/`; the records keep their files and structure, only placed out
-of the users' view (the owner, 2026-11-19). **Still to do, by the lead while no agent runs:**
-rename `DOCUMENTATION.md` to `DOCUMENTATION.md` (the owner, same day) with `git mv` and update
-every reference (16 files: README, AGENTS.md, docs/, the records, `src/calu/config.py`,
-`src/calu/checkers/result_checker.py`, `src/calu/defaults/checkers/README.md`, the
-extensions' `serverCommand.ts` and `ServerCommand.kt`, tests), anchors unchanged.
-
-The VSCode round is done and pushed (test plan section A, R1-R9; VSCode now shows `step.held`
-as well, PLAN D237's "VSCode ignores it" is outdated). `CALU_GUIDE.md` is now
-`DOCUMENTATION.md` (pushed, `da0c883`).
+- Records in `agent/records/` (D238); `CALU_GUIDE.md` became `DOCUMENTATION.md`, rewritten for
+  serial and reference reading (requirement 46) and reviewed sentence by sentence.
+- `calu setup` asks about Claude Code's sandbox (D239); relay port per `calu serve` with server
+  tokens (D242), a projects directory and a port derived from it (D243), dead-server liveness
+  (D244); auto mode by default and thinking in traces (D241); configurable redaction prompt
+  and trace format (D245); final redaction pass before a commit (D246); live permission-mode
+  switch in every client (D247); usage panel, web side questions, `/checker-context`, outdated
+  shipped instructions noticed (D248); root client asks the admin password once, least
+  privilege per action (D249); template library of checker prompts and the mode-switch
+  decision during a check (D250; stored usage limits were built and removed again by the
+  owner); worktree support (D251, D252) with real-Claude runs L1-L6; recording the user's own
+  IDE edits as `.tmp.diff` (D253).
+- The shipped command checker's rule for a worktree outside the project: "A call that runs
+  code (a script, a test, an import) in a 'worktree outside the project directory' (its
+  'Checkout:' line): ESCALATE." (the owner accepted the wording 2026-11-20; it can change).
 
 #### The owner's answers of 2026-11-19 (afternoon) and the work they call for
 
@@ -461,50 +444,20 @@ Not started; the owner put it on the backlog. What ties calu to Linux today:
 
 #### Next, in this order
 
-0. **Remote development of the PyCharm plugin** (agreement accepted): run the split-mode
-   checks of test plan section B (tool window in the client, RPC round trip with a
-   transcript and Allow on a card, the password dialog, editors and diffs opened by the
-   backend, the terminal action).
-0. ~~Core defects found by the SSH round~~ **done** (agent 2, PLAN D237, commits
-   `202b484`..`8c25dc1`, not pushed): an unended turn is history and a fork inherits it;
-   record and replay meet at the prompt uuid (VSCode, terminal); unique scripted tool ids;
-   stale at once when the process is gone, else after 60 s; `ide.fs.changed` carries
-   `skipped` and the PyCharm plugin lists those paths at once. Not reproduced: the "about
-   15 minutes" itself (the code said 180 s); the plugin's own part of H20 (it asks
-   `ide.sessions` every 15 s only while no session is attached, and its waiting step still
-   counts) is the plugin's.
-0. The desktop image lacks `openssh-client` (installed by hand for the SSH round): add it to
-   `uitest/Dockerfile`.
-
-1. Collect those two agents; pre-push run of each new commit (rules below); push; wait for
-   the CI run to complete.
-2. **Coverage and honest code, the rest**: the `calu.cli` contracts, `_start_cancel` and
-   the tests of `calu ide` that need no root are **done** (agent 2, PLAN D237; the rename is
-   `_local_socket_endpoint`). The root-only rest is **done** (PLAN D240, not pushed):
-   `asuser.prepare` on existing directories, the launcher refusing an identity it cannot
-   take, `_after_setup` writing `/var/lib/calu/database.json` as real root, `calu serve
-   --user` with Claude Code's stand-in and the root socket, the sandbox-off advice under
-   `--user` and after `sudo calu setup --no-password`; `docker exec calu-rootbox
-   rootbox-tests`: 22 passed. Fixed on the way: `asuser.prepare` followed a symbolic link
-   in the place of a directory it hands to the user.
-3. ~~Open defects the core-defect agent left~~ **done** (agent 2, PLAN D237): the protocol
-   event `step.held` and the full-screen client's `held` badge after a recorded approval;
-   a web decision records `<role>:<user>@<host>`. VSCode and PyCharm show no held steps at
-   all (they ignore `step.held`); whether they should is open.
-4. **VSCode extension, remaining** (needs the desktop, so after agent 2): the corner cases
-   C5, C6, C11, C12 at scale (done for web, terminal and PyCharm); a look at the new honesty
-   chip in a real VSCode; integration tests (`@vscode/test-cli`, as stay-in-the-loop has
-   them in `extensions/vscode/test/integration` with `scripts/test-in-docker.sh`) in the
-   regression suite; an "Open session trace" action in both plugins (offered to the owner,
-   not answered); `/clear` against a real Claude Code. `extensions/vscode/calu.vsix` (not in
-   git) predates the honesty chip: rebuild with `npm run package` before the owner's test.
-5. **Final screenshots** from the Cua desktop for the README (`docs/assets/`): a tidy project
-   path (the web one shows a scratch path with host and user name), a cleaner subagent shot
-   than the one ending in "finished banana"; all 16:10 so rows line up.
-6. Remote development of the PyCharm plugin needs the owner: the JetBrains CLIENT shows a
-   "JetBrains Team Tools User Agreement" that only he may accept (viewer link:
-   `uv run --no-project --with cua python uitest/desktop.py viewer-url`), then
-   `uitest/pycharm-split.sh`.
+1. **Support the owner's dogfooding** (developing Calu inside Calu): fix what he reports first.
+2. **Hand checks still to run** (docs/TESTING.md): item 46 (usage panel with a real
+   subscription), 48 (the subagent handback review with a real Claude Code, incl. 48(c)
+   what happens after a denied handback), 49 (human diffs in both IDEs, incl. (f) the
+   overwrite and reload cases).
+3. **Open question for the owner** (asked once, not answered): the trace writer holds a tool
+   call's block until Calu's check of it arrives (so the heading can name the worktree); this
+   applies to every project and delays the trace file during a long check (up to about
+   7 minutes for an honesty review); more than 500 queued blocks would be dropped. Options:
+   hold only while the project has worktrees and never drop; never hold; keep.
+4. **Backlog** (sections below): tool documentation for the checkers; Claude Code as a whole
+   inside namespaces; macOS; per-project checker instructions (later, after everything works);
+   web/IDE `/trust` for worktrees (only the terminal clients have `/trust <worktree> <ref>`);
+   a checker cannot mark files of a worktree outside the project.
 
 #### Coverage and honest code (first round, 2026-11-19)
 
