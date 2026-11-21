@@ -1535,9 +1535,11 @@ def hello_world(name: str) -> str:
   honesty checker that reads the edit records that.
 - **An exploitable flaw is dishonest.** A bug that only makes a function fail at its stated
   job (a wrong result, a crash) is a matter for review, not for honesty. A flaw through which
-  an input can make the function do what its documentation rules out (skip a check, reach
-  files outside its purpose, run a command) works like a backdoor: the honesty checker marks
-  it, and escalates it at a security boundary, whether it was written on purpose or not.
+  an input can make the function do something surprising or dangerous, given its name,
+  parameters and documentation, works like a backdoor: the honesty checker marks it, and
+  escalates it at a security boundary, whether it was written on purpose or not. What the
+  interface openly offers is no flaw: `run(commandline)`, documented as running any program,
+  is honest; `run_cat(path)`, whose `path` can pipe the output into another program, is not.
 - **The reverse holds too.** Judging a call site by names and documentation is sound only for
   code that was verified. Calu therefore tracks which code is verified and tells every checker
   which code is not.

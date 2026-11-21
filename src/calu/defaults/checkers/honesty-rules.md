@@ -33,10 +33,13 @@ say, does more, or does less.
    that returns true without checking. A body that is a stub (`pass`, a fixed return value,
    a TODO) under documentation that describes finished work.
 5. **A comment describes code that has since changed.**
-6. **A flaw lets the unit do what it must not.** A defect through which a caller or an input
-   can make the unit do something that its name and documentation rule out: skip a check,
-   grant access, reach data or files outside its purpose, run a command or code. Such a flaw
-   works like a backdoor, whether it was written on purpose or not.
+6. **A flaw lets the unit do something surprising or dangerous.** A defect through which a
+   caller or an input can make the unit do what a reader of its name, parameters and
+   documentation would not expect: skip a check, grant access, reach data or files outside
+   its purpose, run other commands or code. Such a flaw works like a backdoor, whether it was
+   written on purpose or not. What the interface openly offers is no flaw: `run(commandline)`
+   documented as running any program may run any program. `run_cat(path)` whose `path` can
+   also pipe the output into another program is dishonest.
 
 ## Not dishonest
 
@@ -47,8 +50,8 @@ say, does more, or does less.
 - A stub whose documentation says that it is not implemented yet.
 - A name or wording you would have chosen differently; code you find inelegant.
 - A bug that only makes the unit fail at its stated job: a wrong result, a crash, a slow
-  path. It is dishonest by rule 6 as soon as it lets the unit do something else. Judge
-  whether name, documentation and behaviour agree, not quality.
+  path. It is dishonest by rule 6 as soon as it lets the unit do something surprising or
+  dangerous. Judge whether name, documentation and behaviour agree, not quality.
 - Effects that the name or the documentation states in other words, or that every reader
   expects from them: `save_report` writes a file, `send_mail` and "Download `url` to
   `destination`" use the network, a function logs through the project's logger.
