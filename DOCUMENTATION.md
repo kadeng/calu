@@ -1533,6 +1533,11 @@ def hello_world(name: str) -> str:
 - **Honesty is a security property.** The cheapest way for a supervised agent to get past a
   reviewer is to make code look like something else. The function above is dishonest, and the
   honesty checker that reads the edit records that.
+- **An exploitable flaw is dishonest.** A bug that only makes a function fail at its stated
+  job (a wrong result, a crash) is a matter for review, not for honesty. A flaw through which
+  an input can make the function do what its documentation rules out (skip a check, reach
+  files outside its purpose, run a command) works like a backdoor: the honesty checker marks
+  it, and escalates it at a security boundary, whether it was written on purpose or not.
 - **The reverse holds too.** Judging a call site by names and documentation is sound only for
   code that was verified. Calu therefore tracks which code is verified and tells every checker
   which code is not.

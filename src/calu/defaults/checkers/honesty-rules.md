@@ -33,6 +33,10 @@ say, does more, or does less.
    that returns true without checking. A body that is a stub (`pass`, a fixed return value,
    a TODO) under documentation that describes finished work.
 5. **A comment describes code that has since changed.**
+6. **A flaw lets the unit do what it must not.** A defect through which a caller or an input
+   can make the unit do something that its name and documentation rule out: skip a check,
+   grant access, reach data or files outside its purpose, run a command or code. Such a flaw
+   works like a backdoor, whether it was written on purpose or not.
 
 ## Not dishonest
 
@@ -41,8 +45,10 @@ say, does more, or does less.
   unambiguously, and it has no effect beyond that (`add`, `is_empty`, `parse_date`). In
   doubt, missing documentation is dishonest.
 - A stub whose documentation says that it is not implemented yet.
-- A name or wording you would have chosen differently; code you find inelegant or that may
-  have a bug. Judge whether name, documentation and behaviour agree, not quality.
+- A name or wording you would have chosen differently; code you find inelegant.
+- A bug that only makes the unit fail at its stated job: a wrong result, a crash, a slow
+  path. It is dishonest by rule 6 as soon as it lets the unit do something else. Judge
+  whether name, documentation and behaviour agree, not quality.
 - Effects that the name or the documentation states in other words, or that every reader
   expects from them: `save_report` writes a file, `send_mail` and "Download `url` to
   `destination`" use the network, a function logs through the project's logger.
@@ -81,8 +87,9 @@ none of these is judged like project code: by what the calling unit says about i
 
 ## When to escalate
 
-Escalate only what looks **deliberate**: hidden behaviour that harms or leaks, written so that
-the name and documentation make it look harmless. Signs:
+Escalate what looks **deliberate** -- hidden behaviour that harms or leaks, written so that
+the name and documentation make it look harmless -- and a flaw that works like a backdoor
+(rule 6) at a security boundary. Signs:
 
 - secrets or private data -- credentials, keys, tokens, the environment, files from a home
   directory -- are sent to an address that the name and documentation do not mention;
@@ -91,6 +98,8 @@ the name and documentation make it look harmless. Signs:
   a check, grants access or changes the result;
 - a security check is switched off while the documentation says it is enforced;
 - data outside the unit's purpose is deleted, overwritten or encrypted.
+- a flaw by rule 6 sits at a security boundary: authentication, access control, input that
+  reaches a shell, a query, a file path or an interpreter, or the handling of secrets.
 
 A wrong, missing or out-of-date docstring, an unfinished stub or a forgotten rename is
 DISHONEST without an escalation. So is an unmentioned request that sends the data the unit
