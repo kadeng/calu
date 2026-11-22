@@ -726,7 +726,8 @@ you, it shows their number, for example "calu: 2 waiting".
 - **Links to source lines.** A relative path with a known extension in Claude's text, such as
   `src/app.py:12`, `src/app.py#L12` or `docs/guide.md`, is a link that opens the file at that
   line; so is a Markdown link to such a path. Absolute paths and URLs are left alone, and
-  VSCode opens only files inside the workspace folder. The same holds in PyCharm.
+  VSCode opens only files inside the workspace folder. The same holds in PyCharm. Calu asks
+  Claude, in a sentence appended to Claude Code's own system prompt, to name places this way.
 - **Images.** A message can carry up to 4 images of at most 5 MB each.
 - **Usage.** A click on the context chip below the message field opens the usage panel
   ([usage](#usage-cost-and-limits)).

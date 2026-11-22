@@ -120,6 +120,15 @@ ACCOUNT_LIMIT_TYPES = ("five_hour", "seven_day", "seven_day_opus", "seven_day_so
 """The windows of `get_usage`'s `rate_limits` that `account_limits` reads, in this order."""
 
 AGENT_TOOLS = ("Agent", "Task")
+CLAUDE_APPEND = (
+    "When you name a place in the project's files, write it as a path relative to the project "
+    "root with the line, e.g. src/app.py:12, or the path alone for a whole file. The user's IDE "
+    "turns such references into links."
+)
+"""What calu appends to Claude Code's own system prompt (`--append-system-prompt`). Claude Code's
+prompt itself stays: without `system_prompt` the SDK passes `--system-prompt ""`, which replaced
+it with nothing (measured 2026-11-22 with CLI 2.1.329: 5584 prompt tokens with Claude Code's own
+prompt, 2560 with the empty one)."""
 HOOK_TIMEOUT_S = 900
 """Timeout of the PreToolUse hook. The session bounds the checker call inside it
 (`CHECKER_DEADLINE_S`, 840 s) and escalates when that is exceeded, so the hook answers well
@@ -966,7 +975,9 @@ class SdkRunner:
         fork: Fork | None = None,
         session_id: str | None = None,
     ) -> ClaudeAgentOptions:
-        """Build the SDK options: working directory, model, hooks, callbacks and environment.
+        """Build the SDK options: directory, model, system prompt, hooks, callbacks, environment.
+
+        The system prompt is Claude Code's own with calu's sentence appended (`CLAUDE_APPEND`).
 
         Claude Code authenticates as configured on this machine; only checker keys are hidden
         from it (`_claude_env`). The sandbox settings of `config.sandbox` are passed as a
@@ -1338,6 +1349,9 @@ class SdkRunner:
                     )
                 ],
             },
+            # Claude Code's own system prompt plus calu's sentence (`CLAUDE_APPEND`); leaving
+            # `system_prompt` unset made the SDK pass an empty system prompt.
+            system_prompt={"type": "preset", "preset": "claude_code", "append": CLAUDE_APPEND},
             setting_sources=self.config.setting_sources,  # type: ignore[arg-type]
             # `--settings` as a JSON document: it overrides the project's and the user's
             # settings files (agent/records/PLAN.md D15). The keys it holds: `PINNED_SANDBOX_KEYS`.

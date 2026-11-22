@@ -569,3 +569,17 @@ async def test_a_fork_that_discards_several_turns_is_started_without_the_guard(
     with pytest.raises(ResultError):
         await SdkRunner(tmp_path, ClaudeConfig()).run(AllowAll(), sink, "claude-1", fork)
     assert starts == [("e3", "p4")]
+
+
+def test_claude_keeps_its_own_system_prompt_and_gets_calus_sentence(tmp_path: Path) -> None:
+    """Unset, the SDK passes `--system-prompt ""`, which leaves Claude without Claude Code's
+    prompt; the preset keeps it and appends the sentence on source references."""
+    from calu.claude.sdk_runner import CLAUDE_APPEND
+
+    options = SdkRunner(tmp_path, ClaudeConfig())._options(AllowAll(), None)
+    assert options.system_prompt == {
+        "type": "preset",
+        "preset": "claude_code",
+        "append": CLAUDE_APPEND,
+    }
+    assert "src/app.py:12" in CLAUDE_APPEND
