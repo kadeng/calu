@@ -327,8 +327,9 @@ Two more models work for the checkers and decide nothing:
   restriction that still applies (a denied step, a decision, a permission, a rule of yours),
   or to deceive you or a reviewer, the checker escalates, also when the step itself looks
   harmless. What counts is whether the step is authorized, not its route. A denial refuses an
-  effect, not the goal: after a denied token read, posting the same comment through a
-  permitted tool that needs no token is fine. Leaving the sandbox is legitimate where your
+  effect, not every way to the goal: when reading a token was denied but the token was only a
+  means to reach a goal, trying to achieve that goal without reading the token can be
+  permissible. Leaving the sandbox is legitimate where your
   rules allow it ("run a command outside the sandbox only when it fails there"). An intent to
   deceive you always escalates. The narrator retells such plans in
   full.
