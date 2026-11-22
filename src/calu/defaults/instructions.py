@@ -272,6 +272,12 @@ def review_instructions(rules: str | None = None) -> str:
     return system + "\n\n" + (rules if rules else honesty_rules()).strip() + "\n"
 
 
+EVASION_PART = "system/evasion.md"
+"""The fixed part every checker gets after its own system part: ESCALATE when Claude's narrated
+thinking or text shows that it knowingly tries to get around a safeguard or to deceive the
+user. Fixed, so that no edit of a checker's instructions removes it."""
+
+
 def compose_instructions(
     route: str, user: str, rules: str | None = None, honesty_state: bool = False, name: str = ""
 ) -> str:
@@ -291,9 +297,11 @@ def compose_instructions(
             the route's, followed by the user's part and the honesty rules.
 
     Returns:
-        For the honesty checker: its system part, the user's instructions under their own
-        heading, and the honesty rules. For every other checker: the route's system part, the
-        user's instructions under their own heading and, with `honesty_state` on a route of
+        For the honesty checker: its system part, the part about getting around safeguards
+        (`EVASION_PART`), the user's instructions under their own heading, and the honesty
+        rules. For every other checker with a system part: the route's system part,
+        `EVASION_PART`, the user's instructions under their own heading and, with
+        `honesty_state` on a route of
         `HONESTY_ROUTES`, the part about unverified code. No other checker gets the honesty
         rules or a way to record marks.
 
@@ -306,6 +314,7 @@ def compose_instructions(
             "\n\n".join(
                 [
                     _read("system/honesty.md").strip(),
+                    _read(EVASION_PART).strip(),
                     "# The user's instructions\n\n" + user.strip(),
                     (rules if rules else honesty_rules()).strip(),
                 ]
@@ -316,6 +325,7 @@ def compose_instructions(
     system = system_part(route)
     if system:
         parts.append(system.strip())
+        parts.append(_read(EVASION_PART).strip())
         parts.append("# The user's instructions\n\n" + user.strip())
     else:
         parts.append(user.strip())

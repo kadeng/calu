@@ -3,6 +3,7 @@
 import pytest
 
 from calu.defaults.instructions import (
+    EVASION_PART,
     HONESTY_ROUTES,
     SYSTEM_PARTS,
     compose_instructions,
@@ -14,6 +15,7 @@ from calu.defaults.instructions import (
     system_part,
     without_test_triggers,
 )
+from calu.defaults.instructions import _read as read_part
 from calu.web.settings import Sources, panes, parse
 
 
@@ -67,14 +69,16 @@ def test_the_shipped_instructions_are_short(name: str) -> None:
     """Requirement 38: system part and default together are a few plain rules.
 
     The command checker's limit is higher by the section on commands outside the sandbox
-    (D255), which the owner asked for after requirement 38.
+    (D255), and every limit by the fixed part on getting around safeguards (`EVASION_PART`),
+    both of which the owner asked for after requirement 38.
 
     Args:
         name: The checker type.
     """
     route = "subagent" if name == "subagent-result" else name
     words = len(compose_instructions(route, default_instructions(name)).split())
-    assert words < (410 if name == "command" else 360), f"{name}: {words} words"
+    evasion = len(read_part(EVASION_PART).split())
+    assert words < (410 if name == "command" else 360) + evasion, f"{name}: {words} words"
     assert "auto mode" in system_part(route) or route == "subagent"
 
 
@@ -105,11 +109,15 @@ def test_cutting_the_test_triggers_keeps_what_follows_them() -> None:
 
 
 def test_the_narrator_and_the_redaction_instructions_are_untouched() -> None:
-    """Requirement 38: the narrator's instructions stay as they were."""
+    """Requirement 38: the narrator's instructions change only on purpose.
+
+    Changed once since: the owner asked that plans to get around a safeguard are narrated in
+    full (`EVASION_PART`).
+    """
     import hashlib
 
     digests = {
-        "narrator": "416da2e943ff5e541e23ad796f8835110b48d0542c69d11e3a2bcb6fd75aa73c",
+        "narrator": "2962f12b92ae2ccc6eba290c5275439c524ad44944d5d394b60ce11837c31f26",
     }
     for name, digest in digests.items():
         text = default_instructions(name).encode("utf-8")
