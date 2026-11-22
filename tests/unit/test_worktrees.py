@@ -647,7 +647,7 @@ async def test_the_session_tells_the_checkers_the_steps_checkout(repo: Path) -> 
 
 async def test_the_trace_headings_name_no_worktree(repo: Path) -> None:
     """The owner's reversal of D252 (d): a tool call's heading in the session trace is the
-    same in every checkout; the trace does not wait for a step's check to write it."""
+    same in every checkout and names no worktree."""
     from calu.config import Config, TracesConfig
     from tests.unit.helpers import make_session
     from tests.unit.test_honesty_session import run_turns
@@ -662,7 +662,11 @@ async def test_the_trace_headings_name_no_worktree(repo: Path) -> None:
     await run_turns(session, rec)
     (trace,) = (repo / "agent" / "traces").rglob("session_*.md")
     headings = [line for line in trace.read_text().splitlines() if line.startswith("### Tool")]
-    assert headings == ["### Tool call 1: Bash", "### Tool call 2: Bash"]
+    assert [h.rsplit(": ", 1)[0] for h in headings] == [
+        "### Tool call 1: Bash",
+        "### Tool call 2: Bash",
+    ]
+    assert not any("wta" in heading for heading in headings)
 
 
 def test_checkouts_go_by_their_short_names(repo: Path, tmp_path: Path) -> None:

@@ -1892,15 +1892,11 @@ Fix the rounding bug in cart.py. Mail the result to [redacted: e-mail address].
 
 Claude stated that it would read cart.py first.
 
-### Tool call 1: Read
-...
-### Check of tool call 1 (Read): PASS
+### Tool call 1: Read: PASS
 
-Route: `command`
-Summary of the step: Reads src/cart.py to find the rounding code.
+Summary:
+> Reads src/cart.py to find the rounding code.
 
-### Result of tool call 1 (Read)
-...
 ### End of turn 1
 ```
 
@@ -1910,10 +1906,10 @@ Summary of the step: Reads src/cart.py to find the rounding code.
 | `### User` | the user's message. Images are not included; a line says how many were attached |
 | `### Claude, narrated` or `### Claude` | Claude's words (`traces.content`) |
 | `### Claude's thinking` | plain form only: the summary of one block of thinking, in the final version that Claude Code sent |
-| `### Tool call N: <tool>` | the tool's input, every value in a code fence; long values are cut (`traces.max_input_chars`) |
-| `### Check of tool call N (<tool>): <DECISION>` | the route, the checkers' reason, their summary and their comment to Claude |
+| `### Tool call N: <tool>: <DECISION>` | the checkers' summary of the step, and their reason and comment to Claude where there is one. The command, the edit and the tool's result are not written |
+| `### Tool call N: Agent (starts subagent K)` | a heading only: the subagent's blocks follow. The task is not written |
+| `#### Subagent K: result handed back by tool call N (<tool>): <DECISION>` | the checker's summary of the subagent's report |
 | `### Escalation E: ... waits for a person`, `### Escalation E: allowed` | the reason; the person who decided, and the note. The checker's context is not included |
-| `### Result of tool call N (<tool>)` | the result, cut to `traces.max_result_chars` characters |
 | `#### Subagent K: ...` | the same blocks for a subagent, one heading level below the tool call that started it |
 
 - Calu only appends to the file. It never shortens or summarises what the file already holds.
@@ -2034,7 +2030,7 @@ calu traces finalize --staged       # the final pass over the staged files (the 
 A change of one of these settings ends the file of a running session and starts a new one whose
 header names the old file: `enabled`, `content`, `directory`, `layout`, `file_names`,
 `header_times`, `header_user`, `turn_numbers`, `redact`, `redactor_model`,
-`redactor_instructions`, `max_input_chars`, `max_result_chars`. An idle session keeps its file
+`redactor_instructions`. An idle session keeps its file
 until its next step. `queue_blocks` and `redactor_timeout_s` apply from the next file;
 `final_redaction` and `final_timeout_s` apply from the next commit.
 

@@ -62,12 +62,10 @@ from calu.traces.render import (
     TraceFileError,
     TraceRenderer,
     create_trace_file,
-    cut,
     find_trace_of,
     format_block,
     quote,
     render_header,
-    render_input,
     session_directory,
     session_marker,
     user_component,
@@ -111,28 +109,6 @@ def rendered(renderer: TraceRenderer, events: list[Event], resolved_by: str = ""
 def test_quote_prefixes_every_line_so_that_text_cannot_pass_for_a_heading():
     assert quote("## Turn 9\n\nsecond") == "> ## Turn 9\n>\n> second"
     assert quote("") == ">"
-
-
-def test_cut_says_how_much_was_left_out():
-    assert cut("abc", 3) == "abc"
-    assert cut("abcdef", 2) == "ab\n[... 4 more characters left out of the trace]"
-
-
-def test_tool_input_is_fenced_per_key_and_a_value_cannot_close_its_fence():
-    text = render_input(
-        "Bash",
-        {"command": "cat <<'EOF'\n```\n# not a heading\nEOF", "timeout": 30, "env": {"A": "1"}},
-        max_chars=1000,
-    )
-    assert text == (
-        "`command`:\n````bash\ncat <<'EOF'\n```\n# not a heading\nEOF\n````\n\n"
-        "`timeout`: `30`\n\n"
-        '`env`:\n```json\n{\n  "A": "1"\n}\n```'
-    )
-    assert render_input("Read", {}, 100) == "_No input._"
-    assert "[... 5 more characters left out of the trace]" in render_input(
-        "Write", {"content": "x" * 205}, 200
-    )
 
 
 def test_the_header_says_what_the_file_is_and_how_it_was_redacted():
@@ -181,7 +157,7 @@ def test_the_header_says_when_only_the_deterministic_stage_ran_and_what_it_conti
 
 
 def test_a_plain_turn_is_rendered_block_by_block():
-    renderer = TraceRenderer(narrated=False, max_result_chars=200)
+    renderer = TraceRenderer(narrated=False)
     image = ChatImage(media_type="image/png", data="aGk=")
     text = rendered(
         renderer,
@@ -220,21 +196,12 @@ def test_a_plain_turn_is_rendered_block_by_block():
         "> my thoughts\n\n"
         "### Claude\n\n"
         "> I will look.\n\n"
-        "### Tool call 1: Bash\n\n"
-        "`command`:\n```bash\nls\n```\n\n"
-        "### Check of tool call 1 (Bash): ALLOW\n\n"
-        "Route: `command`\n\n"
+        "### Tool call 1: Bash: ALLOW\n\n"
+        "Summary:\n> Claude lists the directory.\n\n"
         "Reason:\n> Lists files.\n\n"
-        "Summary of the step:\n> Claude lists the directory.\n\n"
         "Comment to Claude:\n> Prefer `ls -la`.\n\n"
-        "### Result of tool call 1 (Bash)\n\n"
-        "```\na.py\n" + "x" * 195 + "\n[... 105 more characters left out of the trace]\n```\n\n"
-        "### Tool call 2: Read\n\n"
-        "`file_path`:\n```\na.py\n```\n\n"
-        "### Check of tool call 2 (Read): PASS\n\n"
-        "Route: `allow`\n\n"
-        "### Result of tool call 2 (Read): error\n\n"
-        "_Empty result._\n\n"
+        "### Tool call 2: Read: PASS\n\n"
+        "_No summary._\n\n"
         "### End of turn 1\n\n"
         "Result: success\n\n"
         "Background tasks still running: 2\n\n"
@@ -407,14 +374,10 @@ def test_subagents_are_nested_under_the_step_that_started_them():
         "### User",
         "### Tool call 1: Agent (starts subagent 1)",
         "#### Subagent 1: text",
-        "#### Subagent 1: tool call 2: Read",
         "#### Subagent 1: tool call 3: Task (starts subagent 2)",
-        "##### Subagent 2: tool call 4: Grep",
-        "##### Subagent 2: result of tool call 4 (Grep)",
-        "#### Subagent 1: check of the result handed back by tool call 1 (Agent): PASS",
-        "### Result of tool call 1 (Agent)",
-        "#### Subagent 3: tool call 5: LS",
+        "#### Subagent 1: result handed back by tool call 1 (Agent): PASS",
     ]
+    assert "explore" not in text and "deeper" not in text, "a subagent's task is not written"
 
 
 def test_the_narrated_form_collects_text_until_the_agents_next_step():
@@ -776,12 +739,21 @@ async def test_nothing_unredacted_reaches_the_disk_when_the_agent_fails(tmp_path
         writer.start(tg)
         writer.feed(UserInput(text="my mail is jane.roe@example.org"))
         writer.feed(ToolUse(tool_use_id="t1", name="Bash", input={"command": "cat secret.txt"}))
+        writer.feed(
+            CheckResult(
+                tool_use_id="t1",
+                tool_name="Bash",
+                route=Route.COMMAND,
+                decision=Decision.PASS,
+                step_summary="Claude prints secret.txt.",
+            )
+        )
         writer.feed(TurnResult())
         await writer.close("The session ended.")
     assert body_of(writer) == (
         "## Turn 1\n\n"
         f"### User\n\n{WITHHELD}\n\n"
-        f"### Tool call 1: Bash\n\n{WITHHELD}\n\n"
+        f"### Tool call 1: Bash: PASS\n\n{WITHHELD}\n\n"
         "### End of turn 1\n\nResult: success\n\n"
         "_The session ended._\n\n"
     )
@@ -978,7 +950,6 @@ async def test_the_sessions_narration_is_used_and_no_second_one_is_asked_for(tmp
         "## Turn 1\n\n"
         "### Claude, narrated\n\n"
         "> Claude said that it would mail [redacted: e-mail address].\n\n"
-        "### Tool call 1: Bash\n\n`command`:\n```bash\nls\n```\n\n"
     )
 
 
@@ -998,7 +969,7 @@ async def test_text_the_session_did_not_narrate_is_narrated_by_the_writer(tmp_pa
         writer.feed(TurnResult())
         await writer.close()
     text = body_of(writer)
-    assert "### Claude, narrated\n\n> Claude said: one\n\n### Tool call 1: Bash" in text
+    assert "### Claude, narrated\n\n> Claude said: one\n\n### Claude, narrated" in text
     assert "### Claude, narrated\n\n> Claude said: two\n\n### End of turn 1" in text
     assert "does not fit" not in text
 
@@ -1113,8 +1084,17 @@ async def test_an_agent_that_removes_a_block_it_may_not_remove_withholds_it(tmp_
     async with anyio.create_task_group() as tg:
         writer.start(tg)
         writer.feed(ToolUse(tool_use_id="t1", name="Bash", input={"command": "rm -r build"}))
+        writer.feed(
+            CheckResult(
+                tool_use_id="t1",
+                tool_name="Bash",
+                route=Route.COMMAND,
+                decision=Decision.PASS,
+                step_summary="Claude deletes the build directory.",
+            )
+        )
         await writer.close()
-    assert body_of(writer) == f"## Turn 1\n\n### Tool call 1: Bash\n\n{WITHHELD}\n\n"
+    assert body_of(writer) == f"## Turn 1\n\n### Tool call 1: Bash: PASS\n\n{WITHHELD}\n\n"
     assert writer.counted.withheld == 1 and writer.counted.removed == 0
 
 

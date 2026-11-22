@@ -9,7 +9,7 @@ may lose what tells about the person.
 - Every requirement and decision that entered the session: stated by the user, or proposed
   by Claude and accepted by the user. Never reword, weaken or drop one. A request in the form
   of a question ("Can you make the timeout 30 s?") is a requirement: keep it.
-- What was changed and why: the tool calls, the checks and their reasons, the results.
+- What was changed and why: the tool calls, the checks, their summaries and their reasons.
 - Everything that the two sections below do not name, unchanged.
 
 ## May be removed

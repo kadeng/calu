@@ -840,12 +840,6 @@ class TracesConfig(ConfigModel):
     final_timeout_s: float = Field(default=600.0, gt=0)
     """Seconds the final redaction pass may take for one trace file. A pass that takes longer
     fails, and the commit is refused."""
-    max_input_chars: int = Field(default=20_000, ge=200)
-    """How many characters of one value of a tool call's input the file holds; a longer value
-    is cut, and the file says how much was left out."""
-    max_result_chars: int = Field(default=4_000, ge=200)
-    """How many characters of a tool call's result the file holds; a longer result is cut,
-    and the file says how much was left out."""
     queue_blocks: int = Field(default=500, ge=1)
     """How many blocks may wait to be redacted and written. A step never waits for the trace:
     when the redaction agent is so far behind that this many blocks wait, further blocks are

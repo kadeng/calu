@@ -15,22 +15,25 @@ Everything here is rendering without input or output, except `create_trace_file`
                                      (`_PendingThinking`)
     assistant.text, .thinking        narrated: one block per run of them up to the agent's
                                      next tool call or the end of the turn; the narration
-    tool.use                         "Tool call N: <tool>"; every input value in a code fence
-    check.result                     "Check of tool call N (<tool>): <DECISION>"; route,
-                                     reason, summary, comment to Claude (for a subagent's
-                                     result: "check of the result handed back by ...")
+    tool.use                         nothing; numbers the call. A subagent tool: "Tool call N:
+                                     Agent (starts subagent K)", a heading without the task
+    check.result                     "Tool call N: <tool>: <DECISION>"; the checker's summary
+                                     of the step, its reason and its comment to Claude where
+                                     there is one (for a subagent's result: "Result handed
+                                     back by tool call N (<tool>): <DECISION>")
     escalation.request               "Escalation E: tool call N (<tool>) waits for a person";
                                      the reason; the questions of a question of the agent
     escalation.resolved              "Escalation E: allowed | denied | answered | ended
                                      without a decision"; who decided, the note
-    tool.result                      "Result of tool call N (<tool>)"; the result, cut
+    tool.result                      nothing
     turn.result                      "End of turn T" ("End of turn" without turn numbers)
 
     every other event                nothing (streaming fragments, states, diffs, lists)
 
-Headings are calu's own words. Text that a person, Claude or a checker wrote stands below
-them, quoted line by line (`quote`) or in a code fence that it cannot close
-(`calu.markdown.fence`), so that it cannot pass for a heading of the trace.
+The trace holds no tool input (commands, edits) and no tool result: the checker's summary of a
+step says what it did (the owner's decision of 2026-11-22). Headings are calu's own words.
+Text that a person, Claude or a checker wrote stands below them, quoted line by line
+(`quote`), so that it cannot pass for a heading of the trace.
 
 Subagents: the tool call that starts a subagent numbers it ("starts subagent 2"), and every
 block of that subagent is headed "Subagent 2: ..." one heading level below the blocks of the
@@ -38,9 +41,8 @@ agent that started it:
 
     ## Turn 1
     ### Tool call 3: Agent (starts subagent 1)
-    #### Subagent 1: tool call 4: Read
-    #### Subagent 1: result of tool call 4 (Read)
-    ### Result of tool call 3 (Agent)
+    #### Subagent 1: tool call 4: Read: PASS
+    #### Subagent 1: result handed back by tool call 3 (Agent): PASS
 
 In the narrated form a block is created where Claude's first words appear and filled later:
 `Block.outputs` collects the text and thinking, `Block.closed` says that no more will come,
@@ -62,7 +64,6 @@ last completed form (else the fragments streamed so far), when the agent's think
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import secrets
@@ -73,7 +74,6 @@ from typing import Any
 
 from calu.checkers.policy import Route
 from calu.context.narrator import ClaudeOutput
-from calu.markdown import fence
 from calu.protocol.messages import (
     AgentsUpdate,
     AssistantDelta,
@@ -181,22 +181,6 @@ def quote(text: str) -> str:
     return "\n".join(f"> {line}" if line.strip() else ">" for line in lines)
 
 
-def cut(text: str, limit: int) -> str:
-    """Cut a text to `limit` characters and say how much was left out.
-
-    Args:
-        text: The text.
-        limit: The largest number of characters kept.
-
-    Returns:
-        `text` if it is short enough; else its first `limit` characters and a line
-        "[... N more characters left out of the trace]".
-    """
-    if len(text) <= limit:
-        return text
-    return f"{text[:limit]}\n[... {len(text) - limit} more characters left out of the trace]"
-
-
 def one_line(text: str, limit: int = 200) -> str:
     """Return a short text as one line that cannot leave an inline code span.
 
@@ -223,37 +207,6 @@ def format_block(heading: str, body: str) -> str:
     """
     parts = [part.strip("\n") for part in (heading, body) if part.strip()]
     return "\n\n".join(parts) + "\n\n" if parts else ""
-
-
-def render_input(tool_name: str, tool_input: dict[str, Any], max_chars: int) -> str:
-    """Render the input of a tool call: every value in a code fence under its key.
-
-    Args:
-        tool_name: The tool, e.g. "Bash"; a Bash `command` is fenced as "bash".
-        tool_input: The input as Claude sent it.
-        max_chars: Longer values are cut (`cut`).
-
-    Returns:
-        Markdown: per key a line "`key`:" and the value in a fence that the value cannot
-        close; a list or an object as indented JSON; a number, a truth value or null on the
-        key's line. "_No input._" for an empty input.
-    """
-    if not tool_input:
-        return "_No input._"
-    parts: list[str] = []
-    for key, value in tool_input.items():
-        name = re.sub(r"[^A-Za-z0-9_.-]", "?", str(key))[:80]
-        if value is None or isinstance(value, (bool, int, float)):
-            parts.append(f"`{name}`: `{json.dumps(value)}`")
-            continue
-        if isinstance(value, str):
-            info = "bash" if tool_name == "Bash" and key == "command" else ""
-            text = value
-        else:
-            info = "json"
-            text = json.dumps(value, indent=2, ensure_ascii=False, default=str)
-        parts.append(f"`{name}`:\n{fence(cut(text, max_chars), info)}")
-    return "\n\n".join(parts)
 
 
 def render_questions(questions: list[dict[str, Any]]) -> str:
@@ -400,8 +353,6 @@ class TraceRenderer:
     def __init__(
         self,
         narrated: bool,
-        max_input_chars: int = 20_000,
-        max_result_chars: int = 4_000,
         claude_session: str | None = None,
         turn_numbers: bool = True,
     ) -> None:
@@ -410,16 +361,12 @@ class TraceRenderer:
         Args:
             narrated: True for the narrated form (Claude's text and thinking as blocks to be
                 narrated), False for the plain form (text and thinking verbatim).
-            max_input_chars: Longer values of a tool call's input are cut.
-            max_result_chars: Longer tool results are cut.
             claude_session: The Claude session id the header already names, or None.
             turn_numbers: True for "## Turn 3" ... "### End of turn 3"; False for "## Turn"
                 ... "### End of turn" (`traces.turn_numbers`).
         """
         self.narrated = narrated
         self.turn_numbers = turn_numbers
-        self.max_input_chars = max_input_chars
-        self.max_result_chars = max_result_chars
         self.claude_session = claude_session
         self._turn = 0
         self._in_turn = False
@@ -468,7 +415,7 @@ class TraceRenderer:
                 self._close(event.agent_id)
                 blocks += self._flush_thinking(event.agent_id)
                 blocks += self._start_turn()
-                blocks.append(self._tool_use(event))
+                blocks += self._tool_use(event)
             case CheckResult():
                 self._close(event.agent_id)
                 blocks += self._flush_thinking(event.agent_id)
@@ -482,7 +429,7 @@ class TraceRenderer:
             case EscalationResolved():
                 blocks.append(self._resolved(event, resolved_by))
             case ToolResult():
-                blocks.append(self._tool_result(event))
+                pass  # the result is not part of the trace (module docstring)
             case AgentsUpdate():
                 for agent in event.agents:
                     if agent.status != "running":
@@ -669,6 +616,26 @@ class TraceRenderer:
         self._calls[tool_use_id] = (number, known)
         return f"tool call {number} ({known})" if known else f"tool call {number}"
 
+    def _call_title(self, tool_use_id: str | None, name: str = "") -> str:
+        """Return the heading words of a tool call, numbering one that is new.
+
+        Args:
+            tool_use_id: The call's id, or None if the event carries none.
+            name: The tool's name, if the event carries it.
+
+        Returns:
+            "tool call N: <tool>" (with "(starts subagent K)" for a subagent tool), "tool
+            call N" if the tool is not known, or "a tool call (<tool>)" without an id.
+        """
+        if not tool_use_id:
+            return f"a tool call ({one_line(name)})" if name else "a tool call"
+        self._call(tool_use_id, name)
+        number, known = self._calls[tool_use_id]
+        title = f"tool call {number}: {known}" if known else f"tool call {number}"
+        if tool_use_id in self._agents:
+            title += f" (starts subagent {self._agents[tool_use_id][0]})"
+        return title
+
     def _user_input(self, event: UserInput) -> list[Block]:
         """Render a message Claude took in.
 
@@ -732,47 +699,56 @@ class TraceRenderer:
         self._open[event.agent_id] = block
         return [*self._start_turn(), block]
 
-    def _tool_use(self, event: ToolUse) -> Block:
-        """Render a tool call with its input.
+    def _tool_use(self, event: ToolUse) -> list[Block]:
+        """Number a tool call, and the subagent it starts.
+
+        Side effects: records the call's number and tool name, and for a subagent tool the
+        subagent's number, which the check, the escalation and later blocks refer to.
 
         Args:
             event: The event.
 
         Returns:
-            The block; the call of a subagent tool also numbers the subagent it starts.
+            For a subagent tool, one block with only a heading ("Tool call N: Agent (starts
+            subagent K)"), so that the subagent's blocks below have a start; no block for any
+            other call. The input (the task, a command, an edit) is never written.
         """
         number, _ = self._calls.get(event.tool_use_id, (len(self._calls) + 1, ""))
         self._calls[event.tool_use_id] = (number, one_line(event.name, 80))
-        title = f"tool call {number}: {one_line(event.name, 80)}"
-        if event.name in AGENT_TOOLS:
-            _, depth = self._agent(event.agent_id)
-            started = self._agents.setdefault(event.tool_use_id, (len(self._agents) + 1, depth + 1))
-            title += f" (starts subagent {started[0]})"
-        body = render_input(event.name, event.input, self.max_input_chars)
-        return Block(self._heading(event.agent_id, title), body)
+        if event.name not in AGENT_TOOLS:
+            return []
+        _, depth = self._agent(event.agent_id)
+        self._agents.setdefault(event.tool_use_id, (len(self._agents) + 1, depth + 1))
+        title = self._call_title(event.tool_use_id, event.name)
+        return [Block(self._heading(event.agent_id, title), "", fixed=True)]
 
     def _check(self, event: CheckResult) -> Block:
-        """Render the decision about a tool call.
+        """Render a checked step: the checker's summary of it and the decision.
 
         Args:
             event: The event.
 
         Returns:
-            The block: the decision in the heading; the route, and quoted the reason, the
-            checker's summary of the step and its comment to Claude where there is one.
+            The block: "Tool call N: <tool>: <DECISION>" (for a subagent's result "Result
+            handed back by tool call N (<tool>): <DECISION>"); quoted, the checker's summary
+            of the step, and its reason and comment to Claude where there is one.
         """
-        call = self._call(event.tool_use_id, event.tool_name)
-        what = "check of the result handed back by" if event.route is Route.SUBAGENT else "check of"
-        heading = self._heading(event.agent_id, f"{what} {call}: {event.decision.value}")
-        parts = [f"Route: `{event.route.value}`"]
+        if event.route is Route.SUBAGENT:
+            title = f"result handed back by {self._call(event.tool_use_id, event.tool_name)}"
+        else:
+            title = self._call_title(event.tool_use_id, event.tool_name)
+        heading = self._heading(event.agent_id, f"{title}: {event.decision.value}")
+        parts: list[str] = []
         for label, text in (
+            ("Summary", event.step_summary),
             ("Reason", event.reason),
-            ("Summary of the step", event.step_summary),
             ("Comment to Claude", event.comment),
         ):
             if text.strip():
                 parts.append(f"{label}:\n{quote(text)}")
-        return Block(heading, "\n\n".join(parts), fixed=len(parts) == 1)
+        if not parts:
+            return Block(heading, "_No summary._", fixed=True)
+        return Block(heading, "\n\n".join(parts))
 
     def _escalation(self, event: EscalationRequest) -> Block:
         """Render a tool call that waits for a person.
@@ -831,22 +807,6 @@ class TraceRenderer:
             "\n\n".join(parts),
             fixed=not (event.note and event.note.strip()),
         )
-
-    def _tool_result(self, event: ToolResult) -> Block:
-        """Render the result of a tool call, cut to `max_result_chars`.
-
-        Args:
-            event: The event.
-
-        Returns:
-            The block: the result in a code fence, or a line for an empty result.
-        """
-        call = self._call(event.tool_use_id)
-        title = f"result of {call}" + (": error" if event.is_error else "")
-        heading = self._heading(event.agent_id, title)
-        if not event.content.strip():
-            return Block(heading, "_Empty result._", fixed=True)
-        return Block(heading, fence(cut(event.content, self.max_result_chars)))
 
     def _turn_end(self, event: TurnResult) -> Block:
         """Render the end of a turn.
