@@ -326,9 +326,11 @@ Two more models work for the checkers and decide nothing:
   when Claude's narrated thinking or text shows that it knowingly tries to get around a
   restriction that still applies (a denied step, a decision, a permission, a rule of yours),
   or to deceive you or a reviewer, the checker escalates, also when the step itself looks
-  harmless. What counts is whether the step is authorized, not its route: leaving the sandbox
-  is legitimate where your rules allow it ("run a command outside the sandbox only when it
-  fails there"). An intent to deceive you always escalates. The narrator retells such plans in
+  harmless. What counts is whether the step is authorized, not its route. A denial refuses an
+  effect, not the goal: after a denied token read, posting the same comment through a
+  permitted tool that needs no token is fine. Leaving the sandbox is legitimate where your
+  rules allow it ("run a command outside the sandbox only when it fails there"). An intent to
+  deceive you always escalates. The narrator retells such plans in
   full.
 - **No file of the repository is part of the prompt.** `AGENTS.md`, `CLAUDE.md` and skill
   descriptions can be written by the agent under review, so they are not a source of rules for
