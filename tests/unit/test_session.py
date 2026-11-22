@@ -1406,11 +1406,97 @@ async def test_a_message_out_of_the_session_is_checked_but_a_relay_is_not(tmp_pa
         await session.stop()
 
     sent = [c for c in rec.of(CheckResult) if c.tool_name == "SendMessage"]
-    assert [c.route for c in sent] == [Route.ALLOW, Route.COMMAND], (
-        "a message to one of its own subagents must stay free, one that leaves the session must not"
+    assert [c.route for c in sent] == [Route.SUBAGENT, Route.COMMAND], (
+        "Claude's own message to its subagent is reviewed as a task; one that leaves the "
+        "session goes to the command checker"
     )
-    # Neither is denied here -- the point is that the second one was judged at all.
+    # Neither is denied here -- the point is that each was judged at all.
     assert [c.decision for c in sent] == [Decision.PASS, Decision.PASS]
+    assert sent[0].step_summary.startswith("Message to subagent sleeper: ")
+
+
+async def test_a_relay_of_the_users_words_to_a_subagent_is_not_reviewed(tmp_path: Path):
+    """The user's message that calu asked the main agent to relay is the user's, not Claude's."""
+    session, rec, _ = make_session(
+        tmp_path,
+        [
+            [
+                {
+                    "agent": {
+                        "description": "sleeper",
+                        "background": True,
+                        "actions": [{"sleep": 0.3}, {"text": "sub done"}],
+                    }
+                },
+                {"tool": "SendMessage", "input": {"to": "sleeper", "message": "carry on"}},
+            ]
+        ],
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        session._run_state.relays.append("carry on")  # as `send_chat` records a relay
+        await session.send_chat(ChatSendParams(text="start"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    (sent,) = [c for c in rec.of(CheckResult) if c.tool_name == "SendMessage"]
+    assert sent.route is Route.ALLOW and session._run_state.relays == []
+
+
+async def test_a_subagents_task_is_reviewed_and_named_in_the_context_before_it_runs(
+    tmp_path: Path,
+):
+    """The Agent call goes to the subagent checker; its retelling of the task is in the turn
+    record while the background subagent still runs, so the main agent's next step is checked
+    with it (the owner's case: a later command runs a file the subagent is rewriting)."""
+    session, rec, _ = make_session(
+        tmp_path,
+        [
+            [
+                {
+                    "agent": {
+                        "description": "rewrite hello",
+                        "background": True,
+                        "actions": [{"sleep": 0.3}, {"text": "sub done"}],
+                    }
+                },
+                {"tool": "Bash", "input": {"command": "sleep 1 && python hello.py"}},
+            ]
+        ],
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="start"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    (task,) = [
+        c for c in rec.of(CheckResult) if c.tool_name == "Agent" and c.agent_id != c.tool_use_id
+    ]
+    assert task.route is Route.SUBAGENT and task.step_summary.startswith("Task for subagent ")
+    turns = session.context.check_context().turns
+    assert "[Agent, PASS] Task for subagent " in turns
+    assert turns.index("Task for subagent ") < turns.index("[Bash"), (
+        "the task is in the record before the main agent's next step"
+    )
+
+
+async def test_switching_task_reviews_off_lets_an_agent_call_run_unchecked(tmp_path: Path):
+    """`check_subagent_tasks = false`: the Agent call takes the free route again."""
+    from calu.config import Config
+
+    session, rec, _ = make_session(
+        tmp_path,
+        [[{"agent": {"description": "look", "actions": [{"text": "done"}]}}]],
+        Config(check_subagent_tasks=False),
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="start"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    (task,) = [
+        c for c in rec.of(CheckResult) if c.tool_name == "Agent" and c.agent_id != c.tool_use_id
+    ]
+    assert task.route is Route.ALLOW
 
 
 def test_verdicts_of_several_checkers_combine_most_restrictively():

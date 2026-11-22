@@ -161,6 +161,11 @@ class RunState:
     """The subagents whose report was reviewed when they handed it back (`SubagentHandback`,
     D252): an empty final result of theirs then needs no review."""
 
+    relays: list[str] = field(default_factory=list[str])
+    """The user's texts for a subagent that calu asked the main agent to relay with
+    `SendMessage` (`Session.send_chat`), until the relay is seen: a `SendMessage` that carries
+    one of them is the user's words, not Claude's, and is not reviewed as a task."""
+
     # The fields below are not reset by a start: `following` carries them into the next run.
     queue: list[tuple[QueuedMessage, str]] = field(default_factory=list[tuple[QueuedMessage, str]])
     """The chat messages Claude has not read yet, each with the text that was sent for it."""

@@ -473,7 +473,7 @@ fun checkerRouteOf(route: String): String =
  * Return the display name of the checker (or rule) behind a `check.result` route.
  *
  * @param route The event's `route`.
- * @return "Command checker", "Edit checker", "Changeset checker", "Subagent result checker",
+ * @return "Command checker", "Edit checker", "Changeset checker", "Subagent checker",
  *   "Question" (a question of the agent), "Recorded decision" for "stored" (a step taken from
  *   calu's record, which does not say who decided), or "Rules" for "allow", "deny" and "escalate".
  */
@@ -481,7 +481,7 @@ fun checkerLabel(route: String): String = when (route) {
     "command" -> "Command checker"
     "edit" -> "Edit checker"
     "changeset" -> "Changeset checker"
-    "subagent" -> "Subagent result checker"
+    "subagent" -> "Subagent checker"
     "question" -> "Question"
     "stored" -> "Recorded decision"
     else -> "Rules"

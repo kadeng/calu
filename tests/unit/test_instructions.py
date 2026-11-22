@@ -68,6 +68,14 @@ PRIVACY_WORDS = 40
 """Words of the sentence that keeps secrets and personal data out of a checker's summary
 (2026-11-22, the owner's request)."""
 
+TASK_WORDS = 60
+"""Words the subagent checker's fixed part gained when it began to review tasks as well as
+results (2026-11-22, the owner's request)."""
+
+FILE_TASK_WORDS = 40
+"""Words of the command checker's sentence on judging a file by the task of a subagent that may
+still run (2026-11-22, the owner's request)."""
+
 
 @pytest.mark.parametrize("name", ["command", "edit", "changeset", "subagent-result"])
 def test_the_shipped_instructions_are_short(name: str) -> None:
@@ -84,7 +92,8 @@ def test_the_shipped_instructions_are_short(name: str) -> None:
     route = "subagent" if name == "subagent-result" else name
     words = len(compose_instructions(route, default_instructions(name)).split())
     evasion = len(read_part(EVASION_PART).split())
-    assert words < (410 if name == "command" else 360) + evasion + PRIVACY_WORDS, (
+    tasks = {"subagent-result": TASK_WORDS, "command": FILE_TASK_WORDS}.get(name, 0)
+    assert words < (410 if name == "command" else 360) + evasion + PRIVACY_WORDS + tasks, (
         f"{name}: {words} words"
     )
     assert "auto mode" in system_part(route) or route == "subagent"

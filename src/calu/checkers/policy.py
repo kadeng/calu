@@ -78,15 +78,19 @@ whatever they set in motion is itself checked:
 * `TodoWrite`, `TaskCreate`, `TaskUpdate` write Claude Code's own plan and task state, which
   never reaches the project or the shell.
 * `Agent` (and its older name `Task`) starts a subagent. Every tool call that subagent makes
-  goes through the same gate, and what it hands back is reviewed by the subagent result checker,
-  so starting one buys no unchecked work.
+  goes through the same gate, and what it hands back is reviewed by the subagent checker, so
+  starting one buys no unchecked work. The gate still sends the task itself to the subagent
+  checker before the subagent starts (`StepGate`'s `reviews_task`, `check_subagent_tasks`): a
+  subagent must not be handed what was refused to Claude, and later checks need its task.
 * `SendMessage` is how the main agent relays a client's message to one of its subagents
   (`calu.protocol.messages`, `chat.send {to: <agent id>}`), so checking it would put a checker call
   and a possible denial in the way of calu's own relay. The free route holds **only while the
   message stays inside the session**: Claude Code's `SendMessage` also reaches other sessions on the
   machine, whose steps no checker of this session sees. The session therefore compares the `to`
   value with its own subagents and sends a message to anything else to the command checker
-  (`Session._own_agent`, agent/records/PLAN.md D69). calu's own relay always matches, because the id
+  (`Session._own_agent`, agent/records/PLAN.md D69). A message to its own subagent that is not
+  calu's relay of the user's words is Claude's own instruction and goes to the subagent checker
+  like a task (`Session._reviews_task`). calu's own relay always matches, because the id
   it tells the main agent to use comes from that same registry.
 * `Skill` loads instructions. The tool calls the skill then asks for are checked like any other.
 * `EnterWorktree` creates `.claude/worktrees/<name>` on a new branch from `HEAD` and moves the

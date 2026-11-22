@@ -607,6 +607,26 @@ class FakeRunner:
             await sink(
                 ToolUse(agent_id=agent, tool_use_id=tool_use_id, name="Agent", input=tool_input)
             )
+            # As in Claude Code, the Agent call passes the PreToolUse hook first: a refused
+            # task starts no subagent.
+            allowed, message = await self._gated(
+                Step(
+                    tool_name="Agent",
+                    tool_input=tool_input,
+                    tool_use_id=tool_use_id,
+                    agent_id=agent,
+                    cwd=str(self.workspace),
+                ),
+                gate,
+                sink,
+            )
+            if not allowed:
+                await sink(
+                    ToolResult(
+                        agent_id=agent, tool_use_id=tool_use_id, is_error=True, content=message
+                    )
+                )
+                return
             info = AgentInfo(
                 agent_id=tool_use_id,
                 sdk_agent_id=f"fake-agent-{tool_use_id}",
@@ -733,34 +753,7 @@ class FakeRunner:
             agent_id=agent,
             cwd=str(cwd),
         )
-        gate_result = await gate.pre_tool_use(step)
-        if gate_result.main_note:
-            # As the SDK runner's hook: the note for the main agent goes out before the answer.
-            await sink(UserInput(text=gate_result.main_note, source=NOT_FROM_USER))
-        # As the SDK runner's hook: the mode Claude Code is in when the answer goes out decides
-        # what a PASS means (D250), not the one the call started in.
-        decision = hook_decision(gate_result.verdict, self.permission_mode, False)
-        self.hook_answers.append((name, decision))
-        if decision is None and self.permission_mode != "auto":
-            # No decision and no auto mode by now: Claude Code asks for its own approval.
-            decision = "ask"
-        if decision == "ask":
-            # An interrupt cancels the waiting call, as Claude Code cancels its permission
-            # request; the gate then closes the escalation as cancelled.
-            allowed, message = False, INTERRUPTED_TOOL_RESULT
-            with anyio.CancelScope() as waiting:
-                self._asks.add(waiting)
-                try:
-                    answer = await gate.ask(step)
-                    allowed = answer.allow
-                    message = answer.message or "The user denied this step."
-                finally:
-                    self._asks.discard(waiting)
-        else:
-            # No decision in auto mode: the scripted auto mode classifier approves every step
-            # (agent/records/PLAN.md D21).
-            allowed = decision in (None, "allow")
-            message = gate_result.reason
+        allowed, message = await self._gated(step, gate, sink)
         note = ""
         if allowed and action.get("fails"):
             content, is_error = str(action.get("result", "The tool call failed.")), True
@@ -781,6 +774,48 @@ class FakeRunner:
         if note:
             # Stands for the injected priority-"next" note: calu's text, not the user's.
             await sink(UserInput(text=note, source=NOT_FROM_USER))
+
+    async def _gated(self, step: Step, gate: ToolGate, sink: EventSink) -> tuple[bool, str]:
+        """Ask the gate about one call, as the SDK runner's hook and `can_use_tool` do.
+
+        Side effects: may send the gate's note for the main agent; records the hook's answer
+        in `hook_answers`; waits for `gate.ask` on an ASK verdict (an interrupt cancels it).
+
+        Args:
+            step: The call.
+            gate: Decides about the call.
+            sink: Receives the note for the main agent.
+
+        Returns:
+            (whether the call runs, the message for a refused call).
+        """
+        gate_result = await gate.pre_tool_use(step)
+        if gate_result.main_note:
+            # As the SDK runner's hook: the note for the main agent goes out before the answer.
+            await sink(UserInput(text=gate_result.main_note, source=NOT_FROM_USER))
+        # As the SDK runner's hook: the mode Claude Code is in when the answer goes out decides
+        # what a PASS means (D250), not the one the call started in.
+        decision = hook_decision(gate_result.verdict, self.permission_mode, False)
+        self.hook_answers.append((step.tool_name, decision))
+        if decision is None and self.permission_mode != "auto":
+            # No decision and no auto mode by now: Claude Code asks for its own approval.
+            decision = "ask"
+        if decision == "ask":
+            # An interrupt cancels the waiting call, as Claude Code cancels its permission
+            # request; the gate then closes the escalation as cancelled.
+            allowed, message = False, INTERRUPTED_TOOL_RESULT
+            with anyio.CancelScope() as waiting:
+                self._asks.add(waiting)
+                try:
+                    answer = await gate.ask(step)
+                    allowed = answer.allow
+                    message = answer.message or "The user denied this step."
+                finally:
+                    self._asks.discard(waiting)
+            return allowed, message
+        # No decision in auto mode: the scripted auto mode classifier approves every step
+        # (agent/records/PLAN.md D21).
+        return decision in (None, "allow"), gate_result.reason
 
     async def _cut_short(self, seconds: float) -> bool:
         """Let a tool call take its scripted time.

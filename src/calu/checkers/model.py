@@ -366,6 +366,25 @@ class Step(BaseModel):
 
 
 @dataclass(frozen=True)
+class SubagentTask:
+    """What Claude tells one of its subagents: the task that starts it, or a later message.
+
+    `agent_id` is the protocol id of the subagent (the id of the Agent tool call that starts
+    it), or for a message the `to` value of the `SendMessage` call; `prompt` is Claude's text
+    as written; `kind` is "start" for the task of a new subagent and "message" for a later
+    message; `background` tells whether a new subagent runs in the background.
+    """
+
+    agent_id: str | None
+    description: str
+    prompt: str
+    kind: Literal["start", "message"] = "start"
+    background: bool = False
+    narration: str = ""
+    """Claude's thinking and text before the call, narrated ("" if none)."""
+
+
+@dataclass(frozen=True)
 class SubagentResult:
     """The final result of a subagent and the task it was given.
 

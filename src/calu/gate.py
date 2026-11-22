@@ -479,6 +479,8 @@ class StepGate:
         keep_changeset: Callable[[str, str], None],
         honesty: Callable[[Step], Awaitable[HonestySnapshot | None]],
         honesty_review: Callable[[Step, float | None], Awaitable[str]],
+        reviews_task: Callable[[Step], bool] = lambda step: False,
+        review_task: Callable[[Step], Awaitable[CheckDecision]] | None = None,
     ) -> None:
         """Create the gate of one session.
 
@@ -511,6 +513,15 @@ class StepGate:
                 limit). Returns "" if the review ran (the gate then reads the state again),
                 otherwise one sentence saying why it did not run, failed or is still running;
                 never raises.
+            reviews_task: Says whether a step that the policy lets run unchecked tells a
+                subagent something that the subagent checker reviews first: an Agent call,
+                or Claude's own `SendMessage` to one of its subagents (not calu's relay of
+                the user's words). It may consume what it matched (a pending relay). Default:
+                never.
+            review_task: Reviews such a step with the subagent checker and returns the
+                decision, whose `step_summary` retells the task for the checkers' context;
+                never raises (a failure is an ESCALATE decision). Required when
+                `reviews_task` can return True.
         """
         self._workspace = workspace
         self._desk = hold
@@ -528,6 +539,8 @@ class StepGate:
         self._keep_changeset = keep_changeset
         self._honesty = honesty
         self._honesty_review = honesty_review
+        self._reviews_task = reviews_task
+        self._review_task = review_task
 
     # ------------------------------------------------------------------ fail closed
 
@@ -837,6 +850,10 @@ class StepGate:
             # Code's SendMessage also reaches other sessions on the machine, which the checkers
             # never see, so a message out of the session is decided like any other unknown action.
             route = Route.COMMAND
+        if route is Route.ALLOW and self._review_task is not None and self._reviews_task(step):
+            # What Claude tells a subagent is reviewed before the subagent gets it: a subagent
+            # must not be handed what was refused to Claude itself.
+            route = Route.SUBAGENT
         if outcome.notes:
             step = step.model_copy(update={"notes": [*step.notes, *outcome.notes]})
         held = ""
@@ -905,6 +922,20 @@ class StepGate:
                 decision=CheckDecision(decision=decision, reason=reason, step_summary=label),
                 source="policy",
                 rules=rules,
+            )
+        if route is Route.SUBAGENT and self._review_task is not None:
+            if pending is not None:
+                if pending.text is None:
+                    pending.text = await self._narrate(pending.outputs)
+                if pending.text:
+                    step = step.model_copy(update={"narration": pending.text})
+            reviewed = await self._review_task(step)
+            return await self._settle(
+                Decided(route=route, decision=reviewed, source="checker", rules=rules),
+                held,
+                step,
+                budget,
+                hold_left,
             )
         diff: str | None = None
         diff_text, diff_cut = "", False

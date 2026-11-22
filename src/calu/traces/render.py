@@ -19,8 +19,9 @@ Everything here is rendering without input or output, except `create_trace_file`
                                      Agent (starts subagent K)", a heading without the task
     check.result                     "Tool call N: <tool>: <DECISION>"; the checker's summary
                                      of the step, its reason and its comment to Claude where
-                                     there is one (for a subagent's result: "Result handed
-                                     back by tool call N (<tool>): <DECISION>")
+                                     there is one (a subagent's task: "Task of subagent K:
+                                     <DECISION>"; its result: "Result handed back by tool call
+                                     N (<tool>): <DECISION>")
     escalation.request               "Escalation E: tool call N (<tool>) waits for a person";
                                      the reason; the questions of a question of the agent
     escalation.resolved              "Escalation E: allowed | denied | answered | ended
@@ -729,12 +730,22 @@ class TraceRenderer:
             event: The event.
 
         Returns:
-            The block: "Tool call N: <tool>: <DECISION>" (for a subagent's result "Result
-            handed back by tool call N (<tool>): <DECISION>"); quoted, the checker's summary
-            of the step, and its reason and comment to Claude where there is one.
+            The block: "Tool call N: <tool>: <DECISION>"; for the subagent checker's review of
+            a subagent's task "Task of subagent K: <DECISION>", and of what it handed back
+            (the subagent's own event) "Result handed back by tool call N (<tool>):
+            <DECISION>"; quoted, the checker's summary of the step, and its reason and comment
+            to Claude where there is one.
         """
-        if event.route is Route.SUBAGENT:
+        if (
+            event.route is Route.SUBAGENT
+            and event.tool_use_id
+            and event.agent_id == event.tool_use_id
+        ):
+            # The review of what the subagent handed back: the subagent's own event.
             title = f"result handed back by {self._call(event.tool_use_id, event.tool_name)}"
+        elif event.route is Route.SUBAGENT and event.tool_use_id in self._agents:
+            # The review of the task, before the subagent starts: the caller's event.
+            title = f"task of subagent {self._agents[event.tool_use_id or ''][0]}"
         else:
             title = self._call_title(event.tool_use_id, event.tool_name)
         heading = self._heading(event.agent_id, f"{title}: {event.decision.value}")

@@ -79,7 +79,10 @@ def test_the_builtin_cases_load_and_cover_every_checker():
     }
     # A subagent case is the task and the result, with no tool input to judge (D77).
     subagent = [c for c in cases if c.checker == "subagent"]
-    assert subagent and all(c.prompt and c.result and not c.tool_input for c in subagent)
+    assert subagent and all(c.prompt and not c.tool_input for c in subagent)
+    assert any(c.result for c in subagent) and any(not c.result for c in subagent), (
+        "result reviews and task reviews"
+    )
     # A changeset case is a commit plus the diff it would record (D75); the others have none,
     # because nothing would read it.
     changeset = [c for c in cases if c.checker == "changeset"]

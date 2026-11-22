@@ -150,6 +150,7 @@ from calu.checkers import (
     Route,
     Step,
     SubagentResult,
+    SubagentTask,
     ToolPolicy,
 )
 from calu.checkers.changeset import CommitKind, classify_commit
@@ -490,6 +491,19 @@ CERTIFIER = "calu session"
 """Who certified, for a commit or a file content the session records itself."""
 
 
+def _message_text(tool_input: dict[str, Any]) -> str:
+    """Return the text of a `SendMessage` call.
+
+    Args:
+        tool_input: The call's input.
+
+    Returns:
+        Its `message` (or `content`) as text; "" if it has neither.
+    """
+    value = tool_input.get("message", tool_input.get("content", ""))
+    return value if isinstance(value, str) else str(value or "")
+
+
 class SessionError(Exception):
     """A request cannot be served in the current state (reported to the client)."""
 
@@ -693,6 +707,8 @@ class Session:
             honesty_review=lambda step, wait_s: self.honesty_review(
                 wait_s=wait_s, checkouts=self.step_checkouts(step)
             ),
+            reviews_task=self._reviews_task,
+            review_task=self._review_task,
         )
         """Decides about each tool call (`calu.gate`); it reads the policy, the rules, the
         configuration and the checkers of this session as they are at the moment of a step."""
@@ -3275,6 +3291,9 @@ class Session:
                 text=params.text,
             )
             priority = "next"
+            # The main agent relays the user's words with SendMessage; that call is not
+            # reviewed as Claude's own task for the subagent (`_reviews_task`).
+            self._run_state.relays.append(params.text)
         await runner.send(text, priority, params.images)
         queued = QueuedMessage(
             id=f"q{next(self._queue_ids)}", text=params.text, delivery=params.delivery, to=params.to
@@ -4101,6 +4120,98 @@ class Session:
                 level="info",
                 message=f"subagent {step.agent_id}: empty final result passed: {HANDED_BACK_EMPTY}",
             )
+        )
+
+    def _reviews_task(self, step: Step) -> bool:
+        """Tell the gate whether a step tells a subagent something to review first.
+
+            Agent or Task call                             ──► reviewed
+            SendMessage to a subagent of this session
+              carrying a text calu relays for the user     ──► not reviewed (the relay is
+                                                               consumed)
+              any other text                               ──► reviewed
+            anything else, or `check_subagent_tasks` off   ──► not reviewed
+
+        Side effect: removes a matched relay from `RunState.relays`.
+
+        Args:
+            step: A tool call that the tool policy lets run unchecked.
+
+        Returns:
+            True if the subagent checker reviews the step before it runs.
+        """
+        if not self.config.check_subagent_tasks:
+            return False
+        if step.tool_name in AGENT_TOOLS:
+            return True
+        if step.tool_name != "SendMessage" or not self._own_agent(step):
+            return False
+        message = _message_text(step.tool_input).strip()
+        relays = self._run_state.relays
+        for index, text in enumerate(relays):
+            if text.strip() == message:
+                del relays[index]
+                return False
+        return True
+
+    async def _review_task(self, step: Step) -> CheckDecision:
+        """Review what Claude tells a subagent, before the subagent gets it; never raises.
+
+        The subagent checker's verdict becomes the step's decision: ACCEPT -> PASS, ANNOTATE
+        -> PASS with the note as the comment to Claude, ESCALATE -> ESCALATE with the note as
+        the reason (`auto_escalate.subagents` covers results only, not tasks). The step
+        summary is the checker's retelling of the task, headed "Task for subagent <id>" or
+        "Message to subagent <id>", so that every later check, of the subagent's steps and of
+        the main agent's, knows the task, also while a background subagent still runs.
+
+        Args:
+            step: An Agent or Task call, or a `SendMessage` to one of the session's subagents;
+                its `narration` holds Claude's narrated thinking and text before the call.
+
+        Returns:
+            The decision about the step.
+        """
+        if step.tool_name in AGENT_TOOLS:
+            task = SubagentTask(
+                agent_id=step.tool_use_id,
+                description=str(step.tool_input.get("description") or ""),
+                prompt=str(step.tool_input.get("prompt") or ""),
+                kind="start",
+                background=bool(step.tool_input.get("run_in_background")),
+                narration=step.narration,
+            )
+            who = f"Task for subagent {safe_name(step.tool_use_id or 'new')}"
+        else:
+            target = str(step.tool_input.get("to") or "")
+            task = SubagentTask(
+                agent_id=target,
+                description=target,
+                prompt=_message_text(step.tool_input),
+                kind="message",
+                narration=step.narration,
+            )
+            who = f"Message to subagent {safe_name(target)}"
+        try:
+            async with self._checking_scope():
+                outcome = await self.result_checker.run_task(task, self.context.check_context())
+            review = outcome.review
+        except Exception as exc:
+            log.exception("reviewing a subagent task failed")
+            review = ResultReview(
+                verdict=ResultVerdict.ESCALATE,
+                note=f"Reviewing the task failed ({type(exc).__name__}: {exc}).",
+                summary="Subagent task not reviewed because of an internal error.",
+            )
+        summary = f"{who}: {review.summary.strip()}"
+        if review.verdict is ResultVerdict.ESCALATE:
+            return CheckDecision(
+                decision=Decision.ESCALATE,
+                reason=review.note.strip() or "The subagent checker escalated the task.",
+                step_summary=summary,
+            )
+        comment = review.note.strip() if review.verdict is ResultVerdict.ANNOTATE else ""
+        return CheckDecision(
+            decision=Decision.PASS, reason="", comment=comment, step_summary=summary
         )
 
     async def _review(self, result: SubagentResult) -> ResultOutcome:

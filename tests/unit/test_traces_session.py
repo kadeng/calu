@@ -99,6 +99,7 @@ async def test_a_scripted_session_is_traced_as_one_redacted_file(
         r"agent/traces/\d{4}-\d\d-\d\d/kai/session_001\.md", str(path.relative_to(workspace))
     )
     text = re.sub(r"(?m)^- Started: .*$", "- Started: <time>", path.read_text())
+    text = re.sub(r"fake-tool-[0-9a-f]+-\d+", "fake-tool-<id>", text)
     assert text == (
         "# calu session trace\n"
         "\n"
@@ -141,6 +142,11 @@ async def test_a_scripted_session_is_traced_as_one_redacted_file(
         "\n"
         "### Tool call 2: Agent (starts subagent 1)\n"
         "\n"
+        "### Task of subagent 1: PASS\n"
+        "\n"
+        "Summary:\n"
+        "> Task for subagent fake-tool-<id>: Fake review of a subagent task.\n"
+        "\n"
         "#### Subagent 1: text and thinking, narrated\n"
         "\n"
         "> Narrated: Looking.\n"
@@ -163,12 +169,12 @@ async def test_a_scripted_session_is_traced_as_one_redacted_file(
         "Reason:\n"
         "> Escalated by the rule-based fake checker (calu:escalate).\n"
         "\n"
-        "### Escalation 5: tool call 4 (Bash) waits for a person\n"
+        "### Escalation 6: tool call 4 (Bash) waits for a person\n"
         "\n"
         "Reason:\n"
         "> Escalated by the rule-based fake checker (calu:escalate).\n"
         "\n"
-        "### Escalation 5: allowed\n"
+        "### Escalation 6: allowed\n"
         "\n"
         "Decided by: `client:tui`\n"
         "\n"

@@ -68,11 +68,14 @@ files.
 `git commit` call plus the `diff` the commit would record, which is what the session hands the
 checker beside the step (D75).
 
-"subagent" is the checker that reviews what a subagent hands back (D77). Such a case is the
-task the subagent was given (`prompt`) and what it returned (`result`); `tool_name` is `Agent`,
-the call that started it. Its three verdicts are scored in the vocabulary of the others:
-ACCEPT is a PASS with no comment (`no_comment: true`), ANNOTATE is a PASS whose note is the
-comment (`want_comment: true`), and ESCALATE is ESCALATE."""
+"subagent" is the checker that reviews what Claude tells a subagent and what the subagent
+hands back (D77). A case with `prompt` and `result` is a result review: the task the subagent
+was given and what it returned. A case with `prompt` alone is a task review: the task before
+the subagent starts, with the conversation and the earlier decisions in `context` and Claude's
+thinking in `narration`. `tool_name` is `Agent`, the call that starts the subagent. Its three
+verdicts are scored in the vocabulary of the others: ACCEPT is a PASS with no comment
+(`no_comment: true`), ANNOTATE is a PASS whose note is the comment (`want_comment: true`), and
+ESCALATE is ESCALATE."""
 
 
 class EvalCase(BaseModel):
@@ -111,7 +114,7 @@ class EvalCase(BaseModel):
     prompt: str = ""
     """For a `subagent` case: the task Claude gave the subagent (D77)."""
     result: str = ""
-    """For a `subagent` case: what the subagent handed back (D77)."""
+    """For a `subagent` case: what the subagent handed back (D77); empty for a task review."""
     diff: str = ""
     """For a `changeset` case: the diff the commit would record, in `git diff` form. The session
     computes it from the snapshots and passes it to the checker after the step (D26), so a case
@@ -195,8 +198,8 @@ class EvalCase(BaseModel):
         if self.checker != "command" and self.executes is not None:
             raise ValueError(f"`executes` is only read for a command case, not for {self.name!r}")
         if self.checker == "subagent":
-            if not self.prompt.strip() or not self.result.strip():
-                raise ValueError(f"the subagent case {self.name!r} needs a `prompt` and a `result`")
+            if not self.prompt.strip():
+                raise ValueError(f"the subagent case {self.name!r} needs a `prompt`")
             if self.tool_name != "Agent":
                 raise ValueError(f"a subagent case is an `Agent` call, not {self.tool_name!r}")
         elif self.prompt.strip() or self.result.strip():

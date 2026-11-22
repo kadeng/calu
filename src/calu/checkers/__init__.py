@@ -15,6 +15,7 @@ from calu.checkers.model import (
     Decision,
     Step,
     SubagentResult,
+    SubagentTask,
 )
 from calu.checkers.policy import Route, ToolPolicy
 from calu.checkers.render import render_step
@@ -44,6 +45,7 @@ __all__ = [
     "Route",
     "Step",
     "SubagentResult",
+    "SubagentTask",
     "ToolPolicy",
     "render_step",
 ]

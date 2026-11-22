@@ -950,6 +950,11 @@ class Config(ConfigModel):
     takes many tool calls and a long answer."""
     check_subagent_results: bool = True
     """Review the final result of every subagent with the subagent checker."""
+    check_subagent_tasks: bool = True
+    """Review with the subagent checker what Claude tells a subagent, before the subagent gets
+    it: the task of an Agent call, and a later message of Claude's own to one of its subagents
+    (calu's relay of the user's message is not reviewed). Off: such calls run without a check,
+    and the checkers' context names a subagent's task only by its short description."""
     auto_escalate: AutoEscalate = Field(default_factory=AutoEscalate)
     """Categories that always wait for the human (see `AutoEscalate`); all off by default."""
     escalation_timeout_s: float = Field(default=8 * 3600, ge=0)

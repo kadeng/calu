@@ -409,7 +409,9 @@ def fake_summarizer() -> Model:
 def _fake_result_review(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
     """Rule-based stand-in for the result checker.
 
-    "calu:escalate-result" in the result -> ESCALATE, "calu:scope" -> ANNOTATE, else ACCEPT.
+    A result: "calu:escalate-result" in it -> ESCALATE, "calu:scope" -> ANNOTATE, else ACCEPT.
+    A task ("# Task to review"): "calu:escalate-task" in it -> ESCALATE, else ACCEPT, with the
+    summary "Fake review of a subagent task."
 
     Args:
         messages: The request messages (the last one holds the prompt).
@@ -418,7 +420,16 @@ def _fake_result_review(messages: list[ModelMessage], info: AgentInfo) -> ModelR
     Returns:
         A response that calls the output tool with the review.
     """
-    prompt = _last_prompt(messages).rsplit("# Result to review", 1)[-1]
+    whole = _last_prompt(messages)
+    if "# Task to review" in whole and "# Result to review" not in whole:
+        task = whole.rsplit("# Task to review", 1)[-1]
+        if "calu:escalate-task" in task:
+            verdict, note = "ESCALATE", "Fake subagent checker: the task asks for a refused step."
+        else:
+            verdict, note = "ACCEPT", ""
+        args = {"verdict": verdict, "note": note, "summary": "Fake review of a subagent task."}
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, args)])
+    prompt = whole.rsplit("# Result to review", 1)[-1]
     if "calu:escalate-result" in prompt:
         verdict, note = "ESCALATE", "Fake result checker: the result expands the scope."
     elif "calu:scope" in prompt:

@@ -23,6 +23,16 @@ from tests.unit.helpers import make_session
 pytestmark = pytest.mark.anyio
 
 
+def result_checks(rec) -> list[CheckResult]:
+    """Return the subagent checker's reviews of results, without its reviews of tasks."""
+    return [
+        c
+        for c in rec.of(CheckResult)
+        if c.route == "subagent"
+        and not c.step_summary.startswith(("Task for subagent", "Message to subagent"))
+    ]
+
+
 def agent_turn(result: str) -> list[list[dict]]:
     return [
         [
@@ -83,7 +93,7 @@ async def test_annotated_result_injects_a_note_for_the_main_agent(tmp_path: Path
         await session.send_chat(ChatSendParams(text="small fix only"))
         await rec.wait_for(TurnResult)
         await session.stop()
-    check = next(c for c in rec.of(CheckResult) if c.route == "subagent")
+    check = result_checks(rec)[0]
     assert check.comment == "Fake result checker: points 2-3 are out of scope."
     injected = [u.text for u in rec.of(UserInput) if "result checker" in u.text]
     assert injected and 'subagent "reviewer"' in injected[0]
@@ -100,7 +110,7 @@ async def test_accepted_result_injects_nothing(tmp_path: Path):
         await rec.wait_for(TurnResult)
         await session.stop()
     assert not [u for u in rec.of(UserInput) if "result checker" in u.text]
-    assert next(c for c in rec.of(CheckResult) if c.route == "subagent").decision == "PASS"
+    assert result_checks(rec)[0].decision == "PASS"
 
 
 async def test_escalated_result_waits_for_the_user(tmp_path: Path):
@@ -149,7 +159,8 @@ async def test_a_handed_back_report_is_reviewed_and_its_empty_result_passes(tmp_
     seen: list[str] = []
 
     def spy(messages, info: AgentInfo) -> ModelResponse:
-        seen.append(_last_prompt(messages))
+        if "# Task to review" not in _last_prompt(messages):  # the review of the Agent call
+            seen.append(_last_prompt(messages))
         return _fake_result_review(messages, info)
 
     session, rec, store = make_session(
@@ -163,7 +174,7 @@ async def test_a_handed_back_report_is_reviewed_and_its_empty_result_passes(tmp_
         await rec.wait_for(TurnResult)
         await session.stop()
     assert len(seen) == 1 and "handed back its report" in seen[0] and "Its report:" in seen[0]
-    checks = [c for c in rec.of(CheckResult) if c.route == "subagent"]
+    checks = result_checks(rec)
     assert [c.decision for c in checks] == ["PASS", "PASS"]
     assert checks[0].comment == "Fake result checker: points 2-3 are out of scope."
     assert "handed its report back with SubagentHandback" in checks[1].step_summary
@@ -182,12 +193,13 @@ async def test_claude_codes_pointer_to_a_handed_back_report_passes_without_a_che
     """Dogfooding 2026-11-20: a foreground subagent's final result is Claude Code's pointer
     to the report it handed back, not an empty text. The result checker reviewed the
     pointer a second time and sent the main agent a confusing note about it."""
-    from calu.testing import _fake_result_review, fake_models
+    from calu.testing import _fake_result_review, _last_prompt, fake_models
 
     seen: list[str] = []
 
     def spy(messages, info: AgentInfo) -> ModelResponse:
-        seen.append("x")
+        if "# Task to review" not in _last_prompt(messages):  # the review of the Agent call
+            seen.append("x")
         return _fake_result_review(messages, info)
 
     pointer = (
@@ -205,7 +217,7 @@ async def test_claude_codes_pointer_to_a_handed_back_report_passes_without_a_che
         await rec.wait_for(TurnResult)
         await session.stop()
     assert len(seen) == 1, "only the handed-back report was reviewed"
-    checks = [c for c in rec.of(CheckResult) if c.route == "subagent"]
+    checks = result_checks(rec)
     assert "handed its report back with SubagentHandback" in checks[-1].step_summary
 
 
@@ -240,7 +252,7 @@ async def test_the_review_can_be_turned_off(tmp_path: Path):
         await session.send_chat(ChatSendParams(text="go"))
         await rec.wait_for(TurnResult)
         await session.stop()
-    assert not [c for c in rec.of(CheckResult) if c.route == "subagent"]
+    assert not result_checks(rec)
     assert not rec.of(EscalationRequest)
 
 

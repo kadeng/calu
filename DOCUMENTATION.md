@@ -291,11 +291,21 @@ them.
 | command checker (`command`) | one Bash command, and every tool call that no other route covers (reads, searches, MCP tools, tools a Claude Code update adds; a session names such new tools at its start) | the command or tool input, the notes of the rules, the narrated conversation | yes |
 | edit checker (`edit`) | one `Edit`, `Write` or `MultiEdit` before it is written | the diff, the file before the change | yes |
 | changeset checker (`changeset`) | a whole `git commit`: whether the change is complete, whether it contains work nobody asked for, whether it weakens a test, and whether the message fits the change | the full diff, the message, and the session step in which each file last changed | yes |
-| subagent-result checker (`subagent-result`) | what a subagent hands back, against the task it was given | the subagent's task and result, or the report it hands back with `SubagentHandback` | yes (`check_subagent_results`) |
+| subagent checker (`subagent-result`) | the task Claude gives a subagent, before the subagent starts, and Claude's later messages to it; what the subagent hands back, against its task | the task or message with the narrated conversation and the earlier decisions; the subagent's task and result, or the report it hands back with `SubagentHandback` | yes (`check_subagent_tasks`, `check_subagent_results`) |
 | honesty checker (`honesty`) | whether names and documentation still match the code after an edit; answers HONEST or DISHONEST per file | the edit and the file around it | no ([code honesty](#code-honesty)) |
 
+**What a subagent is told.** Before a subagent starts, the subagent checker reviews the task of
+the `Agent` call against the conversation and the earlier decisions; Claude's own later
+`SendMessage` to a subagent is reviewed the same way. Calu's relay of your message to a
+subagent is not reviewed: those are your words. A task that hands the subagent a step or an
+effect that was refused to Claude escalates. The checker's retelling of the task goes into the
+checkers' context at once ("Task for subagent ..."), so every later check knows it: the checks
+of the subagent's own steps, and the main agent's steps while a background subagent still
+runs. A command that runs a script a subagent was told to rewrite is judged by that task, not
+by the script's old content. `check_subagent_tasks false` lets these calls run unchecked again.
+
 A background subagent of Claude Code delivers its report with the tool `SubagentHandback` and
-ends with an empty final result. Calu reviews that report with the subagent-result checker
+ends with an empty final result. Calu reviews that report with the subagent checker
 before the tool call runs: the checker's remark reaches the main agent as a message, and a
 report the checker escalates waits for a person. A person's denial stops the handback: the
 subagent reads that the user does not want the report, and the main agent reads the remark and

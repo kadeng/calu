@@ -1,10 +1,17 @@
-"""The subagent result checker: reviews a subagent's final result against the conversation.
+"""The subagent checker: reviews what Claude tells a subagent and what the subagent hands back.
+
+Two kinds of review, with the same instructions and the same answer (`ResultReview`):
+
+    task    an Agent call before the subagent starts, or Claude's later SendMessage to it
+            (`run_task`): the task against the conversation and the earlier decisions
+    result  the subagent's final result or handed-back report (`run`): the result against the
+            task and the conversation
 
 Request layout (cache points as for the step checkers):
 
     instructions   <- checkers/subagent-result.md
     user prompt    = [context prefix, CachePoint, recent turns, CachePoint,
-                      subagent task (Claude's prompt) + subagent result]
+                      "# Task to review" (the task) or "# Result to review" (task + result)]
 
 See DOCUMENTATION.md "Checking subagent results" for the failure case it addresses (scope expansion
 through reviewer subagents).
@@ -22,7 +29,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 
 from calu.checkers.checker import CheckContext, context_parts, elapsed_ms
-from calu.checkers.model import CheckerEffort, SubagentResult
+from calu.checkers.model import CheckerEffort, SubagentResult, SubagentTask
 from calu.checkers.render import code
 from calu.markdown import fence
 from calu.models import MAX_ANSWER_TOKENS, cache_settings, run_bounded
@@ -166,6 +173,37 @@ class ResultChecker:
         )
         return parts
 
+    def build_task_prompt(
+        self, task: SubagentTask, context: CheckContext
+    ) -> list[str | CachePoint]:
+        """Return the user prompt parts for reviewing a task Claude gives a subagent.
+
+        Args:
+            task: The task that starts a subagent, or Claude's later message to one.
+            context: Cached project/conversation context and recent turns.
+
+        Returns:
+            Prompt parts with cache points between context and task.
+        """
+        parts = context_parts(context, "# Project and conversation context")
+        # Claude wrote the description: one line in a code span (`calu.checkers.render`).
+        description = code(task.description, 300) if task.description else "no description"
+        if task.kind == "message":
+            what = f"Claude sends a further message to its subagent ({description})."
+        else:
+            kind = "background subagent" if task.background else "subagent"
+            what = f"Claude starts a {kind} ({description}). The subagent has not run yet."
+        before = (
+            f"Claude's thinking and text before this call, narrated:\n{fence(task.narration)}\n\n"
+            if task.narration.strip()
+            else ""
+        )
+        parts.append(
+            f"# Task to review\n\n{what}\n\n{before}"
+            f"Claude's text for the subagent:\n{fence(_cut_middle(task.prompt, 10_000))}"
+        )
+        return parts
+
     def settings(self) -> ModelSettings:
         """Build the model settings of one review: the cache routing key and the effort.
 
@@ -205,11 +243,39 @@ class ResultChecker:
             The review, the token counts (None after a failure) and the duration in
             milliseconds.
         """
+        return await self._run(self.build_prompt(result, context), "result")
+
+    async def run_task(self, task: SubagentTask, context: CheckContext) -> ResultOutcome:
+        """Review a task Claude gives a subagent, before the subagent gets it.
+
+        Never raises for model or network errors (see the class docstring).
+
+        Args:
+            task: The task that starts a subagent, or Claude's later message to one.
+            context: Cached project/conversation context and recent turns.
+
+        Returns:
+            The review (its `summary` retells the task), the token counts (None after a
+            failure) and the duration in milliseconds.
+        """
+        return await self._run(self.build_task_prompt(task, context), "task")
+
+    async def _run(self, prompt: list[str | CachePoint], what: str) -> ResultOutcome:
+        """Run one review and return it with its cost; never raises for model errors.
+
+        Args:
+            prompt: The user prompt parts.
+            what: "task" or "result", for the review that replaces a failed call.
+
+        Returns:
+            The review, the token counts (None after a failure) and the duration in
+            milliseconds.
+        """
         started = time.monotonic()
         try:
             run = await run_bounded(
                 self.agent,
-                self.build_prompt(result, context),
+                prompt,
                 model=self.model,
                 usage_limits=self.usage_limits,
                 model_settings=self.settings(),
@@ -219,8 +285,8 @@ class ResultChecker:
             return ResultOutcome(
                 review=ResultReview(
                     verdict=ResultVerdict.ESCALATE,
-                    note=f"The subagent result checker failed ({type(exc).__name__}: {exc}).",
-                    summary="Subagent result not reviewed because the check failed.",
+                    note=f"The subagent checker failed ({type(exc).__name__}: {exc}).",
+                    summary=f"Subagent {what} not reviewed because the check failed.",
                 ),
                 duration_ms=elapsed_ms(started),
             )

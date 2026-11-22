@@ -58,6 +58,7 @@ from calu.checkers.result_checker import (
     ResultChecker,
     ResultVerdict,
     SubagentResult,
+    SubagentTask,
 )
 from calu.checkers.rules import Rules
 from calu.context.turns import TurnRecord
@@ -166,7 +167,8 @@ async def review_subagent_result(
 
     Args:
         case: A case whose `checker` is "subagent"; its `prompt` and `result` are the task and
-            what the subagent returned.
+            what the subagent returned, or, with an empty `result`, the task to review before
+            the subagent starts.
         instructions: The checker's instructions.
         model: Pydantic AI model string or instance.
         max_requests: Model requests one review may make; None uses the checker's default.
@@ -184,12 +186,20 @@ async def review_subagent_result(
     checker = ResultChecker(instructions, resolve_model(model), effort=effort)
     if max_requests is not None:
         checker.usage_limits = replace(checker.usage_limits, request_limit=max_requests)
-    outcome = await checker.run(
-        SubagentResult(
-            agent_id=None, description=case.name, prompt=case.prompt, result=case.result
-        ),
-        case_context(case),
-    )
+    if case.result.strip():
+        outcome = await checker.run(
+            SubagentResult(
+                agent_id=None, description=case.name, prompt=case.prompt, result=case.result
+            ),
+            case_context(case),
+        )
+    else:  # a task review, before the subagent starts
+        outcome = await checker.run_task(
+            SubagentTask(
+                agent_id=None, description=case.name, prompt=case.prompt, narration=case.narration
+            ),
+            case_context(case),
+        )
     review = outcome.review
     failed = review.verdict is ResultVerdict.ESCALATE and "checker failed" in review.note
     if failed:  # `ResultChecker.run` never raises; a failure has to count as one here

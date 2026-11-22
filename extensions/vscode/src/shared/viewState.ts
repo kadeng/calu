@@ -1906,7 +1906,7 @@ export function checkerRouteOf(route: string): string {
  * Return the display name of the checker (or rule) behind a `check.result` route.
  *
  * @param route The event's `route`.
- * @returns "Command checker", "Edit checker", "Changeset checker", "Subagent result checker",
+ * @returns "Command checker", "Edit checker", "Changeset checker", "Subagent checker",
  *   "Question" (a question of the agent), "Recorded decision" for "stored" (a step taken from
  *   calu's record, which does not say who decided), or "Rules" for "allow", "deny" and "escalate".
  */
@@ -1914,7 +1914,7 @@ export function checkerLabel(route: string): string {
   if (route === 'command') return 'Command checker';
   if (route === 'edit') return 'Edit checker';
   if (route === 'changeset') return 'Changeset checker';
-  if (route === 'subagent') return 'Subagent result checker';
+  if (route === 'subagent') return 'Subagent checker';
   if (route === 'question') return 'Question';
   if (route === 'stored') return 'Recorded decision';
   return 'Rules';
