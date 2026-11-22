@@ -5,7 +5,10 @@
  * Supported: paragraphs, headings (#..######), fenced code blocks, bullet and numbered lists
  * (one level), block quotes, horizontal rules, pipe tables (a header row, a row of dashes, body
  * rows); inline: `code`, **bold**, *italic*, [text](url)
- * with http, https and mailto addresses, and bare line breaks inside a paragraph. Everything else
+ * with http, https and mailto addresses, and bare line breaks inside a paragraph. Source
+ * references (`src/app.py:12`, `docs/x.md`, `[text](src/app.py#L12)`) become `calu-file:`
+ * links that open the file at that line ([SOURCE_REF], the same pattern as the VSCode
+ * extension's `sourceRefs.ts`). Everything else
  * is shown as the text it is. All text is HTML-escaped first, so no markup of the input reaches
  * the pane; raw HTML in the input is shown literally.
  */
@@ -20,6 +23,72 @@ private val CODE_SPAN = Regex("`([^`\n]+)`")
 private val BOLD = Regex("\\*\\*([^*\n]+)\\*\\*")
 private val ITALIC = Regex("(?<![*\\w])\\*([^*\n]+)\\*(?![*\\w])")
 private val LINK = Regex("\\[([^\\]\n]+)]\\(((?:https?://|mailto:)[^\\s)\"<>]+)\\)")
+private val LOCAL_LINK = Regex("\\[([^\\]\n]+)]\\(([^\\s)\"<>:]+(?::\\d+(?::\\d+)?|#L?\\d+(?:-L?\\d+)?)?)\\)")
+private val ANCHOR = Regex("<a [^>]*>.*?</a>")
+
+/** File extensions that make a path a source reference (code, configuration and text files). */
+val SOURCE_EXTENSIONS: List<String> = listOf(
+    "py", "pyi", "ipynb", "c", "h", "cc", "cpp", "cxx", "hh", "hpp", "hxx", "rs", "go", "java",
+    "kt", "kts", "scala", "rb", "php", "cs", "swift", "m", "mm", "js", "jsx", "mjs", "cjs", "ts",
+    "tsx", "vue", "svelte", "html", "htm", "css", "scss", "sass", "less", "json", "jsonc", "yaml",
+    "yml", "toml", "ini", "cfg", "conf", "xml", "md", "rst", "txt", "sh", "bash", "zsh", "ps1",
+    "sql", "proto", "graphql", "gradle", "tf", "lua", "r", "dart", "ex", "exs", "erl", "hs", "ml",
+    "clj", "zig", "nim", "jl", "cmake", "mk", "lock", "csv", "tsv",
+)
+
+/**
+ * One source reference: a relative path with a known extension and an optional line, e.g.
+ * `src/app.py:12`, `src/app.py#L12`, `docs/x.md`. Group 1 is the path, group 2 the line. No word
+ * character, `.`, `/`, `\`, `:` or `@` before it (no URL, absolute path or e-mail address);
+ * no word character, `/` or `\` after it.
+ */
+val SOURCE_REF: Regex = Regex(
+    "(?<![\\w./\\\\:@-])((?:\\.{1,2}/)?(?:[\\w.-]+/)*[\\w-][\\w.-]*\\.(?:" +
+        SOURCE_EXTENSIONS.joinToString("|") +
+        "))(?:(?::|#L?)(\\d+)(?::\\d+)?(?:-L?\\d+)?)?(?![\\w/\\\\])",
+)
+
+/**
+ * Read a text that is exactly one source reference.
+ *
+ * @param text A link target or the text of a code span.
+ * @return The relative path and the line (`null` for none or 0), or `null` if the text is not
+ *   one whole reference.
+ */
+fun sourceRefOf(text: String): FileRef? {
+    val m = SOURCE_REF.matchEntire(text) ?: return null
+    val line = m.groupValues[2].toIntOrNull()?.takeIf { it >= 1 }
+    return FileRef(m.groupValues[1], line)
+}
+
+/**
+ * Return the address of a `calu-file:` link (read back by [parseFileLink]).
+ *
+ * @param ref The file and line.
+ * @return `calu-file:<URL-encoded path>`, with `#L<line>` if a line is known.
+ */
+fun fileAddress(ref: FileRef): String =
+    FILE_LINK_SCHEME + java.net.URLEncoder.encode(ref.path, Charsets.UTF_8) + (ref.line?.let { "#L$it" } ?: "")
+
+/**
+ * Turn the source references in inline HTML into `calu-file:` links, outside existing links.
+ *
+ * @param html Inline HTML of [inline] (escaped text, code span placeholders, links).
+ * @return The HTML with each reference outside an `<a>` element wrapped in a link.
+ */
+private fun linkSourceText(html: String): String {
+    val out = StringBuilder()
+    var at = 0
+    fun plain(text: String) = SOURCE_REF.replace(text) { m ->
+        val line = m.groupValues[2].toIntOrNull()?.takeIf { it >= 1 }
+        "<a href=\"${fileAddress(FileRef(m.groupValues[1], line))}\">${m.value}</a>"
+    }
+    for (anchor in ANCHOR.findAll(html)) {
+        out.append(plain(html.substring(at, anchor.range.first))).append(anchor.value)
+        at = anchor.range.last + 1
+    }
+    return out.append(plain(html.substring(at))).toString()
+}
 
 private val TABLE_RULE = Regex("^\\s*\\|?\\s*:?-{1,}:?\\s*(\\|\\s*:?-{1,}:?\\s*)*\\|?\\s*$")
 
@@ -56,6 +125,11 @@ private fun inline(escaped: String): String {
     val codes = ArrayList<String>()
     var s = CODE_SPAN.replace(escaped) { m -> codes.add(m.groupValues[1]); "\u0000${codes.size - 1}\u0000" }
     s = LINK.replace(s) { m -> "<a href=\"${m.groupValues[2]}\">${m.groupValues[1]}</a>" }
+    s = LOCAL_LINK.replace(s) { m ->
+        val ref = sourceRefOf(m.groupValues[2])
+        if (ref == null) m.value else "<a href=\"${fileAddress(ref)}\">${m.groupValues[1]}</a>"
+    }
+    s = linkSourceText(s)
     s = BOLD.replace(s) { m -> "<b>${m.groupValues[1]}</b>" }
     s = ITALIC.replace(s) { m -> "<i>${m.groupValues[1]}</i>" }
     return Regex("\u0000(\\d+)\u0000").replace(s) { m -> "<code>${codes[m.groupValues[1].toInt()]}</code>" }
@@ -178,11 +252,13 @@ const val FILE_LINK_SCHEME: String = "calu-file:"
 private val FILE_CODE_SPAN = Regex("<code>([^<]{1,400})</code>")
 
 /**
- * Turn the code spans of Claude's text that name a file a tool call touched into links.
+ * Turn the code spans of Claude's text that name a file into links.
  *
- * Only a span whose whole text is a known file (optionally with `:line` or `:line:column`) is
- * linked (`lookupFile`); everything else stays as it is, so no text of Claude can make a link
- * to a file that no tool call named.
+ * A span whose whole text is a file a tool call touched (optionally with `:line` or
+ * `:line:column`) links to that file (`lookupFile`); else a span whose whole text is one source
+ * reference ([sourceRefOf]) links to that relative path, which the IDE resolves against the
+ * session's directory. A span that is already inside a link and everything else stay as they
+ * are. Opening a file shows it in the editor and runs nothing.
  *
  * @param html HTML of `markdownToHtml`.
  * @param index The files the session's tool calls named (`buildFileIndex`).
@@ -190,11 +266,12 @@ private val FILE_CODE_SPAN = Regex("<code>([^<]{1,400})</code>")
  *   each such span.
  */
 fun linkFiles(html: String, index: FileIndex): String = FILE_CODE_SPAN.replace(html) { m ->
+    val before = html.substring(0, m.range.first)
+    if (before.lastIndexOf("<a ") > before.lastIndexOf("</a>")) return@replace m.value // already a link
     val shown = m.groupValues[1]
     val text = shown.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&")
-    val ref = lookupFile(index, text) ?: return@replace m.value
-    val address = FILE_LINK_SCHEME + java.net.URLEncoder.encode(ref.path, Charsets.UTF_8) + (ref.line?.let { "#L$it" } ?: "")
-    "<a href=\"$address\"><code>$shown</code></a>"
+    val ref = lookupFile(index, text) ?: sourceRefOf(text.trim()) ?: return@replace m.value
+    "<a href=\"${fileAddress(ref)}\"><code>$shown</code></a>"
 }
 
 /**

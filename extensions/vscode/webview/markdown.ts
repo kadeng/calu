@@ -4,6 +4,8 @@
  *     text ──renderMarkdownHtml()──► HTML string        (pure; markdown-it, `html: false`)
  *          ──markdown()────────────► <div class="md">    + copy buttons on code blocks
  *                                                        + file links for known paths in `code`
+ *                                                        + links for source references
+ *                                                          (`src/app.py:12`, `sourceRefs.ts`)
  *
  * markdown-it runs with `html: false`, so raw HTML in the source is escaped; its link validator
  * rejects `javascript:`, `vbscript:`, `file:` and non-image `data:` URLs. Images are rendered as
@@ -13,9 +15,14 @@
  */
 
 import MarkdownIt from 'markdown-it';
+import { findSourceRefs, sourceRefHref } from '../src/shared/sourceRefs';
 import { actionButton, el, icon, shown } from './dom';
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false });
+// Only addresses with a scheme (https://...) become links: without one, linkify took file
+// names such as "README.md", "lib.rs" or "hello.py" for web addresses (.md, .rs and .py are
+// country domains). Such names become source references instead (`linkSourceRefs`).
+md.linkify.set({ fuzzyLink: false });
 
 /**
  * Render a Markdown image token as a link (markdown-it renderer rule).
@@ -74,7 +81,62 @@ export function markdown(text: string, cls: string, resolveFile?: FileResolver):
     a.title = a.getAttribute('href') ?? '';
   }
   if (resolveFile) linkFiles(div, resolveFile);
+  linkSourceRefs(div);
   return div;
+}
+
+/**
+ * Turn source references (`src/app.py:12`, `docs/x.md`; see `sourceRefs.ts`) into links, in
+ * place: in plain text, and an inline `code` span whose whole text is one reference. Text
+ * inside a link or a code block is left alone. A link's `href` is the path with ":<line>";
+ * the click handler of `main.ts` sends it as `openLink`, and the host opens it only inside
+ * the workspace folder.
+ *
+ * @param root The rendered Markdown.
+ * @returns Nothing.
+ */
+export function linkSourceRefs(root: HTMLElement): void {
+  for (const code of [...root.querySelectorAll('code')]) {
+    if (code.closest('pre, a')) continue;
+    const text = code.textContent ?? '';
+    const [ref] = findSourceRefs(text);
+    if (!ref || ref.start !== 0 || ref.end !== text.length) continue;
+    const link = sourceLink(sourceRefHref(ref));
+    code.replaceWith(link);
+    link.append(code);
+  }
+  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const texts: Text[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!(node.parentElement?.closest('a, pre, code'))) texts.push(node as Text);
+  }
+  for (const node of texts) {
+    const text = node.data;
+    const refs = findSourceRefs(text);
+    if (!refs.length) continue;
+    const parts: Node[] = [];
+    let at = 0;
+    for (const ref of refs) {
+      if (ref.start > at) parts.push(root.ownerDocument.createTextNode(text.slice(at, ref.start)));
+      const link = sourceLink(sourceRefHref(ref));
+      link.textContent = text.slice(ref.start, ref.end);
+      parts.push(link);
+      at = ref.end;
+    }
+    if (at < text.length) parts.push(root.ownerDocument.createTextNode(text.slice(at)));
+    node.replaceWith(...parts);
+  }
+}
+
+/**
+ * Create the link element of one source reference.
+ *
+ * @param href The path with an optional ":<line>".
+ * @returns An `<a>` with the classes `link file-link` and the target as tooltip.
+ */
+function sourceLink(href: string): HTMLAnchorElement {
+  const link = el('a', 'link file-link', undefined, { href, title: `Open ${href}` });
+  return link as HTMLAnchorElement;
 }
 
 /**

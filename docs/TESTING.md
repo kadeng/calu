@@ -956,6 +956,14 @@ escalation resolved from the database alone.
    PyCharm "Load File System Changes"), edit and save: the block is diffed against Claude's
    version. The unit tests are `tests/unit/test_human_diffs.py`, the editors'
    `test/unit/humanDiffs.test.ts` and `HumanDiffsTest.kt`.
+50. Links to source lines in the chat (VSCode and PyCharm), with the scripted server or a real
+   session. Let Claude answer with `src/app.py:12`, `src/app.py#L12`, `docs/guide.md`, a code
+   span `` `src/app.py:3` ``, a bare `hello.py:2` and a Markdown link `[here](src/app.py#L5)`:
+   each is a link, and a click opens the file at that line. `README.md` is not a web link any
+   more. A URL (`https://example.org/a.py`), an absolute path (`/etc/hosts.conf`), `picture.png`
+   and text inside a code block stay plain. In VSCode a path outside the workspace folder
+   (`../../x.py`) opens nothing; in PyCharm's SSH mode a path outside the server's project
+   directory gives the notice that the file is not on this machine.
 
 ## Measuring the checkers
 

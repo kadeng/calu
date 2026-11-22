@@ -39,6 +39,7 @@ import { flagsForLevel } from './shared/levels';
 import type { ChatSettings, WebviewMessage } from './shared/messages';
 import { rootInstallCommand } from './shared/serverCommand';
 import type { FixAction } from './shared/settingsModel';
+import { isSourceRef, splitLine } from './shared/sourceRefs';
 import { isAttached, isKnownFile, own, sessionTitle, sideHistory, type ViewEvent } from './shared/viewState';
 
 /** Milliseconds between two refreshes of the session list while the chat view is visible. */
@@ -947,8 +948,8 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
 
   /**
    * Open a link from rendered Markdown: http(s) links in the browser, relative links as files
-   * of the workspace folder (a trailing ":<line>" puts the cursor there); other schemes and
-   * paths outside the folder are ignored.
+   * of the workspace folder (a trailing ":<line>", "#L<line>" or "#<line>" puts the cursor
+   * there, `splitLine`); other schemes and paths outside the folder are ignored.
    *
    * @param href The link target (untrusted).
    * @returns A promise that resolves when the link was handled (never rejects).
@@ -959,13 +960,12 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
         await vscode.env.openExternal(vscode.Uri.parse(href, true));
         return;
       }
-      if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('#')) return;
+      if ((/^[a-z][a-z0-9+.-]*:/i.test(href) && !isSourceRef(href)) || href.startsWith('#')) return;
       const folder = bridgeWorkspaceFolder();
       if (!folder) return;
-      const target = decodeURIComponent(href.split(/[?#]/)[0]);
-      const lined = /^(.*?):(\d+)(?::\d+)?$/.exec(target);
-      const rel = normaliseRelativePath(lined ? lined[1] : target);
-      await openFile(vscode.Uri.joinPath(folder.uri, ...rel.split('/')).fsPath, lined ? Math.max(1, Number(lined[2])) : undefined);
+      const { path, line } = splitLine(decodeURIComponent(href.split('?')[0]));
+      const rel = normaliseRelativePath(path.split('#')[0]);
+      await openFile(vscode.Uri.joinPath(folder.uri, ...rel.split('/')).fsPath, line);
     } catch (error) {
       output.appendLine(`[calu] link not opened (${href}): ${errorText(error)}`);
     }

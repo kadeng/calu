@@ -23,6 +23,7 @@ import { formatAge } from './sessionPick';
 import { sessionEnded } from './serverLoss';
 import { IMAGE_MEDIA_TYPES, MAX_IMAGE_BASE64, MAX_IMAGES, type ImageMediaType, type WebviewMessage } from './messages';
 import { MAIN, isAgentLaunch, isAttached, openEscalationCount, own, sessionTitle, type IdMap, type SetupHint, type ToolView, type ViewState } from './viewState';
+import { isSourceRef } from './sourceRefs';
 
 // ------------------------------------------------------------------ texts
 
@@ -825,13 +826,16 @@ export function rateLimitLine(limit: { type?: string; status?: string; utilizati
  * Decide which message a click on a link of rendered Markdown posts. Links never navigate.
  *
  * @param href The link's `href` attribute (untrusted).
- * @returns `openLink` for http(s) and relative links (the host opens a browser or a workspace
- *   file); `undefined` for an empty link, a fragment ("#…") and every other scheme.
+ * @returns `openLink` for http(s) and relative links, including a source reference such as
+ *   "hello.py:12" (the host opens a browser or a workspace file); `undefined` for an empty
+ *   link, a fragment ("#…") and every other scheme.
  */
 export function linkMessage(href: string | null | undefined): WebviewMessage | undefined {
   const target = (href ?? '').trim();
   if (!target || target.startsWith('#')) return undefined;
   if (/^https?:\/\//i.test(target)) return { type: 'openLink', href: target };
+  // "hello.py:12" is a file and a line, not the scheme "hello.py:".
+  if (isSourceRef(target)) return { type: 'openLink', href: target };
   if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith('//')) return undefined;
   return { type: 'openLink', href: target };
 }

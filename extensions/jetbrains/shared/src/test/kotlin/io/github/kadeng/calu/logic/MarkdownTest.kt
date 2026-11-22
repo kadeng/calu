@@ -10,6 +10,25 @@ import org.junit.jupiter.api.Test
 /** The transcript's Markdown converter and the context documents. */
 class MarkdownTest {
     @Test
+    fun `source references in text, code spans and links open the file at the line`() {
+        val html = markdownToHtml("See src/app.py:12 and `docs/guide.md`, or [this](lib/x.rs#L7).")
+        assertTrue(html.contains("<a href=\"calu-file:src%2Fapp.py#L12\">src/app.py:12</a>"), html)
+        assertTrue(html.contains("<a href=\"calu-file:lib%2Fx.rs#L7\">this</a>"), html)
+        val linked = linkFiles(html, buildFileIndex(emptyMap()))
+        assertTrue(linked.contains("<a href=\"calu-file:docs%2Fguide.md\"><code>docs/guide.md</code></a>"), linked)
+        assertEquals(FileRef("src/app.py", 12), parseFileLink("calu-file:src%2Fapp.py#L12"))
+    }
+
+    @Test
+    fun `URLs, absolute paths and unknown extensions are no source references`() {
+        val html = markdownToHtml("https://e.org/a.py /etc/x.conf picture.png version 1.2.3 jane@x.md")
+        assertFalse(html.contains("calu-file:"), html)
+        assertEquals(null, sourceRefOf("app.pyc"))
+        assertEquals(FileRef("hello_world.py", 1293), sourceRefOf("hello_world.py:1293"))
+        assertEquals(FileRef("a.py"), sourceRefOf("a.py:0"))
+    }
+
+    @Test
     fun `paragraphs, inline marks and line breaks`() {
         assertEquals("<p>a <b>b</b> <i>c</i> <code>d*e*</code><br>next</p><p>two</p>", markdownToHtml("a **b** *c* `d*e*`\nnext\n\ntwo"))
     }
