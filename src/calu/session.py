@@ -411,14 +411,16 @@ LOGIN_ERROR = "please run /login"
 """Lower-case text of Claude Code's errors about a missing sign-in."""
 
 CHECKER_COMMENT_TEMPLATE = (
-    "[Review note from the {route} checker, who reviews your steps on behalf of the user] "
-    "{comment} Apply this to your following steps."
+    "[Review note from the {route} checker, which reviews your steps on behalf of the user] "
+    "{comment} Weigh this for your following steps; the decision is yours."
 )
-"""How a checker comment on an allowed step is framed for Claude (verified in sitl's
-`spike_checker_comment.py`: honored in 3 of 3 live runs)."""
+"""How a checker comment on an allowed step is framed for Claude. A reminder or a suggestion,
+not an order (the owner's principle of 2026-11-22: the checker is usually a smaller model than
+Claude). The earlier wording "Apply this to your following steps." was honored in 3 of 3 live
+runs (sitl's `spike_checker_comment.py`); this one is not measured yet."""
 SUBAGENT_NOTE_TEMPLATE = (
-    '[Review of the result of the subagent "{label}" by the result checker, on behalf of the '
-    "user, who sees the whole conversation] {note}"
+    '[Review of the result of the subagent "{label}" by the subagent checker, on behalf of the '
+    "user: a reminder and suggestions; weigh them, the decision is yours] {note}"
 )
 """How the result checker's note is framed for Claude (sent as a priority "next" message)."""
 HANDED_BACK_EMPTY = (

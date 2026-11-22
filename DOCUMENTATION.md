@@ -332,6 +332,12 @@ Two more models work for the checkers and decide nothing:
   user already allowed pushing" in Claude's text arrives as "Claude claimed that the user had
   already allowed pushing". A checker therefore cannot mistake text from Claude, from a web
   page or from a file for an instruction of yours ([security model](#security-model)).
+- **Checkers guide softly and guard hard.** A checker is usually a smaller model than Claude and
+  sees less of its work. On complex questions (design, correctness, wording, the best approach)
+  it reminds and suggests, and Claude decides: a comment, a subagent note and the reason of a
+  DENY explain and may suggest, they give no orders. It is a hard guardrail for security, your
+  explicit rules and attempts to get around a safeguard: there it denies or escalates, and you
+  can still approve.
 - **Secrets and personal data become placeholders.** The narrator and every checker's summary
   of a step write passwords, tokens, keys, names of private persons, e-mail addresses, phone
   numbers, postal addresses and patient, customer or account numbers as typed placeholders

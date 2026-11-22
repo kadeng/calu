@@ -5,6 +5,7 @@ import pytest
 from calu.defaults.instructions import (
     EVASION_PART,
     HONESTY_ROUTES,
+    ROLE_PART,
     SYSTEM_PARTS,
     compose_instructions,
     default_instructions,
@@ -72,6 +73,10 @@ TASK_WORDS = 60
 """Words the subagent checker's fixed part gained when it began to review tasks as well as
 results (2026-11-22, the owner's request)."""
 
+SUGGEST_WORDS = 25
+"""Words the fixed parts gained when DENY reasons, comments and notes became reminders and
+suggestions rather than orders (2026-11-22, the owner's request)."""
+
 FILE_TASK_WORDS = 40
 """Words of the command checker's sentence on judging a file by the task of a subagent that may
 still run (2026-11-22, the owner's request)."""
@@ -82,20 +87,20 @@ def test_the_shipped_instructions_are_short(name: str) -> None:
     """Requirement 38: system part and default together are a few plain rules.
 
     The command checker's limit is higher by the section on commands outside the sandbox
-    (D255), and every limit by the fixed part on getting around safeguards (`EVASION_PART`)
-    and by the sentence on secrets in the summary (`PRIVACY_WORDS`), all of which the owner
-    asked for after requirement 38.
+    (D255), and every limit by the fixed parts on the checker's role (`ROLE_PART`) and on
+    getting around safeguards (`EVASION_PART`), by the sentence on secrets in the summary
+    (`PRIVACY_WORDS`) and by the wording of reminders and suggestions (`SUGGEST_WORDS`), all of
+    which the owner asked for after requirement 38.
 
     Args:
         name: The checker type.
     """
     route = "subagent" if name == "subagent-result" else name
     words = len(compose_instructions(route, default_instructions(name)).split())
-    evasion = len(read_part(EVASION_PART).split())
+    evasion = len(read_part(EVASION_PART).split()) + len(read_part(ROLE_PART).split())
     tasks = {"subagent-result": TASK_WORDS, "command": FILE_TASK_WORDS}.get(name, 0)
-    assert words < (410 if name == "command" else 360) + evasion + PRIVACY_WORDS + tasks, (
-        f"{name}: {words} words"
-    )
+    shared = evasion + PRIVACY_WORDS + SUGGEST_WORDS
+    assert words < (410 if name == "command" else 360) + shared + tasks, f"{name}: {words} words"
     assert "auto mode" in system_part(route) or route == "subagent"
 
 
@@ -238,3 +243,16 @@ def test_the_narrator_replaces_secrets_and_personal_data_by_placeholders() -> No
     for placeholder in ("[redacted: password]", "[redacted: token]", "[redacted: name]"):
         assert placeholder in text
     assert "keeps the\nfact that a token leaves the machine" in text
+
+
+@pytest.mark.parametrize("name", ["command", "edit", "changeset", "subagent-result", "honesty"])
+def test_every_checker_is_told_to_guide_softly_and_guard_hard(name: str) -> None:
+    """The owner's principle: soft guidance on complex questions, hard guardrails on security.
+
+    Args:
+        name: The checker type.
+    """
+    route = {"subagent-result": "subagent", "honesty": "edit"}.get(name, name)
+    prompt = compose_instructions(route, default_instructions(name), name=name)
+    assert "# Your role" in prompt and "soft guidance" in prompt and "hard guardrail" in prompt
+    assert prompt.index("# Your role") < prompt.index("# The user's instructions")

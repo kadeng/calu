@@ -272,6 +272,12 @@ def review_instructions(rules: str | None = None) -> str:
     return system + "\n\n" + (rules if rules else honesty_rules()).strip() + "\n"
 
 
+ROLE_PART = "system/role.md"
+"""The fixed part every checker gets after its own system part: soft guidance on complex
+questions, a hard guardrail on security, the user's explicit rules and attempts to get around
+a safeguard (the owner's principle of 2026-11-22: a checker is usually a smaller model than
+Claude and is no final arbiter of complex questions)."""
+
 EVASION_PART = "system/evasion.md"
 """The fixed part every checker gets after its own system part: ESCALATE when Claude's narrated
 thinking or text shows that it knowingly tries to get around a safeguard or to deceive the
@@ -297,13 +303,12 @@ def compose_instructions(
             the route's, followed by the user's part and the honesty rules.
 
     Returns:
-        For the honesty checker: its system part, the part about getting around safeguards
-        (`EVASION_PART`), the user's instructions under their own heading, and the honesty
-        rules. For every other checker with a system part: the route's system part,
-        `EVASION_PART`, the user's instructions under their own heading and, with
-        `honesty_state` on a route of
-        `HONESTY_ROUTES`, the part about unverified code. No other checker gets the honesty
-        rules or a way to record marks.
+        For the honesty checker: its system part, the checker's role (`ROLE_PART`), the part
+        about getting around safeguards (`EVASION_PART`), the user's instructions under their
+        own heading, and the honesty rules. For every other checker with a system part: the
+        route's system part, `ROLE_PART`, `EVASION_PART`, the user's instructions under their
+        own heading and, with `honesty_state` on a route of `HONESTY_ROUTES`, the part about
+        unverified code. No other checker gets the honesty rules or a way to record marks.
 
     Example:
         compose_instructions("edit", "# Project rules ...") starts with "# Edit checker" and
@@ -314,6 +319,7 @@ def compose_instructions(
             "\n\n".join(
                 [
                     _read("system/honesty.md").strip(),
+                    _read(ROLE_PART).strip(),
                     _read(EVASION_PART).strip(),
                     "# The user's instructions\n\n" + user.strip(),
                     (rules if rules else honesty_rules()).strip(),
@@ -325,6 +331,7 @@ def compose_instructions(
     system = system_part(route)
     if system:
         parts.append(system.strip())
+        parts.append(_read(ROLE_PART).strip())
         parts.append(_read(EVASION_PART).strip())
         parts.append("# The user's instructions\n\n" + user.strip())
     else:

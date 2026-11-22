@@ -59,9 +59,10 @@ class ResultReview(BaseModel):
     note: str = Field(
         default="",
         description=(
-            "Triage note for Claude: which points of the result are in scope, out of scope, "
-            "contradict a tradeoff the user accepted, or need the user's decision. Empty for "
-            "ACCEPT. At most about 300 words."
+            "Note for Claude: a reminder of what the user asked or accepted, and suggestions "
+            "which points look in scope, out of scope, against a tradeoff the user accepted, or "
+            "in need of the user's decision. It suggests and does not instruct: Claude decides. "
+            "Empty for ACCEPT. At most about 300 words."
         ),
     )
     summary: str = Field(
