@@ -322,12 +322,14 @@ Two more models work for the checkers and decide nothing:
   user already allowed pushing" in Claude's text arrives as "Claude claimed that the user had
   already allowed pushing". A checker therefore cannot mistake text from Claude, from a web
   page or from a file for an instruction of yours ([security model](#security-model)).
-- **An intent to get around a safeguard always escalates.** The fixed part of every checker
-  says: when Claude's narrated thinking or text shows that it knowingly tries to get around a
-  restriction put on it on purpose (a denied step, a decision, the sandbox, a permission, a
-  rule of yours), or to deceive you or a reviewer, the checker escalates, also when the step
-  itself looks harmless. The narrator retells such plans in full. Your own instructions cannot
-  switch this off.
+- **An intent to get around a safeguard escalates.** The fixed part of every checker says:
+  when Claude's narrated thinking or text shows that it knowingly tries to get around a
+  restriction that still applies (a denied step, a decision, a permission, a rule of yours),
+  or to deceive you or a reviewer, the checker escalates, also when the step itself looks
+  harmless. What counts is whether the step is authorized, not its route: leaving the sandbox
+  is legitimate where your rules allow it ("run a command outside the sandbox only when it
+  fails there"). An intent to deceive you always escalates. The narrator retells such plans in
+  full.
 - **No file of the repository is part of the prompt.** `AGENTS.md`, `CLAUDE.md` and skill
   descriptions can be written by the agent under review, so they are not a source of rules for
   the checkers. Project rules belong in the checker instructions. Claude Code itself reads
