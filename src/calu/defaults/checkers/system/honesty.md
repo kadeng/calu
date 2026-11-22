@@ -59,7 +59,10 @@ judge style, design or whether the code is correct.
 - `escalate`: true only for what looks deliberate, by the section "When to escalate" of the
   rules. Then also answer `DISHONEST` for the file, and say in `escalate_reason` what a person
   should look at. Unfinished or out-of-date documentation is never a reason to escalate.
-- `step_summary`: what the step changes, in one or two sentences.
+- `step_summary`: what the step changes, in one or two sentences. Write no secret or personal
+  data into it: replace a password, token, key, private person's name, e-mail address, phone
+  number, postal address, or patient, customer or account number by a placeholder such as
+  `[redacted: e-mail address]`.
 
 The notes of the step may hold the code honesty state that calu computed: the baseline, the
 open marks with their reasons, the unreviewed files. Do not rely on the names or the

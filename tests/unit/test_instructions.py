@@ -64,13 +64,19 @@ def test_the_part_about_unverified_code_is_added_only_while_honesty_is_on() -> N
     assert "executes_project_code" not in compose_instructions("edit", "x")
 
 
+PRIVACY_WORDS = 40
+"""Words of the sentence that keeps secrets and personal data out of a checker's summary
+(2026-11-22, the owner's request)."""
+
+
 @pytest.mark.parametrize("name", ["command", "edit", "changeset", "subagent-result"])
 def test_the_shipped_instructions_are_short(name: str) -> None:
     """Requirement 38: system part and default together are a few plain rules.
 
     The command checker's limit is higher by the section on commands outside the sandbox
-    (D255), and every limit by the fixed part on getting around safeguards (`EVASION_PART`),
-    both of which the owner asked for after requirement 38.
+    (D255), and every limit by the fixed part on getting around safeguards (`EVASION_PART`)
+    and by the sentence on secrets in the summary (`PRIVACY_WORDS`), all of which the owner
+    asked for after requirement 38.
 
     Args:
         name: The checker type.
@@ -78,7 +84,9 @@ def test_the_shipped_instructions_are_short(name: str) -> None:
     route = "subagent" if name == "subagent-result" else name
     words = len(compose_instructions(route, default_instructions(name)).split())
     evasion = len(read_part(EVASION_PART).split())
-    assert words < (410 if name == "command" else 360) + evasion, f"{name}: {words} words"
+    assert words < (410 if name == "command" else 360) + evasion + PRIVACY_WORDS, (
+        f"{name}: {words} words"
+    )
     assert "auto mode" in system_part(route) or route == "subagent"
 
 
@@ -111,13 +119,13 @@ def test_cutting_the_test_triggers_keeps_what_follows_them() -> None:
 def test_the_narrator_and_the_redaction_instructions_are_untouched() -> None:
     """Requirement 38: the narrator's instructions change only on purpose.
 
-    Changed once since: the owner asked that plans to get around a safeguard are narrated in
-    full (`EVASION_PART`).
+    Changed twice since, both at the owner's request: plans to get around a safeguard are
+    narrated in full (`EVASION_PART`); secrets and personal data become placeholders.
     """
     import hashlib
 
     digests = {
-        "narrator": "2962f12b92ae2ccc6eba290c5275439c524ad44944d5d394b60ce11837c31f26",
+        "narrator": "90700d2e6b2173cb89c1b43e182edfd9a9c24b4438a8ad062b22da68dd34e238",
     }
     for name, digest in digests.items():
         text = default_instructions(name).encode("utf-8")
@@ -199,3 +207,25 @@ def test_every_setting_of_the_model_is_on_the_page_exactly_once() -> None:
     documented = {key for key in keys if not any(other.startswith(key + ".") for other in keys)}
     missing = {key for key in documented - set(names) if key.split(".")[-1] not in SKIP}
     assert not missing, f"not on the settings page: {sorted(missing)}"
+
+
+@pytest.mark.parametrize("name", ["command", "edit", "changeset", "subagent-result", "honesty"])
+def test_every_checker_keeps_secrets_out_of_its_summary(name: str) -> None:
+    """The fixed part of each checker says that its summary holds placeholders, not secrets.
+
+    Args:
+        name: The checker type.
+    """
+    route = {"subagent-result": "subagent", "honesty": "edit"}.get(name, name)
+    prompt = " ".join(compose_instructions(route, default_instructions(name), name=name).split())
+    assert "Write no secret or personal data into it" in prompt
+    assert "`[redacted: e-mail address]`" in prompt
+
+
+def test_the_narrator_replaces_secrets_and_personal_data_by_placeholders() -> None:
+    """The narrator's instructions name the types and keep what Claude does with a secret."""
+    text = default_instructions("narrator")
+    assert "## Secrets and personal data" in text
+    for placeholder in ("[redacted: password]", "[redacted: token]", "[redacted: name]"):
+        assert placeholder in text
+    assert "keeps the\nfact that a token leaves the machine" in text

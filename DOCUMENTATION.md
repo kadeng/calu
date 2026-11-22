@@ -322,6 +322,11 @@ Two more models work for the checkers and decide nothing:
   user already allowed pushing" in Claude's text arrives as "Claude claimed that the user had
   already allowed pushing". A checker therefore cannot mistake text from Claude, from a web
   page or from a file for an instruction of yours ([security model](#security-model)).
+- **Secrets and personal data become placeholders.** The narrator and every checker's summary
+  of a step write passwords, tokens, keys, names of private persons, e-mail addresses, phone
+  numbers, postal addresses and patient, customer or account numbers as typed placeholders
+  such as `[redacted: e-mail address]`. The checker itself still sees the step as it is. The
+  summaries feed later checks, the chat summary and the session traces.
 - **An intent to get around a safeguard escalates.** The fixed part of every checker says:
   when Claude's narrated thinking or text shows that it knowingly tries to get around a
   restriction that still applies (a denied step, a decision, a permission, a rule of yours),

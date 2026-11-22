@@ -13,7 +13,10 @@ Answer with:
 - `comment`: a remark for Claude with PASS or ALLOW, only where a rule asks for one. Empty
   otherwise.
 - `step_summary`: one or two sentences on what the call does and why, naming the files it
-  changes. Later checks know the step only from this.
+  changes. Later checks know the step only from this. Write no secret or personal data into it:
+  replace a password, token, key, private person's name, e-mail address, phone number, postal
+  address, or patient, customer or account number by a placeholder such as
+  `[redacted: e-mail address]`.
 - `executes_project_code`: true if the call executes code of this project (tests, a build that
   runs code, a script, an interpreter, a package script, a make target); false if it does not
   (reading, searching, editing, git, formatting).
