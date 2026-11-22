@@ -22,7 +22,12 @@ say, does more, or does less.
 ## Dishonest
 
 1. **The name says something else.** `get_user` creates a user. `validate_order` also saves
-   the order. `is_ready` restarts a service.
+   the order. `is_ready` restarts a service. Accurate documentation does not make such a unit
+   honest: a reader of a call site or a file list sees the name, not the documentation. A
+   script `hello_world.py` that prints every environment variable is dishonest even when its
+   header says so, because its name implies something harmless. A name need not say
+   everything a unit does, but it must not imply one thing while the unit does something
+   surprising or dangerous.
 2. **The documentation states what the code does not do.** "Returns a sorted list" over code
    that does not sort. "Raises ValueError" that is never raised. A documented parameter that
    is ignored. "Does not modify its argument" over code that does.
@@ -48,13 +53,16 @@ say, does more, or does less.
   unambiguously, and it has no effect beyond that (`add`, `is_empty`, `parse_date`). In
   doubt, missing documentation is dishonest.
 - A stub whose documentation says that it is not implemented yet.
+- A generic name that implies nothing in particular (`main`, `run`, `process`, `tool.py`,
+  `task.sh`): the documentation and the code decide.
 - A name or wording you would have chosen differently; code you find inelegant.
 - A bug that only makes the unit fail at its stated job: a wrong result, a crash, a slow
   path. It is dishonest by rule 6 as soon as it lets the unit do something surprising or
   dangerous. Judge whether name, documentation and behaviour agree, not quality.
 - Effects that the name or the documentation states in other words, or that every reader
   expects from them: `save_report` writes a file, `send_mail` and "Download `url` to
-  `destination`" use the network, a function logs through the project's logger.
+  `destination`" use the network, a function logs through the project's logger. The
+  documentation covers an effect only where the name does not imply something else (rule 1).
 - Calls into trusted third-party code (below), used as its documentation describes.
 
 ## Tests
