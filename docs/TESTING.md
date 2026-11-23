@@ -93,8 +93,17 @@ the tests compare texts, not alignment or colour.
 ```bash
 cd extensions/vscode && npm ci
 npm run check-types && npm run test:unit      # vitest: the pure modules (no VSCode)
+npm run build:pane                            # after a change to webview/, src/host/, src/shared/ or pane/
 scripts/test-in-docker.sh                     # unit + integration tests in a real VSCode, headless
 ```
+
+The chat's host logic (`src/host/`) is shared with the chat pane of `calu web` (PLAN.md D261).
+`test/unit/chatHost.test.ts` drives it through a scripted bridge. The pane's script is committed
+as `src/calu/web/static/pane/pane.js`; `test/unit/pane.test.ts` fails when it is not what the
+sources build to, so run `npm run build:pane` after a change to anything the chat uses. The
+pane's Python side is tested in `tests/unit/test_web_pane.py` (login, frame policy, the allowed
+bridge requests, one bridge over the WebSocket) and in a real browser in
+`tests/browser/test_web_pane.py` (its own window, an iframe of another site, no login).
 
 `scripts/test-in-docker.sh` builds the image `calu-vscode-test` (`docker/vscode-test.Dockerfile`:
 Node, xvfb, Python 3.14 with calu's dependencies), mounts the checkout read-only, installs calu
@@ -972,6 +981,18 @@ escalation resolved from the database alone.
    suggested); `/honesty-review` starts a review. "Cancel" records nothing (`calu honesty trusted`).
    The honesty menu's "Trust HEAD…", "Trust a commit or branch…" and "Trust a file…" do the same.
    VSCode only: "Trust This File as Honest" in the explorer's and the editor's context menu.
+52. The chat pane of `calu web` (PLAN.md D261), with a running `calu serve` and a session in a
+   project. (a) Open the printed `chat pane:` address with `&dir=<project>`: the session of the
+   project is attached, the transcript and the composer work as in VSCode, and the address no
+   longer shows the token. Reload: the pane connects again without the token in the address.
+   (b) Send a message, decide an escalation, switch sessions in the session menu, start a new
+   session, rename it. (c) Click a file link and "Open diff" of an edit: a read-only view at the
+   line, and a unified diff. (d) The gear opens the full web interface's settings in a separate
+   window. (e) In a Jupyter notebook on this machine, `IFrame("<pane address>", width="100%",
+   height=700)`: the pane works inside the notebook. A page on another host that is not in
+   `web.pane_frame_ancestors` cannot frame it (the browser shows a refusal). (f) With `calu web`
+   signing in by admin password: the pane in its own window works after signing in to `calu web`
+   in the same browser.
 
 ## Measuring the checkers
 

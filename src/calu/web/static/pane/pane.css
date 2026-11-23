@@ -1,0 +1,135 @@
+/*
+ * The dialogs and toasts of the browser pane (`dialogs.ts`), in the theme of `theme.css`.
+ */
+
+.pane-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8vh 12px 12px;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.pane-dialog {
+  width: min(460px, 100%);
+  max-height: 84vh;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--vscode-widget-border);
+  border-radius: 8px;
+  background: var(--vscode-editorWidget-background);
+  color: var(--vscode-foreground);
+  box-shadow: 0 6px 24px var(--vscode-widget-shadow);
+}
+.pane-dialog.wide { width: min(900px, 100%); }
+
+.pane-title { margin: 0; font-size: 1.1em; font-weight: 600; overflow-wrap: anywhere; }
+.pane-detail { margin: 0; color: var(--vscode-descriptionForeground); white-space: pre-wrap; }
+.pane-problem { margin: 0; min-height: 1.2em; color: var(--vscode-errorForeground); }
+
+.pane-input {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--vscode-input-border);
+  border-radius: 4px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  font: inherit;
+}
+.pane-input:focus { outline: 1px solid var(--vscode-focusBorder); }
+
+.pane-buttons { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.pane-button {
+  padding: 4px 12px;
+  border: 1px solid var(--vscode-button-border);
+  border-radius: 4px;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  font: inherit;
+  cursor: pointer;
+}
+.pane-button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+.pane-button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+.pane-button.primary:hover { background: var(--vscode-button-hoverBackground); }
+.pane-button:disabled { opacity: 0.5; cursor: default; }
+.pane-button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+
+.pane-list { overflow-y: auto; min-height: 60px; max-height: 60vh; }
+.pane-heading {
+  padding: 6px 4px 2px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.pane-row { display: flex; gap: 6px; align-items: center; }
+.pane-row-main {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pane-row-main:hover, .pane-row-main:focus-visible { background: var(--vscode-list-hoverBackground); outline: none; }
+.pane-row-label { font-weight: 600; }
+.pane-row-description { color: var(--vscode-descriptionForeground); }
+.pane-row-detail { flex-basis: 100%; color: var(--vscode-descriptionForeground); font-size: 0.9em; overflow-wrap: anywhere; }
+
+.pane-text {
+  margin: 0;
+  overflow: auto;
+  max-height: 66vh;
+  padding: 8px;
+  border-radius: 4px;
+  background: var(--vscode-textCodeBlock-background);
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size);
+  white-space: pre;
+}
+.pane-text.markdown-body { white-space: normal; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
+.pane-line.marked { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+
+.pane-toasts {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(420px, calc(100vw - 24px));
+}
+.pane-toast {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--vscode-widget-border);
+  border-left: 3px solid var(--vscode-notificationsInfoIcon-foreground);
+  border-radius: 6px;
+  background: var(--vscode-editorWidget-background);
+  box-shadow: 0 4px 16px var(--vscode-widget-shadow);
+}
+.pane-toast.warning { border-left-color: var(--vscode-editorWarning-foreground); }
+.pane-toast.error { border-left-color: var(--vscode-errorForeground); }
+.pane-toast-text { flex: 1 1 200px; overflow-wrap: anywhere; }
+.pane-toast-close {
+  border: 0;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  font-size: 1.2em;
+  cursor: pointer;
+}

@@ -345,6 +345,7 @@
     "check-types": "tsc --noEmit -p tsconfig.json",
     "build": "npm run check-types && node esbuild.mjs",
     "build:production": "npm run check-types && node esbuild.mjs --production",
+    "build:pane": "npm run check-types && node esbuild.mjs --pane",
     "watch": "node esbuild.mjs --watch",
     "gen:protocol": "node scripts/gen-protocol.mjs",
     "test:unit": "vitest run",

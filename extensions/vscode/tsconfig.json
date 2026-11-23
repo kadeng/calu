@@ -12,5 +12,5 @@
     "types": ["node"],
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "webview/**/*.ts", "test/unit/**/*.ts"]
+  "include": ["src/**/*.ts", "webview/**/*.ts", "pane/**/*.ts", "test/unit/**/*.ts"]
 }

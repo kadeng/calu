@@ -319,6 +319,8 @@ export interface BridgeRequestParams {
   'ide.models.set': { role: string; model: string; project?: string | null } & WithPassword;
   'ide.checker.get': { name: string } & WithPassword;
   'ide.checker.save': { name: string; instructions: string; base_version: number } & WithPassword;
+  /** A piece of a project file (the file view of the browser pane); `path` relative to the workspace. */
+  'ide.fs.read': { path: string; offset?: number; length?: number };
   'ide.shutdown': Record<string, never>;
 }
 
@@ -344,6 +346,8 @@ export interface BridgeRequestResults {
   'ide.models.set': Record<string, never>;
   'ide.checker.get': IdeCheckerResult;
   'ide.checker.save': { version: number };
+  /** `content_b64`: the bytes read; `size`: of the whole file; `eof`: the read reached its end. */
+  'ide.fs.read': { content_b64: string; sha256: string; size: number; mode: number; eof: boolean };
   'ide.shutdown': Record<string, never>;
 }
 

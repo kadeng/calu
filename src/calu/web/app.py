@@ -22,6 +22,7 @@ Pages:
     /settings             everything that steers a session: the configuration, the checker
                           instructions with each checker's record, and the allow and deny
                           lists, per scope
+    /pane                 the IDE chat view for a browser tab or an iframe (`calu.web.pane`)
 
 **The login is the token `calu web` prints** (`TokenGate`, D161); there are no user accounts
 (agent/records/PLAN.md Q4 is open), so the server refuses to bind anything but the loopback
@@ -42,6 +43,7 @@ Who may do what (the three middlewares, outermost first):
 """
 
 import base64
+import functools
 import hashlib
 import ipaddress
 import logging
@@ -70,6 +72,7 @@ from starlette.templating import Jinja2Templates
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from calu import __version__, admin, asuser, herd, localsocket, servers, session_requests
+from calu.credentials import CredentialStore
 from calu.db import Db
 from calu.homes import short_path
 from calu.protocol.client import RequestFailed, connect
@@ -81,6 +84,15 @@ from calu.protocol.messages import (
 from calu.setup import ADMIN_ROLE
 from calu.web import git
 from calu.web import settings as web_settings
+from calu.web.pane import (
+    PANE_PATH,
+    PANE_RPC_PATH,
+    TOKEN_PROTOCOL,
+    Panes,
+    frame_ancestors,
+    pane_page,
+    pane_socket,
+)
 
 log = logging.getLogger(__name__)
 
@@ -270,6 +282,8 @@ def create_app(
     token: str | None = None,
     host_name: str = "",
     check_password: PasswordCheck | None = None,
+    store: CredentialStore | None = None,
+    pane_frame_ancestors: list[str] | None = None,
 ) -> Starlette:
     """Build the web application on an open database connection.
 
@@ -289,11 +303,17 @@ def create_app(
             token, a browser without a login is asked for the password (D216).
         host_name: The only host name a request may carry (`LocalOnly`). `calu web` always
             passes `WEB_HOST_NAME`; "" accepts every loopback name, for in-process tests.
+        store: The credential store the chat pane's bridges log in with (`calu.web.pane`);
+            None refuses every pane connection.
+        pane_frame_ancestors: `web.pane_frame_ancestors`: who may show `/pane` in a frame
+            (`calu.web.pane.frame_ancestors`; None uses its default).
 
     Returns:
         The Starlette application, ready for uvicorn.
     """
     state = _State(db=db, git_url_template=git_url_template)
+    ancestors = frame_ancestors(pane_frame_ancestors)
+    panes = Panes()
     # A session id is a UUID, and the routes say so: any other text is answered with a plain
     # 404 by the router and never reaches a query (which would fail on the cast) or a page.
     routes = [
@@ -346,12 +366,16 @@ def create_app(
         Route("/checkers/{name}", _page(checker_redirect, state), name="checker"),
         Route("/rules", _page(rules_redirect, state), name="rules"),
         Route("/settings", _page(settings_page, state), methods=["GET", "POST"], name="settings"),
+        Route(PANE_PATH, pane_page, name="pane"),
+        WebSocketRoute(
+            PANE_RPC_PATH, functools.partial(pane_socket, store=store, panes=panes), name="pane_rpc"
+        ),
         Mount("/static", StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
     # Outermost first: the headers go on every response, the refusals of the two guards
     # included.
     middleware = [
-        Middleware(SecurityHeaders),
+        Middleware(SecurityHeaders, pane_ancestors=ancestors),
         Middleware(LocalOnly, host_name=host_name),
     ]
     if token is not None:
@@ -460,13 +484,16 @@ class SecurityHeaders:
     Referrer-Policy           same-origin (no other site learns the address of a page)
     """
 
-    def __init__(self, app: Any) -> None:
+    def __init__(self, app: Any, pane_ancestors: str = "'none'") -> None:
         """Wrap the application.
 
         Args:
             app: The ASGI application.
+            pane_ancestors: The `frame-ancestors` sources of the chat pane's page
+                (`calu.web.pane.frame_ancestors`); every other page keeps `'none'`.
         """
         self.app = app
+        self.pane_ancestors = pane_ancestors
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         """Pass the request on and add the headers to the start of its response.
@@ -483,6 +510,11 @@ class SecurityHeaders:
         if not re.fullmatch(r"[A-Za-z0-9.\-\[\]:]+", host):
             host = WEB_HOST_NAME  # never copy an odd Host into a header
         policy = CONTENT_SECURITY_POLICY.replace("{host}", host)
+        if scope.get("path") == PANE_PATH:
+            # The one page another application may frame (`calu.web.pane`).
+            policy = policy.replace(
+                "frame-ancestors 'none'", f"frame-ancestors {self.pane_ancestors}"
+            )
         extra = [
             (b"content-security-policy", policy.encode("latin-1")),
             (b"x-content-type-options", b"nosniff"),
@@ -558,6 +590,9 @@ class TokenGate:
                                                    or the form field `_key`
         WebSocket: cookie and key              ->  passes; the key is the offered subprotocol
                                                    `calu.key.<key>`
+        WebSocket /pane/rpc with the token     ->  passes; the token is the offered subprotocol
+                                                   `calu.token.<token>` (`calu.web.pane`)
+        GET /pane, GET /static/pane/...        ->  passes (the chat pane's page; no data)
         anything else                          ->  401 (HTTP) or close code 1008 (WebSocket)
 
     The token is never stored in the browser. It and the logins live only in this process; a
@@ -602,17 +637,28 @@ class TokenGate:
             return
         key = self._key_of(scope)
         if scope["type"] == "websocket":
+            protocols = scope.get("subprotocols", [])
             offered = [
-                name[len(KEY_PROTOCOL) :]
-                for name in scope.get("subprotocols", [])
-                if name.startswith(KEY_PROTOCOL)
+                name[len(KEY_PROTOCOL) :] for name in protocols if name.startswith(KEY_PROTOCOL)
             ]
-            if key is not None and any(_same(given, key) for given in offered):
+            # The chat pane in a frame of another site has neither cookie nor key; it sends the
+            # login token itself, and only its own WebSocket takes that (`calu.web.pane`).
+            tokens = [
+                name[len(TOKEN_PROTOCOL) :] for name in protocols if name.startswith(TOKEN_PROTOCOL)
+            ]
+            by_token = scope.get("path") == PANE_RPC_PATH and any(
+                _same(t, self.token) for t in tokens
+            )
+            if by_token or (key is not None and any(_same(given, key) for given in offered)):
                 await self.app(scope, receive, send)
             else:
                 await send({"type": "websocket.close", "code": 1008})
             return
         method = scope.get("method", "GET")
+        if method in ("GET", "HEAD") and _public(str(scope.get("path", ""))):
+            # The chat pane's page and files hold no data; its WebSocket needs the login.
+            await self.app(scope, receive, send)
+            return
         if method == "GET" and await self._login(scope, send):
             return
         if self.check_password is not None and scope.get("path") == LOGIN_PATH:
@@ -814,6 +860,20 @@ class TokenGate:
                     if _same(given, session_id):
                         return key
         return None
+
+
+def _public(path: str) -> bool:
+    """Tell whether a path is served without a login: the chat pane's page and its static files.
+
+    Args:
+        path: The request path.
+
+    Returns:
+        True for `PANE_PATH` and for files below `/static/pane/` (no ".." part).
+    """
+    if path == PANE_PATH:
+        return True
+    return path.startswith("/static/pane/") and ".." not in path.split("/")
 
 
 async def _plain(send: Any, status: int, text: str) -> None:

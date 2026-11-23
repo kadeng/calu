@@ -5,6 +5,13 @@ For the authors of `webview/main.ts` (chat), `webview/settings.ts` (settings dia
 `src/shared/` are the contract and are imported by both sides. Their TSDoc is authoritative; this
 page is the overview.
 
+The chat webview has two hosts: the extension (`src/chatView.ts` with `src/host/chatHost.ts`) and
+the chat pane of `calu web` (`pane/`, PLAN.md D261), which runs the same script in a browser tab
+with the same messages. The pane defines `acquireVsCodeApi` itself and adds `onHostMessage`, so
+the script takes the host's messages from there instead of `window` message events. Only the
+variables of `pane/theme.css` are defined in the pane: a new `--vscode-*` variable in
+`media/chat.css` needs a value there too, and `npm run build:pane` after any change.
+
 ## Rules for both webviews
 
 - **HTML**: the host serves `<div id="app"></div>`, the stylesheet(s) and one script

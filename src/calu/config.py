@@ -625,6 +625,12 @@ class WebConfig(ConfigModel):
     `{remote}` as placeholders, e.g. "http://localhost:8080/calu/commit/{commit}". Empty guesses
     the URL from the project's git remote, which works for GitHub, GitLab and Bitbucket; calu
     does not browse git itself."""
+    pane_frame_ancestors: list[str] = Field(default_factory=list)
+    """Who may show the chat pane (`/pane`) in a frame, as CSP source expressions such as
+    "'self'" or "http://localhost:*" (agent/records/PLAN.md D261). Empty allows this interface
+    and pages of this machine's loopback addresses ("'self'", "http://localhost:*",
+    "http://127.0.0.1:*"), e.g. a local Jupyter. Every other page of `calu web` cannot be framed.
+    Read when `calu web` starts."""
 
 
 class ChangesConfig(ConfigModel):

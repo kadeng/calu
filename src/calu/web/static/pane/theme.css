@@ -1,0 +1,154 @@
+/*
+ * The theme of the browser pane: the CSS variables that VSCode gives a webview, with values
+ * close to VSCode's "Dark Modern" and "Light Modern" themes. `chat.css` uses only these
+ * variables. The pane follows the browser's colour scheme (dark unless the browser asks for
+ * light).
+ */
+
+:root {
+  color-scheme: dark;
+  --vscode-font-family: system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif;
+  --vscode-font-size: 13px;
+  --vscode-editor-font-family: ui-monospace, "Cascadia Code", "DejaVu Sans Mono", Menlo, monospace;
+  --vscode-editor-font-size: 13px;
+
+  --vscode-foreground: #cccccc;
+  --vscode-descriptionForeground: #9d9d9d;
+  --vscode-disabledForeground: #6e6e6e;
+  --vscode-errorForeground: #f85149;
+  --vscode-focusBorder: #0078d4;
+  --vscode-contrastBorder: transparent;
+  --vscode-contrastActiveBorder: transparent;
+  --vscode-widget-border: #313131;
+  --vscode-widget-shadow: rgba(0, 0, 0, 0.36);
+  --vscode-panel-border: #2b2b2b;
+  --vscode-panelTitle-activeBorder: #0078d4;
+  --vscode-sideBar-background: #181818;
+  --vscode-editor-background: #1f1f1f;
+  --vscode-editorWidget-background: #202020;
+  --vscode-editorWarning-foreground: #cca700;
+  --vscode-badge-background: #616161;
+  --vscode-badge-foreground: #f8f8f8;
+  --vscode-button-background: #0078d4;
+  --vscode-button-foreground: #ffffff;
+  --vscode-button-hoverBackground: #026ec1;
+  --vscode-button-border: rgba(255, 255, 255, 0.07);
+  --vscode-button-secondaryBackground: #313131;
+  --vscode-button-secondaryForeground: #cccccc;
+  --vscode-button-secondaryHoverBackground: #3c3c3c;
+  --vscode-charts-blue: #3794ff;
+  --vscode-charts-green: #89d185;
+  --vscode-charts-purple: #b180d7;
+  --vscode-charts-red: #f14c4c;
+  --vscode-charts-yellow: #cca700;
+  --vscode-dropdown-background: #313131;
+  --vscode-dropdown-foreground: #cccccc;
+  --vscode-editorSuggestWidget-background: #202020;
+  --vscode-editorSuggestWidget-border: #454545;
+  --vscode-editorSuggestWidget-foreground: #cccccc;
+  --vscode-editorSuggestWidget-selectedBackground: #04395e;
+  --vscode-editorSuggestWidget-selectedForeground: #ffffff;
+  --vscode-gitDecoration-modifiedResourceForeground: #e2c08d;
+  --vscode-input-background: #313131;
+  --vscode-input-border: #3c3c3c;
+  --vscode-input-foreground: #cccccc;
+  --vscode-input-placeholderForeground: #989898;
+  --vscode-inputValidation-warningBackground: #352a05;
+  --vscode-list-activeSelectionBackground: #04395e;
+  --vscode-list-activeSelectionForeground: #ffffff;
+  --vscode-list-dropBackground: #383b3d;
+  --vscode-list-hoverBackground: #2a2d2e;
+  --vscode-list-inactiveSelectionBackground: #37373d;
+  --vscode-menu-background: #1f1f1f;
+  --vscode-menu-border: #454545;
+  --vscode-menu-foreground: #cccccc;
+  --vscode-menu-selectionBackground: #0078d4;
+  --vscode-menu-selectionForeground: #ffffff;
+  --vscode-menu-separatorBackground: #454545;
+  --vscode-notificationsInfoIcon-foreground: #3794ff;
+  --vscode-scrollbarSlider-background: rgba(121, 121, 121, 0.4);
+  --vscode-terminal-ansiCyan: #11a8cd;
+  --vscode-testing-iconPassed: #73c991;
+  --vscode-textBlockQuote-border: #616161;
+  --vscode-textCodeBlock-background: #2b2b2b;
+  --vscode-textLink-activeForeground: #4daafc;
+  --vscode-textLink-foreground: #4daafc;
+  --vscode-toolbar-hoverBackground: rgba(90, 93, 94, 0.31);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --vscode-foreground: #3b3b3b;
+    --vscode-descriptionForeground: #6f6f6f;
+    --vscode-disabledForeground: #a0a0a0;
+    --vscode-errorForeground: #d13438;
+    --vscode-focusBorder: #005fb8;
+    --vscode-widget-border: #e5e5e5;
+    --vscode-widget-shadow: rgba(0, 0, 0, 0.16);
+    --vscode-panel-border: #e5e5e5;
+    --vscode-panelTitle-activeBorder: #005fb8;
+    --vscode-sideBar-background: #f8f8f8;
+    --vscode-editor-background: #ffffff;
+    --vscode-editorWidget-background: #f8f8f8;
+    --vscode-editorWarning-foreground: #bf8803;
+    --vscode-badge-background: #cccccc;
+    --vscode-badge-foreground: #3b3b3b;
+    --vscode-button-background: #005fb8;
+    --vscode-button-foreground: #ffffff;
+    --vscode-button-hoverBackground: #0258a8;
+    --vscode-button-border: rgba(0, 0, 0, 0.1);
+    --vscode-button-secondaryBackground: #e5e5e5;
+    --vscode-button-secondaryForeground: #3b3b3b;
+    --vscode-button-secondaryHoverBackground: #cccccc;
+    --vscode-charts-blue: #1a85ff;
+    --vscode-charts-green: #388a34;
+    --vscode-charts-purple: #652d90;
+    --vscode-charts-red: #e51400;
+    --vscode-charts-yellow: #bf8803;
+    --vscode-dropdown-background: #ffffff;
+    --vscode-dropdown-foreground: #3b3b3b;
+    --vscode-editorSuggestWidget-background: #f8f8f8;
+    --vscode-editorSuggestWidget-border: #c8c8c8;
+    --vscode-editorSuggestWidget-foreground: #3b3b3b;
+    --vscode-editorSuggestWidget-selectedBackground: #e8e8e8;
+    --vscode-editorSuggestWidget-selectedForeground: #000000;
+    --vscode-gitDecoration-modifiedResourceForeground: #895503;
+    --vscode-input-background: #ffffff;
+    --vscode-input-border: #cecece;
+    --vscode-input-foreground: #3b3b3b;
+    --vscode-input-placeholderForeground: #767676;
+    --vscode-inputValidation-warningBackground: #f6f5d2;
+    --vscode-list-activeSelectionBackground: #e8e8e8;
+    --vscode-list-activeSelectionForeground: #000000;
+    --vscode-list-dropBackground: #d6ebff;
+    --vscode-list-hoverBackground: #f2f2f2;
+    --vscode-list-inactiveSelectionBackground: #e4e6f1;
+    --vscode-menu-background: #ffffff;
+    --vscode-menu-border: #cecece;
+    --vscode-menu-foreground: #3b3b3b;
+    --vscode-menu-selectionBackground: #005fb8;
+    --vscode-menu-selectionForeground: #ffffff;
+    --vscode-menu-separatorBackground: #d4d4d4;
+    --vscode-notificationsInfoIcon-foreground: #1a85ff;
+    --vscode-scrollbarSlider-background: rgba(100, 100, 100, 0.4);
+    --vscode-terminal-ansiCyan: #0598bc;
+    --vscode-testing-iconPassed: #388a34;
+    --vscode-textBlockQuote-border: #e5e5e5;
+    --vscode-textCodeBlock-background: #f2f2f2;
+    --vscode-textLink-activeForeground: #005fb8;
+    --vscode-textLink-foreground: #005fb8;
+    --vscode-toolbar-hoverBackground: rgba(184, 184, 184, 0.31);
+  }
+}
+
+/* What a VSCode webview's own default style sheet does. */
+html, body {
+  background: var(--vscode-sideBar-background);
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+a { color: var(--vscode-textLink-foreground); }
+a:hover { color: var(--vscode-textLink-activeForeground); }
+code, pre { font-family: var(--vscode-editor-font-family); }

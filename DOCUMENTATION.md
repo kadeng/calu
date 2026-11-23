@@ -964,6 +964,42 @@ open in the web-based git browser that your project already uses (`web.git_url_t
   the page refuses the second save once, keeps its text and names the stored version. Saving
   again replaces the stored text.
 
+**The chat pane**
+
+`/pane` is the chat of the VSCode extension as a web page: the same transcript, composer,
+escalation cards, subagent tabs, session menu, slash commands and honesty menu. Open it in its
+own window, or embed it in another web application, for example next to a Jupyter notebook.
+`calu web` prints its address:
+
+```
+chat pane: http://calu.localhost:8800/pane#token=... (also in an iframe of a local app ...)
+```
+
+- **Project.** Add `&dir=/path/to/project` to the address (`#dir=...` without a token). The
+  pane attaches to the session of that folder, as VSCode does with its workspace folder, and
+  starts new sessions there. Without `dir` it uses the folder `calu web` was started in.
+- **Login.** The token after `#` is the login of `calu web`. The browser never sends the part
+  after `#` to a server; the pane keeps the token for the tab and removes it from the address.
+  Treat an address with the token like the token itself. When `calu web` signs browsers in
+  with the admin password, it prints the pane's address without a token: the pane then works in
+  its own window or in a frame of `calu web` after you signed in, not in a frame of another
+  site.
+- **Embedding.** Only `/pane` may be shown in a frame, and only by the origins in
+  `web.pane_frame_ancestors` (default: `calu web` itself, `http://localhost:*` and
+  `http://127.0.0.1:*`). For a Jupyter notebook on this machine:
+
+  ```python
+  from IPython.display import IFrame
+  IFrame("http://calu.localhost:8800/pane#token=...&dir=/home/me/project", width="100%", height=700)
+  ```
+
+- **Settings and checkers** open the full web interface in a separate window.
+- **Files.** A file link or "Open file" shows the file read-only, at the line. "Open diff" shows
+  the edit as a unified diff. The pane cannot change files.
+- **What the pane cannot do.** It cannot start the calu server (a browser has no terminal); it
+  shows the command to copy. It cannot end a session's calu process.
+- Each pane tab runs its own `calu ide` bridge inside `calu web`; at most eight run at a time.
+
 **Other behaviour**
 
 - Pages that change something need JavaScript. Pages that reload themselves do not reload

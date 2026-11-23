@@ -4157,6 +4157,31 @@ def _web_token_line(host: str, port: int, token: str, has_admin_password: bool) 
     return line
 
 
+def _pane_line(host: str, port: int, token: str | None) -> str:
+    """Build the line of `calu web` that names the chat pane (agent/records/PLAN.md D261).
+
+    Args:
+        host: The host name the interface is opened under.
+        port: Its port.
+        token: The login token to put into the address's fragment, for an iframe of another
+            site (the browser never sends a fragment to a server); None when the browser signs
+            in with the admin password, which a frame of another site cannot use.
+
+    Returns:
+        One line with the pane's address.
+    """
+    base = f"http://{host}:{port}/pane"
+    if token is None:
+        return (
+            f"chat pane: {base} (in its own window or a frame of this interface, after signing "
+            "in; add #dir=/path/to/project to start in a project)"
+        )
+    return (
+        f"chat pane: {base}#token={token} (also in an iframe of a local app such as Jupyter; "
+        "add &dir=/path/to/project to start in a project)"
+    )
+
+
 def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
     """Serve the web interface: every session of every host, their history, the checkers.
 
@@ -4217,7 +4242,9 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
         db = ReopeningDb(await open_stored(url.decode()), lambda: open_stored(url.decode()))
         try:
             values = await admin.settings(db)
-            template = str((values.get("web") or {}).get("git_url_template") or "")
+            web_values = values.get("web") or {}
+            template = str(web_values.get("git_url_template") or "")
+            ancestors = web_values.get("pane_frame_ancestors") or None
             # The login token (D161): any local process could otherwise decide escalations,
             # Claude's own `curl` included. New on every start, never stored.
             token = secrets.token_urlsafe(24)
@@ -4235,6 +4262,10 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
                 token=token,
                 host_name=WEB_HOST_NAME,
                 check_password=functools.partial(is_admin_password, place) if by_password else None,
+                store=store,
+                pane_frame_ancestors=[str(a) for a in ancestors]
+                if isinstance(ancestors, list)
+                else None,
             )
             # Flushed: this is the one line a user needs, and the process then serves for
             # hours. Without it the address sits in a buffer whenever stdout is a pipe -- a
@@ -4247,6 +4278,7 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
                 )
             else:
                 print(_web_token_line(WEB_HOST_NAME, args.port, token, typed_password), flush=True)
+            print(_pane_line(WEB_HOST_NAME, args.port, None if by_password else token), flush=True)
             config = uvicorn.Config(
                 app,
                 host=args.host,

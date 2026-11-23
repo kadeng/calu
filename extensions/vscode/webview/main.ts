@@ -79,11 +79,16 @@ import { markdown } from './markdown';
 import { usagePanelSections } from '../src/shared/usagePanel';
 import { closePopup, closePopupIfOutside, openPopup, openPopupId, refreshPopup } from './popup';
 
-/** The API object that VSCode injects into webviews. */
+/**
+ * The API object that VSCode injects into webviews. The browser pane of `calu web` (`pane/`)
+ * defines `acquireVsCodeApi` itself and adds `onHostMessage`: it hands the host's messages over
+ * directly, so the pane listens to no `window` message event, which any other frame could send.
+ */
 interface VsCodeApi {
   postMessage(message: WebviewMessage): void;
   getState(): unknown;
   setState(state: unknown): void;
+  onHostMessage?(handler: (message: HostMessage) => void): void;
 }
 declare function acquireVsCodeApi(): VsCodeApi;
 
@@ -2271,7 +2276,8 @@ window.addEventListener('resize', () => {
   closePopup(false);
 });
 window.addEventListener('blur', () => closePopup(false));
-window.addEventListener('message', (event: MessageEvent) => onHostMessage(event.data as HostMessage));
+if (vscode.onHostMessage) vscode.onHostMessage(onHostMessage);
+else window.addEventListener('message', (event: MessageEvent) => onHostMessage(event.data as HostMessage));
 // Save pending state before the webview is hidden or unloaded.
 window.addEventListener('pagehide', persistNow);
 document.addEventListener('visibilitychange', () => {
