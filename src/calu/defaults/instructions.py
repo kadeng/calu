@@ -4,8 +4,8 @@ A checker's prompt has these parts (agent/records/PLAN.md D181, D224):
 
     system/<route>.md         calu's own: the task, how to answer            fixed
     system/role.md,           soft guidance vs. hard guardrail; getting      fixed
-    system/evasion.md,        around safeguards; no secrets, personal data
-    system/disclosure.md      or outside content in the answer
+    system/evasion.md,        around safeguards; nothing from files outside
+    system/disclosure.md      the project in the answer
     <checker>.md              the user's: the project's rules, and the      `calu checker edit`
                               test triggers of the shipped defaults
     system/honesty-state.md   not to rely on unverified code                 fixed, honesty on
@@ -293,10 +293,9 @@ user. Fixed, so that no edit of a checker's instructions removes it."""
 
 
 DISCLOSURE_PART = "system/disclosure.md"
-"""The fixed part every checker and the honesty reviewer get: no field of their answer may hold
-a secret, an environment variable's value, personal data or content from outside the project
-directory (the owner's rule of 2026-11-23: what reaches Claude stays inside the project and free
-of secrets). Fixed, so that no edit of a checker's instructions removes it."""
+"""The fixed part every checker and the honesty reviewer get: the answer discloses no
+information from files outside the project directory (the owner's rule of 2026-11-23). Fixed,
+so that no edit of a checker's instructions removes it."""
 
 
 def compose_instructions(

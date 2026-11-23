@@ -354,11 +354,9 @@ Two more models work for the checkers and decide nothing:
   rules allow it ("run a command outside the sandbox only when it fails there"). An intent to
   deceive you always escalates. The narrator retells such plans in
   full.
-- **What a checker writes holds no secrets.** The fixed part of every checker and of the
-  honesty reviewer says: no reason, comment, note, finding or summary may contain a password,
-  token, key, the value of an environment variable, personal data, or content from outside the
-  project directory. A path outside the project may be named, its content not. Such values
-  become placeholders such as `[redacted: API key]`.
+- **Nothing from outside the project in a checker's answer.** The fixed part of every checker
+  and of the honesty reviewer says: do not disclose information from files outside the project
+  directory.
 - **No file of the repository is part of the prompt.** `AGENTS.md`, `CLAUDE.md` and skill
   descriptions can be written by the agent under review, so they are not a source of rules for
   the checkers. Project rules belong in the checker instructions. Claude Code itself reads
