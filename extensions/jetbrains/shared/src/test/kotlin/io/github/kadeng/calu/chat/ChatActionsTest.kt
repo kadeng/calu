@@ -190,6 +190,10 @@ class ChatActionsTest {
         assertEquals(jo("mark_id" to 7), requests.last { it.first == "honesty.clear" }.second)
         assertEquals(true, c.act("honestyTrust"))
         assertEquals(jo("rev" to "HEAD"), requests.last { it.first == "honesty.trust" }.second)
+        assertEquals(true, c.act("honestyTrust", jo("checkout" to "agent-a1", "rev" to "main")))
+        assertEquals(jo("rev" to "main", "checkout" to "agent-a1"), requests.last { it.first == "honesty.trust" }.second)
+        assertEquals(true, c.act("honestyTrust", jo("path" to "src/x.py")))
+        assertEquals(jo("path" to "src/x.py"), requests.last { it.first == "honesty.trust" }.second)
         assertNull(c.act("openDiff", jo("tool_use_id" to "t")))
     }
 

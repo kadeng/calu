@@ -198,13 +198,33 @@ suspend fun ChatController.honestyReview(): Boolean = run("The honesty review") 
 }
 
 /**
- * Record the commit that git HEAD names now as honest (`honesty.trust {rev: "HEAD"}`); it
- * becomes the baseline of the honesty state. The caller asks the confirmation first.
+ * Record a commit or one file's present content as honest (`honesty.trust`), and say in the chat
+ * what was recorded. A commit becomes the baseline of the honesty state. The caller asks the
+ * confirmation first.
  *
- * @return True if the session accepted the request.
+ * @param target `{}` for git HEAD, `{rev, checkout?}` for a commit (id, branch or tag; `checkout`
+ *   a worktree name), `{path}` for a file relative to the workspace (`rev` is then ignored).
+ * @return True if the session accepted the request; a rev that names no commit or an unreadable
+ *   file is an error notice in the chat.
  */
-suspend fun ChatController.honestyTrust(): Boolean =
-    run("Trusting HEAD") { supervisor.session("honesty.trust", buildJsonObject { put("rev", JsonPrimitive("HEAD")) }) }
+suspend fun ChatController.honestyTrust(target: JsonObject = EMPTY_OBJECT): Boolean {
+    val path = target.str("path")?.takeIf { it.isNotBlank() }
+    val rev = target.str("rev")?.takeIf { it.isNotBlank() } ?: "HEAD"
+    val checkout = target.str("checkout")?.takeIf { it.isNotBlank() }
+    val commit = rev + (checkout?.let { " in the worktree $it" } ?: "")
+    val params = if (path != null) {
+        buildJsonObject { put("path", JsonPrimitive(path)) }
+    } else {
+        buildJsonObject { put("rev", JsonPrimitive(rev)); checkout?.let { put("checkout", JsonPrimitive(it)) } }
+    }
+    return run(if (path != null) "Trusting $path" else "Trusting $commit") {
+        val result = supervisor.session("honesty.trust", params).asObj() ?: EMPTY_OBJECT
+        val id = result.str("commit_id")
+        val what = if (id != null) "Commit ${id.take(12)} ($commit)" else result.str("path") ?: path ?: commit
+        val now = if (id != null) "is trusted now; it is the baseline of the honesty state." else "is trusted now."
+        notice("info", if (result.bool("recorded")) "$what $now" else "$what was trusted already.")
+    }
+}
 
 /**
  * Clear one honesty mark (`honesty.clear`).
@@ -264,7 +284,7 @@ suspend fun ChatController.comment(input: CommentInput): Boolean {
  *     unlock {}                     refreshUsage {}               usagePanel {}
  *     retryServer {}                lookForServer {}    (after "The calu server stopped": Retry, the timer)
  *     rewind {turn, uuid?}          forkAt {turn, uuid?}          forkConversation {}
- *     sideAsk {question}            honestyReview {}              honestyTrust {}
+ *     sideAsk {question}            honestyReview {}              honestyTrust {rev?, checkout?, path?}
  *     honestyClear {mark_id}        comment {kind, path, side, start_line, end_line, after_text, text, before_text?, ref?}
  *
  * @param action The action's name.
@@ -298,7 +318,7 @@ suspend fun ChatController.act(action: String, args: JsonObject = EMPTY_OBJECT):
     "forkConversation" -> forkConversation()
     "sideAsk" -> sideAsk(args.str("question").orEmpty())
     "honestyReview" -> honestyReview()
-    "honestyTrust" -> honestyTrust()
+    "honestyTrust" -> honestyTrust(args)
     "honestyClear" -> args.int("mark_id")?.let { honestyClear(it) } ?: false
     "comment" -> comment(args)
     else -> null

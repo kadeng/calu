@@ -73,6 +73,9 @@ export const CALU_COMMANDS: readonly SlashCommand[] = [
     { value: 'track', description: 'Track marks and unreviewed files' },
     { value: 'enforce', description: 'Running project code and commits need a clean state' },
   ]),
+  command('trust', 'calu', 'Trust a commit as honest: /trust [worktree] [commit, branch or tag] (default HEAD)'),
+  command('trust-file', 'calu', "Trust a file's present content as honest: /trust-file [path]"),
+  command('honesty-review', 'calu', 'Review the unreviewed and marked files for honesty now'),
   command('checkers', 'calu', 'Edit the instructions of a checker'),
   command('checker-context', 'calu', 'Show the conversation as the checkers see it'),
   command('sessions', 'calu', 'Switch to another running session'),
@@ -209,6 +212,16 @@ export function resolveSlash(text: string, attachedId: string | null): SlashResu
     case 'honesty':
       if (!arg) return { kind: 'ui', action: 'honesty' };
       return (HONESTY_MODES as readonly string[]).includes(arg) ? { kind: 'message', message: { type: 'setHonestyMode', mode: arg as HonestyMode } } : badValue();
+    case 'trust': {
+      // As in `calu attach`: "/trust", "/trust REV" or "/trust WORKTREE REV"; the host asks first.
+      const target = trustArgs(arg);
+      if (!target) return { kind: 'error', text: '/trust takes at most a worktree and a commit, branch or tag.' };
+      return needsSession({ type: 'honestyTrust', ...target });
+    }
+    case 'trust-file':
+      return needsSession(arg ? { type: 'honestyTrust', path: arg } : { type: 'honestyTrust', ask: 'file' });
+    case 'honesty-review':
+      return needsSession({ type: 'honestyReview' });
     case 'checkers':
       return { kind: 'message', message: { type: 'editChecker' } };
     case 'checker-context':
@@ -228,4 +241,19 @@ export function resolveSlash(text: string, attachedId: string | null): SlashResu
     default:
       return { kind: 'chat' };
   }
+}
+
+/**
+ * Read the arguments of `/trust` the way `calu attach` reads them: none (HEAD), "REV", or
+ * "WORKTREE REV". REV is a commit id, a branch or a tag; WORKTREE a name that the honesty state
+ * lists.
+ *
+ * @param text The arguments as typed (may be blank).
+ * @returns `{}` for none, `{rev}` for one word, `{checkout, rev}` for two; `undefined` for more.
+ */
+export function trustArgs(text: string): { rev?: string; checkout?: string } | undefined {
+  const words = text.split(/\s+/).filter((w) => w !== '');
+  if (words.length > 2) return undefined;
+  if (words.length === 2) return { checkout: words[0], rev: words[1] };
+  return words.length === 1 ? { rev: words[0] } : {};
 }

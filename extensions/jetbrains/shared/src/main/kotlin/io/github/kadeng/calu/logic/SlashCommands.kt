@@ -25,6 +25,9 @@
  *     /new               Act("start", {kind: "new"})       /sessions      Ui("sessions")
  *     /fork              Act("forkConversation", {})       /rename        Ui("rename")
  *     /interrupt         Act("interrupt", {})              /settings      Ui("settings")
+ *     /trust [WT] [REV]  Act("honestyTrust", {checkout?, rev?})   (the chat asks for confirmation)
+ *     /trust-file PATH   Act("honestyTrust", {path})       /trust-file    Ui("trustFile")
+ *     /honesty-review    Act("honestyReview", {})
  */
 package io.github.kadeng.calu.logic
 
@@ -105,6 +108,9 @@ val CALU_COMMANDS: List<SlashCommand> = listOf(
             SlashValue("enforce", "Running project code and commits need a clean state"),
         ),
     ),
+    SlashCommand("trust", "Trust a commit as honest: /trust [worktree] [commit, branch or tag] (default HEAD)", "calu"),
+    SlashCommand("trust-file", "Trust a file's present content as honest: /trust-file [path]", "calu"),
+    SlashCommand("honesty-review", "Review the unreviewed and marked files for honesty now", "calu"),
     SlashCommand("checkers", "Edit the instructions of a checker", "calu"),
     SlashCommand("checker-context", "Show the conversation as the checkers see it", "calu"),
     SlashCommand("sessions", "Switch to another running session", "calu"),
@@ -204,7 +210,8 @@ sealed interface SlashResult {
      * Open a part of the view (the command needs a choice or another input).
      *
      * @property action "sessions", "model", "effort", "level", "permission", "honesty", "checkers" (the list
-     *   of checkers to edit), "rename" (ask the new name of the attached session) or "settings".
+     *   of checkers to edit), "rename" (ask the new name of the attached session), "settings" or
+     *   "trustFile" (ask which file to trust as honest).
      */
     data class Ui(val action: String) : SlashResult
 
@@ -271,6 +278,10 @@ fun resolveSlash(text: String, attachedId: String?): SlashResult {
             value in HONESTY_MODES -> SlashResult.Act("setHonesty", arg("mode", value))
             else -> badValue
         }
+        "trust" -> trustArgs(value)?.let { needsSession(SlashResult.Act("honestyTrust", it)) }
+            ?: SlashResult.Error("/trust takes at most a worktree and a commit, branch or tag.")
+        "trust-file" -> needsSession(if (value.isEmpty()) SlashResult.Ui("trustFile") else SlashResult.Act("honestyTrust", arg("path", value)))
+        "honesty-review" -> needsSession(SlashResult.Act("honestyReview"))
         "checkers" -> SlashResult.Ui("checkers")
         "checker-context" -> needsSession(SlashResult.Act("showContext"))
         "sessions" -> SlashResult.Ui("sessions")
@@ -280,5 +291,23 @@ fun resolveSlash(text: String, attachedId: String?): SlashResult {
         "settings" -> SlashResult.Ui("settings")
         "interrupt" -> needsSession(SlashResult.Act("interrupt"))
         else -> SlashResult.Chat
+    }
+}
+
+/**
+ * Read the arguments of `/trust` the way `calu attach` reads them: none (HEAD), "REV", or
+ * "WORKTREE REV". REV is a commit id, a branch or a tag; WORKTREE a name that the honesty state
+ * lists.
+ *
+ * @param text The arguments as typed (may be blank).
+ * @return `{}` for none, `{rev}` for one word, `{checkout, rev}` for two; null for more.
+ */
+fun trustArgs(text: String): JsonObject? {
+    val words = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    return when (words.size) {
+        0 -> EMPTY_OBJECT
+        1 -> arg("rev", words[0])
+        2 -> buildJsonObject { put("checkout", JsonPrimitive(words[0])); put("rev", JsonPrimitive(words[1])) }
+        else -> null
     }
 }

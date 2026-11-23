@@ -471,7 +471,7 @@ function permissionSelect(attached: boolean): HTMLSelectElement {
 
 /**
  * Build the content of the honesty menu: the mode, the open marks with "Clear", and the
- * actions "Review now" and "Trust HEAD".
+ * actions "Review now", "Trust HEAD", "Trust a commit or branch" and "Trust a file".
  *
  * @returns A `role="menu"` element.
  */
@@ -518,7 +518,11 @@ function buildHonestyMenu(): HTMLElement {
     review.disabled = !attached || h.review_running === true;
     const trust = actionButton('Trust HEAD…', 'post', { class: 'menu-item', role: 'menuitem', 'data-type': 'honestyTrust', title: 'Record the current git HEAD as honest (asks first)' });
     trust.disabled = !attached;
-    menu.append(el('div', 'menu-separator', undefined, { role: 'separator' }), review, trust);
+    const trustCommit = actionButton('Trust a commit or branch…', 'post', { class: 'menu-item', role: 'menuitem', 'data-type': 'honestyTrust', 'data-ask': 'rev', title: 'A commit id, branch or tag (asks first)' });
+    trustCommit.disabled = !attached;
+    const trustFile = actionButton('Trust a file…', 'post', { class: 'menu-item', role: 'menuitem', 'data-type': 'honestyTrust', 'data-ask': 'file', title: "Record a file's present content as honest (asks first)" });
+    trustFile.disabled = !attached;
+    menu.append(el('div', 'menu-separator', undefined, { role: 'separator' }), review, trust, trustCommit, trustFile);
   }
   return menu;
 }
@@ -1807,7 +1811,8 @@ function onClick(event: MouseEvent): void {
   const inPopup = actionEl.closest('.popup') !== null;
   switch (data.action) {
     case 'post':
-      vscode.postMessage({ type: data.type } as WebviewMessage);
+      // `data-ask` (the honesty menu's trust entries) asks the host to ask for a commit or a file.
+      vscode.postMessage({ type: data.type, ...(data.ask ? { ask: data.ask } : {}) } as WebviewMessage);
       if (inPopup && data.type !== 'refreshUsage' && data.type !== 'usagePanel') closePopup();
       return;
     case 'postJson':

@@ -140,8 +140,13 @@ export type WebviewMessage =
   | { type: 'setHonestyMode'; mode: HonestyMode }
   /** Run an honesty review of the attached session now (`honesty.review`). */
   | { type: 'honestyReview' }
-  /** Certify the workspace's git HEAD as honest (`honesty.trust {rev: "HEAD"}`). */
-  | { type: 'honestyTrust' }
+  /**
+   * Certify a commit or one file's present content as honest (`honesty.trust`), after a
+   * confirmation. Without fields: the workspace's git HEAD. `rev` (commit id, branch, tag) and
+   * `checkout` (a worktree name, as `calu attach`'s `/trust WT REV`) name a commit; `path` (relative
+   * to the workspace) names a file. `ask` makes the host ask for the commit or the file first.
+   */
+  | { type: 'honestyTrust'; rev?: string; checkout?: string; path?: string; ask?: 'rev' | 'file' }
   /** Close one open honesty mark by hand (`honesty.clear`). */
   | { type: 'honestyClear'; markId: number }
   /** Answer to `reportState` (tests): the webview's own copy of the state. */
@@ -217,7 +222,6 @@ const BARE_TYPES = [
   'unlock',
   'forkConversation',
   'honestyReview',
-  'honestyTrust',
   'cancelStart',
 ] as const;
 
@@ -327,6 +331,23 @@ export function parseWebviewMessage(raw: unknown): WebviewMessage | undefined {
     }
     case 'setHonestyMode':
       return HONESTY_MODES.includes(m.mode as HonestyMode) ? { type: 'setHonestyMode', mode: m.mode as HonestyMode } : undefined;
+    case 'honestyTrust': {
+      const rev = optional(m.rev);
+      const checkout = optional(m.checkout);
+      const path = optional(m.path);
+      const fields = [m.rev, m.checkout, m.path].filter((v) => v !== undefined);
+      if (fields.length !== [rev, checkout, path].filter((v) => v !== undefined).length) return undefined;
+      if (path !== undefined && (rev !== undefined || checkout !== undefined)) return undefined;
+      if ([rev, checkout, path].some((v) => v !== undefined && v.length > 1000)) return undefined;
+      if (m.ask !== undefined && m.ask !== 'rev' && m.ask !== 'file') return undefined;
+      return {
+        type: 'honestyTrust',
+        ...(rev !== undefined ? { rev } : {}),
+        ...(checkout !== undefined ? { checkout } : {}),
+        ...(path !== undefined ? { path } : {}),
+        ...(m.ask !== undefined ? { ask: m.ask } : {}),
+      };
+    }
     case 'honestyClear':
       return typeof m.markId === 'number' && Number.isInteger(m.markId) ? { type: 'honestyClear', markId: m.markId } : undefined;
     case 'stateReport':

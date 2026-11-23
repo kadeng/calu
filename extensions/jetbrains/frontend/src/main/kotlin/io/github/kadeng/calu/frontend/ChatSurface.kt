@@ -32,6 +32,7 @@ import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.JBPopupMenu
+import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.AnimatedIcon
@@ -44,6 +45,7 @@ import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import io.github.kadeng.calu.chat.RowAction
 import io.github.kadeng.calu.json.parseObjectOrNull
+import io.github.kadeng.calu.json.EMPTY_OBJECT
 import io.github.kadeng.calu.json.str
 import io.github.kadeng.calu.logic.CLAUDE_EFFORTS
 import io.github.kadeng.calu.logic.CLAUDE_MODELS
@@ -61,6 +63,7 @@ import io.github.kadeng.calu.logic.activityLine
 import io.github.kadeng.calu.logic.buildSessionPicks
 import io.github.kadeng.calu.logic.heldByAgent
 import io.github.kadeng.calu.logic.neutraliseBidi
+import io.github.kadeng.calu.logic.trustArgs
 import io.github.kadeng.calu.logic.otherOpenEscalations
 import io.github.kadeng.calu.logic.resolveItemAction
 import io.github.kadeng.calu.logic.sessionLabel
@@ -688,7 +691,11 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
     }
 
     override fun act(action: String, args: JsonObject) {
-        if (action == "start" && args.str("kind") == "new") newSession() else host.act(action, args)
+        when {
+            action == "start" && args.str("kind") == "new" -> newSession()
+            action == "honestyTrust" -> confirmTrust(args)
+            else -> host.act(action, args)
+        }
     }
 
     override fun slashUi(action: String) {
@@ -702,6 +709,7 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
             "checkers" -> chooseChecker(project, host)
             "rename" -> rename()
             "settings" -> showCaluSettings(project, host)
+            "trustFile" -> askTrustFile()
         }
     }
 
@@ -945,8 +953,63 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
         }
         menu.addSeparator()
         menu.add("Review Now").addActionListener { host.act("honestyReview") }
-        menu.add("Trust HEAD").addActionListener { host.act("honestyTrust") }
+        menu.add("Trust HEAD…").addActionListener { confirmTrust(EMPTY_OBJECT) }
+        menu.add("Trust a Commit or Branch…").addActionListener { askTrustCommit() }
+        menu.add("Trust a File…").addActionListener { askTrustFile() }
         menu.show(honesty, 0, honesty.height)
+    }
+
+    /**
+     * Ask whether to record a commit or a file as honest, and on "Trust" run `honestyTrust`.
+     *
+     * @param target `{}` for git HEAD, `{rev, checkout?}` for a commit, `{path}` for a file (as
+     *   `ChatController.honestyTrust` takes it).
+     */
+    private fun confirmTrust(target: JsonObject) {
+        val path = target.str("path")
+        val commit = (target.str("rev") ?: "HEAD") + (target.str("checkout")?.let { " in the worktree $it" } ?: "")
+        val (question, detail) = if (path != null) {
+            "Trust the present content of $path?" to "The file as it is now is recorded as honest; a later change makes it unreviewed again."
+        } else {
+            "Trust $commit?" to "The commit it names now is recorded as honest; it becomes the baseline of the honesty state."
+        }
+        val answer = Messages.showOkCancelDialog(project, "${neutraliseBidi(question)}\n\n$detail", "calu: Code Honesty", "Trust", "Cancel", Messages.getWarningIcon())
+        if (answer == Messages.OK) host.act("honestyTrust", target)
+    }
+
+    /** Ask for a commit ("REV" or "WORKTREE REV", as `/trust` in `calu attach`), then confirm it. */
+    private fun askTrustCommit() {
+        val text = Messages.showInputDialog(
+            project,
+            "A commit id, branch or tag. For a commit of a worktree, its name first: \"agent-a1b2 main\".",
+            "calu: Trust a Commit as Honest",
+            null,
+            "HEAD",
+            object : com.intellij.openapi.ui.InputValidatorEx {
+                override fun getErrorText(inputString: String): String? =
+                    if (trustArgs(inputString) == null) "At most a worktree and a commit, branch or tag." else null
+                override fun checkInput(inputString: String): Boolean = trustArgs(inputString) != null
+                override fun canClose(inputString: String): Boolean = checkInput(inputString)
+            },
+        ) ?: return
+        confirmTrust(trustArgs(text) ?: return)
+    }
+
+    /** Ask for a file (the selected editor's file is suggested, relative to the project), then confirm it. */
+    private fun askTrustFile() {
+        val selected = FileEditorManager.getInstance(project).selectedFiles.firstOrNull()?.path
+        val base = project.basePath
+        val suggestion = if (selected != null && base != null && selected.startsWith("$base/")) selected.removePrefix("$base/") else ""
+        val text = Messages.showInputDialog(
+            project,
+            "The file, relative to the project. Its present content is recorded as honest.",
+            "calu: Trust a File as Honest",
+            null,
+            suggestion,
+            null,
+        )?.trim()
+        if (text.isNullOrEmpty()) return
+        confirmTrust(buildJsonObject { put("path", JsonPrimitive(text)) })
     }
 
     /**

@@ -75,7 +75,7 @@ describe('parseWebviewMessage', () => {
     for (const type of [
       'ready', 'attach', 'newSession', 'refreshSessions', 'detach', 'startServer', 'retryServer', 'copyServerCommand', 'install',
       'restartBridge', 'openSettings', 'showContext', 'refreshUsage', 'interrupt', 'showLog', 'unlock',
-      'forkConversation', 'honestyReview', 'honestyTrust',
+      'forkConversation', 'honestyReview',
     ]) {
       expect(parseWebviewMessage({ type, extra: 'dropped' })).toEqual({ type });
     }
@@ -160,5 +160,22 @@ describe('parseWebviewMessage', () => {
     ]) {
       expect(parseWebviewMessage(bad), JSON.stringify(bad)?.slice(0, 80)).toBeUndefined();
     }
+  });
+});
+
+describe('honestyTrust', () => {
+  it('takes a commit, a commit in a worktree, a file, or a request to ask', () => {
+    expect(parseWebviewMessage({ type: 'honestyTrust' })).toEqual({ type: 'honestyTrust' });
+    expect(parseWebviewMessage({ type: 'honestyTrust', rev: ' main ', checkout: 'wt' })).toEqual({ type: 'honestyTrust', rev: 'main', checkout: 'wt' });
+    expect(parseWebviewMessage({ type: 'honestyTrust', path: 'src/x.py' })).toEqual({ type: 'honestyTrust', path: 'src/x.py' });
+    expect(parseWebviewMessage({ type: 'honestyTrust', ask: 'rev' })).toEqual({ type: 'honestyTrust', ask: 'rev' });
+  });
+
+  it('refuses a file together with a commit, blank or wrong fields, and other questions', () => {
+    expect(parseWebviewMessage({ type: 'honestyTrust', path: 'x.py', rev: 'HEAD' })).toBeUndefined();
+    expect(parseWebviewMessage({ type: 'honestyTrust', rev: ' ' })).toBeUndefined();
+    expect(parseWebviewMessage({ type: 'honestyTrust', rev: 3 })).toBeUndefined();
+    expect(parseWebviewMessage({ type: 'honestyTrust', ask: 'all' })).toBeUndefined();
+    expect(parseWebviewMessage({ type: 'honestyTrust', path: 'x'.repeat(1001) })).toBeUndefined();
   });
 });

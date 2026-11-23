@@ -95,6 +95,24 @@
         "icon": "$(repo-forked)"
       },
       {
+        "command": "calu.honestyTrustCommit",
+        "title": "Trust a Commit or Branch as Honest…",
+        "category": "calu",
+        "icon": "$(git-commit)"
+      },
+      {
+        "command": "calu.honestyTrustFile",
+        "title": "Trust This File as Honest",
+        "category": "calu",
+        "icon": "$(verified)"
+      },
+      {
+        "command": "calu.honestyReview",
+        "title": "Run an Honesty Review Now",
+        "category": "calu",
+        "icon": "$(checklist)"
+      },
+      {
         "command": "calu.unlock",
         "title": "Unlock (Enter calu's Password)",
         "category": "calu",
@@ -192,6 +210,18 @@
         {
           "command": "calu.addComment",
           "when": "editorTextFocus",
+          "group": "9_calu@1"
+        },
+        {
+          "command": "calu.honestyTrustFile",
+          "when": "resourceScheme == file",
+          "group": "9_calu@2"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "calu.honestyTrustFile",
+          "when": "resourceScheme == file && !explorerResourceIsFolder",
           "group": "9_calu@1"
         }
       ],

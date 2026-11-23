@@ -9,7 +9,7 @@ const table = allCommands();
 describe('command table', () => {
   it('holds the extension commands and the built-in Claude Code commands, sorted', () => {
     expect(CALU_COMMANDS.map((c) => c.name)).toEqual([
-      'model', 'effort', 'level', 'mode', 'honesty', 'checkers', 'checker-context', 'sessions', 'new', 'fork', 'rename', 'settings', 'interrupt',
+      'model', 'effort', 'level', 'mode', 'honesty', 'trust', 'trust-file', 'honesty-review', 'checkers', 'checker-context', 'sessions', 'new', 'fork', 'rename', 'settings', 'interrupt',
     ]);
     // No /help: a session without a terminal answers that it is not available.
     expect(CLAUDE_COMMANDS.map((c) => c.name)).toEqual(['compact', 'clear', 'usage', 'context', 'cost']);
@@ -118,5 +118,35 @@ describe('Markdown rendering', () => {
     expect(renderMarkdownHtml('[x](javascript:alert(1))')).not.toContain('href="javascript:');
     expect(renderMarkdownHtml('[x](file:///etc/passwd)')).not.toContain('href="file:');
     expect(renderMarkdownHtml('see https://example.org now')).toContain('<a href="https://example.org">');
+  });
+});
+
+describe('the honesty commands of calu attach', () => {
+  it('/trust names HEAD, a commit or a commit in a worktree, as in the terminal client', () => {
+    expect(resolveSlash('/trust', 's1')).toEqual({ kind: 'message', message: { type: 'honestyTrust' } });
+    expect(resolveSlash('/trust main', 's1')).toEqual({ kind: 'message', message: { type: 'honestyTrust', rev: 'main' } });
+    expect(resolveSlash('/trust agent-a1 9f2c1b7', 's1')).toEqual({
+      kind: 'message',
+      message: { type: 'honestyTrust', checkout: 'agent-a1', rev: '9f2c1b7' },
+    });
+    expect(resolveSlash('/trust a b c', 's1').kind).toBe('error');
+    expect(resolveSlash('/trust', null).kind).toBe('error');
+  });
+
+  it('/trust-file names a file or asks for one; /honesty-review starts a review', () => {
+    expect(resolveSlash('/trust-file src/a b.py', 's1')).toEqual({
+      kind: 'message',
+      message: { type: 'honestyTrust', path: 'src/a b.py' },
+    });
+    expect(resolveSlash('/trust-file', 's1')).toEqual({ kind: 'message', message: { type: 'honestyTrust', ask: 'file' } });
+    expect(resolveSlash('/honesty-review', 's1')).toEqual({ kind: 'message', message: { type: 'honestyReview' } });
+  });
+
+  it('every message they post passes the host\'s check unchanged', () => {
+    for (const text of ['/trust', '/trust main', '/trust wt v1.2', '/trust-file x.py', '/trust-file', '/honesty-review']) {
+      const result = resolveSlash(text, 's1');
+      if (result.kind !== 'message') throw new Error(text);
+      expect(parseWebviewMessage(JSON.parse(JSON.stringify(result.message)))).toEqual(result.message);
+    }
   });
 });

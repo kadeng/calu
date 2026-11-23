@@ -1735,6 +1735,12 @@ In a client attached to the session:
 /honesty track              set honesty.mode (off, track, enforce)
 ```
 
+The chats of VSCode and PyCharm take `/trust`, `/trust-file` and `/honesty-review` with the same
+arguments; there, `/honesty` without an argument opens the honesty menu, and `/trust-file`
+without a path asks for one. The honesty menu of both IDEs has "Trust HEAD…", "Trust a commit or
+branch…" and "Trust a file…". VSCode also offers "Trust This File as Honest" in the context
+menus of the explorer and the editor. Every trust asks for confirmation first.
+
 On the command line, with the `operator` or `admin` credential:
 
 ```bash
@@ -2206,8 +2212,9 @@ checkout. With a worktree's name first, it resolves it in that worktree:
 `/trust agent-a1b2 HEAD` certifies the commit the worktree's `HEAD` names. The full-screen
 client completes the names with Tab, the line client lists them in `/honesty`, and the answer
 names the checkout Calu used. A worktree inside `.claude/worktrees/` goes by its directory name,
-any other by its path. The "Trust HEAD" buttons of the web interface and the IDE extensions
-certify the main checkout's `HEAD`.
+any other by its path. The "Trust HEAD" button of the web interface certifies the main
+checkout's `HEAD`. The IDE chats take `/trust` with the same arguments, and their "Trust a
+commit or branch…" entry takes the same text ("agent-a1b2 HEAD").
 
 The session trace does not name a step's checkout; the tool input shows the paths.
 

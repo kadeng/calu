@@ -964,6 +964,14 @@ escalation resolved from the database alone.
    and text inside a code block stay plain. In VSCode a path outside the workspace folder
    (`../../x.py`) opens nothing; in PyCharm's SSH mode a path outside the server's project
    directory gives the notice that the file is not on this machine.
+51. Trusting commits and files from the IDEs (VSCode and PyCharm), in a git project with honesty
+   `track` and a worktree. In the chat: `/trust` asks "Trust HEAD?" and after "Trust" the chat says
+   which commit is trusted; `/trust main`, `/trust <worktree> HEAD` and `/trust <commit id>` do the
+   same for that commit; `/trust a b c` shows an error at the input; `/trust-file src/x.py` asks and
+   then trusts the file; `/trust-file` alone asks for the path (the open editor's file is
+   suggested); `/honesty-review` starts a review. "Cancel" records nothing (`calu honesty trusted`).
+   The honesty menu's "Trust HEAD…", "Trust a commit or branch…" and "Trust a file…" do the same.
+   VSCode only: "Trust This File as Honest" in the explorer's and the editor's context menu.
 
 ## Measuring the checkers
 

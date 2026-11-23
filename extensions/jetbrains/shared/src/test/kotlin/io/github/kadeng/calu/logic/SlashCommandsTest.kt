@@ -12,7 +12,7 @@ class SlashCommandsTest {
     @Test
     fun `holds the plugin commands and the built-in Claude Code commands, sorted`() {
         assertEquals(
-            listOf("model", "effort", "level", "mode", "honesty", "checkers", "checker-context", "sessions", "new", "fork", "rename", "settings", "interrupt"),
+            listOf("model", "effort", "level", "mode", "honesty", "trust", "trust-file", "honesty-review", "checkers", "checker-context", "sessions", "new", "fork", "rename", "settings", "interrupt"),
             CALU_COMMANDS.map { it.name },
         )
         // No /help: a session without a terminal answers that it is not available.
@@ -109,5 +109,17 @@ class SlashCommandsTest {
             assertTrue(result is SlashResult.Error && result.text.contains("needs an attached session"), text)
         }
         assertEquals(SlashResult.Ui("settings"), resolveSlash("/settings", null))
+    }
+
+    @Test
+    fun `the honesty commands of calu attach name a commit, a file or a review`() {
+        assertEquals(SlashResult.Act("honestyTrust", jo()), resolveSlash("/trust", "s1"))
+        assertEquals(SlashResult.Act("honestyTrust", jo("rev" to "main")), resolveSlash("/trust main", "s1"))
+        assertEquals(SlashResult.Act("honestyTrust", jo("checkout" to "agent-a1", "rev" to "9f2c1b7")), resolveSlash("/trust agent-a1 9f2c1b7", "s1"))
+        assertTrue(resolveSlash("/trust a b c", "s1") is SlashResult.Error)
+        assertTrue(resolveSlash("/trust", null) is SlashResult.Error)
+        assertEquals(SlashResult.Act("honestyTrust", jo("path" to "src/a b.py")), resolveSlash("/trust-file src/a b.py", "s1"))
+        assertEquals(SlashResult.Ui("trustFile"), resolveSlash("/trust-file", "s1"))
+        assertEquals(SlashResult.Act("honestyReview"), resolveSlash("/honesty-review", "s1"))
     }
 }

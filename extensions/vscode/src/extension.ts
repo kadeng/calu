@@ -39,6 +39,7 @@ import { flagsForLevel } from './shared/levels';
 import type { ChatSettings, WebviewMessage } from './shared/messages';
 import { rootInstallCommand } from './shared/serverCommand';
 import type { FixAction } from './shared/settingsModel';
+import { trustArgs } from './shared/slashCommands';
 import { isSourceRef, splitLine } from './shared/sourceRefs';
 import { isAttached, isKnownFile, own, sessionTitle, sideHistory, type ViewEvent } from './shared/viewState';
 
@@ -204,6 +205,67 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
       notice('error', `${what} failed: ${errorText(error)}`);
       return false;
     }
+  }
+
+  /**
+   * Certify a commit or a file's present content as honest for the user (`honesty.trust`).
+   *
+   * Side effects: with `ask`, an input box asks for the commit ("REV" or "WORKTREE REV", as
+   * `/trust` in `calu attach`) or the file (the active editor's file is suggested). A modal
+   * dialog then asks for confirmation; only "Trust" sends the request, and a notice in the chat
+   * says what was recorded. Errors (no attached session, a rev that names no commit, an unreadable
+   * file) are shown as a notice by `run`.
+   *
+   * @param target The `honestyTrust` message: no fields for HEAD, `rev` and `checkout` for a
+   *   commit, `path` (relative to the workspace, or absolute) for a file, `ask` to ask first.
+   * @returns Nothing; cancelling a box or the dialog does nothing.
+   */
+  async function trustHonesty(target: Extract<WebviewMessage, { type: 'honestyTrust' }>): Promise<void> {
+    let { rev, checkout, path } = target;
+    if (target.ask === 'rev') {
+      const typed = await vscode.window.showInputBox({
+        title: 'calu: trust a commit as honest',
+        prompt: 'A commit id, branch or tag. For a commit of a worktree, its name first: "agent-a1b2 main".',
+        value: 'HEAD',
+        ignoreFocusOut: true,
+        validateInput: (text) => (trustArgs(text) ? undefined : 'At most a worktree and a commit, branch or tag.'),
+      });
+      const words = typed === undefined ? undefined : trustArgs(typed);
+      if (!words) return;
+      ({ rev, checkout } = words);
+    } else if (target.ask === 'file') {
+      const active = vscode.window.activeTextEditor?.document.uri;
+      const typed = await vscode.window.showInputBox({
+        title: 'calu: trust a file as honest',
+        prompt: "The file, relative to the workspace. Its present content is recorded as honest.",
+        value: active?.scheme === 'file' ? vscode.workspace.asRelativePath(active, false) : '',
+        ignoreFocusOut: true,
+      });
+      if (!typed?.trim()) return;
+      path = typed.trim();
+    }
+    const commit = `${rev ?? 'HEAD'}${checkout ? ` in the worktree ${checkout}` : ''}`;
+    const choice = await vscode.window.showWarningMessage(
+      path !== undefined ? `calu: trust the present content of ${path}?` : `calu: trust ${commit}?`,
+      {
+        modal: true,
+        detail:
+          path !== undefined
+            ? 'The file as it is now is recorded as honest; a later change makes it unreviewed again.'
+            : 'The commit it names now is recorded as honest; it becomes the baseline of the honesty state.',
+      },
+      'Trust',
+    );
+    if (choice !== 'Trust') return;
+    await run(path !== undefined ? `Trusting ${path}` : `Trusting ${commit}`, async () => {
+      const result = await bridge.session(
+        'honesty.trust',
+        path !== undefined ? { path } : { rev: rev ?? 'HEAD', ...(checkout ? { checkout } : {}) },
+      );
+      const what = result.commit_id ? `Commit ${result.commit_id.slice(0, 12)} (${commit})` : (result.path ?? path ?? commit);
+      const now = result.commit_id ? 'is trusted now; it is the baseline of the honesty state.' : 'is trusted now.';
+      notice('info', result.recorded ? `${what} ${now}` : `${what} was trusted already.`);
+    });
   }
 
   /**
@@ -1142,21 +1204,9 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
           else notice('info', `The honesty review ran${result.problem ? `; ${result.problem}` : ' and judged every file'}. The honesty chip shows the state now.`);
         });
         return;
-      case 'honestyTrust': {
-        const choice = await vscode.window.showWarningMessage(
-          'calu: trust the current git HEAD?',
-          { modal: true, detail: 'The commit that HEAD names now is recorded as honest; it becomes the baseline of the honesty state.' },
-          'Trust HEAD',
-        );
-        if (choice === 'Trust HEAD') {
-          await run('Trusting HEAD', async () => {
-            const result = await bridge.session('honesty.trust', { rev: 'HEAD' });
-            const commit = result.commit_id ? `Commit ${result.commit_id.slice(0, 12)} (HEAD)` : 'HEAD';
-            notice('info', result.recorded ? `${commit} is trusted now; it is the baseline of the honesty state.` : `${commit} was trusted already.`);
-          });
-        }
+      case 'honestyTrust':
+        await trustHonesty(message);
         return;
-      }
       case 'honestyClear':
         await run('Clearing the mark', () => bridge.session('honesty.clear', { mark_id: message.markId }));
         return;
@@ -1175,13 +1225,14 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
    * Register a command that reports a failure as an error message.
    *
    * @param id The command id from package.json.
-   * @param handler The command's body.
+   * @param handler The command's body; it gets the file a context menu was opened on, if any.
    * @returns The registration.
    */
-  const command = (id: string, handler: () => unknown): vscode.Disposable =>
-    vscode.commands.registerCommand(id, async () => {
+  const command = (id: string, handler: (uri?: vscode.Uri) => unknown): vscode.Disposable =>
+    vscode.commands.registerCommand(id, async (arg?: unknown) => {
       try {
-        await handler();
+        // A context menu passes the file it was opened on; a palette or a key binding nothing.
+        await handler(arg instanceof vscode.Uri ? arg : undefined);
       } catch (error) {
         void vscode.window.showErrorMessage(`calu: ${errorText(error)}`);
       }
@@ -1219,6 +1270,13 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
     }),
     command('calu.detach', () => sessions.detach()),
     command('calu.forkConversation', () => forkConversation()),
+    command('calu.honestyTrustCommit', () => trustHonesty({ type: 'honestyTrust', ask: 'rev' })),
+    command('calu.honestyReview', () => handleWebviewMessage({ type: 'honestyReview' })),
+    // From the explorer's or the editor's context menu the file comes as an argument.
+    command('calu.honestyTrustFile', (uri) => {
+      const path = uri?.scheme === 'file' ? vscode.workspace.asRelativePath(uri, false) : undefined;
+      return trustHonesty(path ? { type: 'honestyTrust', path } : { type: 'honestyTrust', ask: 'file' });
+    }),
     command('calu.unlock', () => unlock()),
     command('calu.interrupt', () => bridge.session('interrupt', {})),
     command('calu.addComment', () => addCommentCommand(bridge, inputBoxProvider)),
