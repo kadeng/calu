@@ -74,7 +74,8 @@ MAX_MATCHES = 60
 MAX_PATHS = 200
 """Paths `find_files` returns at most."""
 MAX_SCAN = 2_000
-"""Files one `find_files` or `grep_files` call looks at at most."""
+"""Files one `find_files` or `grep_files` call looks at at most. Only files below the fixed
+directory part of the glob count (`_glob_base`): "plugins/**/*.py" scans `plugins/` alone."""
 MAX_CHANGED = 200
 """Changed paths one `changed_files` call reports at most."""
 MAX_STEPS = 100
@@ -259,14 +260,18 @@ class CodeTools:
             limit: Maximum number of paths to return.
 
         Returns:
-            One path per line, or a message saying that nothing matched.
+            One path per line, or a message saying that nothing matched. A line in brackets
+            at the end says that the list may be incomplete and why.
         """
         if len(pattern) > MAX_PATTERN_CHARS:
             return f"the pattern is longer than {MAX_PATTERN_CHARS} characters"
-        found = await anyio.to_thread.run_sync(self._find, pattern, max(1, min(limit, MAX_PATHS)))
+        found, notes = await anyio.to_thread.run_sync(
+            self._find, pattern, max(1, min(limit, MAX_PATHS))
+        )
+        tail = "".join(f"\n[{note}]" for note in notes)
         if not found:
-            return f"no project file matches {pattern!r}"
-        return "\n".join(found)
+            return f"no project file matches {pattern!r}{tail}"
+        return "\n".join(found) + tail
 
     async def grep_files(
         self,
@@ -544,14 +549,22 @@ class CodeTools:
             raise ReadRefused("not text (it holds NUL bytes)")
         return text.splitlines()
 
-    def _walk(self) -> Iterator[str]:
+    def _walk(self, base: tuple[str, ...] = (), stopped: list[str] | None = None) -> Iterator[str]:
         """Yield the project-relative paths of the files a checker may read.
 
         Blocking (directory listings): iterate it in a worker thread. Directories of
         `SKIP_DIRS` are left out. A symbolic link to a directory is never walked into; a link
         to a file is yielded only if `confine` accepts it, like every other entry, so nothing
         outside the project and nothing the read deny lists cover is yielded. At most
-        `MAX_SCAN` entries are visited, so one call cannot walk a huge tree.
+        `MAX_SCAN` files are visited, so one call cannot walk a huge tree.
+
+        Args:
+            base: Directory names from the project root (`_glob_base`); only that directory's
+                tree is walked, and only its files count towards `MAX_SCAN`. The walk starts at
+                the root all the same and enters only the directories on the way, so no link
+                is followed to get there.
+            stopped: If given, a note is appended to it when the walk ends at `MAX_SCAN`
+                before it has seen every file.
 
         Yields:
             Each regular file's path relative to the project root, with "/" separators,
@@ -570,12 +583,21 @@ class CodeTools:
             for entry in entries:
                 relative = f"{directory}/{entry.name}" if directory else entry.name
                 try:
+                    parts = tuple(relative.split("/"))
                     if entry.is_dir(follow_symlinks=False):
-                        if entry.name not in SKIP_DIRS:
+                        on_the_way = parts == base[: len(parts)] or parts[: len(base)] == base
+                        if entry.name not in SKIP_DIRS and on_the_way:
                             pending.append(relative)
                         continue
+                    if parts[: len(base)] != base or len(parts) <= len(base):
+                        continue  # a file on the way to the base directory
                     seen += 1
                     if seen > MAX_SCAN:
+                        if stopped is not None:
+                            stopped.append(
+                                f"the search stopped after {MAX_SCAN} files, so more files "
+                                "may match; start the glob with a directory to search less"
+                            )
                         return
                     if not self.confine(relative).is_file():
                         continue  # a link to a directory, a FIFO, a socket, a dangling link
@@ -583,7 +605,7 @@ class CodeTools:
                     continue
                 yield relative
 
-    def _find(self, pattern: str, limit: int) -> list[str]:
+    def _find(self, pattern: str, limit: int) -> tuple[list[str], list[str]]:
         """Collect the paths `find_files` returns. Blocking: call it in a worker thread.
 
         Args:
@@ -591,17 +613,23 @@ class CodeTools:
             limit: Maximum number of paths.
 
         Returns:
-            Up to `limit` matching paths, in walk order; fewer if the walk took longer than
-            `WALK_BUDGET_S`.
+            `(paths, notes)`: up to `limit` matching paths in walk order, and a note for each
+            reason the list may be incomplete (more than `limit` matches, the `MAX_SCAN` or
+            `WALK_BUDGET_S` limit reached). No note means every match is listed.
         """
         deadline = time.monotonic() + WALK_BUDGET_S
         found: list[str] = []
-        for relative in self._walk():
-            if len(found) >= limit or time.monotonic() > deadline:
+        notes: list[str] = []
+        for relative in self._walk(_glob_base(pattern), notes):
+            if time.monotonic() > deadline:
+                notes.append(f"the search stopped after {WALK_BUDGET_S:g} s; more files may match")
                 break
             if _matches(relative, pattern):
+                if len(found) >= limit:
+                    notes.append(f"more than {limit} files match; narrow the pattern")
+                    break
                 found.append(relative)
-        return found
+        return found, notes
 
     def _collect(
         self, pattern: str, path_glob: str, limit: int
@@ -628,7 +656,7 @@ class CodeTools:
         names: list[str] = []
         notes: list[str] = []
         total = large = 0
-        for relative in self._walk():
+        for relative in self._walk(_glob_base(path_glob), notes):
             if not _matches(relative, path_glob):
                 continue
             if time.monotonic() > deadline:
@@ -665,6 +693,34 @@ def _calu_config_dir() -> Path:
     """
     base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
     return Path(os.path.realpath(Path(base) / "calu"))
+
+
+def _glob_base(pattern: str) -> tuple[str, ...]:
+    """Return the directory names a glob starts with, before its first wildcard.
+
+    Only that directory's tree can hold a match, so the search tools walk nothing else.
+
+    Args:
+        pattern: A glob as `_matches` reads it.
+
+    Returns:
+        The leading segments without `*`, `?` or `[`, the last segment excluded (it names
+        files). () for a pattern without "/" (it matches at any depth) and for one with an
+        empty, "." or ".." segment.
+
+    Example:
+        `_glob_base("plugins/**/*.py")` is `("plugins",)`; `_glob_base("a/b/c.py")` is
+        `("a", "b")`; `_glob_base("**/*.py")` and `_glob_base("*.py")` are `()`.
+    """
+    segments = pattern.split("/")
+    if len(segments) < 2 or any(s in ("", ".", "..") for s in segments):
+        return ()
+    base: list[str] = []
+    for segment in segments[:-1]:
+        if any(char in segment for char in "*?["):
+            break
+        base.append(segment)
+    return tuple(base)
 
 
 def _matches(relative: str, pattern: str) -> bool:

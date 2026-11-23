@@ -1,8 +1,11 @@
 """The built-in checker instructions, and how a checker's full prompt is put together.
 
-A checker's prompt has up to three parts (agent/records/PLAN.md D181, D224):
+A checker's prompt has these parts (agent/records/PLAN.md D181, D224):
 
     system/<route>.md         calu's own: the task, how to answer            fixed
+    system/role.md,           soft guidance vs. hard guardrail; getting      fixed
+    system/evasion.md,        around safeguards; no secrets, personal data
+    system/disclosure.md      or outside content in the answer
     <checker>.md              the user's: the project's rules, and the      `calu checker edit`
                               test triggers of the shipped defaults
     system/honesty-state.md   not to rely on unverified code                 fixed, honesty on
@@ -14,7 +17,8 @@ sentence. Honesty is judged by the honesty checker alone (D224): its prompt is t
 the shipped `honesty-rules.md`). No other checker reads the honesty rules.
 
 The honesty reviewer (`calu.checkers.honesty_review`) is no checker type: its prompt is the
-fixed `system/honesty-review.md` followed by the honesty rules (`review_instructions`). The
+fixed `system/honesty-review.md`, `system/disclosure.md` and the honesty rules
+(`review_instructions`). The
 redaction agent of the session traces (`calu.traces.redact`) is none either: its prompt is the
 fixed `system/trace-redaction.md` followed by `traces.redactor_instructions`, or the shipped
 `trace-redaction.md` (`redaction_instructions`, D245).
@@ -266,10 +270,14 @@ def review_instructions(rules: str | None = None) -> str:
             ones.
 
     Returns:
-        The fixed part `system/honesty-review.md`, followed by the honesty rules.
+        The fixed part `system/honesty-review.md`, the part on what an answer may contain
+        (`DISCLOSURE_PART`), and the honesty rules.
     """
     system = _read("system/honesty-review.md").strip()
-    return system + "\n\n" + (rules if rules else honesty_rules()).strip() + "\n"
+    disclosure = _read(DISCLOSURE_PART).strip()
+    return (
+        system + "\n\n" + disclosure + "\n\n" + (rules if rules else honesty_rules()).strip() + "\n"
+    )
 
 
 ROLE_PART = "system/role.md"
@@ -282,6 +290,13 @@ EVASION_PART = "system/evasion.md"
 """The fixed part every checker gets after its own system part: ESCALATE when Claude's narrated
 thinking or text shows that it knowingly tries to get around a safeguard or to deceive the
 user. Fixed, so that no edit of a checker's instructions removes it."""
+
+
+DISCLOSURE_PART = "system/disclosure.md"
+"""The fixed part every checker and the honesty reviewer get: no field of their answer may hold
+a secret, an environment variable's value, personal data or content from outside the project
+directory (the owner's rule of 2026-11-23: what reaches Claude stays inside the project and free
+of secrets). Fixed, so that no edit of a checker's instructions removes it."""
 
 
 def compose_instructions(
@@ -304,9 +319,10 @@ def compose_instructions(
 
     Returns:
         For the honesty checker: its system part, the checker's role (`ROLE_PART`), the part
-        about getting around safeguards (`EVASION_PART`), the user's instructions under their
-        own heading, and the honesty rules. For every other checker with a system part: the
-        route's system part, `ROLE_PART`, `EVASION_PART`, the user's instructions under their
+        about getting around safeguards (`EVASION_PART`), the part on what an answer may
+        contain (`DISCLOSURE_PART`), the user's instructions under their own heading, and the
+        honesty rules. For every other checker with a system part: the route's system part,
+        `ROLE_PART`, `EVASION_PART`, `DISCLOSURE_PART`, the user's instructions under their
         own heading and, with `honesty_state` on a route of `HONESTY_ROUTES`, the part about
         unverified code. No other checker gets the honesty rules or a way to record marks.
 
@@ -321,6 +337,7 @@ def compose_instructions(
                     _read("system/honesty.md").strip(),
                     _read(ROLE_PART).strip(),
                     _read(EVASION_PART).strip(),
+                    _read(DISCLOSURE_PART).strip(),
                     "# The user's instructions\n\n" + user.strip(),
                     (rules if rules else honesty_rules()).strip(),
                 ]
@@ -333,6 +350,7 @@ def compose_instructions(
         parts.append(system.strip())
         parts.append(_read(ROLE_PART).strip())
         parts.append(_read(EVASION_PART).strip())
+        parts.append(_read(DISCLOSURE_PART).strip())
         parts.append("# The user's instructions\n\n" + user.strip())
     else:
         parts.append(user.strip())

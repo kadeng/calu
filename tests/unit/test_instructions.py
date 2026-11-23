@@ -3,6 +3,7 @@
 import pytest
 
 from calu.defaults.instructions import (
+    DISCLOSURE_PART,
     EVASION_PART,
     HONESTY_ROUTES,
     ROLE_PART,
@@ -12,6 +13,7 @@ from calu.defaults.instructions import (
     has_test_triggers,
     honesty_rules,
     legacy_instructions,
+    review_instructions,
     superseded_instructions,
     system_part,
     without_test_triggers,
@@ -88,7 +90,8 @@ def test_the_shipped_instructions_are_short(name: str) -> None:
 
     The command checker's limit is higher by the section on commands outside the sandbox
     (D255), and every limit by the fixed parts on the checker's role (`ROLE_PART`) and on
-    getting around safeguards (`EVASION_PART`), by the sentence on secrets in the summary
+    getting around safeguards (`EVASION_PART`) and on what an answer may contain
+    (`DISCLOSURE_PART`, 2026-11-23), by the sentence on secrets in the summary
     (`PRIVACY_WORDS`) and by the wording of reminders and suggestions (`SUGGEST_WORDS`), all of
     which the owner asked for after requirement 38.
 
@@ -97,7 +100,7 @@ def test_the_shipped_instructions_are_short(name: str) -> None:
     """
     route = "subagent" if name == "subagent-result" else name
     words = len(compose_instructions(route, default_instructions(name)).split())
-    evasion = len(read_part(EVASION_PART).split()) + len(read_part(ROLE_PART).split())
+    evasion = sum(len(read_part(p).split()) for p in (EVASION_PART, ROLE_PART, DISCLOSURE_PART))
     tasks = {"subagent-result": TASK_WORDS, "command": FILE_TASK_WORDS}.get(name, 0)
     shared = evasion + PRIVACY_WORDS + SUGGEST_WORDS
     assert words < (410 if name == "command" else 360) + shared + tasks, f"{name}: {words} words"
@@ -256,3 +259,25 @@ def test_every_checker_is_told_to_guide_softly_and_guard_hard(name: str) -> None
     prompt = compose_instructions(route, default_instructions(name), name=name)
     assert "# Your role" in prompt and "soft guidance" in prompt and "hard guardrail" in prompt
     assert prompt.index("# Your role") < prompt.index("# The user's instructions")
+
+
+@pytest.mark.parametrize("route", ["command", "edit", "changeset", "subagent", "honesty"])
+def test_every_checker_and_the_reviewer_may_not_pass_on_secrets(route: str) -> None:
+    """The owner's rule of 2026-11-23: what a checker writes for Claude holds no secret, no
+    environment variable's value, no personal data and nothing from outside the project.
+
+    The rule is a fixed part, so the user's own instructions cannot drop it.
+
+    Args:
+        route: The checker's route; "honesty" is the honesty checker.
+    """
+    part = read_part(DISCLOSURE_PART).strip()
+    for word in ("password", "token", "SSH key", "environment variable", "personal data"):
+        assert word in part
+    assert "outside the project directory" in part
+    name = "honesty" if route == "honesty" else ""
+    prompt = compose_instructions(route, "Nothing of the user's.", name=name)
+    assert part in prompt
+    # Before the user's part, which cannot take it back by coming first.
+    assert prompt.index(part) < prompt.index("# The user's instructions")
+    assert part in review_instructions()

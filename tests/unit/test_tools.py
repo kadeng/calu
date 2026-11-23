@@ -407,3 +407,41 @@ def test_a_glob_with_many_stars_is_matched_without_backtracking():
     assert _matches("src/b.py", "*.py") and not _matches("src/b.py", "*.md")
     assert _matches("a/b/c.txt", "**/*") and _matches("c.txt", "**/*")
     assert not _matches("src/b.py", "lib/**/*.py") and not _matches("src/b.py", "")
+
+
+async def test_find_files_reaches_a_deep_directory_in_a_large_project(tmp_path: Path):
+    """A script may load every file of a pattern in some directory; the checker must find them
+    all, also when the rest of the project has more files than one search scans."""
+    from calu.checkers.tools import MAX_SCAN
+
+    root = project(tmp_path)
+    bulk = root / "aaa_data"
+    bulk.mkdir()
+    for index in range(MAX_SCAN + 10):
+        (bulk / f"row{index}.txt").write_text("x\n")
+    deep = root / "zzz" / "plugins" / "extra"
+    deep.mkdir(parents=True)
+    (deep / "loader.py").write_text("def load(): pass\n")
+    (root / "zzz" / "plugins" / "base.py").write_text("def base(): pass\n")
+
+    answer = await call_tool(root, "find_files", {"pattern": "zzz/plugins/**/*.py"})
+    assert sorted(answer.splitlines()) == ["zzz/plugins/base.py", "zzz/plugins/extra/loader.py"]
+    found = await call_tool(root, "grep_files", {"pattern": "def ", "path_glob": "zzz/**/*.py"})
+    assert "loader.py" in found and "base.py" in found
+
+    # A search over everything says that it stopped, instead of looking complete.
+    everything = await call_tool(root, "find_files", {"pattern": "**/*.py", "limit": 200})
+    assert "the search stopped after" in everything
+    many = await call_tool(root, "find_files", {"pattern": "aaa_data/*.txt", "limit": 5})
+    assert len(many.splitlines()) == 6 and "more than 5 files match" in many
+
+
+def test_the_base_of_a_glob_is_its_fixed_directory_part():
+    from calu.checkers.tools import _glob_base
+
+    assert _glob_base("plugins/**/*.py") == ("plugins",)
+    assert _glob_base("a/b/c.py") == ("a", "b")
+    assert _glob_base("src/*/x/*.py") == ("src",)
+    assert _glob_base("**/*.py") == ()
+    assert _glob_base("*.py") == ()
+    assert _glob_base("../x/*.py") == () and _glob_base("a//b") == ()

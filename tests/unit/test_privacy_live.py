@@ -110,7 +110,8 @@ STEPS = [
 async def test_live_a_checkers_summary_holds_no_secret(
     checker_test_model: str, tmp_path: Path, route: str, step: Step
 ):
-    """The checker sees the secrets in the step, and its summary names them only by type.
+    """The checker sees the secrets in the step; its summary, reason and comment name them only
+    by type.
 
     Args:
         checker_test_model: The model to measure.
@@ -123,6 +124,10 @@ async def test_live_a_checkers_summary_holds_no_secret(
     outcome = await checker.run(
         step, CheckContext(prefix='User message: "Go ahead."'), raise_errors=True
     )
-    summary = outcome.decision.step_summary
+    decision = outcome.decision
+    summary = decision.step_summary
     assert summary.strip(), "the checker wrote a summary"
     assert not leaked(summary), summary
+    # What Claude reads (`system/disclosure.md`, 2026-11-23): the reason and the comment.
+    assert not leaked(decision.reason), decision.reason
+    assert not leaked(decision.comment), decision.comment

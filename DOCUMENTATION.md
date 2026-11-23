@@ -354,6 +354,11 @@ Two more models work for the checkers and decide nothing:
   rules allow it ("run a command outside the sandbox only when it fails there"). An intent to
   deceive you always escalates. The narrator retells such plans in
   full.
+- **What a checker writes holds no secrets.** The fixed part of every checker and of the
+  honesty reviewer says: no reason, comment, note, finding or summary may contain a password,
+  token, key, the value of an environment variable, personal data, or content from outside the
+  project directory. A path outside the project may be named, its content not. Such values
+  become placeholders such as `[redacted: API key]`.
 - **No file of the repository is part of the prompt.** `AGENTS.md`, `CLAUDE.md` and skill
   descriptions can be written by the agent under review, so they are not a source of rules for
   the checkers. Project rules belong in the checker instructions. Claude Code itself reads
@@ -362,7 +367,10 @@ Two more models work for the checkers and decide nothing:
   message had images, not what they show.
 - A checker has exactly five tools, and every one of them only reads: `read_file`,
   `find_files`, `grep_files`, and, for the changeset checker, `step_times` and `changed_files`.
-  With them a checker can look up who calls a function instead of guessing. `step_times`
+  With them a checker can look up who calls a function instead of guessing. `find_files` takes
+  recursive globs (`plugins/**/*.py`), so a checker can list what a script loads from a
+  directory tree. A search scans at most 2,000 files below the glob's fixed directory part and
+  says so when it stops early or finds more files than it lists. `step_times`
   reports the times at which the session's recent steps ran. `changed_files` reports the step
   that last changed each file. It derives the step from the file's change time (ctime), which
   an unprivileged process cannot forge.
