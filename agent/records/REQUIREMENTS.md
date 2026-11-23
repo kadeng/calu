@@ -55,7 +55,9 @@ broken down or extended. Derived requirements and design decisions belong in
     agents.
 21. calu is written in Python, first as a package installable with uv plus a binary.
 22. The model layer follows Pydantic AI's patterns and supports AWS Bedrock and the Anthropic
-    subscription out of the box.
+    subscription out of the box. (Changed by the owner on 2026-11-23, PLAN.md D258: the
+    subscription serves only the main coding agent through the `claude` CLI; checkers, narrator,
+    summarizer and honesty reviewer run only through Pydantic AI with API models.)
 23. calu has proper plugins for VSCode (which may be modelled on stay-in-the-loop's extension)
     and for the JetBrains IDEs (PyCharm, RustRover). Both offer a full coding-agent interface
     and the settings calu adds on top, and let the user connect or attach to sessions. Both

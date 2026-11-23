@@ -119,15 +119,6 @@ PRESETS: tuple[Preset, ...] = (
         _mistral_small(),
         "Needs MISTRAL_API_KEY in calu's env file (~/.config/calu/.env).",
     ),
-    Preset(
-        "claude-cli-haiku",
-        "Claude Code's own account · Haiku",
-        "Claude Code",
-        "claude:haiku",
-        "Needs no API key: the checks run through the `claude` program on this machine, "
-        "with the account it is signed in to, and count against that account's limits. "
-        "Checkers get no code tools with this model.",
-    ),
 )
 """The presets in the order an editor shows them."""
 

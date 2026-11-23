@@ -338,7 +338,7 @@ def child(env: Mapping[str, str] | None = None, keep: Sequence[str] = CHILD_KEEP
     """
     if _active is None:
         return {} if env is None else {"env": dict(env)}
-    # Imported here: `calu.config` reaches this module through `calu.claude_model`.
+    # Imported here, so that importing this module does not load `calu.config`.
     from calu.config import PROVIDER_KEYS
 
     spec = _active.spec("").model_copy(update={"keep": tuple(keep)})

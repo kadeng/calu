@@ -303,13 +303,11 @@ async def test_the_presets_need_no_database_and_hold_no_large_mistral_model(
         "bedrock-eu-haiku",
         "fireworks-nemotron",
         "mistral-small",
-        "claude-cli-haiku",
     ]
     assert by_id["default"]["model"] == ""
     assert by_id["anthropic-haiku"]["model"] == "anthropic:claude-haiku-5-5"
     assert by_id["bedrock-eu-haiku"]["model"] == BEDROCK_EU_HAIKU
     assert by_id["fireworks-nemotron"]["model"] == FIREWORKS_MODEL
-    assert by_id["claude-cli-haiku"]["model"] == "claude:haiku"
     assert "small" in by_id["mistral-small"]["model"]
     for preset in answer["presets"]:
         assert set(preset) == {"id", "label", "group", "model", "note"}

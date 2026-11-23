@@ -539,9 +539,9 @@ calu config models auto          # picks a model from the credentials it finds
 calu doctor --keys               # asks each provider whether its key is accepted
 ```
 
-Claude Code never sees the keys in `~/.config/calu/.env`. If you have a Claude subscription and
-no API key, `calu config models claude:haiku` makes the checkers use the machine's own Claude
-Code account. That arrangement has limits ([models and keys](#models-and-keys)).
+Claude Code never sees the keys in `~/.config/calu/.env`. The checkers need an API provider:
+a Claude subscription signs in only Claude Code, which runs the main conversation
+([models and keys](#models-and-keys)).
 
 **Step 4: register the project.** A project row carries the directory's own settings and its
 network policy:
@@ -3204,7 +3204,8 @@ how Calu keeps the checkers' keys from Claude Code.
 | Checkers, narrator, summarizer, honesty reviewer, trace redactor | a provider of their own | model strings in Calu's configuration; keys in `~/.config/calu/.env` |
 
 A Claude Code subscription authenticates the `claude` CLI, not API calls of other programs, so
-the checkers need a provider of their own. They are [Pydantic
+the checkers need a provider of their own. Calu runs the `claude` CLI only for the main
+conversation. The checkers are [Pydantic
 AI](https://pydantic.dev/docs/ai/models/overview/) agents: every provider Pydantic AI supports
 works (the Anthropic API, AWS Bedrock, Fireworks, Mistral, OpenAI, Google, Groq, OpenRouter, a
 local model through Ollama or vLLM). The model string starts with the provider's name
@@ -3215,8 +3216,7 @@ local model through Ollama or vLLM). The model string starts with the provider's
 ```bash
 calu config models auto                     # choose from the credentials found now
 calu config models default                  # store no model: every role uses the default below
-calu config models claude:haiku             # one model for every role
-calu config models anthropic:claude-haiku-5-5 --effort low
+calu config models anthropic:claude-haiku-5-5 --effort low   # one model for every role
 calu config set command_checker.model anthropic:claude-haiku-4-5    # one role
 calu config set edit_checker.model bedrock:eu.anthropic.claude-haiku-4-5-20251001-v1:0
 calu config set command_checker.effort low  # or "off" for no thinking
@@ -3256,26 +3256,14 @@ same during setup):
 - Calu works with providers that offer zero data retention. The guarantee is the provider's;
   Calu neither enables nor enforces it.
 
-### Checkers on the Claude Code account
+### No checkers on the Claude Code account
 
-With a subscription and no API key, a checker can run on the machine's own Claude Code
-account. A `claude:` model starts the `claude` CLI once per check in headless mode and reads
-its structured answer.
-
-```bash
-calu setup --checker-model claude:haiku        # a new setup, no checker key needed
-calu config set command_checker.model claude:haiku
-```
-
-| Limit | Detail |
-|---|---|
-| No tools | the CLI runs with `--tools ""`, so the checker cannot read a file, glob or grep. Instructions that tell it to look at files do not work |
-| Slower | each check starts a process (a second or two) |
-| More tokens | the CLI adds a fixed prompt of its own (about 2.9k tokens) to every call |
-
-Calu states these limits at every start. The checks run in an empty temporary directory. The
-`claude` CLI therefore does not load the `CLAUDE.md` of the project under review, whose text
-would otherwise become instructions in the checker's prompt.
+Earlier versions offered `claude:` models (`claude:haiku`), which ran each check through the
+`claude` CLI on the subscription. They were removed: every checker runs through Pydantic AI and
+gets the same code tools (`read_file`, `find_files`, `grep_files`). `calu config models` and
+`calu setup --checker-model` refuse a `claude:` model. A configuration that still names one
+loads, but every check of that role fails and escalates, and Calu warns about it at every
+start. `calu config models auto` replaces it with an API model.
 
 ### Keys
 

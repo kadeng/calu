@@ -110,14 +110,6 @@ MODEL_OPTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("mistral:ministral-3b-latest", "Ministral 3B"),
         ),
     ),
-    (
-        "This machine's Claude Code account (no API key, no tools)",
-        (
-            ("claude:haiku", "Haiku"),
-            ("claude:sonnet", "Sonnet"),
-            ("claude:opus", "Opus"),
-        ),
-    ),
 )
 """The models offered for a checker, the narrator and the summarizer: (provider, ((Pydantic AI
 model string, label), ...)). A suggestion list, not a limit: the field takes any model string.

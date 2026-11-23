@@ -154,8 +154,7 @@ def detect_model(
 
     Returns:
         The first provider whose credentials are there, or None when there is none -- then the
-        caller keeps the configured models and says how to add a key, or that `claude:haiku`
-        runs the checks on this machine's own Claude Code account (D117).
+        caller keeps the configured models and says how to add a key.
     """
     found = bedrock()
     if found is not None:

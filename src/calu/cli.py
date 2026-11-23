@@ -979,14 +979,20 @@ def _chosen_model(requested: str | None, effort: str | None) -> tuple[str, str |
         report).
 
     Raises:
-        CliError: If "auto" finds no credentials at all; the message says what to add, and that
-            `claude:haiku` needs none.
+        CliError: If "auto" finds no credentials at all (the message says what to add), or if
+            `requested` is a `claude:` model, which calu no longer supports (PLAN.md D258).
     """
     if requested == "default":
         return (
             "",
             effort,
             "the default model: " + ANTHROPIC_HAIKU + ", or in Bedrock mode " + (BEDROCK_EU_HAIKU),
+        )
+    if requested and requested.startswith("claude:"):
+        raise CliError(
+            f"{requested}: calu no longer runs checkers through the `claude` CLI; it runs only "
+            "the main coding agent. Give an API model, or `auto` to choose one from the keys "
+            "found"
         )
     if requested and requested != "auto":
         return requested, effort, "as given"
@@ -995,8 +1001,7 @@ def _chosen_model(requested: str | None, effort: str | None) -> tuple[str, str |
         raise CliError(
             "no model provider found: no AWS credentials that STS accepts, and none of "
             "ANTHROPIC_API_KEY, FIREWORKS_API_KEY, MISTRAL_API_KEY in the environment or in "
-            f"{user_env_file()}. Add one, or give a model explicitly -- `claude:haiku` runs the "
-            "checks on this machine's own Claude Code account and needs no key"
+            f"{user_env_file()}. Add one, or give a model explicitly"
         )
     return choice.model, effort or choice.effort, f"{choice.provider}: {choice.reason}"
 

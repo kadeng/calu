@@ -345,3 +345,14 @@ def test_credential_set_refuses_a_login_entry_it_cannot_read(
     assert store.names() == []
     assert run_cli(monkeypatch, store, ["credential", "set", "other"], "x\npw\npw\n") == 0
     assert store.names() == ["other"]
+
+
+def test_a_claude_cli_model_is_refused_as_a_checker_model() -> None:
+    """D258: checkers run only through Pydantic AI; the `claude` CLI runs the coding agent."""
+    with pytest.raises(cli.CliError, match="no longer runs checkers"):
+        cli._chosen_model("claude:haiku", None)
+    assert cli._chosen_model("anthropic:claude-haiku-5-5", "low") == (
+        "anthropic:claude-haiku-5-5",
+        "low",
+        "as given",
+    )

@@ -294,7 +294,7 @@ async def test_one_settings_page_holds_the_values_the_instructions_and_the_rules
                 "bedrock:anthropic.claude-opus-5-5",
                 "fireworks:accounts/fireworks/models/",
                 "mistral:mistral-small-2603",
-                "claude:haiku",
+                "anthropic:claude-haiku-5-5",
             ):
                 assert f'<option value="{offered}' in page
             assert 'data-model-for="f-command_checker-model"' in page
@@ -492,14 +492,18 @@ async def test_an_extra_checker_is_switched_on_and_given_a_model_on_the_page(db_
                 data={
                     "_present": "checker:honesty:enabled",
                     "checker:honesty:enabled": "on",
-                    "checker:honesty:model": "claude:haiku",
+                    "checker:honesty:model": "anthropic:claude-haiku-4-5",
                     "checker:honesty:request_limit": "7",
                     "honesty.mode": "track",
                     "honesty.rules": "# Our standard\n\nNumPy docstrings.",
                 },
             )
             row = next(r for r in await admin.checkers(db) if r.name == "honesty")
-            assert (row.enabled, row.model, row.request_limit) == (True, "claude:haiku", 7)
+            assert (row.enabled, row.model, row.request_limit) == (
+                True,
+                "anthropic:claude-haiku-4-5",
+                7,
+            )
             values = await admin.settings(db)
             assert values["honesty"] == {
                 "mode": "track",

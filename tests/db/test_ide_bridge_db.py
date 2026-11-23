@@ -180,7 +180,8 @@ async def test_one_model_for_every_role_and_the_default(
         # One role alone, by a model string.
         assert (
             await editor.request(
-                "ide.models.set", {"role": "context.narrator_model", "model": "claude:haiku"}
+                "ide.models.set",
+                {"role": "context.narrator_model", "model": "anthropic:claude-haiku-4-5"},
             )
             == {}
         )
@@ -188,13 +189,16 @@ async def test_one_model_for_every_role_and_the_default(
             await editor.request("ide.models.set", {"role": "nothing.model", "model": "x:y"})
         assert unknown.value.code == -32602
         async with owner_db(db_url) as db:
-            assert (await admin.settings(db))["context"]["narrator_model"] == "claude:haiku"
+            assert (await admin.settings(db))["context"][
+                "narrator_model"
+            ] == "anthropic:claude-haiku-4-5"
             names = {row.name for row in await admin.checkers(db)}
 
         # A checker's model by its role key; an unknown name is refused and creates nothing.
         assert (
             await editor.request(
-                "ide.models.set", {"role": "checker:command", "model": "claude:sonnet"}
+                "ide.models.set",
+                {"role": "checker:command", "model": "anthropic:claude-sonnet-4-5"},
             )
             == {}
         )
@@ -203,7 +207,7 @@ async def test_one_model_for_every_role_and_the_default(
         assert "nosuch" in no_checker.value.message
         async with owner_db(db_url) as db:
             rows = {row.name: row for row in await admin.checkers(db)}
-            assert set(rows) == names and rows["command"].model == "claude:sonnet"
+            assert set(rows) == names and rows["command"].model == "anthropic:claude-sonnet-4-5"
 
         # "default" stores no model, as `calu config models default` does.
         await editor.request("ide.models.set_all", {"model": "default"})

@@ -18,7 +18,6 @@ from pathlib import Path
 from dotenv import dotenv_values
 
 from calu import asuser
-from calu.claude_model import is_cli_model
 from calu.config import (
     KEYLESS_PREFIXES,
     PROVIDER_KEYS,
@@ -452,28 +451,31 @@ def bedrock_warnings(
 
 
 def cli_model_warnings(config: Config) -> list[str]:
-    """Report the roles that run on the machine's Claude Code account (agent/records/PLAN.md D117).
+    """Report the roles that still name the removed `claude:` model type (PLAN.md D258).
 
-    A `claude:` model is not an API client: each call runs the `claude` CLI, which calu starts
-    with `--tools ""`. Such a checker therefore cannot read a file, glob or grep, however its
-    instructions are written -- and that is invisible in the configuration, so it is said at
-    every start. It is one warning for all of them, because a user who chose this chose it on
-    purpose and does not need it repeated per role.
+    `claude:<alias>` once ran a check through the `claude` CLI. It was removed: every checker,
+    the narrator, the summarizer and the honesty reviewer run through Pydantic AI, and the CLI
+    runs only the main coding agent. A stored configuration may still name such a model; it is
+    not refused when it is loaded, so that an old configuration does not stop calu from
+    starting. Every call of such a role fails instead (Pydantic AI: "Unknown model"), and a
+    failed check escalates to the user. This warning says so at every start.
 
     Args:
         config: The session configuration.
 
     Returns:
-        One warning naming the roles, or [].
+        One warning naming the roles and how to choose an API model, or [].
     """
-    roles = sorted(role for role, model in configured_models(config).items() if is_cli_model(model))
+    roles = sorted(
+        role for role, model in configured_models(config).items() if model.startswith("claude:")
+    )
     if not roles:
         return []
     return [
-        f"{', '.join(roles)} run on this machine's Claude Code account (a `claude:` model), "
-        "which needs no API key -- and gets no tools: such a checker cannot read files, glob or "
-        "grep, so instructions that tell it to go and look will not work. Each check also "
-        "starts the CLI once, which costs a second or two."
+        f"{', '.join(roles)} name a `claude:` model, which calu no longer supports: checkers "
+        "run only through Pydantic AI, with an API model. Every check of these roles fails "
+        "and escalates to you. Choose an API model, e.g. `calu config models auto`, which "
+        "picks one from the provider keys in calu's env file."
     ]
 
 

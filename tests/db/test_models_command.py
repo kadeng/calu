@@ -47,17 +47,20 @@ async def test_one_model_for_every_role_reaches_both_places_it_is_kept(
         store = CredentialStore(tmp_path / "credentials.json")
         store.save("admin", db_url, None)
 
-        assert await _run(store, ["config", "models", "claude:haiku", "--effort", "low"]) == 0
+        assert (
+            await _run(store, ["config", "models", "anthropic:claude-haiku-4-5", "--effort", "low"])
+            == 0
+        )
         said = capsys.readouterr().out
-        assert "every model role of the global scope now uses claude:haiku" in said
+        assert "every model role of the global scope now uses anthropic:claude-haiku-4-5" in said
 
         db = Db(conn)
         stored = await admin.settings(db)
         for key in admin.MODEL_KEYS:
             section, field = key.split(".")
-            assert stored[section][field] == "claude:haiku", key
+            assert stored[section][field] == "anthropic:claude-haiku-4-5", key
         assert stored["command_checker"]["effort"] == "low"
-        assert {row.model for row in await admin.checkers(db)} == {"claude:haiku"}, (
+        assert {row.model for row in await admin.checkers(db)} == {"anthropic:claude-haiku-4-5"}, (
             "every definition, the honesty checker's included"
         )
 
@@ -108,11 +111,13 @@ async def test_setup_chooses_the_model_on_a_fresh_database_only(
         assert loaded.config.context.summarizer_model == bedrock
         assert loaded.checkers["honesty"].model == bedrock
         # Someone chooses another model; setup runs again and leaves it alone.
-        await admin.set_all_models(db, "claude:sonnet")
+        await admin.set_all_models(db, "anthropic:claude-sonnet-4-5")
         monkeypatch.setattr("sys.stdin", io.StringIO("pw\npw\n"))
         assert await _run(store, ["setup"]) == 0
         capsys.readouterr()
-        assert (await admin.settings(db))["context"]["narrator_model"] == "claude:sonnet"
+        assert (await admin.settings(db))["context"][
+            "narrator_model"
+        ] == "anthropic:claude-sonnet-4-5"
         # `--checker-model auto` is the detection of D129, now only on request.
         monkeypatch.setattr("sys.stdin", io.StringIO("pw\npw\n"))
         assert await _run(store, ["setup", "--checker-model", "auto"]) == 0

@@ -8,10 +8,10 @@ unchanged. Two need settings that a plain string cannot carry:
                                           MISTRAL_BASE_URL overrides it (e.g. https://api.mistral.ai)
     "bedrock:<...anthropic.claude...>" -> BedrockConverseModel with thinking off: with thinking
                                           on, Pydantic AI cannot force the structured answer tool
-    "claude:<alias>"                   -> a check run by the `claude` CLI on the machine's own
-                                          Claude Code account (`calu.claude_model`): the
-                                          only way a claude.ai subscription can answer a check,
-                                          and the one model type with no tools
+
+Every checker, the narrator, the summarizer and the honesty reviewer run through Pydantic AI and
+get the same code tools. The `claude` CLI runs only the main coding agent: the `claude:` model
+type that ran checks through it was removed (agent/records/PLAN.md D258).
 
 Models are created lazily by Pydantic AI only when called, so resolving needs no API key.
 
@@ -32,8 +32,6 @@ from pydantic_ai import Agent, AgentRunResult, CachePoint, UsageLimits
 from pydantic_ai.exceptions import IncompleteToolCall, UsageLimitExceeded
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
-
-from calu.claude_model import claude_cli_model, is_cli_model
 
 BEDROCK_EU_REGION = "eu-central-1"
 """The AWS region an EU inference profile is called in when the environment names none."""
@@ -125,9 +123,7 @@ def cache_settings(model: str | Model, key: str) -> ModelSettings:
 def resolve_model(model: str | Model) -> str | Model:
     """Return the model to pass to Pydantic AI for a configured model.
 
-    Reads `MISTRAL_BASE_URL` from the environment for "mistral:" models. A `claude:` string
-    becomes the model that runs the check through the Claude Code CLI (D117), which is how a
-    claude.ai subscription can answer a check at all.
+    Reads `MISTRAL_BASE_URL` from the environment for "mistral:" models.
 
     Args:
         model: A Pydantic AI model string (e.g. "mistral:mistral-small-2603") or a `Model`.
@@ -149,11 +145,6 @@ def resolve_model(model: str | Model) -> str | Model:
         return model
     provider, _, name = model.partition(":")
     try:
-        if is_cli_model(model):
-            # Not an API client: the check runs the `claude` CLI on the machine's own Claude
-            # Code account, which is the only way a claude.ai subscription can answer a check
-            # (REQUIREMENTS 22, D117). Its limits are in `calu.claude.cli_model`.
-            return claude_cli_model(model)
         # The provider modules are imported where a model of theirs is built: each pulls in
         # its vendor's SDK (mistralai, botocore), which a session with other models never uses.
         if provider == "mistral" and name:

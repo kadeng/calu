@@ -701,9 +701,8 @@ async def test_the_runner_resolves_a_model_string_the_way_a_session_does(
 ) -> None:
     """D118: `calu evals` built its checkers from the bare string and skipped `resolve_model`.
 
-    What that cost: a `claude:` model failed with "Unknown model: claude:haiku" -- the first
-    real run of the subscription checker through calu, which is how it was found -- and a
-    `mistral:` model would have gone to the global endpoint instead of the EU one that
+    What that cost: a `mistral:` model would have gone to the global endpoint instead of the EU
+    one that
     `resolve_model` pins. A session has always resolved; the measurement path has to agree with
     it, or it measures something the session never runs.
     """
@@ -719,9 +718,6 @@ async def test_the_runner_resolves_a_model_string_the_way_a_session_does(
     cases = [case(name="plain", tool_input={"command": "ls"}, expected=[Decision.PASS])]
     await run_cases(cases, "command", "command", "instructions", rule_based_checker())
     assert seen, "the runner has to go through resolve_model"
-
-    # And a `claude:` string becomes the CLI model rather than being handed to a provider.
-    assert type(real("claude:haiku")).__name__ == "FunctionModel"
 
 
 async def test_the_measured_checker_gets_the_configured_effort() -> None:
