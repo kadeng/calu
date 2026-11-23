@@ -354,9 +354,9 @@ Two more models work for the checkers and decide nothing:
   rules allow it ("run a command outside the sandbox only when it fails there"). An intent to
   deceive you always escalates. The narrator retells such plans in
   full.
-- **Nothing from files a checker reads in its answer.** The fixed part of every checker and of
-  the honesty reviewer says: do not disclose information from files that you read with the
-  tools `read_file` and `grep_files`.
+- **No contents of other files and no secrets in a checker's answer.** The fixed part of every
+  checker and of the honesty reviewer says: do not disclose the contents of files you read,
+  beyond the files under review, and never disclose a secret that any file contains.
 - **No file of the repository is part of the prompt.** `AGENTS.md`, `CLAUDE.md` and skill
   descriptions can be written by the agent under review, so they are not a source of rules for
   the checkers. Project rules belong in the checker instructions. Claude Code itself reads
