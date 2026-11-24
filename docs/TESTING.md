@@ -1059,6 +1059,17 @@ escalation resolved from the database alone.
    prints an address with `?token=` and the browser gets no sign-in page; `calu setup` and
    `calu doctor` say that every program of the user can then use the login.
    Not run yet.
+54. `calu uninstall` (PLAN.md D267), in a throwaway machine or container only (it removes the
+   real logins and the local database): install with `install.sh` as yourself, `calu setup`,
+   then `calu uninstall --dry-run` must list `~/.config/calu`, `~/.local/state/calu`, the
+   local database (container and data directory) and the uv tool installation, and name what
+   it keeps. With `calu serve` running it must refuse and list the process. Typing `remove
+   calu` faster than two seconds (`echo "remove calu" | calu uninstall`) must be refused;
+   typed by hand it removes everything listed, `calu` is gone from `PATH`, `docker ps -a` shows
+   no `calu-db` container, and a new `install.sh` + `calu setup` starts from nothing. As root
+   (`sudo calu uninstall` after `install.sh | sudo bash`): `/etc/calu`, `/var/lib/calu`,
+   `/usr/local/lib/calu`, `/usr/local/bin/calu` and the invoking user's calu files go;
+   uv, Docker and the postgres image stay. Not yet run by hand.
 
 ## Measuring the checkers
 

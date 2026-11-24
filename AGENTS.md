@@ -73,6 +73,7 @@ READMEs). This file stays at the top level, where every agent looks first.
 | `src/calu/admin.py` | `calu project`, `calu config`, `calu checker`, `calu rules`: changing what steers the checkers |
 | `src/calu/evals/` | `calu evals`: evaluation cases, checker runs and their metrics |
 | `src/calu/preflight.py` | Start-up warnings: sandbox tools, checker API keys, write-set settings |
+| `src/calu/uninstall.py` | `calu uninstall`: what calu left on this machine (logins, state, the local database, the installation), removed after `remove calu` typed by hand (D267) |
 | `src/calu/doctor.py` | `calu doctor`: what is in place and what a session would miss, before anything runs |
 | `src/calu/machine.py` | In which process table a process runs (machine id, boot id, pid namespace): what a session records at its start and `calu sessions` compares before it takes a missing pid for a gone process (D202) |
 | `src/calu/clock.py` | Watches calu's own clock: a backward jump breaks the attribution of file changes to steps (D32) |

@@ -3161,6 +3161,7 @@ unless it is empty; `db-admin`: the database owner's login, the same password).
 | `calu doctor [DIR]` | report what is in place and what a session would miss |
 | `calu db up\|down\|migrate\|reset` | the local database and schema migrations |
 | `calu credential list\|set\|remove` | the encrypted credential store |
+| `calu uninstall [--dry-run]` | remove Calu, its logins, state and local database from this machine (as root: the root installation) |
 
 **For programs**
 
@@ -3956,6 +3957,24 @@ instructions and all settings are gone. The stored credentials keep working.
   A phrase that arrives in under two seconds (a pipe, a paste, an automatic answer) is
   refused.
 - Stop running sessions first; they lose their rows.
+
+**Remove Calu.** `calu uninstall` (your own installation) or `sudo calu uninstall` (the root
+installation) removes Calu from the machine for a fresh start:
+
+| Run | Removes |
+|---|---|
+| `calu uninstall` | `~/.config/calu` (logins, checker keys), `~/.local/state/calu` (state, logs), the local database in Docker (container, data directory) when its files are yours, and your uv tool installation of Calu with its commands |
+| `sudo calu uninstall` | `/etc/calu`, `/var/lib/calu` (root's logins, state, logs, the place file), the local database, `/usr/local/lib/calu` and its commands in `/usr/local/bin`, and the same files and installation of the user who ran sudo |
+
+- It keeps the prerequisites (uv, Docker and the postgres image, Claude Code, bubblewrap,
+  socat, git), a database on another server, the IDE extensions, and what Calu wrote into your
+  projects (session traces, recorded edits, the git hook of `calu traces hook`).
+- `calu uninstall --dry-run` lists what it would remove and what it keeps, and removes
+  nothing.
+- It refuses while Calu still runs (`calu serve`, `calu web`, an editor's `calu ide`) and
+  lists those processes.
+- It asks you to type `remove calu`. An answer that arrives in under two seconds (a pipe, a
+  paste, an automatic answer) is refused, and nothing is removed.
 
 **A single-file binary** can be built with `scripts/build-binary.sh` (no Python needed to run
 it). It is not published yet.

@@ -956,6 +956,61 @@ def cmd_db_reset(args: argparse.Namespace, store: CredentialStore) -> None:
         wipe(url)
 
 
+def cmd_uninstall(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Remove calu from this machine: logins, state, the local database, the installation.
+
+    See `calu.uninstall` (agent/records/PLAN.md D267). Prints what it would remove and what it
+    keeps; with `--dry-run` that is all. Otherwise it refuses while calu processes run
+    (`calu serve`, `calu web`, an editor's `calu ide`, ...), asks for
+    `calu.uninstall.CONFIRM_PHRASE` typed by hand in no less than
+    `calu.uninstall.MIN_SECONDS`, and removes the items one by one, the installation last.
+    Run as root (`sudo calu uninstall`) it removes the root installation, root's files and
+    those of the user who ran sudo.
+
+    Args:
+        args: Parsed arguments (`dry_run`).
+        store: The credential store (unused: nothing is decrypted).
+
+    Raises:
+        CliError: If calu processes still run, the confirmation is missing, wrong or too fast
+            (nothing is removed then), or an item could not be removed (the others are).
+    """
+    import calu
+    from calu import uninstall
+
+    euid = os.geteuid()
+    chosen = uninstall.plan(euid, dict(os.environ), Path(calu.__file__))
+    if not chosen.items:
+        print("Nothing of calu was found to remove on this machine.")
+        for line in chosen.lines():
+            print(line)
+        return
+    print("calu uninstall removes:")
+    for line in chosen.lines():
+        print(line)
+    if args.dry_run:
+        print("(--dry-run: nothing was removed)")
+        return
+    running = uninstall.running_calu(euid, os.getpid())
+    if running:
+        listed = "\n".join(f"  {pid}  {line}" for pid, line in running)
+        raise CliError(
+            f"calu still runs; stop these first (close the editor for `calu ide`), then run "
+            f"`calu uninstall` again. Nothing was removed.\n{listed}"
+        )
+    try:
+        uninstall.confirm()
+    except uninstall.NotConfirmed as exc:
+        raise CliError(str(exc)) from None
+    compose = local_db.compose_file()
+    failed = uninstall.remove(chosen, compose, uninstall.compose_image(compose), euid)
+    if failed:
+        raise CliError(
+            "these were not removed (the rest was):\n" + "\n".join(f"  {f}" for f in failed)
+        )
+    print("calu is removed. Run the install script again for a fresh start.")
+
+
 def _chosen_model(requested: str | None, effort: str | None) -> tuple[str, str | None, str]:
     """Turn `MODEL` or `auto` into a model, an effort and a line saying how it was chosen.
 
@@ -6793,6 +6848,17 @@ def build_parser() -> argparse.ArgumentParser:
     rules.add_argument("--project", help="the project's rules instead of the global ones")
     rules.add_argument("--position", type=int, help="position in the list (default: append)")
     rules.set_defaults(handler=cmd_rules)
+
+    p = sub.add_parser(
+        "uninstall",
+        help="remove calu from this machine: its logins, state, local database and "
+        "installation (as root: the root installation, root's files and yours); keeps "
+        "prerequisites and your projects. Asks you to type `remove calu`",
+    )
+    p.add_argument(
+        "--dry-run", action="store_true", help="only list what would be removed and what stays"
+    )
+    p.set_defaults(handler=cmd_uninstall)
 
     p = sub.add_parser("credential", help="manage the encrypted credential store")
     p.add_argument("action", choices=["list", "set", "remove"])

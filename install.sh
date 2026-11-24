@@ -191,7 +191,7 @@ Next steps (as your own user, not as root):
   sudo calu setup          the database and root's credentials in /etc/calu
   calu serve --sudo        the server: calu as root, Claude Code as you
   calu web --sudo          the web interface (prints the address of the chat pane too)
-Run this script again to update calu.
+Run this script again to update calu; `sudo calu uninstall` removes it.
 EOF
     else
         case ":$PATH:" in
@@ -204,7 +204,7 @@ Next steps:
   calu doctor      what is in place and what is missing
   calu setup       the database and your calu user password
   calu serve       the server; then calu web, the VSCode extension or calu attach
-Run this script again to update calu.
+Run this script again to update calu; `calu uninstall` removes it.
 EOF
     fi
 }
