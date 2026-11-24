@@ -28,6 +28,17 @@ the container's user was run on a temporary directory. The removal of a real `ca
 container has not been run (only with a fake docker): never on this machine, where `calu-db`
 is the owner's database. He runs it himself on his machines.
 
+Also on 2026-11-24: `calu serve --web` runs `calu web` as the server's child (D268, tested with
+real processes incl. SIGKILL); the local database can stop with `calu serve`, chosen at setup
+(D269; `--stop-db-with-server`; the container's restart policy follows; tests can no longer
+send `docker update`/`compose down`/`volume rm` to the machine's Docker); the README has a
+Quickstart (install.sh as root with a link to read it and `sudo calu uninstall` next to it,
+`sudo calu setup --database docker --stop-db-with-server --sandbox`, `calu serve --sudo
+--web`, the IDEs) and DOCUMENTATION.md opens with "Installation"; install.sh downloads uv's
+release archive and checks a SHA-256 written in the script (tested in Ubuntu 24.04: root,
+user, a tampered checksum refused). The owner wants to test from a clean slate next: update
+with install.sh, `sudo calu uninstall`, then the quickstart.
+
 Not yet run with the one login: the rootbox tests (`docker exec calu-rootbox rootbox-tests`,
 needs a root box), the Cua GUI runs of both plugins and the pane, checklist item 53 of
 `docs/TESTING.md` (the password experience in every front end). backtester1, the owner's WSL
