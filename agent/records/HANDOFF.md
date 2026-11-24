@@ -21,6 +21,13 @@ migrated (its dump is identical to the old chain's). A database migrated by the 
 refused by `calu db migrate`/`calu setup` (`calu.db.EarlierSchema`: `calu db reset` recreates
 it empty), and `calu doctor --db` says so. The owner has no database he needs to keep.
 
+`calu uninstall` (D267, the owner's request for a clean slate before he tests): run in an
+Ubuntu container as a user and as root (install.sh, then uninstall: everything listed went,
+uv stayed, a confirmation in under 2 s was refused); the removal of database files owned by
+the container's user was run on a temporary directory. The removal of a real `calu-db`
+container has not been run (only with a fake docker): never on this machine, where `calu-db`
+is the owner's database. He runs it himself on his machines.
+
 Not yet run with the one login: the rootbox tests (`docker exec calu-rootbox rootbox-tests`,
 needs a root box), the Cua GUI runs of both plugins and the pane, checklist item 53 of
 `docs/TESTING.md` (the password experience in every front end). backtester1, the owner's WSL
