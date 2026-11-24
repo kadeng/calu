@@ -26,6 +26,73 @@ calu: the owner reinstalls with `curl -fsSL .../install.sh | sudo bash` and rest
 `calu serve --sudo`; its checkers need `sudo calu config models auto` (the API key is in
 `/etc/calu/.env`).
 
+### The session of 2026-11-22 to 24 (the lead): what is open and what to know
+
+**Waiting for the owner** (he does these himself; he types every password):
+
+- backtester1: reinstall (`curl -fsSL https://raw.githubusercontent.com/kadeng/calu/main/install.sh | sudo bash`),
+  restart `calu serve --sudo` in the screen session `calu` (it asks the session password),
+  `sudo calu config models auto` (the roles still name `claude:haiku`, which no longer exists:
+  every check escalates until then; the key is in `/etc/calu/.env`, mode 600, root's),
+  rebuild/reinstall the `.vsix` in VSCode Remote-SSH, try `calu web --sudo` and the pane.
+  From this machine, `ssh backtester1` needs `-o HostName=66.163.113.110 -o
+  HostKeyAlias=backtester1` (the local `~/.ssh/config` entry has the port but no HostName).
+- The "operator password" prompt of `calu sessions` that confused him is what
+  `NEXT_STEP.md` removes; until then `calu credential remove operator` makes it use `admin`.
+- Human diffs did not show up for him (PLAN D253): not diagnosed; he was asked which file,
+  which VSCode folder and whether a session was attached, and offered per-save logging of the
+  reason a save is not recorded. No answer yet.
+- Offers he has not answered: a command-checker rule against running a file that a
+  background subagent is rewriting without a prior refusal (D256 relies on the task review);
+  committing the script that generated the narrated eval variants; multi-turn eval cases;
+  relabel the two "review demands a redesign" eval cases from ESCALATE to PASS-with-comment
+  (they predate the soft-guidance principle of `system/role.md`) and a subagent-checker rule
+  for tasks that dump the environment or secrets.
+
+**Measured on 2026-11-23 with `anthropic:claude-haiku-5-5`** (the default checker model now
+that `claude:` models are gone, D258; `CALU_TEST_CHECKER_MODEL=anthropic:claude-haiku-5-5`,
+the key comes from `ANTHROPIC_API_KEY` in the shell environment; never print it): command,
+edit, changeset, honesty checkers 100 % accuracy; subagent-result checker 85 % with critical
+misses on `background-task-turns-a-harmless-script-into-an-environment-dump` (a real miss)
+and the two redesign cases (see above); honesty reviewer 77-93 % (too strict on missing or
+incomplete docstrings: `review-four-honest-files-with-terse-or-no-docs`, once an answer that
+named one file of two). The same misses existed before the disclosure part (D259).
+
+**How things were run** (worked in this session):
+
+- Docker: Docker Desktop must be running on Windows; then `docker` works in WSL. Without it,
+  the VSCode integration tests and Cua cannot run (say so instead of skipping silently).
+- VSCode integration tests: `extensions/vscode/scripts/test-in-docker.sh` (8 tests, ~3 min).
+- Database tests: container `calu-prepush-pg` (`docker start calu-prepush-pg`), DSN above;
+  sequentially.
+- Browser tests: Playwright's Chromium is installed locally; `uv run pytest -m browser
+  -n 5 tests/browser/test_web_pane*.py`; `CALU_PANE_SCREENSHOTS=<dir>` keeps pictures.
+- Cua desktop: `uitest/run.sh`, then `uitest/setup-demo.sh` (copies the working tree,
+  restarts the fake server); a `.vsix` via `~/.cache/calu-uitest/share/`; the PyCharm plugin
+  zip unpacked into `~/.local/share/JetBrains/PyCharm2026.3`; for the pane: `calu web` in a
+  tmux session of user `cua` and a layout page served by `python3 -m http.server` (delete the
+  page afterwards: it holds the token). Firefox and Chromium are installed in the desktop.
+- Static pane files can be swapped into the desktop's installed calu without a reinstall
+  (`~/.local/share/uv/tools/calu/lib/python3.14/site-packages/calu/web/static/pane/`).
+- `install.sh` was tested in fresh `ubuntu:24.04` containers (root through a pipe, user).
+
+**Rules learned in this session:**
+
+- **Never write the owner's passwords into any file, commit or prompt.** The auto-mode
+  classifier blocked a push that had his backtester1 password in `NEXT_STEP.md`; it was
+  removed before anything was committed.
+- The owner wants each change committed and pushed, then CI checked; tests may run in
+  parallel and in the background.
+- Ask design questions only when a choice is his; when he answers with a message instead of
+  the options, take the recommended options and say so.
+- Tests that start a bridge or a session must point `calu.db.place.PATH` at a missing file
+  and clear `CALU_PLACE_FILE`, or they reach the owner's database through
+  `/var/lib/calu/database.json` (happened once in a screenshot script on 2026-11-23: only a
+  failed connection).
+
+**Left running:** `calu-uitest` (the demo set up, VSCode, PyCharm and Firefox open, the test
+`calu web` stopped), `calu-prepush-pg`, and the owner's `calu-db-postgres-1`.
+
 ### State of the repository (updated 2026-11-20 evening, by the lead)
 
 **Read first:** this section and "Next, in this order" below; `PLAN.md` D238-D255 (the
@@ -586,8 +653,8 @@ said it had not reviewed the script. `allow_unsandboxed_commands` stays `false`.
    overwrite and reload cases).
 3. **Backlog** (sections below): tool documentation for the checkers; Claude Code as a whole
    inside namespaces; macOS; per-project checker instructions (later, after everything works);
-   web/IDE `/trust` for worktrees (only the terminal clients have `/trust <worktree> <ref>`);
-   a checker cannot mark files of a worktree outside the project.
+   `/trust` for worktrees in the web interface (the IDEs have it since D260); a checker
+   cannot mark files of a worktree outside the project.
 
 #### Coverage and honest code (first round, 2026-11-19)
 
