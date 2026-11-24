@@ -2230,11 +2230,13 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
     """Answer session requests in the foreground until interrupted (agent/records/PLAN.md D208).
 
     Asks for the user password once; every session that `calu start` asks for afterwards
-    runs in this process without a further password.
+    runs in this process without a further password. With `--web` it also runs `calu web`
+    as its child for as long as it runs (`_start_web_child`, PLAN.md D268): the same login,
+    no second password, the child's lines on the same terminal; it ends with the server.
 
     Args:
         args: Parsed arguments (`max_sessions`, `idle_timeout`, `user`, `sudo`, `secure`,
-            `insecure`, `relay_port`, `no_relay`, `projects`).
+            `insecure`, `relay_port`, `no_relay`, `projects`, `web`, `web_port`).
         store: The credential store.
 
     Raises:
@@ -2242,11 +2244,15 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
             `--idle-timeout` is not above 0, `--relay-port` is no port, the user cannot be
             switched (`_run_as`), the projects directory is refused
             (`calu.projects_dir.check_projects_dir`, before the password is asked), the
-            database refused the user login, or no relay port can be bound.
+            database refused the user login, no relay port can be bound, or `--web-port`
+            is no port.
         CredentialError: On a wrong password.
+        OSError: If `calu web` cannot be started.
         psycopg.Error: On database errors at the start.
     """
     _check_security_flags(args)
+    if args.web and not 1 <= args.web_port <= 65535:
+        raise CliError(f"--web-port takes a number from 1 to 65535, not {args.web_port}")
     if args.max_sessions < 1:
         raise CliError("--max-sessions takes a number of 1 or more")
     if args.idle_timeout is not None and not (
@@ -2263,7 +2269,10 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
     except projects_dir.ProjectsDirRefused as exc:
         raise CliError(str(exc)) from None
     url = _session_login(store)
+    web: subprocess.Popen[bytes] | None = None
     try:
+        if args.web:
+            web = _start_web_child(args.web_port, url, "user" in _typed, run_as)
         options = ServeOptions(
             projects=projects,
             relay=not args.no_relay,
@@ -2278,8 +2287,110 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
         code = asyncio.run(serve_sessions(url, options, user=run_as.user if run_as else None))
     finally:
         wipe(url)
+        if web is not None:
+            _stop_web_child(web)
     if code:
         raise CliError("the server ended with an error (see the lines above and the log file)")
+
+
+WEB_CHILD_STOP_S = 10.0
+"""How long `calu serve --web` waits for its `calu web` to end after SIGTERM before SIGKILL."""
+
+
+def _start_web_child(
+    port: int, login: bytearray, typed: bool, run_as: RunAs | None
+) -> subprocess.Popen[bytes]:
+    """Start `calu web` as a child of `calu serve --web`, with the login serve already holds.
+
+    The login goes to the child through a pipe the child inherits (`calu web --login-fd`),
+    never through the environment, the command line or a file. The child shares this
+    process's stdout and stderr, so its address appears among serve's lines, and it gets the
+    kernel's signal SIGTERM when this process dies, however it dies (`PR_SET_PDEATHSIG`). As
+    root for a user (`run_as`) the child is told `--user`, so it does its file access as that
+    user, as `calu web --sudo` does.
+
+    Side effects: starts a process and a thread that reports the process's end if it ends
+    while the server runs; writes the login into the pipe and closes it.
+
+    Args:
+        port: The port of the web interface on 127.0.0.1.
+        login: The user login, as the store holds it; not wiped here.
+        typed: Whether the user password was typed for it (then a browser signs in with
+            it; else the child prints an address with a token).
+        run_as: The user Claude Code runs as, when calu runs as root for one.
+
+    Returns:
+        The child process.
+
+    Raises:
+        OSError: If the process cannot be started.
+    """
+    read_end, write_end = os.pipe()
+    argv = [sys.executable, "-m", "calu", "web", "--port", str(port), "--login-fd", str(read_end)]
+    if typed:
+        argv.append("--login-typed")
+    if run_as is not None:
+        argv += ["--user", run_as.user or str(run_as.uid)]
+    try:
+        child = subprocess.Popen(argv, pass_fds=(read_end,), preexec_fn=_die_with_parent)
+    finally:
+        os.close(read_end)
+    with os.fdopen(write_end, "wb") as pipe:
+        pipe.write(bytes(login))
+    print(
+        f"started calu web (pid {child.pid}) on port {port}; it ends with this server", flush=True
+    )
+
+    def watch() -> None:
+        """Say so when the child ends by itself while the server goes on."""
+        code = child.wait()
+        # 0, 130 and the signals: Ctrl-C reaches the child too, before the server stops it.
+        if not _stopping_web and code not in (0, 130, -signal.SIGINT, -signal.SIGTERM):
+            print(
+                f"calu web ended (exit code {code}); the server goes on without it",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    threading.Thread(target=watch, name="calu-web-watch", daemon=True).start()
+    return child
+
+
+_stopping_web: list[bool] = []
+"""Non-empty once `_stop_web_child` ends the child, so that its watcher stays silent."""
+
+
+def _die_with_parent() -> None:
+    """Ask the kernel to send this (child) process SIGTERM when its parent dies.
+
+    Runs in the child between fork and exec (`subprocess.Popen(preexec_fn=...)`); Linux only
+    (`prctl(PR_SET_PDEATHSIG)`). A failure leaves the child without that signal: serve's own
+    `_stop_web_child` still ends it on every orderly exit.
+    """
+    import ctypes
+
+    with contextlib.suppress(OSError, AttributeError):
+        ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGTERM)  # 1: PR_SET_PDEATHSIG
+
+
+def _stop_web_child(child: subprocess.Popen[bytes]) -> None:
+    """End the `calu web` child: SIGTERM, then SIGKILL after `WEB_CHILD_STOP_S`.
+
+    Side effects: signals and reaps the process (its watcher thread, which reported an end by
+    itself, stays silent from here on).
+
+    Args:
+        child: The process `_start_web_child` started.
+    """
+    _stopping_web.append(True)
+    if child.poll() is not None:
+        return
+    child.terminate()
+    try:
+        child.wait(WEB_CHILD_STOP_S)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait()
 
 
 def cmd_start(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -3957,6 +4068,33 @@ def _pane_line(host: str, port: int, token: str | None) -> str:
     )
 
 
+def _read_login_fd(fd: int) -> bytearray:
+    """Read the login `calu serve --web` wrote into the pipe it gave this process.
+
+    Side effect: closes the file descriptor.
+
+    Args:
+        fd: The read end of the pipe (`--login-fd`).
+
+    Returns:
+        The login as the store holds it; the caller wipes it.
+
+    Raises:
+        CliError: If the descriptor cannot be read or holds no login.
+    """
+    try:
+        with os.fdopen(fd, "rb") as pipe:
+            secret = bytearray(pipe.read())
+    except OSError as exc:
+        raise CliError(f"--login-fd {fd} cannot be read: {exc}") from exc
+    try:
+        Target.parse(secret)
+    except ValueError as exc:
+        wipe(secret)
+        raise CliError(f"--login-fd {fd} holds no database login: {exc}") from exc
+    return secret
+
+
 def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
     """Serve the web interface: every session of every host, their history, the checkers.
 
@@ -3973,7 +4111,8 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
     opened again with it (`calu.web.database.ReopeningDb`).
 
     Args:
-        args: Parsed arguments (`host`, `port`).
+        args: Parsed arguments (`host`, `port`, `user`, `sudo`; `login_fd` and
+            `login_typed` from `calu serve --web`, whose child this then is).
         store: The credential store.
 
     Raises:
@@ -3997,11 +4136,18 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
         # Port 0 would bind a random port, and the address printed below would name port 0.
         raise CliError(f"--port takes a number from 1 to 65535, not {args.port}")
     run_as = _client_user(args)
-    url = _settings_login(store, args)
-    # With an empty user password nobody knows the password of `calu_admin`, so a browser
-    # cannot be asked for it: the address carries the token instead (D228). A password that
-    # was typed for this command is the user password, which the browser is asked for.
-    typed_password = "user" in _typed
+    if args.login_fd is not None:
+        # The child of `calu serve --web` (D268): the login comes from the server, through a
+        # pipe only the two processes hold, and nothing is asked here.
+        url = _read_login_fd(args.login_fd)
+        typed_password = args.login_typed
+    else:
+        url = _settings_login(store, args)
+        # With an empty user password nobody knows the password of `calu_admin`, so a
+        # browser cannot be asked for it: the address carries the token instead (D228). A
+        # password that was typed for this command is the user password, which the browser
+        # is asked for.
+        typed_password = "user" in _typed
     if run_as is not None:
         # As root for a user (`calu web --sudo`): the login was read from root's store and
         # stays in this process's memory; from here on the process touches files as the user.
@@ -6376,6 +6522,16 @@ def build_parser() -> argparse.ArgumentParser:
     relay_choice.add_argument(
         "--no-relay", action="store_true", help="no relay: each session only on its own port"
     )
+    p.add_argument(
+        "--web",
+        action="store_true",
+        help="also run the web interface (`calu web`) as a child of this server, with the "
+        "same login and no second password; it prints its address here and ends with the "
+        "server (Ctrl-C ends both)",
+    )
+    p.add_argument(
+        "--web-port", type=int, default=8800, metavar="N", help="the port of --web (default: 8800)"
+    )
     p.set_defaults(handler=cmd_serve, log_name="serve")
 
     p = sub.add_parser("start", help="ask the running `calu serve` for a session and attach to it")
@@ -6538,6 +6694,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--user", metavar="NAME|UID[:GID]", help="as root: the user to work for")
     p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
+    # `calu serve --web` hands its child the login through an inherited pipe (D268).
+    p.add_argument("--login-fd", type=int, default=None, help=argparse.SUPPRESS)
+    p.add_argument("--login-typed", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(handler=cmd_web)
 
     p = sub.add_parser("protocol", help="JSON Schema of the client protocol")

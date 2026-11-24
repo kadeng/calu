@@ -515,3 +515,44 @@ def test_a_claude_cli_model_is_refused_as_a_checker_model() -> None:
         "low",
         "as given",
     )
+
+
+def test_serve_with_web_hands_its_child_the_login_through_a_pipe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D268: the child `calu web` gets the login through an inherited pipe (never the
+    command line or the environment), is told `--user` when calu runs as root for a user,
+    `--login-typed` when the password was typed, and is asked to die with its parent."""
+    import os
+    import subprocess
+
+    from calu.launch import RunAs
+
+    seen: dict[str, object] = {}
+
+    class FakeChild:
+        pid = 4242
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    def popen(argv: list[str], pass_fds: tuple[int, ...], preexec_fn: object) -> FakeChild:
+        seen.update(argv=argv, fds=pass_fds, preexec=preexec_fn)
+        seen["copy"] = os.dup(pass_fds[0])  # the parent closes its end right after this
+        return FakeChild()
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    login = bytearray(b"postgresql://calu_admin:secret@db.example:5432/calu")
+    child = cli._start_web_child(
+        8811, login, True, RunAs(uid=1000, gid=1000, home="/h", user="ada")
+    )
+
+    assert child.pid == 4242
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    assert argv[2:6] == ["calu", "web", "--port", "8811"]
+    assert "--login-typed" in argv and argv[-2:] == ["--user", "ada"]
+    assert "secret" not in " ".join(argv), "the login is not on the command line"
+    assert seen["preexec"] is cli._die_with_parent
+    read = cli._read_login_fd(int(str(seen["copy"])))
+    assert bytes(read) == bytes(login)

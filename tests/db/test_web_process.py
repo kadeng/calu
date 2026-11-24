@@ -154,3 +154,104 @@ async def test_calu_web_serves_the_fleet_and_refuses_a_public_address(
             server.terminate()
             with anyio.move_on_after(10):
                 await server.wait()
+
+
+async def test_calu_serve_with_web_runs_the_web_interface_as_its_child(
+    db_url: str, tmp_path: Path
+) -> None:
+    """D268: `calu serve --web` asks the user password once, starts `calu web` as its child
+    with the same login (a browser signs in with that password), and the child ends with the
+    server: after SIGTERM to the server, and after SIGKILL, which only the kernel's
+    parent-death signal can pass on.
+
+    Gives the server-wide role `calu_admin` the password "serve-web-test"; stores the user
+    login in a credential store below `tmp_path`; starts the server in a projects directory
+    below `tmp_path` (no session is started, so no `claude` is needed).
+    """
+    import signal
+
+    password = "serve-web-test"
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        await set_user_password(conn, password)
+    finally:
+        await conn.close()
+    user_url = user_login(Target.parse(db_url), password).libpq_string()
+    home = tmp_path / "config"
+    home.mkdir()
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    environment = {
+        **os.environ,
+        "XDG_CONFIG_HOME": str(home),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+        "PYTHONUNBUFFERED": "1",
+    }
+    setting = await anyio.open_process(
+        [sys.executable, "-m", "calu", "credential", "set", "user"], env=environment, stdin=-1
+    )
+    assert setting.stdin is not None
+    await setting.stdin.send(f"{user_url}\n{password}\n{password}\n".encode())
+    await setting.stdin.aclose()
+    await setting.wait()
+    assert setting.returncode == 0
+
+    for stop in (signal.SIGTERM, signal.SIGKILL):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        server = await anyio.open_process(
+            [
+                sys.executable,
+                "-m",
+                "calu",
+                "serve",
+                "--projects",
+                str(projects),
+                "--no-relay",
+                "--web",
+                "--web-port",
+                str(port),
+            ],
+            env=environment,
+            stdin=-1,
+        )
+        assert server.stdin is not None and server.stdout is not None
+        await server.stdin.send(f"{password}\n".encode())
+        try:
+            with anyio.fail_after(START_TIMEOUT_S):
+                printed = b""
+                while b"sign in with" not in printed or not printed.endswith(b"\n"):
+                    printed += await server.stdout.receive(4096)
+            text = printed.decode()
+            started = next(x for x in text.splitlines() if x.startswith("started calu web"))
+            child = int(started.split("(pid ")[1].split(")")[0])
+            assert f"http://calu.localhost:{port}/" in text and "?token=" not in text
+            named = {"Host": f"calu.localhost:{port}"}
+            async with httpx.AsyncClient() as client:
+                with anyio.fail_after(START_TIMEOUT_S):
+                    while True:  # the address is printed just before the port is bound
+                        try:
+                            login = await client.post(
+                                f"http://127.0.0.1:{port}/_login",
+                                headers=named,
+                                data={"password": password, "onward": "/"},
+                                timeout=10,
+                            )
+                            break
+                        except httpx.ConnectError:
+                            await anyio.sleep(0.3)
+            assert login.status_code == 200, "the child signs a browser in with the password"
+            server.send_signal(stop)
+            with anyio.fail_after(20):
+                await server.wait()
+                while Path(f"/proc/{child}").exists():
+                    status = Path(f"/proc/{child}/stat").read_text().split(") ")[-1][0]
+                    if status == "Z":  # ended; its parent (gone) cannot reap it
+                        break
+                    await anyio.sleep(0.2)
+        finally:
+            if server.returncode is None:
+                server.kill()
+                await server.wait()

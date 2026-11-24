@@ -2456,7 +2456,15 @@ for, in its projects directory and the directories below it, until you stop it.
 ```bash
 cd ~/src && calu serve          # in a terminal of its own, or under tmux or a service unit
 calu serve --projects ~/src     # the same from another directory
+calu serve --web                # also the web interface, as a child of the server
+calu serve --sudo --web         # the same in the root arrangement
 ```
+
+With `--web` (port `--web-port`, default 8800) the server starts `calu web` as its child: the
+same login, so the password is asked once, and a browser signs in with it. The web interface
+prints its address among the server's lines and ends with the server, also when the server is
+killed. If the web interface ends by itself (its port is taken), the server says so and goes
+on.
 
 In another terminal, in a project directory:
 
@@ -2765,7 +2773,7 @@ curl -fsSL https://raw.githubusercontent.com/kadeng/calu/main/install.sh | sudo 
 sudo calu setup              # 2. the database and root's logins in /etc/calu (one user password)
 calu doctor --sudo .         # 3. check the arrangement; starts nothing
 calu login --sudo            # 4. only if Claude Code is not logged in for you yet
-calu serve --sudo            # 5. calu as root, Claude Code as you
+calu serve --sudo            # 5. calu as root, Claude Code as you (--web: the web interface too)
 calu attach --sudo           # 6. the client runs as root; it opens files and starts programs as you
 calu web --sudo              #    the web interface runs as root; it reads and writes files as you
 ```
@@ -3120,7 +3128,7 @@ unless it is empty; `db-admin`: the database owner's login, the same password).
 | Command | Purpose | Login |
 |---|---|---|
 | `calu run [DIR]` | one checked session in the foreground | user |
-| `calu serve` | a server that runs many sessions | user, once |
+| `calu serve [--web]` | a server that runs many sessions; with `--web` also the web interface, as its child | user, once |
 | `calu start [DIR]` | ask the running `calu serve` for a session and attach | user |
 | `calu attach [ADDRESS]` | terminal client of a running session | user, or a token |
 | `calu list-sessions [N]` | the last conversations of this directory, to resume or fork | user |
