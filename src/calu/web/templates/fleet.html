@@ -40,7 +40,7 @@
 {% if not sessions %}
 <p class="empty">
   {% if query %}No session matches {{ query }}.
-  {% else %}No session is running. Start one with <code>calu run</code> in a project directory.{% endif %}
+  {% else %}No session is running. Start one in the <a href="/pane">chat pane</a>, or with <code>calu start</code> (needs <code>calu serve</code>) or <code>calu run</code> in a project directory.{% endif %}
 </p>
 {% endif %}
 {% endblock %}

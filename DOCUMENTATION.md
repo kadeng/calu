@@ -12,8 +12,9 @@ This file is the user documentation. It does not assume that you have read
 
 | Part | Sections | Read it when |
 |---|---|---|
+| Installation | [Installation](#installation) | you install Calu; the [quickstart](README.md#quickstart) is the short form |
 | 1. Concepts | [Calu in brief](#calu-in-brief) to [The decision about a step](#the-decision-about-a-step) | you are new, or a term is unclear |
-| 2. Tasks | [Install and set up](#install-and-set-up) to [Troubleshooting](#troubleshooting) | you want to do something; the sections follow the order in which a user meets them |
+| 2. Tasks | [The first session](#the-first-session) to [Troubleshooting](#troubleshooting) | you want to do something; the sections follow the order in which a user meets them |
 | 3. Reference | [Commands](#commands) to [Configuration reference](#configuration-reference) | you look something up |
 
 Each section starts with what it is for and can be read on its own. Every setting with its
@@ -32,6 +33,8 @@ the code; this file names settings and links there.
 
 ## Contents
 
+- [Installation](#installation) (the [quickstart](README.md#quickstart) is in the README)
+
 **Part 1: Concepts**
 
 - [Calu in brief](#calu-in-brief)
@@ -41,7 +44,6 @@ the code; this file names settings and links there.
 
 **Part 2: Tasks**
 
-- [Install and set up](#install-and-set-up)
 - [The first session](#the-first-session)
 - [Working day to day](#working-day-to-day)
 - [Deciding a step](#deciding-a-step)
@@ -71,6 +73,142 @@ the code; this file names settings and links there.
 - [Limits and fixed numbers](#limits-and-fixed-numbers)
 - [Upgrading and starting over](#upgrading-and-starting-over)
 - [Configuration reference](#configuration-reference)
+
+---
+
+## Installation
+
+This section takes a machine from nothing to a state in which a session can start, and names
+every choice on the way. The shortest path is the [quickstart in the
+README](README.md#quickstart): Linux or WSL2, a user with `sudo`, the install script as root,
+one password, `calu serve --sudo --web`. The steps below are the same, with the alternatives.
+
+**Requirements**
+
+| You need | Detail |
+|---|---|
+| Linux on the machine where Claude Code runs | WSL2, a container or an SSH host count; clients may run anywhere. macOS is not supported yet on that side |
+| Claude Code, working in the project | installed and signed in as the user it runs as; run `claude` once in a terminal in the project folder: sign in, trust the folder. Calu neither checks nor changes that setup |
+| PostgreSQL | Docker on this machine for a local database that Calu manages, or a server you have ([the database](#the-database)) |
+| A key for the checker models | an Anthropic API key by default, or AWS credentials for Bedrock, or another provider's key ([models and keys](#models-and-keys)). The checkers never use Claude Code's own sign-in |
+| `bubblewrap` and `socat` | only for Claude Code's sandbox, which is optional; the install script adds them with `--with-sandbox` |
+
+Calu itself needs nothing else: the install script brings uv, and uv brings Python 3.14 if the
+machine has none.
+
+### Step 1: install Calu
+
+Calu is one package with every command, the web interface and the full-screen terminal
+client. Two ways to install it:
+
+| Install | Command | Use it when |
+|---|---|---|
+| **For the machine, as root** (recommended) | `curl -fsSL https://raw.githubusercontent.com/kadeng/calu/main/install.sh \| sudo bash` | Calu runs as root and Claude Code as you (`--sudo`): the operating system keeps the agent away from Calu's logins and checker keys ([Calu as root](#calu-as-root-claude-code-as-another-user)) |
+| For your own user | `curl -fsSL https://raw.githubusercontent.com/kadeng/calu/main/install.sh \| bash` | no root on the machine, or a container where you are the only user; the sandbox then keeps Claude's commands away from Calu's files |
+
+- **What the script does.** [install.sh](install.sh) lists its steps at the top, one function
+  each: it installs curl and git if they are missing (as root), downloads uv at a pinned
+  version and checks its SHA-256 against the value written in the script, then runs `uv tool
+  install` of Calu from GitHub. As root everything goes into `/usr/local/lib/calu`, owned and
+  writable by root only, the commands into `/usr/local/bin`; for a user, into uv's tool
+  directory and `~/.local/bin`. It starts nothing and changes no setting.
+- **Install exactly what you read.** Download the script of one commit, read it, and install
+  that commit:
+
+  ```bash
+  curl -fsSLo install.sh https://raw.githubusercontent.com/kadeng/calu/<commit>/install.sh
+  sudo bash install.sh --ref <commit>
+  ```
+
+- **Options** (after `bash -s --` when piped): `--ref <branch, tag or commit>`, `--source <git
+  repository>`, `--with-sandbox` (root only: bubblewrap and socat for Claude Code's sandbox,
+  and on Ubuntu 23.10 and later the AppArmor profile that lets bubblewrap create user
+  namespaces).
+- **Update:** run the script again. **Remove:** `sudo calu uninstall` (or `calu uninstall`
+  for your own installation) removes Calu, its logins, its state and its local database, and
+  keeps the programs the script installed ([remove Calu](#upgrading-and-starting-over)).
+- Without the script: `uv tool install git+https://github.com/kadeng/calu` for your user.
+
+### Step 2: set up the database and your password
+
+```bash
+sudo calu setup              # as root (or `calu setup` for your own installation)
+```
+
+`calu setup` asks, the first time:
+
+| Question | Choices | Option for scripts |
+|---|---|---|
+| Which database | a local one in Docker, a PostgreSQL server you have, AWS RDS with IAM | `--database docker\|server\|rds-iam` |
+| For Docker: data directory and port | defaults: `<state>/calu/db` (`/var/lib/calu/db` as root), port 5433 | `--data-dir`, `--port` |
+| For Docker: stop with the server | keep it running (default), or stop it when `calu serve` ends and leave it stopped after a reboot. `calu run` and `calu serve` start it either way | `--stop-db-with-server`, `--no-stop-db-with-server` |
+| For a server: host, port, database, a database user and its password | that user creates Calu's tables and its login role; Calu keeps its login for migrations | `--host`, `--port`, `--dbname`, `--user`, `--sslmode`, `--sslrootcert` |
+| The calu user password | the one password Calu asks for: when a session or the server starts, when a browser or an IDE signs in, when you change a setting from a terminal. An empty one means Calu never asks ([what that costs](#the-calu-login-and-the-user-password)) | `--no-password` for an empty one |
+| Claude Code's sandbox | on when bubblewrap and socat are installed | `--sandbox`, `--no-sandbox` |
+
+Running `calu setup` again applies new migrations and keeps everything else;
+`--set-password` changes the password. [The database](#the-database) describes the three
+variants.
+
+### Step 3: give the checkers a model
+
+The checkers never use Claude Code's account. By default every role (each checker, the
+narrator, the summarizer) uses Claude Haiku on the Anthropic API. Put the key into Calu's key
+file, which Claude Code never sees:
+
+```bash
+sudoedit /etc/calu/.env                                       # as root: ANTHROPIC_API_KEY=sk-ant-...
+echo 'ANTHROPIC_API_KEY=sk-ant-...' >> ~/.config/calu/.env    # for your own installation
+calu config models auto          # optional: picks a model from the credentials it finds
+calu doctor --keys               # asks each provider whether its key is accepted
+```
+
+[Models and keys](#models-and-keys) lists the providers.
+
+### Step 4: start the server and a client
+
+```bash
+cd ~/projects && calu serve --sudo --web     # as root for you; or `calu serve --web`
+```
+
+The server starts sessions in its projects directory and below (`--projects DIR`, default:
+the current directory). `--web` also runs the web interface at <http://calu.localhost:8800/>,
+where a browser signs in with the calu user password. The chat pane
+(`/pane#dir=/path/to/project`), the full-screen client (`calu start`, `calu attach`) and the
+IDE extensions start sessions through the server ([working day to day](#working-day-to-day)).
+
+Register a project to give it its own settings and network policy (a session in an
+unregistered folder reaches nothing on the network):
+
+```bash
+cd ~/projects/shop && calu project add . --name shop
+```
+
+### Step 5 (optional): the IDE extensions
+
+- **VSCode** (1.106 or newer): not on the marketplace yet. Build the file and install it with
+  "Extensions: Install from VSIX…":
+
+  ```bash
+  cd extensions/vscode && npm ci && npm run package   # writes calu.vsix (Node 22 or newer)
+  ```
+
+  With Remote-SSH, WSL or a dev container, install it on the remote side: the extension runs
+  where the workspace is. It finds `calu` itself, offers to install uv and Calu where they are
+  missing, and checks that Claude Code is there (it does not install it).
+- **PyCharm** (2026.3): see [extensions/jetbrains](extensions/jetbrains) and
+  [PyCharm: the three ways to work](#pycharm-the-three-ways-to-work).
+
+### Check the result
+
+```bash
+calu doctor --sudo .   # as root for you: this machine and this project directory
+calu doctor --db       # also asks the database (asks the user password)
+```
+
+`calu doctor` starts nothing. It reports missing programs, the permission mode a session
+would start in, sandbox entries in Claude Code's settings files that would stop a session, and
+credentials stored without a password.
 
 ---
 
@@ -492,118 +630,6 @@ calu config set auto_escalate.subagents true  # ... and every subagent's result
 ---
 
 # Part 2: Tasks
-
-## Install and set up
-
-This section takes a machine from nothing to a state in which a session can start. You do it
-once per machine.
-
-**Requirements**
-
-| You need | Detail |
-|---|---|
-| Linux on the machine where Claude Code runs | WSL2, a container or an SSH host count; clients may run anywhere |
-| [uv](https://docs.astral.sh/uv/) | it downloads Python 3.14 if the machine has none |
-| Claude Code, working in the project | run `claude` once in a terminal in the project folder: sign in, trust the folder. Calu neither checks nor changes that setup |
-| PostgreSQL | a server you have, or Docker on this machine for a local one that Calu manages |
-| Credentials for the checker models | an API key (Anthropic by default), AWS credentials for Bedrock, or the machine's own Claude Code account ([models and keys](#models-and-keys)) |
-| `bubblewrap` and `socat` | only for Claude Code's sandbox, which is optional (Debian/Ubuntu: `sudo apt install bubblewrap socat`) |
-
-**Step 1: install Calu.** Calu is one package. It contains every command, the web interface
-and the full-screen terminal client. The install script installs uv if it is missing, then
-calu:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/kadeng/calu/main/install.sh | bash        # for you
-curl -fsSL https://raw.githubusercontent.com/kadeng/calu/main/install.sh | sudo bash   # as root, for --sudo
-calu doctor                                          # reports what is in place and what is missing
-```
-
-- For you, it puts the `calu` command into `~/.local/bin`; with uv already there it is the same
-  as `uv tool install git+https://github.com/kadeng/calu`.
-- With `sudo` it makes the root installation of [running Calu as root](#quick-start-with-sudo):
-  calu and its own uv in `/usr/local/lib/calu`, the command in `/usr/local/bin`, nothing
-  writable but by root; it installs curl and git if they are missing.
-- Options after `bash -s --`: `--ref <branch, tag or commit>`, `--source <git repository>`,
-  `--with-sandbox` (root only: bubblewrap and socat for Claude Code's sandbox, and on Ubuntu
-  23.10 and later the AppArmor profile that lets bubblewrap create user namespaces). Example:
-  `curl -fsSL .../install.sh | sudo bash -s -- --with-sandbox`.
-- Running it again updates calu. It starts nothing and changes no setting.
-- To install exactly what you have read: download the script of one commit
-  (`.../kadeng/calu/<commit>/install.sh`), read it, and run `sudo bash install.sh --ref <commit>`.
-
-**Step 2: set up the database.** `calu setup` asks which database to use (a local one in
-Docker, an existing server, or RDS), creates the tables, and asks you to choose one password,
-the **calu user password**. Calu asks for it when a session starts (`calu run`, `calu
-serve`), when you decide a step or change a setting from a terminal, and when a browser or
-an IDE signs in. For an existing server, setup also asks for a database user that may create
-tables and roles; Calu keeps that login, protected by the same password, for later
-migrations.
-
-```bash
-calu setup                 # asks for the database, the user password and the sandbox
-```
-
-An empty user password means Calu never asks for one. Then every program that runs as you
-can use Calu's login, Claude's commands outside the sandbox included, so they could decide
-their own escalations. Use it for tests, or together with the sandbox or [Calu as
-root](#calu-as-root-claude-code-as-another-user). `calu setup --set-password` changes the
-password later ([credentials](#credentials-and-tokens)).
-
-`calu setup` also asks whether to switch Claude Code's sandbox on. It offers "on" when
-`bubblewrap` and `socat` are installed. [The database](#the-database) describes the three
-variants and the options for scripts.
-
-**Step 3: give the checkers a model.** The checkers never use Claude Code's account. By
-default every role (each checker, the narrator, the summarizer) uses Claude Haiku on the
-Anthropic API:
-
-```bash
-echo 'ANTHROPIC_API_KEY=sk-ant-...' >> ~/.config/calu/.env
-calu config models auto          # picks a model from the credentials it finds
-calu doctor --keys               # asks each provider whether its key is accepted
-```
-
-Claude Code never sees the keys in `~/.config/calu/.env`. The checkers need an API provider:
-a Claude subscription signs in only Claude Code, which runs the main conversation
-([models and keys](#models-and-keys)).
-
-**Step 4: register the project.** A project row carries the directory's own settings and its
-network policy:
-
-```bash
-cd ~/src/shop
-calu project add . --name shop   # network policy "proxy" with a starter allow list
-```
-
-A session started without a registered project reaches nothing on the network
-([the sandbox](#the-sandbox-and-the-network-policy)).
-
-**Step 5 (optional): the IDE extension.**
-
-- **VSCode** (1.106 or newer): the extension is not on the marketplace yet. Build the file and
-  install it with "Extensions: Install from VSIX…":
-
-  ```bash
-  cd extensions/vscode && npm ci && npm run package   # writes calu.vsix
-  ```
-
-  With Remote-SSH, WSL or a dev container, install it on the remote side: the extension runs
-  where the workspace is. It finds `calu` itself, offers to install uv and Calu where they are
-  missing, and checks that Claude Code is there (it does not install it).
-- **PyCharm** (2026.3): see [extensions/jetbrains](extensions/jetbrains) and
-  [PyCharm: the three ways to work](#pycharm-the-three-ways-to-work).
-
-**Check the result.**
-
-```bash
-calu doctor .          # this machine and this project directory
-calu doctor --db       # also asks the database (asks the user password)
-```
-
-`calu doctor` starts nothing. It reports missing programs, the permission mode a session
-would start in, sandbox entries in Claude Code's settings files that would stop a session, and
-credentials stored without a password.
 
 ## The first session
 
