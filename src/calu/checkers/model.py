@@ -354,6 +354,10 @@ class Step(BaseModel):
     """Hints from the user's rules for the checker, e.g. paths outside the allowlists."""
     narration: str = ""
     """Claude's thinking and text before this call, narrated in indirect speech (may be "")."""
+    narration_cut: int = 0
+    """Characters of Claude's thinking and text before this call that the narrator did not
+    read, because they were longer than `calu.context.narrator.MAX_INPUT_CHARS` (0: none).
+    The rendered step says so; with `context.escalate_on_cut` an approval becomes an escalation."""
     asked_about: str = ""
     """What Claude Code says it is asking permission for, when **it** raised the question
     (agent/records/PLAN.md D60).

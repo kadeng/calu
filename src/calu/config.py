@@ -152,6 +152,11 @@ class ContextConfig(ConfigModel):
     narrator_model: str = ""
     """Model that narrates Claude's thinking and text in indirect speech, so that a checker
     does not read it as an instruction; blank uses the default (see a checker's `model`)."""
+    escalate_on_cut: bool = True
+    """A step waits for a human when a checker could not see all of what it judges, because
+    a text was longer than calu's (generous) limits: Claude's thinking and text before the
+    step, or a subagent's task or result. The checker's verdict and the size of the cut are in
+    the escalation. A cut of the command or diff itself always escalates."""
     max_recent_chars: int = Field(default=100_000, ge=1_000)
     """Upper bound in characters for the unfolded turns and the running turn in a checker's
     context. Above it the oldest turns are folded into the chat summary at once, as many as it
@@ -652,8 +657,9 @@ class ChangesConfig(ConfigModel):
     on something that already stands: the files go back to the state from before the command."""
     max_file_bytes: int = Field(default=1_000_000, ge=0)
     """Files above this size are reported by path and size, but their content is not shown."""
-    max_patch_bytes: int = Field(default=200_000, ge=0)
-    """Upper bound on the patch a checker or a client ever sees."""
+    max_patch_bytes: int = Field(default=400_000, ge=0)
+    """Upper bound on the patch a checker or a client ever sees; a checker shown a cut patch
+    cannot approve (it escalates)."""
     always_capture: list[str] = Field(default_factory=lambda: [".env"])
     """Paths to snapshot even though a `.gitignore` covers them, so that a write to them is
     noticed; they are the ones that matter most and the ones git would otherwise hide."""

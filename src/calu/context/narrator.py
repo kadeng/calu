@@ -34,8 +34,10 @@ from pydantic_ai.settings import ModelSettings
 from calu.markdown import fence
 from calu.models import run_bounded
 
-MAX_INPUT_CHARS = 6_000
-"""Longer input is cut at the start: the end is closest to the next action."""
+MAX_INPUT_CHARS = 30_000
+"""Longer input is cut at the start: the end is closest to the next action. Generous, so that
+it practically never cuts (PLAN.md D273); `unread_chars` says when it does, and
+`context.escalate_on_cut` then makes the step wait for a person."""
 
 
 @dataclass(frozen=True)
@@ -92,6 +94,19 @@ def render_input(outputs: list[ClaudeOutput], max_chars: int = MAX_INPUT_CHARS) 
     return "# Claude's thinking and output to narrate\n\n" + "\n\n".join(reversed(sections))
 
 
+def unread_chars(outputs: list[ClaudeOutput], max_chars: int = MAX_INPUT_CHARS) -> int:
+    """Count the characters of Claude's thinking and text that the narrator does not read.
+
+    Args:
+        outputs: The blocks `render_input` gets.
+        max_chars: Its limit.
+
+    Returns:
+        How many characters beyond `max_chars` the blocks hold together; 0 if they fit.
+    """
+    return max(0, sum(len(output.text) for output in outputs) - max_chars)
+
+
 @dataclass
 class Narrator:
     """The narrator agent with Markdown instructions.
@@ -103,7 +118,7 @@ class Narrator:
     instructions: str
     model: str | Model
     usage_limits: UsageLimits = field(
-        default_factory=lambda: UsageLimits(request_limit=2, output_tokens_limit=8_000)
+        default_factory=lambda: UsageLimits(request_limit=2, output_tokens_limit=16_000)
     )
     _agent: Agent[None, Narration] | None = field(default=None, init=False, repr=False)
     _built_for: str | None = field(default=None, init=False, repr=False)

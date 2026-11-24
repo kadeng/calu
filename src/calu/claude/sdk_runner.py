@@ -137,8 +137,10 @@ anyway stops the step: the in-process hook of the SDK fails closed, and Claude r
 once per timeout (verified in `spikes/RESULTS.md`, "Hook timeouts"), which is why this is 15
 minutes and not hours."""
 MAX_RESULT_CHARS = 4_000
-SUBAGENT_RESULT_CHARS = 60_000
-"""Upper bound for a subagent result passed to the result checker."""
+SUBAGENT_RESULT_CHARS = 240_000
+"""Upper bound for a subagent result passed to the result checker: twice what it reads
+(`calu.checkers.result_checker.MAX_RESULT_CHARS`), so that a longer result is still seen as
+cut there and escalates with `context.escalate_on_cut` (PLAN.md D273)."""
 SYNTHETIC_MODEL = "<synthetic>"
 """`AssistantMessage.model` of a text Claude Code wrote itself: the output of a slash command
 it ran without the model, or an error text."""

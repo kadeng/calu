@@ -32,17 +32,17 @@ from calu.checkers.model import Step
 from calu.checkers.symbols import changed_definitions
 from calu.markdown import fence
 
-MAX_CONTRACTS = 6
+MAX_CONTRACTS = 20
 """How many changed definitions a rendered edit lists with their contract."""
 
-MAX_DOCSTRING_CHARS = 2000
+MAX_DOCSTRING_CHARS = 8_000
 """How much of one docstring a rendered edit shows beside the diff."""
 
 MAX_PATH_CHARS = 4096
 """Characters of an edit's target path that are shown: the longest path Linux accepts
 (`PATH_MAX`). What a longer path has beyond that counts as cut (`render_step_cut`)."""
 
-MAX_CHARS = 60_000
+MAX_CHARS = 200_000
 """Upper bound for a rendered command, diff or tool input; longer text is cut, which makes the
 step one a checker cannot approve (`render_step_cut`). An ordinary new file of a thousand lines
 fits; the limit keeps one step from filling a checker's context window."""
@@ -416,6 +416,12 @@ def render_step_cut(step: Step, workspace: Path) -> RenderedStep:
             "not the user's):\n" + _quote(step.narration)
         )
         lines.append("")  # ends the block quote
+    if step.narration_cut:
+        # calu's own line: the narration above misses the oldest part of Claude's text.
+        lines.append(
+            f"[The oldest {step.narration_cut} characters of Claude's thinking and text before "
+            "this call were longer than the narrator reads and are not narrated above.]"
+        )
     inp = step.tool_input
 
     def block(label: str, what: str, text: str, info: str) -> int:

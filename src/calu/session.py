@@ -363,7 +363,7 @@ TRACE_BLOCK_EVENTS = (
 the `traces` settings in an idle session takes effect with the first of them
 (`Session._follow_traces`)."""
 
-MAX_PENDING_OUTPUTS = 50
+MAX_PENDING_OUTPUTS = 500
 """Thinking/text blocks kept per agent until its next tool call (older ones are dropped)."""
 
 CROSS_SESSION_LABEL = "Message from another Claude session, not from the user"
@@ -438,7 +438,7 @@ HANDBACK_REFUSED = (
     "now. {note}"
 )
 """The reason a subagent reads when a person denied its handed-back report (D252)."""
-HANDBACK_REPORT_CHARS = 60_000
+HANDBACK_REPORT_CHARS = 240_000
 """The longest handed-back report the result checker reads, as for a final result
 (`calu.claude.sdk_runner.SUBAGENT_RESULT_CHARS`)."""
 DECISION_NOTE_TEMPLATE = (
@@ -4198,7 +4198,9 @@ class Session:
             who = f"Message to subagent {safe_name(target)}"
         try:
             async with self._checking_scope():
-                outcome = await self.result_checker.run_task(task, self.context.check_context())
+                outcome = await self.result_checker.run_task(
+                    task, self.context.check_context(), self.config.context.escalate_on_cut
+                )
             review = outcome.review
         except Exception as exc:
             log.exception("reviewing a subagent task failed")
@@ -4230,7 +4232,9 @@ class Session:
         """
         try:
             async with self._checking_scope():
-                return await self.result_checker.run(result, self.context.check_context())
+                return await self.result_checker.run(
+                    result, self.context.check_context(), self.config.context.escalate_on_cut
+                )
         except Exception as exc:
             log.exception("reviewing a subagent result failed")
             return ResultOutcome(

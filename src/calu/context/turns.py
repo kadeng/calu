@@ -19,12 +19,12 @@ from pydantic import BaseModel, Field
 
 from calu.checkers.render import inline, safe_name
 
-MAX_ANSWER_CHARS = 1_500
-MAX_SUMMARY_CHARS = 4_000
+MAX_ANSWER_CHARS = 10_000
+MAX_SUMMARY_CHARS = 10_000
 """Characters of a step summary shown in a turn (a checker's summary has up to about 400 words)."""
-MAX_COMMENT_CHARS = 1_500
+MAX_COMMENT_CHARS = 4_000
 """Characters of a checker comment shown in a turn."""
-MAX_NARRATION_CHARS = 6_000
+MAX_NARRATION_CHARS = 30_000
 """Characters of one narration shown in a turn (the narrator's input has the same bound)."""
 
 

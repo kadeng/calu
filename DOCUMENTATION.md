@@ -513,9 +513,12 @@ Two more models work for the checkers and decide nothing:
   reports the times at which the session's recent steps ran. `changed_files` reports the step
   that last changed each file. It derives the step from the file's change time (ctime), which
   an unprivileged process cannot forge.
-- Calu truncates a step longer than 60,000 characters, or a commit diff longer than 240,000
-  characters, before it shows it to a checker. When a checker approves a truncated step, Calu
-  turns the approval into an escalation.
+- Calu's limits on what a checker reads are generous, so that they practically never cut
+  (a step 200,000 characters, a commit diff 400,000, Claude's thinking and text before a step
+  30,000, a subagent's task 60,000 and its result 120,000). When one does cut, the checker is
+  told. An approval of a cut step or diff always becomes an escalation; an approval of a step
+  whose preceding thinking, or of a subagent task or result, that was cut becomes one while
+  `context.escalate_on_cut` is on (the default).
 - Checkers judge the step, not the whole program. Overall correctness of a change is the
   changeset checker's task.
 
@@ -3966,7 +3969,8 @@ This section collects the fixed numbers of Calu in one place. Settings with defa
 
 | Subject | Value |
 |---|---|
-| A step shown to a checker | truncated after 60,000 characters; a commit's diff after 240,000 |
+| What a checker reads | a step up to 200,000 characters, a commit's diff up to 400,000, Claude's thinking and text before a step up to 30,000 (narrated), a subagent's task up to 60,000 and its result up to 120,000; a cut is shown and escalates (`context.escalate_on_cut` for the last three) |
+| The conversation a checker reads | up to `context.max_recent_chars` (100,000 characters) of unfolded turns; more folds the oldest turns into the chat summary at once |
 | A checker's file tools | a file over 2 MB is not read; one search reads at most 20 MB and stops after 10 seconds |
 | A held step | becomes an escalation after 5 minutes |
 | An escalation | waits `escalation_timeout_s` (default 8 hours), then the session stops |

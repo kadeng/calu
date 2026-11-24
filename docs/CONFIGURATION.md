@@ -84,6 +84,7 @@ This file is generated from `calu.config` by `calu.configdoc`; a test keeps the 
 | `context.summarizer_model` | text | `""` | Model that writes the chat summary when turns are folded; blank uses the default (see a checker's `model`). |
 | `context.narrate` | bool | `true` | Narrate Claude's thinking and text for the checkers (`calu.context.narrator`). |
 | `context.narrator_model` | text | `""` | Model that narrates Claude's thinking and text in indirect speech, so that a checker does not read it as an instruction; blank uses the default (see a checker's `model`). |
+| `context.escalate_on_cut` | bool | `true` | A step waits for a human when a checker could not see all of what it judges, because a text was longer than calu's (generous) limits: Claude's thinking and text before the step, or a subagent's task or result. The checker's verdict and the size of the cut are in the escalation. A cut of the command or diff itself always escalates. |
 | `context.max_recent_chars` | int | `100000` | Upper bound in characters for the unfolded turns and the running turn in a checker's context. Above it the oldest turns are folded into the chat summary at once, as many as it takes to get under it, not only after `fold_every` turns. |
 | `claude` | ClaudeConfig | see below | The Claude Code session itself: model, effort, permission mode, sandbox. |
 | `claude.use_bedrock` | bool | `false` | Set `CLAUDE_CODE_USE_BEDROCK=1` for Claude Code, so that it runs on AWS Bedrock with the environment's AWS credentials. False leaves the variable as it is; calu does not otherwise touch how Claude Code authenticates. |
@@ -115,7 +116,7 @@ This file is generated from `calu.config` by `calu.configdoc`; a test keeps the 
 | `changes.snapshot` | bool | `false` | Take a git snapshot of the project directory before and after every Bash step. |
 | `changes.review` | bool | `false` | Let a checker judge what a command wrote, once it has run, and undo the change if it refuses (needs `snapshot`). The agent waits for that review, so a refusal is not a comment on something that already stands: the files go back to the state from before the command. |
 | `changes.max_file_bytes` | int | `1000000` | Files above this size are reported by path and size, but their content is not shown. |
-| `changes.max_patch_bytes` | int | `200000` | Upper bound on the patch a checker or a client ever sees. |
+| `changes.max_patch_bytes` | int | `400000` | Upper bound on the patch a checker or a client ever sees; a checker shown a cut patch cannot approve (it escalates). |
 | `changes.always_capture` | list of text | `[".env"]` | Paths to snapshot even though a `.gitignore` covers them, so that a write to them is noticed; they are the ones that matter most and the ones git would otherwise hide. |
 | `web` | WebConfig | see below | Settings of the web interface. |
 | `web.git_url_template` | text | `""` | URL of one commit in whatever git browser the project uses, with `{commit}` and `{remote}` as placeholders, e.g. "http://localhost:8080/calu/commit/{commit}". Empty guesses the URL from the project's git remote, which works for GitHub, GitLab and Bitbucket; calu does not browse git itself. |

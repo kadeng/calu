@@ -328,3 +328,34 @@ def test_an_escalation_without_a_note_takes_the_summary_as_its_note() -> None:
     assert _require_note(kept) is kept
     with pytest.raises(ModelRetry):
         _require_note(ResultReview(verdict=ResultVerdict.ANNOTATE, summary="s"))
+
+
+async def test_a_task_or_result_longer_than_the_checker_reads_escalates(tmp_path: Path):
+    """D273: the review shows the start and the end of an over-long task or result; with
+    `context.escalate_on_cut` (the default) an approval of it becomes an ESCALATE whose note
+    names the cut and the model's own verdict; without it the model's verdict stands."""
+    from calu.checkers.result_checker import MAX_RESULT_CHARS, MAX_TASK_CHARS, SubagentTask
+
+    def accept(messages, info: AgentInfo) -> ModelResponse:
+        return ModelResponse(
+            parts=[ToolCallPart(info.output_tools[0].name, {"verdict": "ACCEPT", "summary": "s"})]
+        )
+
+    checker = ResultChecker("Review subagents.", FunctionModel(accept))
+    long_result = SubagentResult(
+        agent_id="a1", description="d", prompt="p", result="r" * (MAX_RESULT_CHARS + 10)
+    )
+    outcome = await checker.run(long_result, CheckContext())
+    assert outcome.review.verdict is ResultVerdict.ESCALATE
+    assert "10 characters longer than the checker reads" in outcome.review.note
+    assert "ACCEPT" in outcome.review.note
+    kept = await checker.run(long_result, CheckContext(), escalate_cut=False)
+    assert kept.review.verdict is ResultVerdict.ACCEPT
+
+    task = SubagentTask(agent_id="", description="d", prompt="t" * (MAX_TASK_CHARS + 5))
+    reviewed = await checker.run_task(task, CheckContext())
+    assert reviewed.review.verdict is ResultVerdict.ESCALATE
+    short = await checker.run_task(
+        SubagentTask(agent_id="", description="d", prompt="t"), CheckContext()
+    )
+    assert short.review.verdict is ResultVerdict.ACCEPT

@@ -93,3 +93,22 @@ async def test_a_checker_deny_stays_a_deny(tmp_path: Path):
     )
     assert not rec.of(EscalationRequest)
     assert rec.of(ToolResult)[0].is_error
+
+
+async def test_a_step_whose_preceding_text_the_narrator_cannot_read_whole_escalates(
+    tmp_path: Path,
+):
+    """D273: Claude's thinking and text before a step longer than the narrator reads leaves
+    the checker without all of Claude's intent; with `context.escalate_on_cut` (the default)
+    an approval of that step waits for a person, and the reason says why."""
+    from calu.context.narrator import MAX_INPUT_CHARS
+
+    turn = [
+        {"text": "x" * (MAX_INPUT_CHARS + 50)},
+        # Not on the allow lists, so a checker judges it (a rule's approval needs no intent).
+        {"tool": "Bash", "input": {"command": "make test"}, "result": "a"},
+    ]
+    rec = await run_turn(tmp_path, [turn], AutoEscalate())
+    (esc,) = rec.of(EscalationRequest)
+    assert "50 characters longer than the narrator reads" in esc.reason
+    assert rec.of(ToolResult)[0].content == "a"

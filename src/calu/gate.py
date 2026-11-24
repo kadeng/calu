@@ -139,7 +139,7 @@ from calu.checkers.rules import (
 )
 from calu.config import CheckerConfig, Config
 from calu.context import label_for_unchecked
-from calu.context.narrator import ClaudeOutput
+from calu.context.narrator import ClaudeOutput, unread_chars
 from calu.honesty import NOTE_PATH_CHARS, NOTE_REASON_CHARS, HonestySnapshot, diff_paths, shown
 from calu.markdown import fence
 from calu.steps import paths_of_step
@@ -927,8 +927,12 @@ class StepGate:
             if pending is not None:
                 if pending.text is None:
                     pending.text = await self._narrate(pending.outputs)
-                if pending.text:
-                    step = step.model_copy(update={"narration": pending.text})
+                step = step.model_copy(
+                    update={
+                        "narration": pending.text or "",
+                        "narration_cut": unread_chars(pending.outputs),
+                    }
+                )
             reviewed = await self._review_task(step)
             return await self._settle(
                 Decided(route=route, decision=reviewed, source="checker", rules=rules),
@@ -992,8 +996,12 @@ class StepGate:
         if pending is not None:
             if pending.text is None:
                 pending.text = await self._narrate(pending.outputs)
-            if pending.text:
-                step = step.model_copy(update={"narration": pending.text})
+            step = step.model_copy(
+                update={
+                    "narration": pending.text or "",
+                    "narration_cut": unread_chars(pending.outputs),
+                }
+            )
         decision, runs = await self.run_checkers(
             route,
             step,
@@ -1263,26 +1271,29 @@ class StepGate:
             `decided`, with an approval turned into an ESCALATE where `_auto_escalate` says so,
             and with `hold_left` set to what the waits left of the step's `HOLD_BUDGET_S`.
         """
-        decided = self._auto_escalate(decided, held)
+        decided = self._auto_escalate(decided, held, step)
         if decided.decision.decision.approves and self._desk.holding():
             started = anyio.current_time()
             held = await self._hold(step, budget, hold_left)
             hold_left = max(hold_left - (anyio.current_time() - started), 0.0)
-            decided = self._auto_escalate(decided, held)
+            decided = self._auto_escalate(decided, held, step)
         decided.hold_left = max(hold_left, 0.0)
         return decided
 
-    def _auto_escalate(self, decided: Decided, held: str = "") -> Decided:
+    def _auto_escalate(self, decided: Decided, held: str = "", step: Step | None = None) -> Decided:
         """Turn an approval into an escalation where an approval must not stand alone.
 
-        Two cases: auto-escalation is on for the step's route, or the step was held behind an
-        escalation until its `HOLD_BUDGET_S` ran out and something still holds it (`_hold`). A
-        DENY and an ESCALATE are returned unchanged in both.
+        Three cases: auto-escalation is on for the step's route; the step was held behind an
+        escalation until its `HOLD_BUDGET_S` ran out and something still holds it (`_hold`);
+        or the checker could not read all of Claude's thinking and text before the step
+        (`Step.narration_cut`) and `context.escalate_on_cut` is on (D273). A DENY and an ESCALATE
+        are returned unchanged in all three.
 
         Args:
             decided: The decision of the checker or of the rules.
             held: What still held this step when its hold ran out, as `EscalationDesk.holding`
                 describes it; "" if the step was not held or was released.
+            step: The tool call, for its `narration_cut`; None skips that case.
 
         Returns:
             `decided` unchanged, or the same object with an ESCALATE decision and source "auto"
@@ -1294,6 +1305,26 @@ class StepGate:
             return decided
         auto = self._config().auto_escalate
         route, source = decided.route, decided.source
+        if (
+            step is not None
+            and step.narration_cut
+            and self._config().context.escalate_on_cut
+            and source == "checker"
+            and decided.decision.decision.approves
+        ):
+            decided.decision = CheckDecision(
+                decision=Decision.ESCALATE,
+                reason=(
+                    f"Claude's thinking and text before this step were {step.narration_cut} "
+                    "characters longer than the narrator reads, so the checker did not see all "
+                    "of what Claude intended (context.escalate_on_cut). The checker decided "
+                    + decided.decision.decision.value
+                    + (f": {decided.decision.reason}" if decided.decision.reason else ".")
+                ),
+                step_summary=decided.decision.step_summary,
+            )
+            decided.source = "auto"
+            return decided
         # A checker DENY stays a DENY: auto-escalation only turns approvals into questions, so
         # a hasty "allow" can never run a step that the checker blocked.
         if decided.decision.decision.approves and (

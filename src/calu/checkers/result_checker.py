@@ -19,7 +19,7 @@ through reviewer subagents).
 
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -34,8 +34,26 @@ from calu.checkers.render import code
 from calu.markdown import fence
 from calu.models import MAX_ANSWER_TOKENS, cache_settings, run_bounded
 
-MAX_RESULT_CHARS = 30_000
-"""Longer subagent results are cut (from the middle) before they are sent to the checker."""
+MAX_RESULT_CHARS = 120_000
+"""Longer subagent results are cut (from the middle) before they are sent to the checker.
+Generous, so that it practically never cuts (PLAN.md D273); a cut escalates with
+`context.escalate_on_cut` (`run`)."""
+
+MAX_TASK_CHARS = 60_000
+"""Longer tasks Claude gives a subagent are cut (from the middle), as results are."""
+
+
+def cut_chars(task: str, result: str = "") -> int:
+    """Count the characters a review does not show of a task and a result.
+
+    Args:
+        task: Claude's text for the subagent.
+        result: The subagent's result or report; "" for the review of a task.
+
+    Returns:
+        The characters beyond `MAX_TASK_CHARS` and `MAX_RESULT_CHARS`; 0 if both fit.
+    """
+    return max(0, len(task) - MAX_TASK_CHARS) + max(0, len(result) - MAX_RESULT_CHARS)
 
 
 class ResultVerdict(StrEnum):
@@ -169,7 +187,7 @@ class ResultChecker:
         )
         parts.append(
             f"# Result to review\n\nA {kind} ({description}) {done}.\n\n"
-            f"Task Claude gave it:\n{fence(_cut_middle(result.prompt, 10_000))}\n\n"
+            f"Task Claude gave it:\n{fence(_cut_middle(result.prompt, MAX_TASK_CHARS))}\n\n"
             f"{what}:\n{fence(_cut_middle(result.result))}"
         )
         return parts
@@ -201,7 +219,7 @@ class ResultChecker:
         )
         parts.append(
             f"# Task to review\n\n{what}\n\n{before}"
-            f"Claude's text for the subagent:\n{fence(_cut_middle(task.prompt, 10_000))}"
+            f"Claude's text for the subagent:\n{fence(_cut_middle(task.prompt, MAX_TASK_CHARS))}"
         )
         return parts
 
@@ -230,7 +248,9 @@ class ResultChecker:
         """
         return (await self.run(result, context)).review
 
-    async def run(self, result: SubagentResult, context: CheckContext) -> ResultOutcome:
+    async def run(
+        self, result: SubagentResult, context: CheckContext, escalate_cut: bool = True
+    ) -> ResultOutcome:
         """Review `result` and return the review with the cost of the model call.
 
         Never raises for model or network errors (see the class docstring); the session stores
@@ -239,14 +259,20 @@ class ResultChecker:
         Args:
             result: The subagent's task and result.
             context: Cached project/conversation context and recent turns.
+            escalate_cut: `context.escalate_on_cut`: a review that could not show all of the task
+                or the result (`cut_chars`) ends in ESCALATE whatever the model answered.
 
         Returns:
             The review, the token counts (None after a failure) and the duration in
             milliseconds.
         """
-        return await self._run(self.build_prompt(result, context), "result")
+        outcome = await self._run(self.build_prompt(result, context), "result")
+        cut = cut_chars(result.prompt, result.result)
+        return _escalated_for_cut(outcome, cut, "task or result") if escalate_cut else outcome
 
-    async def run_task(self, task: SubagentTask, context: CheckContext) -> ResultOutcome:
+    async def run_task(
+        self, task: SubagentTask, context: CheckContext, escalate_cut: bool = True
+    ) -> ResultOutcome:
         """Review a task Claude gives a subagent, before the subagent gets it.
 
         Never raises for model or network errors (see the class docstring).
@@ -254,12 +280,15 @@ class ResultChecker:
         Args:
             task: The task that starts a subagent, or Claude's later message to one.
             context: Cached project/conversation context and recent turns.
+            escalate_cut: `context.escalate_on_cut`, as for `run`.
 
         Returns:
             The review (its `summary` retells the task), the token counts (None after a
             failure) and the duration in milliseconds.
         """
-        return await self._run(self.build_task_prompt(task, context), "task")
+        outcome = await self._run(self.build_task_prompt(task, context), "task")
+        cut = cut_chars(task.prompt)
+        return _escalated_for_cut(outcome, cut, "task") if escalate_cut else outcome
 
     async def _run(self, prompt: list[str | CachePoint], what: str) -> ResultOutcome:
         """Run one review and return it with its cost; never raises for model errors.
@@ -298,6 +327,30 @@ class ResultChecker:
             cache_read_tokens=run.usage.cache_read_tokens,
             duration_ms=elapsed_ms(started),
         )
+
+
+def _escalated_for_cut(outcome: ResultOutcome, cut: int, what: str) -> ResultOutcome:
+    """Turn a review that could not show everything into an escalation (D273).
+
+    Args:
+        outcome: The model's review.
+        cut: Characters the review did not show (`cut_chars`); 0 leaves `outcome` as it is.
+        what: What was cut, for the note ("task", "task or result").
+
+    Returns:
+        `outcome` unchanged when nothing was cut or it escalates already; otherwise the same
+        cost with an ESCALATE review whose note names the cut and the model's own verdict.
+    """
+    review = outcome.review
+    if not cut or review.verdict is ResultVerdict.ESCALATE:
+        return outcome
+    note = (
+        f"The subagent's {what} was {cut} characters longer than the checker reads; it saw "
+        f"the start and the end only (context.escalate_on_cut). The checker answered "
+        f"{review.verdict.value}" + (f": {review.note}" if review.note else ".")
+    )
+    escalated = review.model_copy(update={"verdict": ResultVerdict.ESCALATE, "note": note})
+    return replace(outcome, review=escalated)
 
 
 def _require_note(output: ResultReview) -> ResultReview:
