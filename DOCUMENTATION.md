@@ -1043,6 +1043,10 @@ chat pane: http://calu.localhost:8800/pane#token=... (also in an iframe of a loc
 - **Project.** Add `&dir=/path/to/project` to the address (`#dir=...` without a token). The
   pane attaches to the session of that folder, as VSCode does with its workspace folder, and
   starts new sessions there. Without `dir` it uses the folder `calu web` was started in.
+- **One session.** `&session=<id>` attaches the pane to that session first. The sessions list
+  of `calu web` links each running session of this machine and of your user this way
+  ("chat", in a window of its own). A session of another machine has no such link: the
+  pane's bridge runs on the machine of `calu web`; use its "live" view instead.
 - **Login.** The token after `#` is the login of `calu web`. The browser never sends the part
   after `#` to a server; the pane keeps the token for the tab and removes it from the address.
   Treat an address with the token like the token itself. When `calu web` signs browsers in

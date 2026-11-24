@@ -154,14 +154,14 @@ def settings(workspace: Path) -> ProjectSettings:
 
 
 @asynccontextmanager
-async def scripted_session(project: Path) -> AsyncGenerator[None]:
+async def scripted_session(project: Path) -> AsyncGenerator[str]:
     """Run a scripted session of `project` on a token-free local socket (`--insecure`).
 
     Args:
         project: The project directory.
 
     Yields:
-        Nothing; the session runs until the block ends.
+        The session's id; the session runs until the block ends.
     """
     bus = Bus()
     script = FakeScript(turns=[list(turn) for turn in TURNS])
@@ -182,7 +182,7 @@ async def scripted_session(project: Path) -> AsyncGenerator[None]:
         listener = localsocket.bind(path, owner=os.geteuid())
         tasks.start_soon(server.listen_local, listener, path)
         try:
-            yield
+            yield str(store.session_id)
         finally:
             await session.stop()
             tasks.cancel_scope.cancel()
@@ -417,4 +417,29 @@ async def test_the_pane_works_in_each_layout(
         assert TOKEN not in settings_page.url
         assert "full web interface" in await settings_page.inner_text("body")
         assert "/pane" in frame.url, "the pane stays where it is"
+    assert errors == [], errors
+
+
+async def test_a_sessions_list_link_attaches_the_pane_to_its_session(
+    browser_context: Any, world: Path
+) -> None:
+    """D271: the "chat" link of `calu web`'s sessions list names the session
+    (`#session=<id>`). The pane attaches to that session first, also when the folder in the
+    address is another one: the workspace it then shows is the session's own."""
+    context = await browser_context(viewport={"width": 900, "height": 700})
+    page = await context.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    elsewhere = world.parent / "elsewhere"
+    elsewhere.mkdir()
+    async with (
+        scripted_session(world) as session_id,
+        serve(pane_app(CredentialStore(world.parent / "c.json"))) as base,
+    ):
+        await page.goto(f"{base}/pane#token={TOKEN}&dir={elsewhere}&session={session_id}")
+        await page.wait_for_selector('[data-testid="input-text"]', timeout=20_000)
+        await page.wait_for_function(
+            "() => document.body.innerText.includes('project')", timeout=20_000
+        )
+        assert f"session={session_id}" in page.url, "the session stays in the address"
     assert errors == [], errors

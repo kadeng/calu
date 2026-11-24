@@ -1172,7 +1172,10 @@ def _render(request: Request, template: str, values: dict[str, Any]) -> Response
 async def fleet(request: Request, state: _State) -> Response:
     """Show every session of every host, newest first.
 
-    With `?all=1` the sessions that have ended are shown as well.
+    With `?all=1` the sessions that have ended are shown as well. A running session of this
+    machine and of the user the interface works for gets a "chat" link: the chat pane,
+    attached to that session, in a window of its own (`/pane#dir=...&session=...`, D271);
+    the pane's bridge runs here, so a session of another machine has none.
 
     Args:
         request: The request.
@@ -1181,6 +1184,8 @@ async def fleet(request: Request, state: _State) -> Response:
     Returns:
         The fleet page.
     """
+    from calu.web.start import web_user
+
     show_all = request.query_params.get("all") == "1"
     query = (request.query_params.get("q") or "").strip().lower()
     rows = await herd.sessions(state.db, active_only=not show_all)
@@ -1199,6 +1204,8 @@ async def fleet(request: Request, state: _State) -> Response:
             "open_escalations": len(waiting),
             "show_all": show_all,
             "query": request.query_params.get("q") or "",
+            "this_host": socket.gethostname(),
+            "this_user": web_user(),
         },
     )
 

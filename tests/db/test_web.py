@@ -1494,3 +1494,38 @@ async def test_the_new_session_dialog_makes_a_folder_and_starts_a_session_there(
             assert refused.status_code == 200 and "is no folder name calu makes" in refused.text
     finally:
         await conn.close()
+
+
+async def test_a_local_running_session_gets_a_chat_link_and_a_remote_one_none(db_url: str) -> None:
+    """D271: the sessions list links a running session of this machine and of the user the
+    interface works for to the chat pane, attached to it (`#dir=...&session=...`, a window
+    of its own); a session of another host has no such link, because the pane's bridge runs
+    on this machine."""
+    import socket
+
+    from calu.web.start import web_user
+
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        here = DatabaseSessionStore(db)
+        local_id = await here.start(
+            SessionIdentity(
+                hostname=socket.gethostname(),
+                os_user=web_user(),
+                directory="/w/shop",
+                pid=7,
+                os="Linux",
+            )
+        )
+        await here.set_address("ws://127.0.0.1:8765")
+        there = DatabaseSessionStore(db)
+        remote_id = await there.start(IDENTITY)
+        await there.set_address("ws://127.0.0.1:8766")
+        async with await client_for(db) as client:
+            page = (await client.get("/")).text
+        assert f"session={local_id}" in page and f'target="calu-chat-{local_id}"' in page
+        assert f"session={remote_id}" not in page
+    finally:
+        await conn.close()

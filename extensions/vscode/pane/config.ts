@@ -3,8 +3,9 @@
  * the tab's session storage after a reload), the key of a `calu web` login in this origin, and the
  * project folder. Pure apart from the two storages it is given.
  *
- *     /pane#token=abc&dir=/home/me/project  ──readPaneConfig──►  {token: "abc", key: "", dir: "/home/me/project"}
- *                                           ──addressWithoutToken──►  "#dir=%2Fhome%2Fme%2Fproject"
+ *     /pane#token=abc&dir=/home/me/project&session=4f1c  ──readPaneConfig──►
+ *         {token: "abc", key: "", dir: "/home/me/project", session: "4f1c"}
+ *     ──addressWithoutToken──►  "#dir=%2Fhome%2Fme%2Fproject&session=4f1c"
  */
 
 /** Session storage key of the token taken from the address. */
@@ -18,6 +19,9 @@ export interface PaneConfig {
   key: string;
   /** The project folder for the bridge (`#dir=`), or "" for the folder `calu web` runs in. */
   dir: string;
+  /** The session to attach to first (`#session=`, a session id of this machine), or "" for
+   * the session of the folder. The links of `calu web`'s sessions list carry it. */
+  session: string;
 }
 
 /**
@@ -26,7 +30,8 @@ export interface PaneConfig {
  * @param hash The address's fragment, e.g. "#token=abc&dir=/home/me/project".
  * @param session The tab's session storage (may be unavailable).
  * @param local The origin's local storage (may be unavailable).
- * @returns The token (from the fragment, else from the session storage), the key and the dir.
+ * @returns The token (from the fragment, else from the session storage), the key, the dir and
+ *   the session.
  *   Side effect: a token from the fragment is put into the session storage.
  */
 export function readPaneConfig(hash: string, session: Storage | undefined, local: Storage | undefined): PaneConfig {
@@ -44,17 +49,21 @@ export function readPaneConfig(hash: string, session: Storage | undefined, local
   } catch {
     key = '';
   }
-  return { token, key, dir: params.get('dir') ?? '' };
+  return { token, key, dir: params.get('dir') ?? '', session: params.get('session') ?? '' };
 }
 
 /**
  * Build the fragment that stays in the address after the token was taken out.
  *
  * @param config The pane's config.
- * @returns "#dir=..." or "".
+ * @returns "#dir=...&session=...", the parts that are set, or "".
  */
 export function addressWithoutToken(config: PaneConfig): string {
-  return config.dir ? `#${new URLSearchParams({ dir: config.dir }).toString()}` : '';
+  const kept = new URLSearchParams();
+  if (config.dir) kept.set('dir', config.dir);
+  if (config.session) kept.set('session', config.session);
+  const text = kept.toString();
+  return text ? `#${text}` : '';
 }
 
 /**

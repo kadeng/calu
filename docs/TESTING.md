@@ -1078,6 +1078,11 @@ escalation resolved from the database alone.
    new session; with only "start a session" it shows the live view. Without a running server
    it says how to start one. The new folder and the clone belong to you, not root. Not yet
    run by hand.
+56. The "chat" link of the sessions list (PLAN.md D271): with two sessions of yours on this
+   machine (one per project) and one of another host in the database, the list shows "chat"
+   for the two local ones only; each opens a window with the chat pane attached to its own
+   session (its transcript, its escalations), also when both run in one folder. Not yet run
+   by hand.
 
 ## Measuring the checkers
 

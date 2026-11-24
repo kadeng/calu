@@ -473,7 +473,8 @@ export function startPane(config: PaneConfig): { view: PaneView; host: ChatHost 
       { label: 'Copy command', run: () => void copy(command, 'The server command').catch(() => undefined) },
     ]);
 
-  const host = new ChatHost(bridge, view, ui, sessionsUi);
+  // A link of `calu web`'s sessions list names the session to attach to (`#session=`).
+  const host = new ChatHost(bridge, view, ui, sessionsUi, () => undefined, config.session || undefined);
   view.onMessage = (message) => void host.handle(message);
   host.start();
   document.addEventListener('visibilitychange', () => {

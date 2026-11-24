@@ -26,11 +26,17 @@ describe('the pane login', () => {
   it('takes the token from the fragment, keeps it for a reload and drops it from the address', () => {
     const session = memory();
     const config = readPaneConfig('#token=abc&dir=%2Fhome%2Fme%2Fp', session, memory());
-    expect(config).toEqual({ token: 'abc', key: '', dir: '/home/me/p' });
+    expect(config).toEqual({ token: 'abc', key: '', dir: '/home/me/p', session: '' });
     expect(addressWithoutToken(config)).toBe('#dir=%2Fhome%2Fme%2Fp');
     // After the reload the address has no token any more; the tab's storage still has it.
     expect(readPaneConfig(addressWithoutToken(config), session, undefined).token).toBe('abc');
-    expect(addressWithoutToken({ token: 'abc', key: '', dir: '' })).toBe('');
+    expect(addressWithoutToken({ token: 'abc', key: '', dir: '', session: '' })).toBe('');
+  });
+
+  it('keeps the session a sessions-list link names, and only the token leaves the address', () => {
+    const config = readPaneConfig('#token=abc&dir=%2Fw&session=4f1c-77', memory(), memory());
+    expect(config.session).toBe('4f1c-77');
+    expect(addressWithoutToken(config)).toBe('#dir=%2Fw&session=4f1c-77');
   });
 
   it('offers the token or the key of a calu web login as WebSocket subprotocols', () => {
@@ -38,12 +44,12 @@ describe('the pane login', () => {
     local.setItem('calu-key', 'k1');
     const config = readPaneConfig('', undefined, local);
     expect(loginProtocols(config)).toEqual(['calu', 'calu.key.k1']);
-    expect(loginProtocols({ token: 't', key: '', dir: '' })).toEqual(['calu', 'calu.token.t']);
+    expect(loginProtocols({ token: 't', key: '', dir: '', session: '' })).toEqual(['calu', 'calu.token.t']);
   });
 
   it('works without storage (a frame whose storage the browser blocks)', () => {
     const blocked = { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } } as unknown as Storage;
-    expect(readPaneConfig('#token=x', blocked, blocked)).toEqual({ token: 'x', key: '', dir: '' });
+    expect(readPaneConfig('#token=x', blocked, blocked)).toEqual({ token: 'x', key: '', dir: '', session: '' });
   });
 });
 
