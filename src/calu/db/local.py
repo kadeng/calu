@@ -210,7 +210,12 @@ def owner_url(password: str, port: int = DEFAULT_PORT) -> str:
     return f"postgresql://{OWNER}:{password}@127.0.0.1:{port}/{DATABASE}"
 
 
-def owner_target(password: str, port: int = DEFAULT_PORT, data: str = VOLUME_DATA) -> Target:
+def owner_target(
+    password: str,
+    port: int = DEFAULT_PORT,
+    data: str = VOLUME_DATA,
+    stop_with_server: bool = False,
+) -> Target:
     """Build the stored record of the owner login of the local database.
 
     The record requires SCRAM authentication of the server: a session then refuses another
@@ -221,6 +226,7 @@ def owner_target(password: str, port: int = DEFAULT_PORT, data: str = VOLUME_DAT
         password: The owner password.
         port: The host port of the container.
         data: An absolute directory, or `VOLUME_DATA`.
+        stop_with_server: `DockerBlock.stop_with_server`.
 
     Returns:
         The target of the variant `docker` for the role `calu_owner`.
@@ -235,7 +241,7 @@ def owner_target(password: str, port: int = DEFAULT_PORT, data: str = VOLUME_DAT
             "require_auth": "scram-sha-256",
         },
         auth=PasswordAuth(password=password),
-        docker=DockerBlock(port=port, data=data),
+        docker=DockerBlock(port=port, data=data, stop_with_server=stop_with_server),
     )
 
 
@@ -365,6 +371,9 @@ def ensure_running(block: DockerBlock) -> bool:
     Args:
         block: Port and data location from the stored record.
 
+    Side effect: after a start, the container's restart policy follows
+    `block.stop_with_server` (`set_restart`).
+
     Returns:
         True if the container was started; False if the port answered already, or if the
         record names the old Docker volume and no such volume exists (also when docker is
@@ -393,7 +402,35 @@ def ensure_running(block: DockerBlock) -> bool:
             "no database yet; `calu db up` creates it with the stored owner login"
         )
     up(block.port, None, block.data)
+    set_restart(block.stop_with_server)
     return True
+
+
+def set_restart(stop_with_server: bool) -> None:
+    """Give the local database's container the restart policy that fits its setting.
+
+    `unless-stopped` (the compose file's) brings the container back when Docker or the
+    machine restarts; `no` leaves it stopped until a calu command starts it
+    (`DockerBlock.stop_with_server`, PLAN.md D269). The container keeps running either way.
+
+    Side effect: `docker update --restart` on the compose project's containers.
+
+    Args:
+        stop_with_server: The setting.
+
+    Raises:
+        DockerError: If docker is missing or refuses the update.
+    """
+    found = _run(
+        ["docker", "ps", "-a", "-q", "--filter", f"label=com.docker.compose.project={PROJECT}"]
+    )
+    ids = found.stdout.split()
+    if found.returncode != 0 or not ids:
+        return
+    policy = "no" if stop_with_server else "unless-stopped"
+    result = _run(["docker", "update", f"--restart={policy}", *ids])
+    if result.returncode != 0:
+        raise DockerError(result.stderr.strip() or result.stdout.strip())
 
 
 HARDEN_SCRIPT = (

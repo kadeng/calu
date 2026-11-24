@@ -124,3 +124,32 @@ async def db_url() -> AsyncIterator[str]:
             sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
         )
         await admin.close()
+
+
+@pytest.fixture(autouse=True)
+def _no_change_to_the_machines_containers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Refuse every `docker update`, `docker compose ... down` and `docker volume rm` a test
+    would send to the machine's own Docker.
+
+    On a developer's machine the compose project `calu-db` is their real database (PLAN.md
+    D269: `calu.db.local.set_restart`; D267: `calu uninstall`). A test that means to check
+    such a command replaces `calu.db.local._run` (or the uninstaller's runner) with a fake of
+    its own, or puts a fake `docker` program into a temporary directory on `PATH`; this guard
+    lets both through.
+    """
+    import shutil
+    import tempfile
+
+    from calu.db import local
+
+    real = local._run
+
+    def guarded(args: list[str], env: dict[str, str] | None = None):  # type: ignore[no-untyped-def]
+        changing = args[:2] == ["docker", "update"] or args[:3] == ["docker", "volume", "rm"]
+        changing = changing or (args[:2] == ["docker", "compose"] and "down" in args)
+        found = shutil.which("docker") or ""
+        if changing and not found.startswith(tempfile.gettempdir()):
+            raise AssertionError(f"a test sent {args!r} to the machine's own Docker")
+        return real(args, env)
+
+    monkeypatch.setattr(local, "_run", guarded)

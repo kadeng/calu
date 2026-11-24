@@ -3642,6 +3642,12 @@ password (existing server only), then the new user password twice (none with `--
 - **You never have to start it.** `calu run` and every other command that needs the database
   start the container when it does not answer (`calu run` does so after you typed the user
   password, because the database's location is stored inside the encrypted credential entry).
+- **Running or stopping with the server.** `calu setup` asks once whether the database
+  stops when `calu serve` ends (`--stop-db-with-server`; `--no-stop-db-with-server` keeps it
+  running, the default). A database that stops with the server is also left stopped after a
+  restart of the machine; one that keeps running comes back with Docker. `calu serve` leaves
+  it running while other Calu processes use it (`calu run`, `calu web`, an editor's `calu
+  ide`). `calu setup --stop-db-with-server` (or `--no-...`) changes the choice later.
 - `calu db down` stops it and `calu db up` starts it by hand. A session that is running while
   the database is stopped waits for it and does not start it.
 - The local database asks every connection for a password, including those from inside its

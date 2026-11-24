@@ -42,7 +42,7 @@ def local_style(monkeypatch: pytest.MonkeyPatch, db_url: str) -> list[int]:
     asked), and `calu.db.local.up` by a stub that records the port and starts nothing.
 
     Args:
-        monkeypatch: Replaces the two functions for the test.
+        monkeypatch: Replaces the functions for the test (also `set_restart`, a no-op).
         db_url: The owner login of the test database.
 
     Returns:
@@ -52,17 +52,19 @@ def local_style(monkeypatch: pytest.MonkeyPatch, db_url: str) -> list[int]:
     assert isinstance(test_db.auth, PasswordAuth)
     started: list[int] = []
 
-    def owner_target(_password: str, port: int, data: str) -> Target:
+    def owner_target(_password: str, port: int, data: str, stops: bool = False) -> Target:
         """Return the test database's owner as a local database's record."""
         return Target(
             variant="docker",
             conninfo=dict(test_db.conninfo),
             auth=test_db.auth,
-            docker=DockerBlock(port=port, data=data),
+            docker=DockerBlock(port=port, data=data, stop_with_server=stops),
         )
 
     monkeypatch.setattr(local_db, "owner_target", owner_target)
     monkeypatch.setattr(local_db, "up", lambda port, _password, _data: started.append(port))
+    # Never the machine's own Docker: on a developer's machine `calu-db` is their database.
+    monkeypatch.setattr(local_db, "set_restart", lambda _stops: None)
     return started
 
 

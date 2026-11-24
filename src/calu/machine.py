@@ -130,3 +130,50 @@ def here(root: Path = Path("/")) -> Machine:
         boot_id=read("proc/sys/kernel/random/boot_id").replace("|", ""),
         pid_namespace=namespace.replace("|", ""),
     )
+
+
+CLIENT_COMMANDS = frozenset({"serve", "run", "web", "ide", "attach", "acp", "start"})
+"""calu commands whose processes `calu_processes` finds."""
+
+
+def calu_processes(euid: int, own_pid: int, proc: Path = Path("/proc")) -> list[tuple[int, str]]:
+    """Find the calu processes of this machine that use calu's database or files.
+
+    `calu uninstall` refuses while there are any; `calu serve` leaves a database that stops
+    with it running while there are any (PLAN.md D267, D269).
+
+    Args:
+        euid: The effective uid of this process: root sees every user's processes, a user
+            only their own.
+        own_pid: This process and its parents are left out (`sudo` runs us as a child).
+        proc: The proc file system.
+
+    Returns:
+        (pid, command line) of each process whose arguments are a calu command of
+        `CLIENT_COMMANDS` (`calu serve`, `python -m calu web`, ...).
+    """
+    skip = {own_pid}
+    pid = own_pid
+    for _ in range(8):  # this process's ancestors, e.g. sudo and the shell
+        try:
+            fields = (proc / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()
+            pid = int(fields[1])
+        except OSError, IndexError, ValueError:
+            break
+        skip.add(pid)
+    found: list[tuple[int, str]] = []
+    for entry in proc.iterdir():
+        if not entry.name.isdigit() or int(entry.name) in skip:
+            continue
+        try:
+            if euid != 0 and entry.stat().st_uid != euid:
+                continue
+            argv = (entry / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        words = [part.decode(errors="replace") for part in argv if part]
+        for index, word in enumerate(words[:-1]):
+            if Path(word).name == "calu" and words[index + 1] in CLIENT_COMMANDS:
+                found.append((int(entry.name), " ".join(words)))
+                break
+    return found

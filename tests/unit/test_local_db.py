@@ -334,3 +334,54 @@ def test_container_data_without_a_data_mount_is_none(
     """No mount of the data directory, or unreadable output, says nothing."""
     _fake_docker(monkeypatch, stdout)
     assert local.container_data() is None
+
+
+def test_the_restart_policy_follows_the_stop_with_server_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D269: a database that stops with the server is left stopped after a restart of the
+    machine (`--restart=no`); one that keeps running comes back (`unless-stopped`). Only the
+    compose project's containers are updated, and without one nothing is called."""
+    import subprocess
+
+    calls: list[list[str]] = []
+
+    def run(args: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        out = "c1\nc2\n" if args[:2] == ["docker", "ps"] else ""
+        return subprocess.CompletedProcess(args, 0, out, "")
+
+    monkeypatch.setattr(local, "_run", run)
+    local.set_restart(True)
+    assert calls[-1] == ["docker", "update", "--restart=no", "c1", "c2"]
+    local.set_restart(False)
+    assert calls[-1] == ["docker", "update", "--restart=unless-stopped", "c1", "c2"]
+
+    calls.clear()
+    monkeypatch.setattr(
+        local, "_run", lambda args, env=None: subprocess.CompletedProcess(args, 0, "", "")
+    )
+    local.set_restart(True)
+    assert calls == []
+
+
+def test_the_stored_record_keeps_the_stop_with_server_setting() -> None:
+    """D269: the setting travels inside the encrypted login and its derived user login, and
+    a record written before it reads as "keeps running"."""
+    from calu.db.target import Target
+
+    owner = local.owner_target("pw", 5544, "/srv/db", stop_with_server=True)
+    again = Target.parse(owner.dump())
+    assert again.docker is not None and again.docker.stop_with_server
+    from calu.setup import user_login
+
+    derived = user_login(again, "user-pw")
+    assert derived.docker is not None and derived.docker.stop_with_server
+    old = (
+        local.owner_target("pw", 5544, "/srv/db")
+        .dump()
+        .replace(b', "stop_with_server": false', b"")
+    )
+    assert b"stop_with_server" not in old
+    parsed = Target.parse(old).docker
+    assert parsed is not None and not parsed.stop_with_server

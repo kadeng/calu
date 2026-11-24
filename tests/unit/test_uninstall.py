@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from calu import cli, uninstall
+from calu import cli, machine, uninstall
 from calu.credentials import CredentialStore
 
 
@@ -212,7 +212,7 @@ def test_running_calu_processes_are_found_but_not_this_one(tmp_path: Path) -> No
     process(20, 19, "/usr/local/bin/calu", "uninstall")
     process(19, 1, "sudo", "calu", "run")  # the parent of this process: left out
 
-    found = uninstall.running_calu(0, 20, proc)
+    found = machine.calu_processes(0, 20, proc)
 
     assert sorted(found) == [
         (10, "/usr/local/bin/calu serve --sudo"),

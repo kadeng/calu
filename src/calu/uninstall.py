@@ -19,9 +19,9 @@ postgres image, Claude Code, bubblewrap, socat, git, curl), a database on anothe
 
 `plan` decides without changing anything; `remove` carries a plan out and reports each item.
 The caller (`calu.cli.cmd_uninstall`) prints the plan, refuses while calu processes run
-(`running_calu`), and asks for `CONFIRM_PHRASE` typed by hand (`confirm`). This module imports
-nothing that is not loaded before the removal starts: the installation it runs from may be
-deleted by the last step.
+(`calu.machine.calu_processes`), and asks for `CONFIRM_PHRASE` typed by hand (`confirm`).
+This module imports nothing that is not loaded before the removal starts: the installation
+it runs from may be deleted by the last step.
 """
 
 import pwd
@@ -49,9 +49,6 @@ COMPOSE_PROJECT = "calu-db"
 
 VOLUME = f"{COMPOSE_PROJECT}_data"
 """The named volume an early `calu db up` created (`calu.db.local.VOLUME`)."""
-
-CLIENT_COMMANDS = frozenset({"serve", "run", "web", "ide", "attach", "acp", "start"})
-"""calu commands whose process must end before calu is removed."""
 
 Runner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 """Runs a command and returns it finished (any exit code); raises FileNotFoundError if the
@@ -370,46 +367,6 @@ def _in_root(env: Path | None, root_home: Path) -> bool:
         True if `env` lies inside `root_home`.
     """
     return env is not None and env.is_relative_to(root_home)
-
-
-def running_calu(euid: int, own_pid: int, proc: Path = Path("/proc")) -> list[tuple[int, str]]:
-    """Find calu processes that have to end before calu is removed.
-
-    Args:
-        euid: The effective uid of this process: root sees every user's processes, a user
-            only their own.
-        own_pid: This process and its parents are left out (`sudo` runs us as a child).
-        proc: The proc file system.
-
-    Returns:
-        (pid, command line) of each process whose arguments are a calu command of
-        `CLIENT_COMMANDS` (`calu serve`, `python -m calu web`, ...).
-    """
-    skip = {own_pid}
-    pid = own_pid
-    for _ in range(8):  # this process's ancestors, e.g. sudo and the shell
-        try:
-            fields = (proc / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()
-            pid = int(fields[1])
-        except OSError, IndexError, ValueError:
-            break
-        skip.add(pid)
-    found: list[tuple[int, str]] = []
-    for entry in proc.iterdir():
-        if not entry.name.isdigit() or int(entry.name) in skip:
-            continue
-        try:
-            if euid != 0 and entry.stat().st_uid != euid:
-                continue
-            argv = (entry / "cmdline").read_bytes().split(b"\0")
-        except OSError:
-            continue
-        words = [part.decode(errors="replace") for part in argv if part]
-        for index, word in enumerate(words[:-1]):
-            if Path(word).name == "calu" and words[index + 1] in CLIENT_COMMANDS:
-                found.append((int(entry.name), " ".join(words)))
-                break
-    return found
 
 
 class NotConfirmed(Exception):

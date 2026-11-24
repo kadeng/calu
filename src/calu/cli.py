@@ -991,7 +991,7 @@ def cmd_uninstall(args: argparse.Namespace, store: CredentialStore) -> None:
     if args.dry_run:
         print("(--dry-run: nothing was removed)")
         return
-    running = uninstall.running_calu(euid, os.getpid())
+    running = machine.calu_processes(euid, os.getpid())
     if running:
         listed = "\n".join(f"  {pid}  {line}" for pid, line in running)
         raise CliError(
@@ -1276,7 +1276,8 @@ def _check_setup_options(args: argparse.Namespace, variant: str | None) -> None:
 
     Raises:
         CliError: If an option of `_SETUP_OPTIONS` was given for a stored database or for a
-            variant it does not apply to, or `--set-password` together with `--no-password`.
+            variant it does not apply to, `--stop-db-with-server` for a new database other
+            than docker, or `--set-password` together with `--no-password`.
     """
     for attribute, option, variants in _SETUP_OPTIONS:
         if getattr(args, attribute) is None:
@@ -1292,6 +1293,11 @@ def _check_setup_options(args: argparse.Namespace, variant: str | None) -> None:
                 f"{option} does not apply to the database {variant}; it is for "
                 f"{' and '.join(variants)}"
             )
+    if args.stop_db_with_server is not None and variant not in (None, "docker"):
+        raise CliError(
+            f"--stop-db-with-server and --no-stop-db-with-server do not apply to the database "
+            f"{variant}; they are for docker, the local database calu starts and stops"
+        )
     if args.set_password and args.no_password:
         raise CliError(
             "--set-password and --no-password contradict each other: --no-password is "
@@ -1496,6 +1502,42 @@ def sandbox_setup_notes(enabled: bool, store: CredentialStore) -> list[str]:
     return sandbox_off_warnings(off, login_protection(store, os.geteuid() == 0))
 
 
+def choose_stop_with_server(flag: bool | None) -> bool:
+    """Decide whether a new local database stops with `calu serve` (PLAN.md D269).
+
+        --stop-db-with-server / --no-stop-db-with-server   ──► that value
+        a terminal                                         ──► the question; default: no
+        no terminal, no option                             ──► no (it keeps running)
+
+    Side effects: on a terminal without the option, prints one line and reads one answer.
+
+    Args:
+        flag: The option, or None.
+
+    Returns:
+        True if the database is to stop when `calu serve` ends and stay stopped after a
+        restart of the machine.
+
+    Raises:
+        CliError: If the answer is neither yes nor no.
+    """
+    if flag is not None:
+        return flag
+    if not sys.stdin.isatty():
+        return False
+    print(
+        "The local database can keep running in Docker (and start again with the machine), "
+        "or stop when `calu serve` ends. Either way `calu run` and `calu serve` start it "
+        "when it does not run."
+    )
+    answer = ask("Stop it when calu serve ends? yes/no", "no", "--stop-db-with-server").lower()
+    if answer in ("yes", "y"):
+        return True
+    if answer in ("no", "n"):
+        return False
+    raise CliError(f"{answer!r} is neither yes nor no")
+
+
 def _choose_user_password(empty: bool, local: bool) -> bytearray:
     """Ask for a new calu user password, after one paragraph that explains it.
 
@@ -1534,7 +1576,13 @@ def _save_login(store: CredentialStore, name: str, login: Target, password: byte
         wipe(secret)
 
 
-def _first_start_local(store: CredentialStore, port: int, data: str, password: bytearray) -> Target:
+def _first_start_local(
+    store: CredentialStore,
+    port: int,
+    data: str,
+    password: bytearray,
+    stop_with_server: bool = False,
+) -> Target:
     """Create the local database: store the `db-admin` credential, then start the container.
 
     The credential is saved before the container starts, so that a start that fails can be
@@ -1546,6 +1594,8 @@ def _first_start_local(store: CredentialStore, port: int, data: str, password: b
         data: An absolute directory prepared with `local_db.prepare_data_dir`, or
             `local_db.VOLUME_DATA`.
         password: The user password, which protects the entry; empty for none.
+        stop_with_server: Whether the database stops with `calu serve` and stays stopped
+            after a restart of the machine (`DockerBlock.stop_with_server`).
 
     Returns:
         The owner login.
@@ -1553,10 +1603,11 @@ def _first_start_local(store: CredentialStore, port: int, data: str, password: b
     Raises:
         local_db.DockerError: If docker fails.
     """
-    owner = local_db.owner_target(local_db.new_owner_password(), port, data)
+    owner = local_db.owner_target(local_db.new_owner_password(), port, data, stop_with_server)
     _save_login(store, logins.DB_ADMIN, owner, password)
     assert isinstance(owner.auth, PasswordAuth)
     local_db.up(port, owner.auth.password, data)
+    local_db.set_restart(stop_with_server)
     where = "the Docker volume calu-db_data" if data == local_db.VOLUME_DATA else data
     print(f"local database initialized in {where}, running on 127.0.0.1:{port}")
     return owner
@@ -1590,9 +1641,10 @@ def _new_database(args: argparse.Namespace, store: CredentialStore) -> tuple[Tar
         )
         port = args.port or _port(ask("Port on 127.0.0.1", str(local_db.DEFAULT_PORT), "--port"))
         data = str(local_db.prepare_data_dir(Path(chosen)))
+        stops = choose_stop_with_server(args.stop_db_with_server)
         password = _choose_user_password(args.no_password, local=True)
         try:
-            return _first_start_local(store, port, data, password), password
+            return _first_start_local(store, port, data, password, stops), password
         except BaseException:
             wipe(password)
             raise
@@ -1725,6 +1777,8 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
         _check_setup_options(args, None)
     if logins.DB_ADMIN in store:
         owner = _db_admin_target(store)
+        if args.stop_db_with_server is not None:
+            owner = _with_stop_with_server(owner, args.stop_db_with_server)
         if args.set_password or args.no_password:
             password = _choose_user_password(args.no_password, owner.docker is not None)
         else:
@@ -1750,6 +1804,37 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
         wipe(password)
     _print_sandbox_notes([sandbox_on], store)
     print("next: `calu project add . --name NAME` in a project directory, then `calu run`")
+
+
+def _with_stop_with_server(owner: Target, stops: bool) -> Target:
+    """Change whether the stored local database stops with `calu serve` (PLAN.md D269).
+
+    Side effects: sets the running container's restart policy (`local_db.set_restart`) and
+    prints one line; the changed login is stored at the end of the setup (`_store_logins`).
+
+    Args:
+        owner: The stored owner login.
+        stops: `--stop-db-with-server` (True) or `--no-stop-db-with-server` (False).
+
+    Returns:
+        The owner login with the setting changed.
+
+    Raises:
+        CliError: If the stored database is not calu's local one.
+        local_db.DockerError: If docker refuses the change.
+    """
+    block = owner.docker
+    if block is None:
+        raise CliError(
+            "--stop-db-with-server and --no-stop-db-with-server are for calu's local database; "
+            f"{owner.place} is a server that calu does not start or stop"
+        )
+    local_db.set_restart(stops)
+    print(
+        "the local database "
+        + ("stops when calu serve ends" if stops else "keeps running when calu serve ends")
+    )
+    return owner.model_copy(update={"docker": block.model_copy(update={"stop_with_server": stops})})
 
 
 def _finish_local_start(owner: Target) -> None:
@@ -2232,7 +2317,9 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
     Asks for the user password once; every session that `calu start` asks for afterwards
     runs in this process without a further password. With `--web` it also runs `calu web`
     as its child for as long as it runs (`_start_web_child`, PLAN.md D268): the same login,
-    no second password, the child's lines on the same terminal; it ends with the server.
+    no second password, the child's lines on the same terminal; it ends with the server. A
+    local database set up to stop with the server (`DockerBlock.stop_with_server`) is stopped
+    when it ends, unless other calu processes use it (`_stop_db_after_serve`, D269).
 
     Args:
         args: Parsed arguments (`max_sessions`, `idle_timeout`, `user`, `sudo`, `secure`,
@@ -2269,6 +2356,7 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
     except projects_dir.ProjectsDirRefused as exc:
         raise CliError(str(exc)) from None
     url = _session_login(store)
+    block = Target.parse(url).docker
     web: subprocess.Popen[bytes] | None = None
     try:
         if args.web:
@@ -2289,8 +2377,36 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
         wipe(url)
         if web is not None:
             _stop_web_child(web)
+        if block is not None and block.stop_with_server:
+            _stop_db_after_serve()
     if code:
         raise CliError("the server ended with an error (see the lines above and the log file)")
+
+
+def _stop_db_after_serve() -> None:
+    """Stop the local database that stops with `calu serve`, unless calu still uses it.
+
+    See PLAN.md D269. Another calu process of this machine (`calu run`, another `calu serve`,
+    `calu web`, an editor's `calu ide`, a client; `calu.machine.calu_processes`) keeps it
+    running, with a line that names them. A failure of docker is reported, never raised:
+    the server has ended either way.
+
+    Side effects: `docker compose down` of the local database; prints one line.
+    """
+    others = machine.calu_processes(os.geteuid(), os.getpid())
+    if others:
+        pids = ", ".join(str(pid) for pid, _line in others)
+        print(
+            f"the local database keeps running: other calu processes use it (pid {pids})",
+            file=sys.stderr,
+        )
+        return
+    try:
+        local_db.down()
+    except local_db.DockerError as exc:
+        print(f"the local database was not stopped: {exc}", file=sys.stderr)
+        return
+    print("stopped the local database (the next calu run or calu serve starts it)", flush=True)
 
 
 WEB_CHILD_STOP_S = 10.0
@@ -6364,6 +6480,15 @@ def build_parser() -> argparse.ArgumentParser:
         "/var/lib/calu/database.json, which every user and program of the machine can read "
         "(Claude Code's commands included). Weak security by choice, for example for tests; "
         "`calu setup --set-password` puts a password back",
+    )
+    p.add_argument(
+        "--stop-db-with-server",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="docker: stop the local database when `calu serve` ends and leave it stopped "
+        "after a restart of the machine (or keep it running, the default), instead of the "
+        "question; for a database set up already, changes the setting. `calu run` and "
+        "`calu serve` start it either way",
     )
     p.add_argument(
         "--set-password",

@@ -71,6 +71,11 @@ class DockerBlock(_Model):
     """The port on 127.0.0.1 the container publishes."""
     data: str
     """Where the cluster's files are: an absolute host directory, or `VOLUME_DATA`."""
+    stop_with_server: bool = False
+    """Whether `calu serve` stops the container when it ends, and Docker leaves it stopped
+    after a restart of the machine (chosen at `calu setup`, PLAN.md D269). False: it keeps
+    running until `calu db down`, and Docker starts it again after a restart. Either way a
+    calu command that needs the database starts it."""
 
 
 class PasswordAuth(_Model):

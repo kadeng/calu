@@ -36,6 +36,7 @@ def test_the_local_database_is_created_in_the_chosen_directory_before_anything_c
 ) -> None:
     started: list[tuple[int, str | None, str]] = []
     monkeypatch.setattr(local, "up", lambda port, pw, data: started.append((port, pw, data)))
+    monkeypatch.setattr(local, "set_restart", lambda _stops: None)
     monkeypatch.setattr(local, "listening", lambda port, timeout_s=0.5: False)
     data = tmp_path / "pgdata"
     argv = ["setup", "--database", "docker", "--data-dir", str(data), "--port", "5599"]
@@ -64,6 +65,7 @@ def test_db_up_without_a_stored_database_creates_the_local_one_with_a_user_passw
 ) -> None:
     started: list[tuple[int, str | None, str]] = []
     monkeypatch.setattr(local, "up", lambda port, pw, data: started.append((port, pw, data)))
+    monkeypatch.setattr(local, "set_restart", lambda _stops: None)
     data = tmp_path / "pgdata"
     argv = ["db", "up", "--data-dir", str(data), "--port", "5598"]
     assert run_cli(monkeypatch, store, argv, "user-pw\nuser-pw\n") == 0
@@ -99,6 +101,7 @@ def test_db_up_takes_port_and_directory_from_the_stored_record(
     database. The record decides now, and a contradicting option is refused."""
     started: list[tuple[int, str | None, str]] = []
     monkeypatch.setattr(local, "up", lambda port, pw, data: started.append((port, pw, data)))
+    monkeypatch.setattr(local, "set_restart", lambda _stops: None)
     data = str(local.prepare_data_dir(tmp_path / "db"))
     store.save(logins.DB_ADMIN, local.owner_target("owner-pw", 5599, data).dump(), "user-pw")
 

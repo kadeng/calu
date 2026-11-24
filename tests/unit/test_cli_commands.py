@@ -556,3 +556,56 @@ def test_serve_with_web_hands_its_child_the_login_through_a_pipe(
     assert seen["preexec"] is cli._die_with_parent
     read = cli._read_login_fd(int(str(seen["copy"])))
     assert bytes(read) == bytes(login)
+
+
+def test_the_database_stops_with_the_server_only_when_no_other_calu_uses_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """D269: at the end of `calu serve`, a database set to stop with it is stopped, unless
+    another calu process (a `calu run`, an editor's `calu ide`) still uses it; a refusal of
+    docker is said, not raised."""
+    from calu import machine
+
+    downs: list[bool] = []
+    monkeypatch.setattr(cli.local_db, "down", lambda: downs.append(True))
+
+    monkeypatch.setattr(machine, "calu_processes", lambda euid, pid: [(77, "calu ide")])
+    cli._stop_db_after_serve()
+    assert downs == [] and "keeps running: other calu processes use it (pid 77)" in (
+        capsys.readouterr().err
+    )
+
+    monkeypatch.setattr(machine, "calu_processes", lambda euid, pid: [])
+    cli._stop_db_after_serve()
+    assert downs == [True] and "stopped the local database" in capsys.readouterr().out
+
+    def refused() -> None:
+        raise cli.local_db.DockerError("no permission")
+
+    monkeypatch.setattr(cli.local_db, "down", refused)
+    cli._stop_db_after_serve()
+    assert "was not stopped: no permission" in capsys.readouterr().err
+
+
+def test_the_stop_with_server_question_and_its_option(monkeypatch: pytest.MonkeyPatch) -> None:
+    """D269: the option answers without a question; without a terminal the database keeps
+    running; on a terminal the question takes yes or no; the option is refused for a new
+    database that calu does not start (a server)."""
+    import argparse
+
+    assert cli.choose_stop_with_server(True) is True
+    assert cli.choose_stop_with_server(False) is False
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    assert cli.choose_stop_with_server(None) is False
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "yes")
+    assert cli.choose_stop_with_server(None) is True
+    monkeypatch.setattr("builtins.input", lambda _prompt: "maybe")
+    with pytest.raises(cli.CliError, match="neither yes nor no"):
+        cli.choose_stop_with_server(None)
+
+    args = cli.build_parser().parse_args(["setup", "--stop-db-with-server"])
+    assert isinstance(args, argparse.Namespace)
+    with pytest.raises(cli.CliError, match="do not apply to the database server"):
+        cli._check_setup_options(args, "server")
+    cli._check_setup_options(args, "docker")
