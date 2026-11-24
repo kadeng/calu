@@ -32,6 +32,42 @@ async def test_migrate_is_idempotent(db_url: str) -> None:
         await conn.close()
 
 
+async def test_a_database_of_the_replaced_migrations_is_refused_until_it_is_reset(
+    db_url: str,
+) -> None:
+    """D266: a database whose `schema_migrations` names the 44 migrations the baseline
+    replaced cannot be migrated from here: `migrate` and `setup_database` refuse it with a
+    message that names `calu db reset`, change nothing, and a reset (the schema dropped and
+    created again, as `calu db reset` does) makes it migrate normally."""
+    from calu.db import EarlierSchema, earlier_migrations
+    from calu.setup import SetupRefused, setup_database
+
+    conn = await connect(db_url)
+    try:
+        await migrate(conn)
+        # What the old chain left behind: its own names under the same version numbers.
+        await conn.execute("DELETE FROM schema_migrations")
+        await conn.execute(
+            "INSERT INTO schema_migrations (version, name) VALUES"
+            " (1, '0001_initial.sql'), (2, '0002_turn_records.sql')"
+        )
+        assert await earlier_migrations(conn) == ["0001_initial.sql", "0002_turn_records.sql"]
+        with pytest.raises(EarlierSchema, match="calu db reset"):
+            await migrate(conn)
+        with pytest.raises(SetupRefused, match="calu db reset"):
+            await setup_database(conn, "test:model")
+        rows = await (await conn.execute("SELECT count(*) FROM schema_migrations")).fetchone()
+        assert rows == (2,), "a refusal changes nothing"
+
+        await conn.execute("DROP SCHEMA public CASCADE")
+        await conn.execute("CREATE SCHEMA public")
+        await conn.execute("GRANT USAGE ON SCHEMA public TO PUBLIC")
+        assert [m.name for m in await migrate(conn)] == ["0001_baseline.sql"]
+        assert await earlier_migrations(conn) == []
+    finally:
+        await conn.close()
+
+
 async def test_setup_seeds_defaults_once_and_gives_the_user_login(db_url: str) -> None:
     """`setup` seeds the checker types once and returns a working `calu_admin` login."""
     conn = await connect(db_url)
@@ -310,7 +346,7 @@ async def test_migration_43_leaves_one_user_login(db_url: str) -> None:
 
 
 async def test_the_honesty_register_is_not_a_table(db_url: str) -> None:
-    """D180: dirty and clean marks are kept in memory only; migration 0024 drops the table."""
+    """D180: dirty and clean marks are kept in memory only; the schema has no table for them."""
     conn = await connect(db_url)
     try:
         await setup(conn, db_url, "test:model")
@@ -323,7 +359,7 @@ async def test_the_honesty_register_is_not_a_table(db_url: str) -> None:
 
 
 async def test_no_usage_limits_are_stored(db_url: str) -> None:
-    """D250: migration 0042 drops the table and the functions of migration 0041 again."""
+    """D250: the usage limits are not stored: no table, no functions for them."""
     conn = await connect(db_url)
     try:
         await setup(conn, db_url, "test:model")

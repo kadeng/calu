@@ -12,8 +12,7 @@ from calu import session_requests
 from calu.db import Db, connect
 from calu.db.connection import open_stored
 from calu.session_requests import SessionRequest
-from calu.setup import set_user_password
-from tests.db.test_admin_role import PASSWORD, prepared
+from tests.db.test_admin_role import prepared
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -66,24 +65,6 @@ async def test_the_user_login_cannot_change_or_delete_audit_entries(db_url: str)
         await conn.execute("SELECT count(*) FROM audit_log")
     finally:
         await conn.close()
-
-
-async def test_migration_0035_runs_again_without_harm(db_url: str):
-    await prepared(db_url)
-    owner = await connect(db_url)
-    try:
-        migration = (
-            Path(__file__).parents[2]
-            / "src"
-            / "calu"
-            / "db"
-            / "migrations"
-            / "0035_review_fixes.sql"
-        )
-        await owner.execute(migration.read_text(encoding="utf-8"))  # type: ignore[arg-type]
-        await set_user_password(owner, PASSWORD)
-    finally:
-        await owner.close()
 
 
 async def test_revoke_session_tokens_ends_its_search_path_with_pg_temp(db_url: str):

@@ -569,14 +569,8 @@ async def test_the_status_counts_the_running_servers_and_a_change_needs_no_secon
 
 
 async def test_the_user_login_names_a_session(db_url: str, tmp_path: Path):
-    """Migration 0036: a name of at most 80 characters, and the migration can run again."""
+    """A session's name has at most 80 characters, and the user login sets it."""
     user_url = await prepare(db_url, tmp_path)
-    migration = Path(herd.__file__).parent / "db" / "migrations" / "0036_session_name.sql"
-    owner = await connect(db_url)
-    try:
-        await owner.execute(migration.read_text(encoding="utf-8"))  # type: ignore[arg-type]
-    finally:
-        await owner.close()
     async with owner_db(db_url) as db:
         host = await db.scalar("INSERT INTO hosts (hostname) VALUES ('box') RETURNING id")
         session_id = str(

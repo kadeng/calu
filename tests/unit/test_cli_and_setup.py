@@ -31,10 +31,22 @@ def test_no_rules_are_shipped_and_the_recommended_set_allows_no_command() -> Non
 
 
 def test_migrations_are_found_in_order() -> None:
+    """D266: the shipped migrations begin with the baseline and are sorted by version."""
     found = migrations()
-    assert found[0].version == 1
+    assert found[0].name == "0001_baseline.sql"
     assert [m.version for m in found] == sorted(m.version for m in found)
-    assert "CREATE TABLE sessions" in found[0].sql
+    assert "CREATE TABLE public.sessions" in found[0].sql
+
+
+def test_the_baseline_names_no_owner_and_leaves_the_search_path_as_it_was() -> None:
+    """D266: the baseline is a cleaned-up schema dump. It must run as any owner (no role
+    name of the database it was dumped from), and it must not change the connection's
+    settings beyond its own transaction (`set_config(..., true)`, `SET LOCAL`)."""
+    sql = migrations()[0].sql
+    assert "calu_owner" not in sql
+    assert "set_config('search_path', '', false)" not in sql
+    statements = [line for line in sql.splitlines() if line.startswith("SET ")]
+    assert statements and all(line.startswith("SET LOCAL ") for line in statements)
 
 
 DSN = "host=db.example.org dbname=calu user=u"

@@ -454,13 +454,52 @@ async def applied_versions(conn: psycopg.AsyncConnection) -> set[int]:
     return {r[0] for r in await cur.fetchall()}
 
 
+class EarlierSchema(Exception):
+    """The database was migrated by a calu whose migrations were replaced (PLAN.md D266).
+
+    Its `schema_migrations` rows name files that calu no longer ships, so the shipped
+    migrations cannot be applied on top of it. The message says what to do.
+    """
+
+
+EARLIER_SCHEMA = (
+    "this database was set up by an earlier calu, whose migrations were replaced by one "
+    "baseline (agent/records/PLAN.md D266), so it cannot be migrated. `calu db reset` "
+    "recreates it empty: it deletes every session, setting and checker instruction in it"
+)
+"""The message of `EarlierSchema`."""
+
+
+async def earlier_migrations(conn: psycopg.AsyncConnection) -> list[str]:
+    """Name the applied migrations that calu does not ship under their version any more.
+
+    Args:
+        conn: An open connection.
+
+    Returns:
+        The names recorded in `schema_migrations` whose version is not shipped, or is
+        shipped under another name (`migrations`); empty for a database without the table
+        and for one set up from the shipped migrations.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    cur = await conn.execute("SELECT to_regclass('schema_migrations') IS NOT NULL")
+    row = await cur.fetchone()
+    if not row or not row[0]:
+        return []
+    shipped = {migration.version: migration.name for migration in migrations()}
+    cur = await conn.execute("SELECT version, name FROM schema_migrations ORDER BY version")
+    return [str(name) for version, name in await cur.fetchall() if shipped.get(version) != name]
+
+
 async def migrate(conn: psycopg.AsyncConnection) -> list[Migration]:
     """Apply all migrations that are not applied yet.
 
     The connection must belong to the database owner (it creates tables, functions and the
-    roles `calu_session`, `calu_operator` and `calu_admin`). Each migration runs in one
-    transaction together with its `schema_migrations` row, so a failed migration leaves
-    nothing behind.
+    roles `calu_session`, `calu_operator` and `calu_admin`, migration 0001). Each migration
+    runs in one transaction together with its `schema_migrations` row, so a failed migration
+    leaves nothing behind.
 
     Args:
         conn: An open connection in autocommit mode (see `connect`).
@@ -469,8 +508,12 @@ async def migrate(conn: psycopg.AsyncConnection) -> list[Migration]:
         The migrations applied by this call, in order; empty if the schema was up to date.
 
     Raises:
+        EarlierSchema: If the database was migrated by a calu whose migrations were replaced
+            (`earlier_migrations`); nothing is changed then.
         psycopg.Error: If a migration fails; earlier migrations of this call stay applied.
     """
+    if await earlier_migrations(conn):
+        raise EarlierSchema(EARLIER_SCHEMA)
     await conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations ("
         " version integer PRIMARY KEY,"

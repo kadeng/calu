@@ -17,7 +17,7 @@ import psycopg
 from psycopg import sql
 
 from calu.config import CHANGESET_REQUEST_LIMIT, CheckerConfig, changeset_limits
-from calu.db import migrate, roles
+from calu.db import EarlierSchema, migrate, roles
 from calu.db.connection import open_stored
 from calu.db.target import PasswordAuth, Target
 from calu.defaults.instructions import shipped_status
@@ -454,13 +454,18 @@ async def setup_database(
         A human-readable report of what was done.
 
     Raises:
-        SetupRefused: If `preflight` finds a problem; nothing was changed.
+        SetupRefused: If `preflight` finds a problem, or the database was set up by an
+            earlier calu whose migrations were replaced (`calu.db.EarlierSchema`); nothing
+            was changed.
         psycopg.Error: On database errors.
     """
     problems = await preflight(conn)
     if problems:
         raise SetupRefused("\n".join(f"- {line}" for line in problems))
-    applied = await migrate(conn)
+    try:
+        applied = await migrate(conn)
+    except EarlierSchema as exc:
+        raise SetupRefused(f"- {exc}") from exc
     checkers, rules = await seed_defaults(conn, model, update_outdated)
     return (
         f"migrations applied: {len(applied)}; checker types added: {checkers}; rules added: {rules}"

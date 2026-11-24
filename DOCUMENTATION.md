@@ -3939,9 +3939,10 @@ calu db migrate               # new schema versions (`calu setup` applies them t
   rows and stops.
 - `calu setup` run again applies new migrations and keeps the logins. `calu setup
   --set-password` changes the user password; a running `calu serve` then needs a restart.
-- The upgrade to the one user login (migration 43) takes the logins of `calu_session` and
-  `calu_operator`: run `calu setup` once afterwards, which converts the stored logins, and
-  restart `calu serve`.
+- **A database set up before 2026-11-24** was built by migrations that Calu no longer ships
+  (they were replaced by one baseline). `calu db migrate`, `calu setup` and `calu doctor --db`
+  say so, and `calu db reset` recreates it empty. `calu setup` converts the stored logins of
+  that Calu (admin, session, operator) into the one user login.
 - In the root arrangement, run `sudo calu setup` once after an upgrade.
 - `calu setup` reports shipped checker instructions that are out of date
   ([updates](#updates-of-the-shipped-instructions)).

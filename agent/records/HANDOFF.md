@@ -15,10 +15,11 @@ one means calu never asks. Messages live in `src/calu/logins.py`; both IDE plugi
 password with tries left; migration 0043 takes the logins of calu_session/calu_operator;
 `calu setup` converts an old store. `NEXT_STEP.md` (the plan) is deleted.
 
-Next, decided by the owner the same day ("Squash only"): replace the 43 migrations by one
-baseline that reproduces today's final schema (roles, policies and functions kept); a
-database created from the old chain is refused with "`calu db reset` recreates it". He has no
-database he needs to keep.
+Then, decided by the owner the same day ("Squash only", D266): the 44 old migrations are
+replaced by `0001_baseline.sql`, a cleaned-up `pg_dump --schema-only` of a database they had
+migrated (its dump is identical to the old chain's). A database migrated by the old chain is
+refused by `calu db migrate`/`calu setup` (`calu.db.EarlierSchema`: `calu db reset` recreates
+it empty), and `calu doctor --db` says so. The owner has no database he needs to keep.
 
 Not yet run with the one login: the rootbox tests (`docker exec calu-rootbox rootbox-tests`,
 needs a root box), the Cua GUI runs of both plugins and the pane, checklist item 53 of
@@ -1176,7 +1177,7 @@ inside a container). No phase has unbuilt work in it.
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
 **2713 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. about 470 commits, ~83k lines of Python in `src` (~88k with the SQL, templates and
-default instructions), ~49k of tests, 40 migrations, 28 CLI commands (27 in `calu --help` and the hidden easter egg
+default instructions), ~49k of tests, 1 migration file (the baseline of D266), 28 CLI commands (27 in `calu --help` and the hidden easter egg
 `calu lightcycles`), 26 protocol requests,
 21 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
@@ -1494,7 +1495,7 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    afterwards), Claude reported the refusal and did not retry, and the database held the write
    set and a `checker_runs` row for the review.
 
-11. The **installed wheel**: `uv build` ships every piece of package data (13 migrations, 16
+11. The **installed wheel**: `uv build` ships every piece of package data (the migration, 16
    default instruction files, 13 templates, 5 static files), and in a throwaway virtual
    environment `calu --version`, `calu protocol` (51 definitions) and `calu doctor` run out of
    `site-packages` with that data resolving correctly (D41). `calu doctor` exits non-zero there,

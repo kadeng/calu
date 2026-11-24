@@ -113,7 +113,7 @@ from calu.config import (
 )
 from calu.configdoc import setting_rows
 from calu.credentials import CredentialError, CredentialStore, WrongPassword, wipe
-from calu.db import Db, LoginRefused, migrate
+from calu.db import Db, EarlierSchema, LoginRefused, migrate
 from calu.db import local as local_db
 from calu.db import place as db_place
 from calu.db import rds as rds_auth
@@ -789,12 +789,16 @@ def cmd_db_migrate(args: argparse.Namespace, store: CredentialStore) -> None:
 
     Raises:
         CliError: If there is no `db-admin` credential (only logins of before D265: `calu
-            setup` converts them and migrates), or the password is not given.
+            setup` converts them and migrates), the password is not given, or the database
+            was set up by an earlier calu whose migrations were replaced (`EarlierSchema`:
+            the message names `calu db reset`).
         psycopg.Error: On database errors.
     """
     url = load_credential(store, logins.DB_ADMIN, logins.USER_PROMPT)
     try:
         count = asyncio.run(_migrate(url))
+    except EarlierSchema as exc:
+        raise CliError(str(exc)) from exc
     finally:
         wipe(url)
     print(f"migrations applied: {count}")

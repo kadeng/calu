@@ -28,8 +28,9 @@ from calu import __version__, admin, asuser, launch, logins, preflight
 from calu.changes import default_root
 from calu.config import PROVIDER_KEYS_BY_PREFIX, SETTINGS_KEY, Config, user_env_file
 from calu.credentials import CredentialStore
-from calu.db import Db, applied_versions, migrations
+from calu.db import Db, applied_versions, earlier_migrations, migrations
 from calu.db import place as db_place
+from calu.db.connection import EARLIER_SCHEMA
 from calu.db.connection import open_stored as connect
 from calu.db.target import PasswordAuth
 from calu.launch import RunAs
@@ -594,8 +595,9 @@ async def database_findings(url: str) -> list[Finding]:
         url: The connection string of the user login.
 
     Returns:
-        Findings for the connection and for the migrations. A connection that fails is one
-        finding and the migrations are not checked.
+        Findings for the connection and for the migrations: current, missing ones, or a
+        schema of an earlier calu whose migrations were replaced (`calu db reset`). A
+        connection that fails is one finding and the migrations are not checked.
 
     Raises:
         nothing: a failure to connect is reported as a finding.
@@ -613,6 +615,11 @@ async def database_findings(url: str) -> list[Finding]:
             )
         ]
     try:
+        if await earlier_migrations(conn):
+            return [
+                Finding("database", True, "answers", ""),
+                Finding("schema", False, "set up by an earlier calu", f"{EARLIER_SCHEMA}."),
+            ]
         applied = await applied_versions(conn)
         known = {migration.version for migration in migrations()}
         missing = sorted(known - applied)

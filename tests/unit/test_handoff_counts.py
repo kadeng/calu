@@ -62,7 +62,10 @@ def stated(pattern: str) -> float:
     [
         (r"~([\d.]+k) lines of Python in `src`", lambda: lines_in("src", (".py",))),
         (r"~([\d.]+k) of tests", lambda: lines_in("tests", (".py",))),
-        (r"(\d+) migrations", lambda: len(list((ROOT / "src/calu/db/migrations").glob("*.sql")))),
+        (
+            r"(\d+) migration files?",
+            lambda: len(list((ROOT / "src/calu/db/migrations").glob("*.sql"))),
+        ),
     ],
 )
 def test_a_size_claim_in_the_handoff_is_roughly_true(claim: str, measured) -> None:
