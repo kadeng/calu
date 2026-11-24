@@ -9,6 +9,8 @@ turn, and the oldest completed turns.
 import re
 from pathlib import Path
 
+import pytest
+
 from calu.config import ContextConfig
 from calu.context import ContextBuilder, StepRecord
 
@@ -106,3 +108,53 @@ def test_a_turn_longer_than_the_whole_budget_still_names_the_step(tmp_path: Path
     recent = context.recent()
     assert "the newest step" in recent
     assert "[1 earlier step of this turn omitted]" in recent
+
+
+def test_the_limit_is_100k_characters_by_default() -> None:
+    """D272: the owner's default; the old 40,000 dropped history in sessions with long turns."""
+    assert ContextConfig().max_recent_chars == 100_000
+
+
+@pytest.mark.anyio
+async def test_outgrowing_the_limit_folds_early_as_many_turns_as_it_takes(tmp_path: Path) -> None:
+    """D272: when the unfolded turns and the running turn outgrow the limit, a fold is due
+    long before `fold_every` turns, and it takes the fewest oldest turns that bring the
+    context under the limit, so nothing has to be dropped; the folded users' words stay
+    verbatim in the chat summary."""
+    from pydantic_ai.models.test import TestModel
+
+    context = ContextBuilder(
+        tmp_path,
+        ContextConfig(max_recent_chars=2_000, narrate=False, fold_every=30, fold_count=20),
+        summarizer_model=TestModel(custom_output_text="What happened so far."),
+    )
+    for index in range(4):
+        context.user_input(f"question {index}")
+        context.step(step(f"a step of turn {index} {'z' * 300}"))
+        context.end_turn(f"answer {index}")
+    assert not context.needs_fold(), "4 short turns fit"
+    for index in range(4, 8):
+        context.user_input(f"question {index}")
+        context.step(step(f"a step of turn {index} {'z' * 300}"))
+        context.end_turn(f"answer {index}")
+    assert context.over_limit() and context.needs_fold(), "8 turns of ~420 characters do not"
+
+    assert await context.fold()
+    assert not context.over_limit()
+    assert "omitted" not in context.recent(), "after the fold nothing is dropped"
+    assert 1 <= 8 - len(context.turns) < 8, "only as many turns as needed are folded"
+    assert "question 0" in context.summary, "the folded user inputs stay verbatim"
+
+
+def test_a_running_turn_alone_over_the_limit_folds_every_completed_turn(tmp_path: Path) -> None:
+    """D272: the running turn cannot be folded, so when it alone outgrows the limit the fold
+    takes all completed turns (and the running turn keeps its newest steps)."""
+    context = builder(tmp_path, limit=1_500)
+    for index in range(3):
+        context.user_input(f"question {index}")
+        context.end_turn(f"answer {index}")
+    context.user_input("a long running turn")
+    for index in range(30):
+        context.step(step(f"step {index} {'w' * 60}"))
+    assert context.needs_fold()
+    assert context._fold_size() == 3

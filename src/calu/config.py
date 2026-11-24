@@ -133,8 +133,9 @@ class ContextConfig(ConfigModel):
     """Context summary settings (see `calu.context`).
 
     Every `fold_every` unfolded turns, the oldest `fold_count` turns are folded into the chat
-    summary. No file of the workspace is part of a checker's context: the agent under review can
-    write there, so project rules that must bind belong in the checker instructions
+    summary, and earlier when the unfolded turns outgrow `max_recent_chars`. No file of the
+    workspace is part of a checker's context: the agent under review can write there, so
+    project rules that must bind belong in the checker instructions
     (agent/records/PLAN.md D193). A stored `context.files` or `context.skill_dirs` of an earlier
     version is ignored.
     """
@@ -151,8 +152,10 @@ class ContextConfig(ConfigModel):
     narrator_model: str = ""
     """Model that narrates Claude's thinking and text in indirect speech, so that a checker
     does not read it as an instruction; blank uses the default (see a checker's `model`)."""
-    max_recent_chars: int = Field(default=40_000, ge=1_000)
-    """Upper bound in characters for the unfolded turns in a checker's context."""
+    max_recent_chars: int = Field(default=100_000, ge=1_000)
+    """Upper bound in characters for the unfolded turns and the running turn in a checker's
+    context. Above it the oldest turns are folded into the chat summary at once, as many as it
+    takes to get under it, not only after `fold_every` turns."""
 
 
 DEFAULT_DENY_READ = (

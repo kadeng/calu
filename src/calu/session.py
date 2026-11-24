@@ -737,6 +737,7 @@ class Session:
         self._git_head_value: str | None = None
         self._git_head_time = float("-inf")
         self._pending = 0  # background tasks (narration, turn storage, folding)
+        self._folding = False  # a fold of `_fold_if_due` runs (D272)
         self._quiet = anyio.Event()
         self._quiet.set()
         self._queue_ids = itertools.count(1)
@@ -3694,6 +3695,7 @@ class Session:
             narration=pending.text or "",
         )
         self.context.step(record)
+        self._fold_if_due()
         if step.tool_use_id:
             self.recorder.summarize_time(
                 self._run_state.peek(step.tool_use_id).time_seq or 0, result.step_summary
@@ -4003,6 +4005,7 @@ class Session:
                 summary=review.summary,
             )
         )
+        self._fold_if_due()
         if step_id is not None:
             await self.recorder.attempt(
                 "recording a checker run",
@@ -4580,6 +4583,7 @@ class Session:
         if self.narrator is None:
             record.summary = CROSS_SESSION_HIDDEN
         self.context.step(record)
+        self._fold_if_due()
         if self.narrator is not None and self._run_state.tg is not None:
             self._spawn(self._narrate_cross_session, record, text, "message" if cross else "notice")
 
@@ -4621,12 +4625,27 @@ class Session:
         if self.context.needs_fold():
             await self._fold()
 
+    def _fold_if_due(self) -> None:
+        """Start a fold in the background when the context outgrew its limit mid-turn (D272).
+
+        A step can make the unfolded turns and the running turn longer than
+        `context.max_recent_chars`; folding then must not wait for the end of the turn. At most
+        one such fold runs at a time (`_folding`); `ContextBuilder.fold` checks again whether it
+        is still due.
+        """
+        if self._folding or not self.context.over_limit():
+            return
+        self._folding = True
+        self._spawn(self._fold)
+
     async def _fold(self) -> None:
         """Fold old turns into the chat summary; never raises (errors are logged)."""
         try:
             await self.context.fold()
         except Exception:
             log.exception("folding the context failed")
+        finally:
+            self._folding = False
 
     async def _store_summary(self, summary: str, covered_turns: int) -> None:
         """Store the chat summary after a fold and mark the folded turns (never raises).

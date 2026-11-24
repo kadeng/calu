@@ -3,9 +3,11 @@
     cached prefix = chat summary
     recent        = unfolded turns + the running turn
 
-When a turn ends and at least `fold_every` turns are unfolded, the oldest `fold_count` turns are
-folded: a summarizer agent merges them into the narrative part of the chat summary, and their
-user inputs are appended verbatim to its "User inputs" section. Folding runs in the background;
+When at least `fold_every` turns are unfolded, or the unfolded turns and the running turn
+together are longer than `max_recent_chars`, the oldest turns are folded (`fold_count` of them,
+or as many as it takes to get under the limit, whichever is more; PLAN.md D272): a summarizer
+agent merges them into the narrative part of the chat summary, and their user inputs are
+appended verbatim to its "User inputs" section. Folding runs in the background;
 checks continue with the old context until it is done. The summary is kept in memory
 (`ContextBuilder.summary`) and handed to `on_summary` after each fold, so the session can store
 it in the database (table `chat_summaries`, with the number of the newest folded turn).
@@ -242,12 +244,54 @@ class ContextBuilder:
         return self.current.index if self.current is not None else self._next_index
 
     def needs_fold(self) -> bool:
-        """Tell whether enough turns are unfolded to fold.
+        """Tell whether old turns are to be folded now.
 
         Returns:
-            True if the number of unfolded turns reached `fold_every`.
+            True if the number of unfolded turns reached `fold_every`, or if there are
+            unfolded turns and they and the running turn together are longer than
+            `max_recent_chars` (`over_limit`).
         """
-        return len(self.turns) >= self.config.fold_every
+        return len(self.turns) >= self.config.fold_every or self.over_limit()
+
+    def _rendered_size(self) -> int:
+        """Measure the unfolded turns and the running turn as a checker would get them.
+
+        Returns:
+            The characters of the rendered completed turns (with their separators) and of
+            the running turn's pieces.
+        """
+        current = sum(map(len, self.current.render_parts())) if self.current else 0
+        return current + sum(len(t.render()) + 2 for t in self.turns)
+
+    def over_limit(self) -> bool:
+        """Tell whether the context has outgrown `max_recent_chars` and a fold would help.
+
+        Returns:
+            True if there is at least one unfolded completed turn and the completed turns and
+            the running turn together are longer than the limit.
+        """
+        return bool(self.turns) and self._rendered_size() > self.config.max_recent_chars
+
+    def _fold_size(self) -> int:
+        """Decide how many of the oldest unfolded turns the next fold takes.
+
+        Returns:
+            `fold_count` when `fold_every` turns are unfolded; when over the limit, the fewest
+            oldest turns whose removal brings the context under `max_recent_chars` (all
+            completed turns if even that is not enough, the running turn being too long by
+            itself); the larger of the two when both apply; 0 when no fold is due.
+        """
+        wanted = self.config.fold_count if len(self.turns) >= self.config.fold_every else 0
+        if self.over_limit():
+            excess = self._rendered_size() - self.config.max_recent_chars
+            freed, needed = 0, 0
+            for turn in self.turns:
+                if freed >= excess:
+                    break
+                freed += len(turn.render()) + 2
+                needed += 1
+            wanted = max(wanted, needed)
+        return min(wanted, len(self.turns))
 
     def _ensure_turn(self) -> TurnRecord:
         """Return the running turn; start a new one with the next index if none is running.
@@ -274,10 +318,12 @@ class ContextBuilder:
         """Return the completed unfolded turns and the pieces of the running turn.
 
         The completed turns are limited to `ContextConfig.max_recent_chars` minus the size of
-        the running turn: the oldest turns are dropped first (they are still kept for folding),
-        and a note says how many. A running turn longer than the limit drops its oldest steps
-        behind a note. The running turn's pieces come from `TurnRecord.render_parts`, so a new
-        step only appends a piece (prompt caching per checked step, see `Checker`).
+        the running turn. Over that limit a fold is due (`needs_fold`); until it is done (or
+        when it failed), the oldest turns are dropped from this text (they are still kept for
+        folding), and a note says how many. A running turn longer than the limit by itself
+        drops its oldest steps behind a note. The running turn's pieces come from
+        `TurnRecord.render_parts`, so a new step only appends a piece (prompt caching per
+        checked step, see `Checker`).
 
         Returns:
             `(turns, current)`: the completed turns rendered as one text ("" if none) and the
@@ -347,7 +393,7 @@ class ContextBuilder:
         return self._summarizer
 
     async def fold(self) -> bool:
-        """Fold the oldest `fold_count` turns into the chat summary if `needs_fold()`.
+        """Fold the oldest turns into the chat summary if `needs_fold()` (`_fold_size` of them).
 
         The summary is read before and compared again after the (slow) summarizer call; if it
         was replaced meanwhile, nothing changes and the turns stay unfolded for the next try.
@@ -362,7 +408,7 @@ class ContextBuilder:
         async with self._fold_lock:
             if not self.needs_fold():
                 return False
-            batch = self.turns[: self.config.fold_count]
+            batch = self.turns[: self._fold_size()]
             current = self.summary
             narrative, inputs = split_summary(current)
             prompt = (
