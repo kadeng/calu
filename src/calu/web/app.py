@@ -226,12 +226,15 @@ claims a state, and nothing an operator does for them has any effect, so they ar
 """
 
 DETAIL_LEVELS = {
-    "summary": "Narrated summary (what the checkers see)",
+    "summary": "What the checkers see (your words verbatim, Claude narrated, every step as a "
+    "checker described it)",
     "compact": "Compact (answers and one line per tool call)",
     "detailed": "Detailed (with Claude's thinking, narrated)",
     "full": "Full (tool inputs, results and checker verdicts)",
 }
-"""The levels of detail of the chat log, from least to most (the owner's wording).
+"""The levels of detail of the chat log, from least to most (the owner's wording; the first
+renamed on 2026-11-24 from "Narrated summary", which read as an abridgement of what the checkers
+get when it is all of it).
 
 The four differ in what they show of each turn:
 

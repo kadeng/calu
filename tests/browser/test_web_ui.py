@@ -43,7 +43,7 @@ async def test_an_operator_can_work_through_a_session_in_the_browser(db_url: str
             await page.get_by_role("link", name="Full (tool inputs").click()
             full = await page.inner_text("main")
             assert "make test" in full and "2 passed" in full
-            await page.get_by_role("link", name="Narrated summary").click()
+            await page.get_by_role("link", name="What the checkers see").click()
             assert "## Turn 1" in await page.inner_text("main")
 
             # A token is minted and shown once, with the command to attach with it.
