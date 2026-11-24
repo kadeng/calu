@@ -12,33 +12,48 @@
 #   --with-sandbox   also install bubblewrap and socat for Claude Code's sandbox (root only)
 #   --help           print this text
 #
-# What it does, as root:
-#   uv     uses `uv` from PATH, else installs uv into /usr/local/lib/calu/bin (not on PATH)
-#   tools  installs curl and git with apt, dnf or zypper if they are missing
-#   calu   `uv tool install --reinstall` into /usr/local/lib/calu (Python in
-#          /usr/local/lib/calu/python), the `calu` command in /usr/local/bin; every directory
-#          root's, writable by root only, which `--sudo` checks before it runs calu as root
-# and for a user:
-#   uv     uses `uv` from PATH, else installs it into ~/.local/bin
-#   calu   `uv tool install --reinstall` with uv's defaults: the command in ~/.local/bin
+# What it does, in this order (each step is one function below):
+#   1. check_system     Linux only; reads the options
+#   2. need_tools       as root: installs curl and git with apt, dnf or zypper if missing
+#                       (as a user: stops and names them if missing)
+#   3. get_uv           uses the `uv` on PATH (as a user), or downloads uv UV_VERSION from
+#                       its GitHub release and checks the archive's SHA-256 against the value
+#                       written below before anything of it runs
+#   4. install_calu     `uv tool install --reinstall git+<source>@<ref>`: uv downloads calu's
+#                       source from that repository, its Python packages from PyPI and, if
+#                       needed, a Python build. As root everything goes into /usr/local/lib/calu
+#                       (the command into /usr/local/bin), owned by root and writable by root
+#                       only, which `calu ... --sudo` checks before it runs calu as root.
+#                       As a user it goes where uv puts tools (the command into ~/.local/bin).
+#   5. add_sandbox      only with --with-sandbox: bubblewrap and socat, and on Ubuntu 23.10 and
+#                       later an AppArmor profile that lets bubblewrap create user namespaces
+#   6. say_next         prints the next commands
 #
-# Running it again updates calu. It starts nothing, creates no database and changes no
-# setting: `calu doctor` and `calu setup` come next (it prints them). The whole script is one
-# function called on the last line, so a download that breaks off runs nothing.
+# It starts nothing, creates no database, changes no calu setting and writes nothing outside
+# the places named above. Running it again updates calu; `calu uninstall` (or `sudo calu
+# uninstall`) removes calu, its logins and its local database, but none of the programs of
+# steps 2, 3 and 5. The whole script is one function called on the last line, so a download
+# that breaks off runs nothing.
 #
-# To install exactly what you have read, download the script of one commit, read it, run it:
+# To install exactly what you have read: download the script of one commit, read it, run it.
 #   curl -fsSLo install.sh https://raw.githubusercontent.com/kadeng/calu/<commit>/install.sh
 #   sudo bash install.sh --ref <commit>
 
 set -euo pipefail
 
 CALU_SOURCE_DEFAULT="https://github.com/kadeng/calu"
-UV_VERSION="0.12.23"                 # the uv installed when none is found (a tested version)
 ROOT_HOME="/usr/local/lib/calu"      # the root installation (agent/records/PLAN.md D211)
 ROOT_BIN="/usr/local/bin"
 
+# uv, pinned: the version and the SHA-256 of its release archives, as published with the
+# release (https://github.com/astral-sh/uv/releases/tag/0.12.23, files *.tar.gz.sha256).
+UV_VERSION="0.12.23"
+UV_SHA256_X86_64="9167d72b3319674b6303c4cbe071854bba13ebdf3d76b1a7cbdc175471fb66d6"
+UV_SHA256_AARCH64="6524bd338177ed50d035d39354e12545e993bbeba2ecbddf0480c5b3a81d313f"
+
 say() { printf 'calu install: %s\n' "$*" >&2; }
 fail() { say "error: $*"; exit 1; }
+is_root() { [ "$(id -u)" -eq 0 ]; }
 
 usage() {
     sed -n '2,/^$/p' "${BASH_SOURCE[0]:-/dev/null}" 2>/dev/null | sed 's/^# \{0,1\}//' || true
@@ -49,7 +64,7 @@ Usage: install.sh [--ref REF] [--source URL] [--with-sandbox]
 EOF
 }
 
-# Run a package manager to install packages (root only). Arguments: the packages.
+# Install distribution packages (root only). Arguments: the packages.
 install_packages() {
     if command -v apt-get >/dev/null 2>&1; then
         DEBIAN_FRONTEND=noninteractive apt-get update -qq
@@ -63,108 +78,113 @@ install_packages() {
     fi
 }
 
-# Download a URL to stdout with curl or wget.
-fetch() {
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$1"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -qO- "$1"
-    else
-        fail "neither curl nor wget is installed"
-    fi
-}
-
-main() {
-    local ref="main" source="$CALU_SOURCE_DEFAULT" sandbox=0
+# Step 1. Arguments: the script's arguments. Sets REF, SOURCE and SANDBOX.
+check_system() {
+    REF="main" SOURCE="$CALU_SOURCE_DEFAULT" SANDBOX=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --ref) [ $# -ge 2 ] || fail "--ref needs a value"; ref="$2"; shift 2 ;;
-            --source) [ $# -ge 2 ] || fail "--source needs a value"; source="$2"; shift 2 ;;
-            --with-sandbox) sandbox=1; shift ;;
+            --ref) [ $# -ge 2 ] || fail "--ref needs a value"; REF="$2"; shift 2 ;;
+            --source) [ $# -ge 2 ] || fail "--source needs a value"; SOURCE="$2"; shift 2 ;;
+            --with-sandbox) SANDBOX=1; shift ;;
             -h|--help) usage; exit 0 ;;
             *) usage; fail "unknown option: $1" ;;
         esac
     done
-    case "$ref" in *[!A-Za-z0-9._/-]*|-*|"") fail "--ref takes a branch, tag or commit, not '$ref'" ;; esac
+    case "$REF" in *[!A-Za-z0-9._/-]*|-*|"") fail "--ref takes a branch, tag or commit, not '$REF'" ;; esac
     [ "$(uname -s)" = "Linux" ] || fail "calu runs on Linux (WSL2, a container or an SSH host count)"
-
-    local root=0
-    [ "$(id -u)" -eq 0 ] && root=1
-
-    if [ "$sandbox" -eq 1 ] && [ "$root" -eq 0 ]; then
+    if [ "$SANDBOX" -eq 1 ] && ! is_root; then
         fail "--with-sandbox installs system packages; run the script with sudo"
     fi
+}
 
-    # curl (for uv's installer) and git (uv clones git sources with it).
-    if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
-        if [ "$root" -eq 1 ]; then
-            say "installing curl"
-            install_packages curl ca-certificates
-        else
-            fail "neither curl nor wget is installed; install one and run this again"
-        fi
+# Step 2. curl (to download uv) and git (uv clones calu's repository with it).
+need_tools() {
+    if ! command -v curl >/dev/null 2>&1; then
+        is_root || fail "curl is missing; install it (e.g. sudo apt install curl) and run this again"
+        say "installing curl"
+        install_packages curl ca-certificates
     fi
     if ! command -v git >/dev/null 2>&1; then
-        if [ "$root" -eq 1 ]; then
-            say "installing git"
-            install_packages git
-        else
-            fail "git is missing; install it (e.g. sudo apt install git) and run this again"
-        fi
+        is_root || fail "git is missing; install it (e.g. sudo apt install git) and run this again"
+        say "installing git"
+        install_packages git
     fi
+}
 
-    # uv: the one on PATH, else a pinned version in a place of our own.
-    local uv
-    if command -v uv >/dev/null 2>&1 && [ "$root" -eq 0 ]; then
-        uv="$(command -v uv)"
-    elif [ "$root" -eq 1 ] && [ -x "$ROOT_HOME/bin/uv" ]; then
-        uv="$ROOT_HOME/bin/uv"
+# Step 3. Sets UV to the uv program to use.
+get_uv() {
+    if ! is_root && command -v uv >/dev/null 2>&1; then
+        UV="$(command -v uv)"
+        return
+    fi
+    local into
+    if is_root; then
+        # Root's own copy: a uv in a user's directory on root's PATH would let that user run
+        # code as root at the next update.
+        into="$ROOT_HOME/bin"
+        install -d -m 0755 -o root -g root "$ROOT_HOME" "$into"
     else
-        local into
-        if [ "$root" -eq 1 ]; then
-            # Root's own copy: a uv in a user's directory on root's PATH would let that user run
-            # code as root at the next update.
-            into="$ROOT_HOME/bin"
-            install -d -m 0755 -o root -g root "$ROOT_HOME" "$into"
-        else
-            into="$HOME/.local/bin"
-            mkdir -p "$into"
-        fi
-        say "installing uv $UV_VERSION into $into"
-        fetch "https://astral.sh/uv/$UV_VERSION/install.sh" \
-            | env UV_INSTALL_DIR="$into" UV_NO_MODIFY_PATH=1 INSTALLER_NO_MODIFY_PATH=1 sh >/dev/null
-        uv="$into/uv"
-        [ -x "$uv" ] || fail "uv was not installed into $into"
+        into="$HOME/.local/bin"
+        mkdir -p "$into"
     fi
+    if [ -x "$into/uv" ] && [ "$("$into/uv" --version 2>/dev/null | cut -d' ' -f1,2)" = "uv $UV_VERSION" ]; then
+        UV="$into/uv"
+        return
+    fi
+    local arch expected
+    case "$(uname -m)" in
+        x86_64|amd64) arch="x86_64"; expected="$UV_SHA256_X86_64" ;;
+        aarch64|arm64) arch="aarch64"; expected="$UV_SHA256_AARCH64" ;;
+        *) fail "no uv build is pinned for $(uname -m); install uv yourself and run this again" ;;
+    esac
+    local name="uv-$arch-unknown-linux-gnu"
+    local work
+    work="$(mktemp -d)"
+    say "downloading uv $UV_VERSION ($arch) and checking its SHA-256"
+    curl -fsSLo "$work/uv.tar.gz" \
+        "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/$name.tar.gz"
+    if [ "$(sha256sum "$work/uv.tar.gz" | cut -d' ' -f1)" != "$expected" ]; then
+        rm -rf "$work"
+        fail "the downloaded uv archive does not have the SHA-256 written in this script; nothing was installed"
+    fi
+    tar -xzf "$work/uv.tar.gz" -C "$work"
+    install -m 0755 "$work/$name/uv" "$work/$name/uvx" "$into/"
+    rm -rf "$work"
+    UV="$into/uv"
+}
 
-    local spec="git+${source}@${ref}"
-    if [ "$root" -eq 1 ]; then
-        install -d -m 0755 -o root -g root "$ROOT_HOME"
+# Step 4. Installs calu with uv, from SOURCE at REF.
+install_calu() {
+    local spec="git+${SOURCE}@${REF}"
+    if is_root; then
         say "installing calu ($spec) for root into $ROOT_HOME, the command in $ROOT_BIN"
         # umask 022: everything written is root's and not writable by others (`--sudo` checks it).
         (
             umask 022
             env UV_TOOL_DIR="$ROOT_HOME" UV_TOOL_BIN_DIR="$ROOT_BIN" \
                 UV_PYTHON_INSTALL_DIR="$ROOT_HOME/python" UV_CACHE_DIR="$ROOT_HOME/cache" \
-                "$uv" tool install --reinstall --quiet "$spec"
+                "$UV" tool install --reinstall --quiet "$spec"
         )
         rm -rf "$ROOT_HOME/cache"
         # uv leaves lock files that everybody may write; nobody but root may change anything here.
         find "$ROOT_HOME" -perm -o+w -not -type l -exec chmod o-w {} +
     else
         say "installing calu ($spec) for $(id -un)"
-        "$uv" tool install --reinstall --quiet "$spec"
+        "$UV" tool install --reinstall --quiet "$spec"
     fi
+}
 
-    if [ "$sandbox" -eq 1 ]; then
-        say "installing bubblewrap and socat for Claude Code's sandbox"
-        install_packages bubblewrap socat
-        # Ubuntu 23.10 and later let only programs with an AppArmor profile create user
-        # namespaces; bubblewrap needs one for the sandbox (calu doctor reports the case).
-        if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = "1" ] \
-            && [ -d /etc/apparmor.d ] && [ ! -e /etc/apparmor.d/bwrap ] && command -v apparmor_parser >/dev/null 2>&1; then
-            say "adding the AppArmor profile /etc/apparmor.d/bwrap (user namespaces for bubblewrap)"
-            cat >/etc/apparmor.d/bwrap <<'EOF'
+# Step 5. Only with --with-sandbox (root).
+add_sandbox() {
+    [ "$SANDBOX" -eq 1 ] || return 0
+    say "installing bubblewrap and socat for Claude Code's sandbox"
+    install_packages bubblewrap socat
+    # Ubuntu 23.10 and later let only programs with an AppArmor profile create user
+    # namespaces; bubblewrap needs one for the sandbox (calu doctor reports the case).
+    if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = "1" ] \
+        && [ -d /etc/apparmor.d ] && [ ! -e /etc/apparmor.d/bwrap ] && command -v apparmor_parser >/dev/null 2>&1; then
+        say "adding the AppArmor profile /etc/apparmor.d/bwrap (user namespaces for bubblewrap)"
+        cat >/etc/apparmor.d/bwrap <<'EOF'
 abi <abi/4.0>,
 include <tunables/global>
 
@@ -174,23 +194,23 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
   include if exists <local/bwrap>
 }
 EOF
-            apparmor_parser -r /etc/apparmor.d/bwrap
-        fi
+        apparmor_parser -r /etc/apparmor.d/bwrap
     fi
+}
 
+# Step 6.
+say_next() {
     local calu_cmd
-    if [ "$root" -eq 1 ]; then calu_cmd="$ROOT_BIN/calu"; else calu_cmd="$HOME/.local/bin/calu"; fi
+    if is_root; then calu_cmd="$ROOT_BIN/calu"; else calu_cmd="$HOME/.local/bin/calu"; fi
     [ -x "$calu_cmd" ] || fail "calu was installed, but $calu_cmd is missing"
     say "done: $("$calu_cmd" --version 2>/dev/null || echo calu)"
-
-    if [ "$root" -eq 1 ]; then
+    if is_root; then
         cat >&2 <<'EOF'
 
 Next steps (as your own user, not as root):
-  calu doctor --sudo .     check the root arrangement
-  sudo calu setup          the database and root's credentials in /etc/calu
-  calu serve --sudo        the server: calu as root, Claude Code as you
-  calu web --sudo          the web interface (prints the address of the chat pane too)
+  sudo calu setup          the database and your calu user password (root's logins in /etc/calu)
+  calu serve --sudo --web  the server and the web interface: calu as root, Claude Code as you
+  calu doctor --sudo .     what is in place and what is missing
 Run this script again to update calu; `sudo calu uninstall` removes it.
 EOF
     else
@@ -201,12 +221,21 @@ EOF
         cat >&2 <<'EOF'
 
 Next steps:
-  calu doctor      what is in place and what is missing
-  calu setup       the database and your calu user password
-  calu serve       the server; then calu web, the VSCode extension or calu attach
+  calu setup         the database and your calu user password
+  calu serve --web   the server and the web interface; or the VSCode extension, calu attach
+  calu doctor        what is in place and what is missing
 Run this script again to update calu; `calu uninstall` removes it.
 EOF
     fi
+}
+
+main() {
+    check_system "$@"
+    need_tools
+    get_uv
+    install_calu
+    add_sandbox
+    say_next
 }
 
 main "$@"
