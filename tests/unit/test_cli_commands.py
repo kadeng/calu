@@ -609,3 +609,19 @@ def test_the_stop_with_server_question_and_its_option(monkeypatch: pytest.Monkey
     with pytest.raises(cli.CliError, match="do not apply to the database server"):
         cli._check_setup_options(args, "server")
     cli._check_setup_options(args, "docker")
+
+
+def test_ctrl_d_at_a_setup_question_says_what_was_not_done(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ctrl-D at a question of `calu setup` ends the command with one sentence that names
+    the question and the option that answers it, not with a traceback (found when the
+    install script ran `calu setup` on the terminal)."""
+
+    def ended(_prompt: str) -> str:
+        raise EOFError
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", ended)
+    with pytest.raises(cli.CliError, match="Not done: the input ended at the question 'Database'"):
+        cli.ask("Database", "1", "--database")

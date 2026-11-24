@@ -28,9 +28,14 @@
 #   5. add_sandbox      only with --with-sandbox: bubblewrap and socat, and on Ubuntu 23.10 and
 #                       later an AppArmor profile that lets bubblewrap create user namespaces
 #   6. say_next         prints the next commands
+#   7. offer_setup      asks whether to run `calu setup` now, with the rights this script has
+#                       (run through sudo: as root, as `sudo calu setup` would), on the terminal (/dev/tty, since the script itself arrives on
+#                       standard input); not asked when CALU_INSTALL_NONINTERACTIVE is set or
+#                       there is no terminal. `calu setup` asks its own questions and creates
+#                       or migrates the database
 #
-# It starts nothing, creates no database, changes no calu setting and writes nothing outside
-# the places named above. Running it again updates calu; `calu uninstall` (or `sudo calu
+# Apart from that setup, which you start by answering yes, it starts nothing, creates no
+# database, changes no calu setting and writes nothing outside the places named above. Running it again updates calu; `calu uninstall` (or `sudo calu
 # uninstall`) removes calu, its logins and its local database, but none of the programs of
 # steps 2, 3 and 5. The whole script is one function called on the last line, so a download
 # that breaks off runs nothing.
@@ -229,6 +234,35 @@ EOF
     fi
 }
 
+# Step 7. Offers to run `calu setup` on the terminal, unless CALU_INSTALL_NONINTERACTIVE is
+# set or there is no terminal.
+offer_setup() {
+    local calu_cmd how rights answer
+    if is_root; then
+        calu_cmd="$ROOT_BIN/calu" how="sudo calu setup" rights="as root, like this script"
+    else
+        calu_cmd="$HOME/.local/bin/calu" how="calu setup" rights="as $(id -un), like this script"
+    fi
+    if [ -n "${CALU_INSTALL_NONINTERACTIVE:-}" ]; then
+        say "CALU_INSTALL_NONINTERACTIVE is set: not offering \`$how\`; run it yourself"
+        return 0
+    fi
+    if ! { : </dev/tty; } 2>/dev/null; then
+        say "no terminal to ask on: run \`$how\` yourself"
+        return 0
+    fi
+    printf '\nRun `calu setup` now (%s)? It sets up or updates the database and asks for your calu user password. [Y/n] ' "$rights" >/dev/tty
+    read -r answer </dev/tty || answer="n"
+    case "$answer" in
+        ""|[Yy]|[Yy][Ee][Ss]) ;;
+        *) say "not run; \`$how\` does it later"; return 0 ;;
+    esac
+    # Its questions and the password prompt read the terminal, not this script's input.
+    if ! "$calu_cmd" setup </dev/tty; then
+        say "\`$how\` did not finish (see above); run it again when the cause is fixed"
+    fi
+}
+
 main() {
     check_system "$@"
     need_tools
@@ -236,6 +270,7 @@ main() {
     install_calu
     add_sandbox
     say_next
+    offer_setup
 }
 
 main "$@"

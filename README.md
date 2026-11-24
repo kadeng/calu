@@ -174,16 +174,18 @@ curl -fsSL https://raw.githubusercontent.com/kadeng/calu/main/install.sh | sudo 
 - **Remove Calu again:** `sudo calu uninstall`. It removes Calu, its logins and its local
   database, and keeps the programs the script installed (curl, git, uv, bubblewrap, socat).
 
-**2. Set up the database and your password.**
+**2. Set up the database and your password.** At its end the install script offers to run
+`calu setup` with its own rights (as root). Say yes and answer: database `1` (Docker), Enter
+at the data directory and the port, `yes` to stopping the database with the server, then the
+password twice, and the sandbox `on`. Or say no and run it with every answer given:
 
 ```bash
 sudo calu setup --database docker --stop-db-with-server --sandbox
 ```
 
-Press Enter at the data directory and port questions to keep the defaults. Choose the **calu
-user password**: the one password Calu asks for, when the server starts, when a browser or
-an IDE signs in, and when you change a setting. The local database starts with `calu serve`
-and stops when it ends.
+Choose the **calu user password**: the one password Calu asks for, when the server starts,
+when a browser or an IDE signs in, and when you change a setting. The local database starts
+with `calu serve` and stops when it ends.
 
 **3. Give the checkers a key.**
 

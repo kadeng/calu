@@ -111,7 +111,10 @@ client. Two ways to install it:
   version and checks its SHA-256 against the value written in the script, then runs `uv tool
   install` of Calu from GitHub. As root everything goes into `/usr/local/lib/calu`, owned and
   writable by root only, the commands into `/usr/local/bin`; for a user, into uv's tool
-  directory and `~/.local/bin`. It starts nothing and changes no setting.
+  directory and `~/.local/bin`. At its end it offers to run `calu setup` on the terminal,
+  with the rights the script has (as root after `sudo bash`); answering no, or setting
+  `CALU_INSTALL_NONINTERACTIVE=1`, leaves that to you. Apart from that it starts nothing and
+  changes no setting.
 - **Install exactly what you read.** Download the script of one commit, read it, and install
   that commit:
 

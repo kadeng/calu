@@ -508,15 +508,24 @@ def ask(prompt: str, default: str | None, flag: str) -> str:
         The answer. Without a terminal nothing is asked: the default is returned.
 
     Raises:
-        CliError: If an answer is required and none was given, or there is no terminal to ask
-            on and no default (the message names the option to pass).
+        CliError: If an answer is required and none was given, there is no terminal to ask
+            on and no default (the message names the option to pass), or the input ended at
+            the question (Ctrl-D).
     """
     if not sys.stdin.isatty():
         if default is None:
             raise CliError(f"{flag} is needed (there is no terminal to ask on)")
         return default
     shown = f"{prompt} ({default}): " if default else f"{prompt}: "
-    answer = input(shown).strip() or (default or "")
+    try:
+        answer = input(shown).strip() or (default or "")
+    except EOFError:
+        # Ctrl-D: end the line the question is on, then say what happened.
+        print(file=sys.stderr)
+        raise CliError(
+            f"Not done: the input ended at the question {prompt!r}. Run the command again "
+            f"to answer it, or give {flag}"
+        ) from None
     if not answer:
         raise CliError(f"{prompt.lower()} must not be empty")
     return answer
