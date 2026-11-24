@@ -59,13 +59,13 @@ leave config/defaults.toml unchanged."
 - **The step check holds the line.** Because every subagent step is judged against the whole
   conversation, a rule the main agent forgot to pass on is still enforced where it matters:
   at the edit. The subagent gets the DENY's reason and can put the default elsewhere.
-- **The hand-over check misses the earlier, cheaper fix.** The subagent checker saw the rule
-  and the task side by side and accepted the task. A remark at that point ("the user's rule
-  about config/defaults.toml applies to this task; pass it on") would have kept the subagent
-  from planning around the protected file at all. This needs a sentence in the shipped
-  subagent instructions (`defaults/checkers/subagent-result.md`): when the conversation holds
-  a user rule that bears on the task and the task leaves it out, ANNOTATE and tell Claude to
-  pass it on. Not done yet; offered to the owner.
+- **The hand-over check accepts the task, and that is right.** The owner, 2026-11-24: "the
+  subagent checker cannot expect the main model to pass on every single thing the user said.
+  It must be able to leave out things, but this omission might bite later." A task is a
+  selection; which rule will matter is often known only when the subagent makes its choice.
+  The omission is therefore caught where it bites, at the subagent's step, by a checker that
+  judges it against the whole conversation; the shipped subagent instructions stay as they
+  are.
 - **Soft rules are the harder case.** A hard "never edit X" is matched by a file name. A soft
   rule needs the checker to see that a design choice of the subagent conflicts with it; the
   step checkers are told to remind and suggest there rather than deny (the soft-guidance
