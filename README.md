@@ -165,7 +165,8 @@ Claude Code's own sandbox is optional; `calu setup` asks whether to switch it on
 `bubblewrap` and `socat`).
 
 ```bash
-uv tool install git+https://github.com/kadeng/calu   # one package, every command
+curl -fsSL https://raw.githubusercontent.com/kadeng/calu/main/install.sh | bash   # uv if missing, then calu
+# as root, for `calu ... --sudo`:  ... install.sh | sudo bash
 calu doctor               # what is in place and what is missing
 calu setup                # picks or creates the database; asks for two passwords
 ```

@@ -510,14 +510,27 @@ once per machine.
 | `bubblewrap` and `socat` | only for Claude Code's sandbox, which is optional (Debian/Ubuntu: `sudo apt install bubblewrap socat`) |
 
 **Step 1: install Calu.** Calu is one package. It contains every command, the web interface
-and the full-screen terminal client.
+and the full-screen terminal client. The install script installs uv if it is missing, then
+calu:
 
 ```bash
-uv tool install git+https://github.com/kadeng/calu   # until calu is on PyPI
+curl -fsSL https://raw.githubusercontent.com/kadeng/calu/main/install.sh | bash        # for you
+curl -fsSL https://raw.githubusercontent.com/kadeng/calu/main/install.sh | sudo bash   # as root, for --sudo
 calu doctor                                          # reports what is in place and what is missing
 ```
 
-uv puts the `calu` command into `~/.local/bin`.
+- For you, it puts the `calu` command into `~/.local/bin`; with uv already there it is the same
+  as `uv tool install git+https://github.com/kadeng/calu`.
+- With `sudo` it makes the root installation of [running Calu as root](#quick-start-with-sudo):
+  calu and its own uv in `/usr/local/lib/calu`, the command in `/usr/local/bin`, nothing
+  writable but by root; it installs curl and git if they are missing.
+- Options after `bash -s --`: `--ref <branch, tag or commit>`, `--source <git repository>`,
+  `--with-sandbox` (root only: bubblewrap and socat for Claude Code's sandbox, and on Ubuntu
+  23.10 and later the AppArmor profile that lets bubblewrap create user namespaces). Example:
+  `curl -fsSL .../install.sh | sudo bash -s -- --with-sandbox`.
+- Running it again updates calu. It starts nothing and changes no setting.
+- To install exactly what you have read: download the script of one commit
+  (`.../kadeng/calu/<commit>/install.sh`), read it, and run `sudo bash install.sh --ref <commit>`.
 
 **Step 2: set up the database.** `calu setup` asks which database to use (a local one in
 Docker, an existing server, or RDS), creates the tables, and asks for two new passwords:
@@ -2743,8 +2756,8 @@ signal or trace the Calu process, and cannot change Calu's installation.
 ### Quick start with sudo
 
 ```bash
-# 1. install calu so that only root can change it
-sudo env UV_TOOL_DIR=/usr/local/lib/calu UV_TOOL_BIN_DIR=/usr/local/bin UV_PYTHON_INSTALL_DIR=/usr/local/lib/calu/python uv tool install git+https://github.com/kadeng/calu
+# 1. install calu so that only root can change it (again to update it)
+curl -fsSL https://raw.githubusercontent.com/kadeng/calu/main/install.sh | sudo bash
 ```
 
 ```bash
