@@ -220,6 +220,9 @@ class TraceWriter:
         self._resume.set()
         self._held_until = 0.0
         """`anyio.current_time()` at which a hold ends by itself."""
+        self._progress = anyio.Event()
+        """Set (and replaced) whenever the write loop wrote a block or stopped; `settle`
+        waits for it."""
         send, receive = anyio.create_memory_object_stream[_Entry](math.inf)
         self._todo: MemoryObjectSendStream[_Entry] = send
         self._work: MemoryObjectReceiveStream[_Entry] = receive
@@ -366,6 +369,7 @@ class TraceWriter:
             self.created.set()
             self._finish()
             self._done.set()
+            self._signal_progress()
 
     def _create(self) -> None:
         """Create the trace file and write its header (runs in a worker thread).
@@ -465,6 +469,12 @@ class TraceWriter:
             if self._entries and self._entries[0] is entry:
                 self._entries.popleft()
                 self.counted.written += 1
+            self._signal_progress()
+
+    def _signal_progress(self) -> None:
+        """Wake the callers of `settle`: a block was written, or the writer stopped."""
+        self._progress.set()
+        self._progress = anyio.Event()
 
     def hold(self, seconds: float) -> None:
         """Keep the writer from appending to the file until `release`, at most `seconds`.
@@ -484,6 +494,55 @@ class TraceWriter:
     def release(self) -> None:
         """End a hold (`hold`); does nothing without one. Never raises."""
         self._resume.set()
+
+    async def settle(self, timeout_s: float) -> bool:
+        """Wait until the blocks queued so far are in the file, as far as they can get there.
+
+        Used before the final pass for a commit of Claude's (agent/records/PLAN.md D262):
+        the pass reads the file on disk, and a block that is still being narrated or
+        redacted (e.g. the block of the commit's own tool call) would otherwise miss the
+        commit, depending on how fast the redaction agent answered. The caller calls `hold`
+        right after this returns, with no `await` in between, so that no block is appended
+        between the two.
+
+            the blocks queued at the call          settle returns
+            all written                            True
+            the first queued block is still open   False at once: it is written only
+            (`Block.closed` is False)              after the session's next event
+            a hold is on, the writer is not        False at once
+            started, the trace is closing or
+            failed, the file does not exist
+            `timeout_s` is over                    False
+
+        Blocks queued after the call are not waited for. Never raises (except for a
+        cancellation).
+
+        Args:
+            timeout_s: The longest wait in seconds.
+
+        Returns:
+            True if every block queued at the call was written to the file.
+        """
+        if not self._entries:
+            return True
+        last = self._entries[-1]
+        with anyio.move_on_after(timeout_s):
+            while True:
+                if not any(entry is last for entry in self._entries):
+                    return True
+                head = self._entries[0]
+                stuck = (
+                    not self._started
+                    or not head.submitted
+                    or not self._resume.is_set()
+                    or self._closing
+                    or self._failed
+                    or (self._fd is None and self.created.is_set())
+                )
+                if stuck:
+                    return False
+                await self._progress.wait()
+        return False
 
     async def _wait_while_held(self) -> None:
         """Wait until no hold keeps the writer from appending, or the hold's time is up."""
@@ -702,6 +761,7 @@ class TraceWriter:
             for entry in self._entries:
                 entry.narrated.set()  # no more narrations will be delivered
             self._wake.set()
+            self._signal_progress()
         if not self._started:
             self._entries.clear()
             self._done.set()

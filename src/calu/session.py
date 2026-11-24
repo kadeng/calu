@@ -5073,7 +5073,10 @@ class Session:
         For a plain `git commit` (`classify_commit`) while `traces.final_redaction` is on:
         every trace file below `traces.directory` that differs from HEAD gets its new part
         redacted as a whole (`calu.traces.finalize`), is written back and is staged, so the
-        commit records the finalized text. The session's trace writer is held from here
+        commit records the finalized text. Before the pass reads the file, it waits up to
+        `traces.redactor_timeout_s` for the blocks queued so far to be written
+        (`TraceWriter.settle`, D262), so that the commit also records the block of its own
+        tool call. The session's trace writer is held from here
         until the commit's tool result arrives (`TraceWriter.hold`), so that the file on
         disk is what the commit records also for `git commit -a`. Any other step, a
         directory outside a git work tree and a trace directory outside the repository do
@@ -5111,6 +5114,10 @@ class Session:
             return "", ""
         writer = self.traces
         if writer is not None and step.tool_use_id:
+            # The blocks queued before the commit (its own tool call's block among them) may
+            # still be in the per-block redaction; the pass reads the file on disk (D262).
+            # No `await` between `settle` and `hold`, so that no block is appended in between.
+            await writer.settle(cfg.redactor_timeout_s)
             writer.hold(cfg.final_timeout_s + COMMIT_HOLD_S)
             self._commit_hold = step.tool_use_id
         try:

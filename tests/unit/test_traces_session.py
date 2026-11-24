@@ -699,17 +699,25 @@ COMMIT_SCRIPT = [
 ]
 
 
-def final_pass_model(fail: bool = False) -> tuple[FunctionModel, list[str]]:
-    """A redaction agent that records the final pass's excerpts (and may fail only there)."""
+def final_pass_model(
+    fail: bool = False, slow_tool_block_s: float = 0.0
+) -> tuple[FunctionModel, list[str]]:
+    """A redaction agent that records the final pass's excerpts (and may fail only there).
+
+    `slow_tool_block_s` delays the per-block redaction of the tool call blocks, so that such
+    a block is still in work when Claude's commit asks for the final pass.
+    """
     read: list[str] = []
 
-    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         prompt = _last_prompt(messages)
         excerpt = excerpt_of(prompt)
         if prompt.startswith("# Stretch"):
             read.append(excerpt)
             if fail:
                 raise RuntimeError("the provider is down")
+        elif slow_tool_block_s and "Fake summary of Tool call" in excerpt:
+            await anyio.sleep(slow_tool_block_s)
         text = re.sub(r"[a-z.]+@example\.org", "[redacted: e-mail address]", excerpt)
         return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"text": text})])
 
@@ -752,6 +760,21 @@ async def test_claudes_commit_takes_the_trace_along_after_the_final_pass(git_rep
     text = path.read_text()
     assert text.startswith(committed) and "### End of turn 1" in text
     assert any("finalized for the commit" in log.message for log in rec.of(Log))
+
+
+async def test_the_final_pass_waits_for_the_blocks_still_being_redacted(git_repo: Path):
+    """CI 2026-11-23: the block of the commit's own tool call was still being redacted when
+    the final pass read the file, so the commit lacked it. The pass now waits for the blocks
+    queued before it (`TraceWriter.settle`)."""
+    models = fake_models()
+    models["trace-redactor"], _ = final_pass_model(slow_tool_block_s=0.5)
+    session, rec, _ = make_session(git_repo, COMMIT_SCRIPT, traced(), checker_models=models)
+    await run_commit(session, rec)
+
+    (path,) = trace_files(git_repo)
+    committed = git_out(git_repo, "show", f"HEAD:{path.relative_to(git_repo).as_posix()}")
+    assert "### Tool call 1: Bash" in committed and "Fake summary of Tool call" in committed
+    assert committed.index("### Tool call 1: Bash") < committed.index("_[calu: the final")
 
 
 async def test_claude_is_told_that_the_staged_trace_belongs_in_its_commit(git_repo: Path):

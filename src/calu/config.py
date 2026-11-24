@@ -831,7 +831,8 @@ class TracesConfig(ConfigModel):
     a fixed part in front of it (the excerpt is data, the form of the answer)."""
     redactor_timeout_s: float = Field(default=60.0, gt=0)
     """Seconds the redaction agent may take for one block. A block that takes longer is
-    withheld."""
+    withheld. A commit of Claude's also waits up to this long for the blocks still being
+    redacted, so that they are part of the commit (agent/records/PLAN.md D262)."""
     final_redaction: bool = True
     """Before a commit, redact what the commit adds to each trace file once more, as a whole:
     the part of the file that is not in `HEAD` yet, read by the redaction agent in one go

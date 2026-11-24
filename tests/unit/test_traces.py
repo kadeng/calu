@@ -792,6 +792,33 @@ async def test_blocks_are_written_in_the_order_of_the_events_under_a_slow_agent(
     assert order == [f"> message {number}" for number in range(6)]
 
 
+async def test_settle_waits_for_the_blocks_queued_before_it(tmp_path: Path):
+    """The final pass for a commit reads the file after `settle` (D262)."""
+
+    async def slow(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        piece = excerpt_of(_last_prompt(messages))
+        await anyio.sleep(0.3 if "slow" in piece else 0)
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"text": piece})])
+
+    writer = writer_for(tmp_path, FunctionModel(slow))
+    async with anyio.create_task_group() as tg:
+        writer.start(tg)
+        writer.feed(UserInput(text="message slow 1"))
+        assert not await writer.settle(0.05), "the time is up before the block is written"
+        writer.feed(UserInput(text="message 2"))
+        assert await writer.settle(5)
+        assert body_of(writer).endswith("> message slow 1\n\n### User\n\n> message 2\n\n")
+        assert await writer.settle(5), "nothing queued: at once"
+        writer.hold(60)
+        writer.feed(UserInput(text="message 3"))
+        before = anyio.current_time()
+        assert not await writer.settle(5), "a held writer appends nothing"
+        assert anyio.current_time() - before < 1
+        writer.release()
+        await writer.close()
+    assert body_of(writer).endswith("> message 3\n\n")
+
+
 async def test_a_full_queue_leaves_blocks_out_and_says_how_many(tmp_path: Path):
     writer = writer_for(tmp_path, fake_redactor(), queue_blocks=3)
     for number in range(6):  # nothing is written yet: the writer's task has not started
