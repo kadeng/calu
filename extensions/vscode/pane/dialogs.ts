@@ -203,14 +203,15 @@ export function choose<T>(title: string, rows: ChoiceRow<T>[]): Promise<{ value:
  * Show read-only text.
  *
  * @param title Title of the dialog.
- * @param body `text`: shown as preformatted text, `line` (1-based) marked and scrolled to;
- *   `html`: trusted markup from the chat's Markdown renderer.
+ * @param body `text`: shown as preformatted text with line numbers, `line` (1-based) marked
+ *   and scrolled to; `diff`: a unified diff, without line numbers, with added, removed and
+ *   hunk-header lines coloured; `html`: trusted markup from the chat's Markdown renderer.
  * @param actions Further buttons with what they do (the dialog stays open).
  * @returns Resolves when the dialog was closed.
  */
 export function showText(
   title: string,
-  body: { text: string; line?: number } | { html: string },
+  body: { text: string; line?: number } | { diff: string } | { html: string },
   actions: { label: string; run: () => void }[] = [],
 ): Promise<void> {
   return modal((box) => {
@@ -221,12 +222,22 @@ export function showText(
       const content = node('div', 'pane-text markdown-body');
       content.innerHTML = body.html;
       box.append(content);
+    } else if ('diff' in body) {
+      const pre = node('pre', 'pane-text diff');
+      for (const line of body.diff.replace(/\n$/, '').split('\n')) {
+        const kind = /^(\+\+\+|---) /.test(line) ? 'file' : line.startsWith('@@') ? 'hunk' : line.startsWith('+') ? 'added' : line.startsWith('-') ? 'removed' : '';
+        pre.append(node('span', `pane-line ${kind}`.trim(), line || ' '));
+      }
+      box.append(pre);
     } else {
-      const pre = node('pre', 'pane-text');
-      body.text.split('\n').forEach((line, index) => {
-        const span = node('span', index + 1 === body.line ? 'pane-line marked' : 'pane-line', `${line}\n`);
-        if (index + 1 === body.line) target = span;
-        pre.append(span);
+      // One row per line, with its number in a column that is not selected with the text.
+      const pre = node('pre', 'pane-text numbered');
+      // A final newline ends the last line; it starts no empty one.
+      body.text.replace(/\n$/, '').split('\n').forEach((line, index) => {
+        const row = node('span', index + 1 === body.line ? 'pane-line marked' : 'pane-line');
+        row.append(node('span', 'pane-number', String(index + 1)), node('span', 'pane-code', line || ' '));
+        if (index + 1 === body.line) target = row;
+        pre.append(row);
       });
       box.append(pre);
     }

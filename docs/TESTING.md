@@ -103,7 +103,13 @@ as `src/calu/web/static/pane/pane.js`; `test/unit/pane.test.ts` fails when it is
 sources build to, so run `npm run build:pane` after a change to anything the chat uses. The
 pane's Python side is tested in `tests/unit/test_web_pane.py` (login, frame policy, the allowed
 bridge requests, one bridge over the WebSocket) and in a real browser in
-`tests/browser/test_web_pane.py` (its own window, an iframe of another site, no login).
+`tests/browser/test_web_pane.py` (its own window, an iframe of another site, no login) and
+`tests/browser/test_web_pane_layouts.py`: a scripted session on a token-free local socket (no
+database) and the pane at the bottom right of a notebook layout on a 2560x1440 monitor and on
+MacBook Pro 16" and 14" displays, as a side bar and in its own window; each runs a turn with an
+escalation, the decision, the diff, a file at its line, the session menu, and checks that the
+settings open the full web interface in another, logged-in window. `CALU_PANE_SCREENSHOTS=<dir>`
+saves a picture of every state; look at them after a change to `media/chat.css`.
 
 `scripts/test-in-docker.sh` builds the image `calu-vscode-test` (`docker/vscode-test.Dockerfile`:
 Node, xvfb, Python 3.14 with calu's dependencies), mounts the checkout read-only, installs calu

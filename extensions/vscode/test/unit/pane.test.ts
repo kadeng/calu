@@ -1,6 +1,6 @@
 // The browser pane of `calu web`: its login from the address, the diff of an edit, and that the
 // committed bundle matches the sources (PLAN.md D261).
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import * as esbuild from 'esbuild';
 import { describe, expect, it } from 'vitest';
 import { addressWithoutToken, loginProtocols, readPaneConfig } from '../../pane/config';
@@ -64,7 +64,9 @@ describe('unifiedDiff', () => {
 });
 
 describe('the committed pane bundle', () => {
-  it('is what the sources build to (run `npm run build:pane` after a change)', async () => {
+  // Skipped where the extension is used without the Python package beside it (the Docker test
+  // image copies the extension alone).
+  it.skipIf(!existsSync(PANE_OUT))('is what the sources build to (run `npm run build:pane` after a change)', async () => {
     const built = await esbuild.build({ ...PANE_OPTIONS, write: false, outfile: 'pane.js' });
     const fresh = built.outputFiles[0].text;
     expect(fresh === readFileSync(`${PANE_OUT}/pane.js`, 'utf8'), 'src/calu/web/static/pane/pane.js is out of date').toBe(true);

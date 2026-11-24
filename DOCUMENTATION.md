@@ -993,9 +993,14 @@ chat pane: http://calu.localhost:8800/pane#token=... (also in an iframe of a loc
   IFrame("http://calu.localhost:8800/pane#token=...&dir=/home/me/project", width="100%", height=700)
   ```
 
-- **Settings and checkers** open the full web interface in a separate window.
-- **Files.** A file link or "Open file" shows the file read-only, at the line. "Open diff" shows
-  the edit as a unified diff. The pane cannot change files.
+- **Settings and checkers** open the full web interface in a separate window, logged in with
+  the pane's token.
+- **Small panes.** In a pane less than 480 pixels high (the corner of a notebook layout, or
+  VSCode's bottom panel) the header is one row, the keyboard hint under the input is left out,
+  and in a wide pane the model, effort and buttons sit beside the input, so the transcript and
+  an open decision keep most of the height.
+- **Files.** A file link or "Open file" shows the file read-only, with line numbers, at the
+  line. A click on an edit shows it as a coloured unified diff. The pane cannot change files.
 - **What the pane cannot do.** It cannot start the calu server (a browser has no terminal); it
   shows the command to copy. It cannot end a session's calu process.
 - Each pane tab runs its own `calu ide` bridge inside `calu web`; at most eight run at a time.

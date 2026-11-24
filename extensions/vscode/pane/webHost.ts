@@ -232,11 +232,19 @@ function titleFor(state: ViewState): string {
 /**
  * Open a page of the full web interface in its own window (never inside the pane's frame).
  *
+ * The new window is logged in to `calu web` with the pane's token (`?token=`, which `calu web`
+ * turns into the window's own login and takes out of the address), so that it does not ask for
+ * the login the pane already has. Without a token (the pane uses the browser's login) the
+ * window has that login too.
+ *
  * @param path The path, e.g. "/settings".
+ * @param token The pane's login token, or "".
  * @returns Nothing.
  */
-function openWeb(path: string): void {
-  window.open(new URL(path, location.origin).toString(), 'calu-web', 'noopener');
+export function openWeb(path: string, token: string): void {
+  const url = new URL(path, location.origin);
+  if (token) url.searchParams.set('token', token);
+  window.open(url.toString(), 'calu-web', 'noopener');
 }
 
 /**
@@ -315,7 +323,7 @@ export function startPane(config: PaneConfig): { view: PaneView; host: ChatHost 
   const viewDiff = async (toolUseId: string): Promise<void> => {
     const diff = diffs.get(toolUseId);
     if (!diff) throw new Error('the diff of this edit is no longer held');
-    await dialogs.showText(`Edit of ${diff.path}`, { text: unifiedDiff(diff.before, diff.after, diff.path) || '(no change)' });
+    await dialogs.showText(`Edit of ${diff.path}`, { diff: unifiedDiff(diff.before, diff.after, diff.path) || '(no change)' });
   };
 
   /**
@@ -355,7 +363,7 @@ export function startPane(config: PaneConfig): { view: PaneView; host: ChatHost 
       }
       case 'openSettings':
       case 'editChecker':
-        openWeb('/settings');
+        openWeb('/settings', config.token);
         return;
       case 'copyServerCommand':
         await copy(host.sessions.serverHelp().command, 'The server command');

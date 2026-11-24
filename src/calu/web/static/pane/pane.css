@@ -99,6 +99,22 @@
   white-space: pre;
 }
 .pane-text.markdown-body { white-space: normal; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
+.pane-text.numbered { padding: 6px 0; }
+.pane-line { display: flex; min-width: max-content; }
+.pane-number {
+  flex: none;
+  width: 4.5ch;
+  padding-right: 1ch;
+  text-align: right;
+  color: var(--vscode-descriptionForeground);
+  user-select: none;
+}
+.pane-code { padding-right: 8px; }
+.pane-text.diff .pane-line { padding: 0 8px; }
+.pane-line.file { color: var(--vscode-descriptionForeground); font-weight: 600; }
+.pane-line.hunk { color: var(--vscode-charts-blue); }
+.pane-line.added { background: color-mix(in srgb, var(--vscode-charts-green) 18%, transparent); }
+.pane-line.removed { background: color-mix(in srgb, var(--vscode-charts-red) 18%, transparent); }
 .pane-line.marked { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
 
 .pane-toasts {
