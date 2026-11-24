@@ -3,6 +3,17 @@
 {% block main_attrs %} data-reload-after="5000"{% endblock %}
 {% block body %}
 <h1>{{ sessions | length }} session{{ '' if sessions | length == 1 else 's' }}{{ ' (including ended)' if show_all }}</h1>
+<p><a class="button primary" id="new-session" href="{{ url_for('start') }}" target="calu-start">New session…</a>
+  <span class="muted">in a folder of your projects, a new one, or a clone of a git repository</span></p>
+<script>
+// The dialog opens as a window of its own, which later becomes the session's chat pane;
+// a browser that refuses popups gets a new tab from the link itself.
+document.getElementById("new-session").addEventListener("click", (event) => {
+  if (window.open(event.currentTarget.href, "calu-start", "popup,width=980,height=860")) {
+    event.preventDefault();
+  }
+});
+</script>
 <form class="inline" method="get" action="{{ url_for('fleet') }}">
   <input type="text" name="q" value="{{ query }}" class="wide" placeholder="filter by name, host, directory or state" aria-label="filter the sessions">
   {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
@@ -40,7 +51,7 @@
 {% if not sessions %}
 <p class="empty">
   {% if query %}No session matches {{ query }}.
-  {% else %}No session is running. Start one in the <a href="/pane">chat pane</a>, or with <code>calu start</code> (needs <code>calu serve</code>) or <code>calu run</code> in a project directory.{% endif %}
+  {% else %}No session is running. Start one with <strong>New session…</strong> above, in the <a href="/pane">chat pane</a>, or with <code>calu start</code> (needs <code>calu serve</code>) or <code>calu run</code> in a project directory.{% endif %}
 </p>
 {% endif %}
 {% endblock %}

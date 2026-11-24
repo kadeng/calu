@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}New session · calu{% endblock %}
+{% block body %}
+<h1>New session</h1>
+{% if problem %}<p class="problem">{{ problem }}</p>{% endif %}
+{% if done %}<p><strong class="state running">ready</strong> {{ done }} ·
+  <a href="{{ url_for('pane') }}#dir={{ done | urlencode }}">open the chat pane there</a></p>{% endif %}
+{% if server %}
+<p class="muted">The <code>calu serve</code> of {{ user }} on {{ host }} starts sessions in
+  <code>{{ projects }}</code> and the folders below it.</p>
+
+<h2>1. Folder</h2>
+<p class="crumbs">
+  <a href="{{ url_for('start') }}" title="{{ projects }}">{{ projects.rstrip('/').split('/')[-1] or projects }}</a>{% for name, rel in crumbs %} / <a href="{{ url_for('start') }}?at={{ rel | urlencode }}">{{ name }}</a>{% endfor %}
+</p>
+{% if folders %}
+<ul class="folders">
+  {% for name, rel in folders %}<li><a href="{{ url_for('start') }}?at={{ rel | urlencode }}">{{ name }}/</a></li>{% endfor %}
+</ul>
+{% else %}<p class="muted">No folders here.</p>{% endif %}
+
+<form method="post" action="{{ url_for('start') }}" class="card">
+  <input type="hidden" name="at" value="{{ at }}">
+  <p>The session starts in <code>{{ projects }}{% if at %}/{{ at }}{% endif %}</code>, or in a
+    new folder there:</p>
+  <p class="row">
+    <label>New folder <input type="text" name="name" value="{{ form.name }}" placeholder="name (optional)"></label>
+  </p>
+  <p class="row">
+    <label>From a git repository <input type="text" name="url" value="{{ form.url }}" class="wide" placeholder="https://… or git@host:path (optional)"></label>
+  </p>
+  <p class="muted">With a repository, the new folder gets its name unless you give one; it is
+    cloned as {{ user }}. An empty new folder needs only a name.</p>
+
+  <h2>2. Session</h2>
+  <p class="row">
+    <label><input type="checkbox" name="start" value="on"{% if form.start %} checked{% endif %}> start a session now</label>
+  </p>
+  <p class="row">
+    <textarea name="prompt" rows="3" placeholder="first message for Claude (optional)">{{ form.prompt }}</textarea>
+  </p>
+  <p class="row">
+    <label><input type="checkbox" name="pane" value="on"{% if form.pane %} checked{% endif %}> open the chat pane in this window</label>
+  </p>
+  <p class="row"><button class="primary" type="submit">Go</button></p>
+</form>
+{% endif %}
+{% endblock %}

@@ -1043,3 +1043,9 @@ main { overflow-wrap: break-word; }
 #side-answers .side-entry { border-bottom: 1px solid var(--line); padding: .4rem 0; }
 #side-answers .side-entry .user { color: var(--accent); font-weight: 600; margin: 0 0 .2rem; }
 #side-text { width: 100%; min-height: 3rem; font-family: var(--sans); }
+
+/* The "new session" dialog (start.html): the folders of one level, as a compact list. */
+.crumbs { font-family: var(--mono, monospace); overflow-wrap: anywhere; }
+ul.folders { columns: 16rem; list-style: none; padding-left: 0; margin: .4rem 0 1rem; }
+ul.folders li { break-inside: avoid; padding: .1rem 0; font-family: var(--mono, monospace); }
+form.card textarea { width: 100%; height: 6rem; min-height: 4rem; }

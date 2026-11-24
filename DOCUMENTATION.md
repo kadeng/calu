@@ -1012,6 +1012,23 @@ open in the web-based git browser that your project already uses (`web.git_url_t
   the page refuses the second save once, keeps its text and names the stored version. Saving
   again replaces the stored text.
 
+**Starting a session from the web interface**
+
+The sessions page has a **New session…** button. It opens a window with a dialog (a new tab
+where the browser blocks popups):
+
+- **Folder:** the folders below the projects directory of the `calu serve` that runs on this
+  machine for your user. Choose one, make a new folder in it, or clone a git repository into
+  a new folder (`https://`, `ssh://` or `user@host:path`; it gets the repository's name unless
+  you give one). Folders are made and repositories cloned as you, and only inside the
+  projects directory, never in a hidden folder.
+- **Start a session now** (with an optional first message): the server starts it there.
+- **Open the chat pane in this window:** the window becomes the chat pane (below) of that
+  folder, attached to the session. Without it, a started session opens its live view.
+- Without a running `calu serve` for you on this machine, the dialog says how to start one.
+  A clone asks for nothing: a repository that needs a password or a key your ssh agent does
+  not offer fails with git's message, and a clone stops after five minutes.
+
 **The chat pane**
 
 `/pane` is the chat of the VSCode extension as a web page: the same transcript, composer,

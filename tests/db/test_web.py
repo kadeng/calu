@@ -1414,3 +1414,83 @@ async def test_switching_human_diffs_on_offers_the_traces_on_the_settings_page(
             assert "offer=" not in str(again.url)
     finally:
         await conn.close()
+
+
+async def test_the_new_session_dialog_makes_a_folder_and_starts_a_session_there(
+    db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D270: without a `calu serve` of this host and user the dialog says what to start.
+    With one, it lists the folders of its projects directory, makes a new folder, and turns
+    the window into the chat pane of that folder; asked to start a session, it files the
+    request there (answered here by a stand-in for the server) and opens its live view.
+
+    Makes folders below `tmp_path`; records a `servers` row for this host and user."""
+    import socket
+
+    from calu import servers, session_requests
+    from calu.web import start
+
+    projects = (tmp_path / "projects").resolve()
+    (projects / "shop").mkdir(parents=True)
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        app = create_app(db, git_url_template="")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+            none = await client.get("/start")
+            assert "No `calu serve` of" in none.text and "calu serve --sudo --web" in none.text
+
+            await servers.record_start(
+                db, socket.gethostname(), start.web_user(), "", str(projects)
+            )
+            listed = await client.get("/start")
+            assert str(projects) in listed.text and "shop/" in listed.text
+
+            made = await client.post(
+                "/start", data={"at": "shop", "name": "api", "url": "", "pane": "on"}
+            )
+            assert made.status_code == 303
+            assert made.headers["location"].endswith(f"/pane#dir={projects}/shop/api")
+            assert (projects / "shop" / "api").is_dir()
+
+            filed: list[session_requests.SessionRequest] = []
+
+            async def answered(
+                db_: Db, request_id: int, *_a: object
+            ) -> session_requests.SessionRequest:
+                row = await db_.one(
+                    "SELECT directory, label, prompt FROM session_requests WHERE id = %s",
+                    (request_id,),
+                )
+                assert row is not None
+                filed.append(
+                    session_requests.SessionRequest(
+                        hostname="", os_user="", directory=row[0], label=row[1], prompt=row[2]
+                    )
+                )
+                return session_requests.SessionRequest(
+                    hostname="",
+                    os_user="",
+                    directory=row[0],
+                    state="started",
+                    session_id="00000000-0000-0000-0000-000000000001",
+                )
+
+            monkeypatch.setattr(session_requests, "wait_for", answered)
+            started = await client.post(
+                "/start",
+                data={"at": "shop/api", "name": "", "url": "", "start": "on", "prompt": "hello"},
+            )
+            assert started.status_code == 303
+            assert started.headers["location"].endswith(
+                "/sessions/00000000-0000-0000-0000-000000000001/live"
+            )
+            assert filed[0].directory == str(projects / "shop" / "api")
+            assert filed[0].label == "calu web" and filed[0].prompt == "hello"
+
+            refused = await client.post("/start", data={"at": "", "name": "../escape"})
+            assert refused.status_code == 200 and "is no folder name calu makes" in refused.text
+    finally:
+        await conn.close()

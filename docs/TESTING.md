@@ -1070,6 +1070,14 @@ escalation resolved from the database alone.
    (`sudo calu uninstall` after `install.sh | sudo bash`): `/etc/calu`, `/var/lib/calu`,
    `/usr/local/lib/calu`, `/usr/local/bin/calu` and the invoking user's calu files go;
    uv, Docker and the postgres image stay. Not yet run by hand.
+55. "New session…" in the web interface (PLAN.md D270), with `calu serve --sudo --web` in
+   `~/projects`: the button opens a window; the dialog lists the folders of `~/projects`
+   (no hidden ones), walks into one, makes a new folder, clones a public https repository
+   into a new folder named after it, and refuses `../x`, `.x` and an `ext::` address. With
+   "start a session" and "open the chat pane" the window becomes the pane, attached to the
+   new session; with only "start a session" it shows the live view. Without a running server
+   it says how to start one. The new folder and the clone belong to you, not root. Not yet
+   run by hand.
 
 ## Measuring the checkers
 

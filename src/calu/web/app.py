@@ -345,6 +345,7 @@ def create_app(
         WebSocketRoute(
             "/ws/sessions/{session_id:uuid}", _socket(live_socket, state), name="live_ws"
         ),
+        Route("/start", _page(start_page, state), methods=["GET", "POST"], name="start"),
         Route("/escalations", _page(escalations, state), name="escalations"),
         Route("/triage", _page(triage, state), name="triage"),
         Route("/api/escalations", _page(waiting_json, state), name="waiting_json"),
@@ -1489,6 +1490,118 @@ async def request_session(request: Request, state: _State) -> Response:
     if done.state != "started" or done.session_id is None:
         return _error(request, 503, "The session was not started", done.message)
     return RedirectResponse(request.url_for("live", session_id=done.session_id), status_code=303)
+
+
+async def start_page(request: Request, state: _State) -> Response:
+    """Show the "new session" dialog, or carry it out (agent/records/PLAN.md D270).
+
+    GET lists the folders at `?at=` below the projects directory of the `calu serve` of this
+    machine and of the user the interface works for (`calu.web.start`). POST takes the form
+    `at` (the folder), `name` (a new folder in it), `url` (a git address to clone into it),
+    `prompt` (the first message), and the checkboxes `start` (start a session) and `pane`
+    (open the chat pane in this window).
+
+    Side effects of a POST: may create a folder or clone a repository (as that user), and
+    may file a session request that the server answers by starting a session.
+
+    Args:
+        request: The request.
+        state: The shared state.
+
+    Returns:
+        The dialog (with a reason in red when something was refused or failed); after a
+        POST that asked for the pane, a redirect to `/pane#dir=<folder>`; after one that only
+        started a session, a redirect to its live view.
+    """
+    from urllib.parse import quote
+
+    from calu.web import start
+
+    user = start.web_user()
+    host = socket.gethostname()
+    found = await servers.running(state.db, hostname=host, os_user=user)
+    server = next((row for row in found if row.projects_directory), None)
+    values: dict[str, Any] = {
+        "user": user,
+        "host": host,
+        "server": server,
+        "at": "",
+        "folders": [],
+        "crumbs": [],
+        "problem": "",
+        "done": "",
+        "form": {"name": "", "url": "", "prompt": "", "start": True, "pane": True},
+    }
+    if server is None:
+        values["problem"] = (
+            f"No `calu serve` of {user} runs on {host}"
+            + (" with a projects directory" if found else "")
+            + ". Start one, e.g. `cd ~/projects && calu serve --sudo --web`, then reload."
+        )
+        return _render(request, "start.html", values)
+    projects = Path(server.projects_directory)
+    if request.method == "POST":
+        form = await request.form()
+        at = str(form.get("at") or "")
+        values["form"] = {
+            "name": str(form.get("name") or ""),
+            "url": str(form.get("url") or ""),
+            "prompt": str(form.get("prompt") or ""),
+            "start": bool(form.get("start")),
+            "pane": bool(form.get("pane")),
+        }
+        chosen = values["form"]
+        try:
+            target = await anyio.to_thread.run_sync(
+                start.prepare, projects, at, chosen["name"], chosen["url"]
+            )
+        except start.StartRefused as exc:
+            values["problem"] = str(exc)
+        else:
+            started: str | None = None
+            if chosen["start"]:
+                wanted = session_requests.SessionRequest(
+                    hostname=server.hostname,
+                    os_user=server.os_user,
+                    directory=str(target),
+                    prompt=chosen["prompt"].strip() or None,
+                    label="calu web",
+                )
+                try:
+                    done = await session_requests.wait_for(
+                        state.db, await session_requests.file(state.db, wanted)
+                    )
+                except (session_requests.NoServer, TimeoutError) as exc:
+                    done = None
+                    values["problem"] = f"{target} is ready, but no session started: {exc}"
+                if done is not None and (done.state != "started" or not done.session_id):
+                    values["problem"] = f"{target} is ready, but the server said: {done.message}"
+                elif done is not None:
+                    started = done.session_id
+            if not values["problem"]:
+                if chosen["pane"]:
+                    pane = str(request.url_for("pane"))
+                    return RedirectResponse(f"{pane}#dir={quote(str(target))}", status_code=303)
+                if started:
+                    return RedirectResponse(
+                        request.url_for("live", session_id=started), status_code=303
+                    )
+                values["done"] = str(target)
+    else:
+        at = str(request.query_params.get("at") or "")
+    try:
+        values["folders"] = [
+            (name, f"{at.strip('/')}/{name}".strip("/"))
+            for name in await anyio.to_thread.run_sync(start.listing, projects, at)
+        ]
+        values["at"] = at.strip("/")
+    except start.StartRefused as exc:
+        values["problem"] = values["problem"] or str(exc)
+        values["at"] = ""
+    parts = [part for part in values["at"].split("/") if part]
+    values["crumbs"] = [(part, "/".join(parts[: i + 1])) for i, part in enumerate(parts)]
+    values["projects"] = str(projects)
+    return _render(request, "start.html", values)
 
 
 async def summary_page(request: Request, state: _State) -> Response:
