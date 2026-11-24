@@ -2492,8 +2492,8 @@ calu serve --sudo --web         # the same in the root arrangement
 With `--web` (port `--web-port`, default 8800) the server starts `calu web` as its child: the
 same login, so the password is asked once, and a browser signs in with it. The web interface
 prints its address among the server's lines and ends with the server, also when the server is
-killed. If the web interface ends by itself (its port is taken), the server says so and goes
-on.
+killed. If the web interface ends by itself (its port is taken), the server goes on and says
+so when it stops.
 
 In another terminal, in a project directory:
 

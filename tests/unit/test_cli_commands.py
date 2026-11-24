@@ -542,12 +542,19 @@ def test_serve_with_web_hands_its_child_the_login_through_a_pipe(
         return FakeChild()
 
     monkeypatch.setattr(subprocess, "Popen", popen)
+    import threading
+
+    threads = threading.active_count()
     login = bytearray(b"postgresql://calu_admin:secret@db.example:5432/calu")
     child = cli._start_web_child(
         8811, login, True, RunAs(uid=1000, gid=1000, home="/h", user="ada")
     )
 
     assert child.pid == 4242
+    # A root server switches to its user's file identity next, which no other thread may
+    # escape (`calu.asuser.enter`): starting the child starts no thread (the owner's first
+    # `calu serve --sudo --web` failed on a watcher thread).
+    assert threading.active_count() == threads
     argv = seen["argv"]
     assert isinstance(argv, list)
     assert argv[2:6] == ["calu", "web", "--port", "8811"]

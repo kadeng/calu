@@ -2434,8 +2434,9 @@ def _start_web_child(
     root for a user (`run_as`) the child is told `--user`, so it does its file access as that
     user, as `calu web --sudo` does.
 
-    Side effects: starts a process and a thread that reports the process's end if it ends
-    while the server runs; writes the login into the pipe and closes it.
+    Side effects: starts a process; writes the login into the pipe and closes it. No thread
+    is started: a root server switches to its user's file identity next, which other threads
+    would escape (`calu.asuser.enter` refuses then).
 
     Args:
         port: The port of the web interface on 127.0.0.1.
@@ -2466,23 +2467,7 @@ def _start_web_child(
         f"started calu web (pid {child.pid}) on port {port}; it ends with this server", flush=True
     )
 
-    def watch() -> None:
-        """Say so when the child ends by itself while the server goes on."""
-        code = child.wait()
-        # 0, 130 and the signals: Ctrl-C reaches the child too, before the server stops it.
-        if not _stopping_web and code not in (0, 130, -signal.SIGINT, -signal.SIGTERM):
-            print(
-                f"calu web ended (exit code {code}); the server goes on without it",
-                file=sys.stderr,
-                flush=True,
-            )
-
-    threading.Thread(target=watch, name="calu-web-watch", daemon=True).start()
     return child
-
-
-_stopping_web: list[bool] = []
-"""Non-empty once `_stop_web_child` ends the child, so that its watcher stays silent."""
 
 
 def _die_with_parent() -> None:
@@ -2501,14 +2486,17 @@ def _die_with_parent() -> None:
 def _stop_web_child(child: subprocess.Popen[bytes]) -> None:
     """End the `calu web` child: SIGTERM, then SIGKILL after `WEB_CHILD_STOP_S`.
 
-    Side effects: signals and reaps the process (its watcher thread, which reported an end by
-    itself, stays silent from here on).
+    Side effects: signals and reaps the process; prints a line if it had ended by itself
+    before, with its exit code (0, 130 and the signals SIGINT and SIGTERM, which Ctrl-C
+    gives the child too, are not reported).
 
     Args:
         child: The process `_start_web_child` started.
     """
-    _stopping_web.append(True)
-    if child.poll() is not None:
+    code = child.poll()
+    if code is not None:
+        if code not in (0, 130, -signal.SIGINT, -signal.SIGTERM):
+            print(f"calu web had ended earlier (exit code {code})", file=sys.stderr)
         return
     child.terminate()
     try:
