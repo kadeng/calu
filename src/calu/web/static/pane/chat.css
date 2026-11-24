@@ -1145,8 +1145,7 @@ a.tool-head.file-link { flex: 0 1 auto; margin-right: auto; color: var(--vscode-
    A chat with little height: VSCode's bottom panel, or the chat pane of `calu web` in the corner
    of a notebook layout (PLAN.md D261). The transcript keeps as many rows as possible: the header
    becomes one row (session, quick switches, settings), the empty state loses its picture, the
-   keyboard hint under the input goes (the same keys are in the input's tooltip), and an open
-   escalation's command stays short enough that its reason and the buttons fit. */
+   keyboard hint under the input goes (the same keys are in the input's tooltip). */
 @media (max-height: 480px) {
   .header { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; padding: 3px 8px 2px; }
   .header > .header-row:first-child { flex: 0 1 auto; min-width: 0; }
@@ -1158,17 +1157,40 @@ a.tool-head.file-link { flex: 0 1 auto; margin-right: auto; color: var(--vscode-
   .empty { margin-top: 8px; }
   .empty .logo, .setup-slot .logo { display: none; }
   .item { margin: 6px 0; }
-  .esc-step { max-height: 7em; }
   .dock { padding: 2px 8px 4px; }
   .dock > .hint:not(.notice) { display: none; }
 }
 
-/* Short and wide: the composer's model, effort and buttons sit beside the text field. */
-@media (max-height: 480px) and (min-width: 640px) {
-  .composer { flex-direction: row; flex-wrap: wrap; align-items: flex-end; }
-  .composer > .thumbs-slot { flex-basis: 100%; }
-  .composer > .input { flex: 1 1 16em; width: auto; }
-  .composer > .composer-footer { flex: 0 1 auto; flex-wrap: nowrap; }
+/* Short and wide (a bottom panel, the corner of a notebook layout): two columns. The transcript
+   with its tabs keeps the left one at the full height under the header; the activity line and
+   the composer take the right one, so that an open escalation is not squeezed between them.
+
+     ┌ header: session, quick switches, settings ───────────────────────┐
+     │ tabs                                       │                     │
+     │ transcript (escalation cards, steps)       │ activity            │
+     │                                            │ composer            │
+     └────────────────────────────────────────────┴─────────────────────┘ */
+@media (max-height: 480px) and (min-width: 600px) and (min-aspect-ratio: 2/1) {
+  #app {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(250px, 34%);
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+  }
+  #app > .header { grid-column: 1 / -1; grid-row: 1; }
+  #app > .tabs-slot { grid-column: 1; grid-row: 2; }
+  #app > .setup-slot { grid-column: 1; grid-row: 3; }
+  #app > .transcript { grid-column: 1; grid-row: 4; min-height: 0; }
+  #app > .dock {
+    grid-column: 2;
+    grid-row: 2 / -1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    min-height: 0;
+    overflow-y: auto;
+    border-left: 1px solid var(--calu-border);
+  }
+  .dock > .activity.idle { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

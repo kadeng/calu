@@ -88,9 +88,10 @@
 .pane-row-detail { flex-basis: 100%; color: var(--vscode-descriptionForeground); font-size: 0.9em; overflow-wrap: anywhere; }
 
 .pane-text {
+  flex: 1 1 auto;
+  min-height: 0;
   margin: 0;
   overflow: auto;
-  max-height: 66vh;
   padding: 8px;
   border-radius: 4px;
   background: var(--vscode-textCodeBlock-background);
@@ -148,4 +149,16 @@
   color: var(--vscode-descriptionForeground);
   font-size: 1.2em;
   cursor: pointer;
+}
+
+/* Markdown in a dialog (checker context, escalation context): headings at reading size. */
+.pane-text.markdown-body h1 { font-size: 1.3em; margin: 0.4em 0; }
+.pane-text.markdown-body h2 { font-size: 1.15em; margin: 0.6em 0 0.3em; }
+.pane-text.markdown-body h3 { font-size: 1.05em; margin: 0.6em 0 0.3em; }
+
+/* A short pane (the corner of a notebook layout): dialogs take the whole height. */
+@media (max-height: 480px) {
+  .pane-backdrop { padding: 4px; }
+  .pane-dialog { max-height: calc(100vh - 8px); padding: 8px 10px; gap: 6px; }
+  .pane-title { font-size: 1em; }
 }

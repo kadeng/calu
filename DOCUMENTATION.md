@@ -996,9 +996,10 @@ chat pane: http://calu.localhost:8800/pane#token=... (also in an iframe of a loc
 - **Settings and checkers** open the full web interface in a separate window, logged in with
   the pane's token.
 - **Small panes.** In a pane less than 480 pixels high (the corner of a notebook layout, or
-  VSCode's bottom panel) the header is one row, the keyboard hint under the input is left out,
-  and in a wide pane the model, effort and buttons sit beside the input, so the transcript and
-  an open decision keep most of the height.
+  VSCode's bottom panel) the header is one row and the keyboard hint under the input is left
+  out. A pane that is also at least twice as wide as high gets two columns: the transcript with
+  its decisions on the left, the composer on the right, so that an open decision keeps the full
+  height. Dialogs (a file, a diff, what the checker saw) then take the whole pane.
 - **Files.** A file link or "Open file" shows the file read-only, with line numbers, at the
   line. A click on an edit shows it as a coloured unified diff. The pane cannot change files.
 - **What the pane cannot do.** It cannot start the calu server (a browser has no terminal); it
