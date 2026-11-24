@@ -6,6 +6,26 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
 
 ## Pick up here
 
+### First: `agent/records/NEXT_STEP.md` (2026-11-24)
+
+The owner decided to merge calu's three logins (admin, operator, session) into one "user"
+login, with the database owner kept for migrations, one password for both on a local
+database, and an empty user password meaning "never ask". The plan, his words, the decisions
+taken and the code map are in `NEXT_STEP.md`; nothing of it is built yet. Do that next.
+
+State on 2026-11-24 before that: everything up to `9656f41` is pushed and CI is green.
+Built on 2026-11-22/24 (PLAN D256-D264): subagent task review (D256); Claude Code's own
+system prompt kept (D257); `claude:` checker models removed, checkers run only through
+Pydantic AI (D258); the fixed `system/disclosure.md` part (D259); `/trust`, `/trust-file`,
+`/honesty-review` in both IDEs (D260); the chat pane of `calu web` at `/pane` on a chat host
+shared with VSCode (`extensions/vscode/src/host/`, D261) and its short/wide layouts (D263);
+the trace final pass waits for blocks still being redacted (D262); `install.sh` (D264).
+The VSCode integration tests (Docker) and a Cua run of VSCode, PyCharm and the pane passed
+after D261/D263. backtester1 (66.163.113.110, SSH port 19871, root mode) still runs an older
+calu: the owner reinstalls with `curl -fsSL .../install.sh | sudo bash` and restarts
+`calu serve --sudo`; its checkers need `sudo calu config models auto` (the API key is in
+`/etc/calu/.env`).
+
 ### State of the repository (updated 2026-11-20 evening, by the lead)
 
 **Read first:** this section and "Next, in this order" below; `PLAN.md` D238-D255 (the
