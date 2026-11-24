@@ -22,6 +22,42 @@ pointer in `HANDOFF.md`) when the change is done and recorded as a decision in `
   login (store encryption, sandbox, root mode, the web token keep it out), and `operator`
   can approve escalations anyway. See the conversation of 2026-11-24 and D48, D213, D228, D249.
 
+## Requirement: the password experience (the owner, 2026-11-24)
+
+"The user experience must be taken into account when requiring passwords, including for the
+case that a wrong or no password can be entered. Error messages and prompt messages must be
+helpful and explanatory (still concise), not just technically correct."
+
+What that means for this change (check every prompt and error in every front end: CLI, TUI,
+`calu web`'s sign-in page, the VSCode and PyCharm password dialogs, the pane):
+
+- **A prompt says which password and why**, in the user's terms, not the entry's name:
+  "calu user password (set at `calu setup`; needed to start sessions and decide steps):",
+  not "Operator password:". The database owner's prompt says that it is the database
+  password and what needs it ("needed for migrations").
+- **A wrong password** says so, says how many tries are left (if limited), and what to do
+  if it is forgotten: e.g. "That is not the calu user password. Forgot it? `calu setup
+  --set-password` sets a new one (it needs the database password)." Never a traceback, never
+  only "WrongPassword" or "authentication failed".
+- **No password entered / cancelled** (Enter on an empty prompt, Escape, Ctrl-C, a dialog
+  closed): say what did not happen and how to continue ("Not started: no password given.
+  Run again to retry."), and distinguish it from an empty password that is the real one
+  (empty user password = never asked, see below).
+- **No terminal to ask on** (IDE bridge, ACP, scripts, `calu web` started by systemd): say
+  why calu cannot ask and the two ways out (store the login without a password, or give the
+  password where the front end asks for it), as `NeedsPassword` in `cli._herd_value` does
+  today, but shorter and in the new terms.
+- **The database refuses the login although the store's password was right** (the role's
+  password changed, the database moved): say that the stored login is outdated and that
+  `calu setup` renews it, instead of a raw psycopg error.
+- **Setup prompts** explain the choice in one line each: what the password protects, that
+  an empty one means "never asked" and who can then act as you (Claude's commands outside
+  the sandbox included), and that the database and user password are the same for a local
+  database.
+- **Tests** pin the wording of each case (wrong, empty, cancelled, no terminal, outdated
+  login) per front end, so that later changes keep them helpful; `docs/TESTING.md` gets a
+  manual checklist item that walks through them in each front end.
+
 ## Decisions taken (the owner did not answer the three questions; these were my
 recommendations, announced to him; confirm if in doubt)
 
@@ -184,7 +220,7 @@ Counts at planning time: `calu_session` 207 refs in src/117 in tests, `calu_oper
 - The JetBrains plugin and VSCode share the unlock logic; change both and their tests together.
 - Keep `calu credential set` able to import a connection string for `user` (remote machines).
 
-## Order of work
+## Order of work (the password experience above applies to every step that touches a prompt or an error)
 
 1. Read D48, D205, D213, D216, D228, D230, D249 in `PLAN.md` and the setup/credential code above.
 2. Migration 0043 + `setup.py` + `roles.py`; DB tests green.
