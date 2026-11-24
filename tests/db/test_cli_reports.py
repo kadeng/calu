@@ -143,9 +143,9 @@ class _AnyCredential:
         """List the credentials.
 
         Returns:
-            The two names the commands ask for.
+            The two entries of a store since D265.
         """
-        return ["admin", "session"]
+        return ["db-admin", "user"]
 
     def needs_password(self, _name: str) -> bool:
         """Say that every entry is encrypted (D104).

@@ -6,18 +6,19 @@ See agent/records/PLAN.md D228.
 
 `calu setup` as root writes the file. A client that found a root session through a local
 socket, and therefore asked no database which session to attach to, reads it to learn which
-database that session uses, so that it can log in there as `calu_admin` with the admin
+database that session uses, so that it can log in there as `calu_admin` with the calu user
 password a person types. The file holds the host, the port, the database name and how the
 server is verified.
 
-After `calu setup --no-password` it also holds the generated password of the role
-`calu_admin` (`admin_password`): the owner's ruling of 2026-11-18 is that a setup without
-passwords has weak security and that this is allowed. Every user and every program of the
+With an empty user password (`calu setup --no-password`) it also holds the generated
+password of the role `calu_admin`, the user login (the key `admin_password`): the owner's
+ruling of 2026-11-18 is that a setup without passwords has weak security and that this is
+allowed. Every user and every program of the
 machine can then read the file and change calu's settings; a client asks for nothing. After
-a setup with passwords the file holds no secret.
+a setup with a user password the file holds no secret.
 
 Why a file and not the session's word: a socket in a user's runtime directory can be created
-by any program of that user. A client that sent the admin password to whatever database such
+by any program of that user. A client that sent the user password to whatever database such
 a "session" named would hand the password to that program. Only root can write this file, and
 the client checks that before it reads it.
 """
@@ -119,7 +120,7 @@ def problems(path: Path | None = None, owner: int = 0) -> list[str]:
 
 
 def _conninfo(path: Path) -> tuple[dict[str, str], str]:
-    """Read the connection parameters and the admin password out of the place file.
+    """Read the connection parameters and the password of `calu_admin` out of the place file.
 
     Args:
         path: The file.
@@ -166,10 +167,10 @@ def read(path: Path | None = None, owner: int = 0) -> Target:
         raise PlaceError("; ".join(wrong))
     conninfo, password = _conninfo(path)
     # Imported here: `calu.setup` imports from `calu.db`.
-    from calu.setup import ADMIN_ROLE
+    from calu.setup import USER_ROLE
 
     return Target(
         variant="server",
-        conninfo={**conninfo, "user": ADMIN_ROLE},
+        conninfo={**conninfo, "user": USER_ROLE},
         auth=PasswordAuth(password=password),
     )

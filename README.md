@@ -168,7 +168,7 @@ Claude Code's own sandbox is optional; `calu setup` asks whether to switch it on
 curl -fsSL https://raw.githubusercontent.com/kadeng/calu/main/install.sh | bash   # uv if missing, then calu
 # as root, for `calu ... --sudo`:  ... install.sh | sudo bash
 calu doctor               # what is in place and what is missing
-calu setup                # picks or creates the database; asks for two passwords
+calu setup                # picks or creates the database; asks you to choose the calu user password
 ```
 
 The checkers need a key of their own, which Claude Code never sees. By default every role uses

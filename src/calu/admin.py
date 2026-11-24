@@ -1,9 +1,9 @@
 """Changing what steers the checkers: projects, configuration, checker definitions and rules.
 
 These are the operations behind `calu project`, `calu config`, `calu checker` and `calu rules`
-(agent/records/PLAN.md §8). They need the `admin` credential, because the role of a session may
-only read the configuration (agent/records/PLAN.md D6, §5): a running session cannot change the
-rules it is judged by, and neither can the agent.
+(agent/records/PLAN.md §8). They use the user login (`calu_admin`, D265), which no session
+hands to Claude: the agent cannot change the rules it is judged by. (Before D265 the role of a
+session could only read the configuration, D6, §5.)
 
 Every change announces itself on `config_changed`, so a running session reloads within a
 moment (`calu.store.ConfigStore.reload_loop`), and the audit trigger records who changed what.

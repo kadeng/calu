@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from calu import cli, doctor
+from calu import cli, doctor, logins
 from calu.credentials import CredentialStore
 from calu.db import place as db_place
 from calu.db.target import Target
@@ -29,10 +29,10 @@ def test_the_report_names_what_a_session_cannot_run_without() -> None:
     findings = [
         Finding("claude", True, "2.1.319"),
         Finding("socat", False, "not on PATH", "apt install socat"),
-        Finding("credential 'session'", False, "not stored", "run calu setup", essential=True),
+        Finding("calu login ('user')", False, "not stored", "run calu setup", essential=True),
     ]
     shown = doctor.report(findings)
-    assert "a session cannot run without credential 'session'" in shown
+    assert "a session cannot run without calu login ('user')" in shown
     assert doctor.essential_missing(findings) is True
 
     fine = [Finding("claude", True, "2.1.319")]
@@ -70,13 +70,42 @@ def test_the_credential_store_is_reported_without_decrypting_anything(
     store: CredentialStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     no_root_place(monkeypatch)
-    empty = doctor.credential_findings(store)
-    assert [f.ok for f in empty] == [False, False]
-    assert any(f.essential for f in empty)  # `calu run` needs the session credential
+    user, db_admin = doctor.credential_findings(store)
+    assert (user.ok, db_admin.ok) == (False, False)
+    assert user.essential and not db_admin.essential  # every command needs the user login
+    assert user.advice == logins.no_login()
 
-    store.save("session", "postgresql://localhost/calu", bytearray(b"password"))
-    after = doctor.credential_findings(store)
-    assert after[1].ok is True and after[1].detail == "stored"
+    store.save(logins.USER, "postgresql://calu_admin@localhost/calu", bytearray(b"password"))
+    user, db_admin = doctor.credential_findings(store)
+    assert user.ok and user.detail == "stored"
+    assert db_admin.ok and db_admin.detail == "not stored here; migrations run where it is"
+
+    store.save(logins.DB_ADMIN, "postgresql://calu_owner@localhost/calu", bytearray(b"password"))
+    user, db_admin = doctor.credential_findings(store)
+    assert user.ok and db_admin.ok and db_admin.detail == "stored"
+
+
+def test_the_logins_of_an_earlier_calu_are_reported_with_what_to_do(
+    store: CredentialStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D265 (5): without the user login the advice is `calu.logins.old_logins`; next to it the
+    old entries are named as unused."""
+    no_root_place(monkeypatch)
+    store.save("admin", "postgresql://calu_owner@localhost/calu", "pw")
+    store.save("operator", "postgresql://calu_operator@localhost/calu", "pw")
+    user, _db_admin = doctor.credential_findings(store)
+    assert not user.ok and user.advice == logins.old_logins(has_owner=True)
+
+    store.remove("admin")
+    user, _db_admin = doctor.credential_findings(store)
+    assert not user.ok and user.advice == logins.old_logins(has_owner=False)
+
+    store.save(logins.USER, "postgresql://calu_admin@localhost/calu", "pw")
+    found = {f.name: f for f in doctor.credential_findings(store)}
+    assert found["calu login ('user')"].ok
+    earlier = found["logins of an earlier calu"]
+    assert not earlier.ok and earlier.detail == "operator still stored, unused"
+    assert "calu credential remove NAME" in earlier.advice
 
 
 def test_a_user_of_roots_calu_needs_no_credential_of_their_own(
@@ -90,26 +119,22 @@ def test_a_user_of_roots_calu_needs_no_credential_of_their_own(
     assert not doctor.essential_missing([only])
 
 
-def test_a_credential_without_a_password_is_reported(store: CredentialStore) -> None:
-    """D104: the choice is legitimate, but it is invisible in the store, so `doctor` says it.
-
-    It is a note for the narrow `operator` credential and a problem for `admin` or `session`,
-    which can change the schema or start sessions.
-    """
+def test_a_login_without_a_password_is_reported(store: CredentialStore) -> None:
+    """D104, D265 (2): an empty user password is a legitimate choice, but it is invisible in
+    the store, so `doctor` says it, with what it means: every program of the user can use the
+    login. Entries of before D265 are not part of it (they are reported as unused)."""
+    store.save(logins.USER, "postgresql://calu_admin@localhost/calu", None)
+    store.save(logins.DB_ADMIN, "postgresql://calu_owner@localhost/calu", None)
     store.save("operator", "postgresql://op@localhost/calu", None)
     (said,) = [f for f in doctor.credential_findings(store) if f.name == "credential protection"]
-    assert said.ok is True, "the operator credential is what the switch is for"
-    assert "operator stored without a password" in said.detail
-    assert said.advice == ""
+    assert said.ok is True, "a choice, not a defect"
+    assert said.detail.startswith("db-admin, user stored without a password")
+    assert "every program that runs as you can use the login" in said.detail
+    assert "calu setup --set-password" in said.detail
 
-    store.save("admin", "postgresql://a@localhost/calu", None)
-    (worse,) = [f for f in doctor.credential_findings(store) if f.name == "credential protection"]
-    assert worse.ok is False
-    assert "admin" in worse.advice and "with a password" in worse.advice
-
-    # With a password on everything the report says nothing about protection at all.
-    store.save("admin", "postgresql://a@localhost/calu", "pw")
-    store.save("operator", "postgresql://op@localhost/calu", "pw")
+    # With a password on the user login the report says nothing about protection at all.
+    store.save(logins.USER, "postgresql://calu_admin@localhost/calu", "pw")
+    store.save(logins.DB_ADMIN, "postgresql://calu_owner@localhost/calu", "pw")
     names = [f.name for f in doctor.credential_findings(store)]
     assert "credential protection" not in names
 
@@ -126,10 +151,13 @@ def test_a_workspace_is_checked_for_being_a_git_repository(tmp_path: Path) -> No
     assert missing[0].ok is False and missing[0].essential
 
 
-def test_the_local_findings_cover_the_four_groups(store: CredentialStore) -> None:
+def test_the_local_findings_cover_the_four_groups(
+    store: CredentialStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    no_root_place(monkeypatch)
     names = [finding.name for finding in doctor.local_findings(store)]
     assert names[:4] == ["claude", "bwrap", "socat", "git"]
-    assert "credential 'admin'" in names and "checker keys" in names
+    assert "calu login ('user')" in names and "checker keys" in names
     assert "snapshot directory" in names
 
 
@@ -302,7 +330,7 @@ def test_a_password_free_credential_where_no_sandbox_can_run_is_a_finding(
     store = CredentialStore(
         tmp_path / "c.json", KdfParams(time_cost=1, memory_cost=8, parallelism=1)
     )
-    store.save("operator", "postgresql://op@localhost/calu", None)
+    store.save(logins.USER, "postgresql://calu_admin@localhost/calu", None)
     monkeypatch.setattr(doctor.shutil, "which", lambda name: None if name == "socat" else "/x")
     (finding,) = doctor.self_approval_findings(store)
     assert not finding.ok and "socat missing" in finding.detail
@@ -315,11 +343,12 @@ def test_a_password_free_credential_where_no_sandbox_can_run_is_a_finding(
     monkeypatch.setattr(doctor, "namespace_findings", lambda: refused)
     (finding,) = doctor.self_approval_findings(store)
     assert "cannot create a sandbox" in finding.detail
-    # The advice names the entries that have no password, not always `operator`.
-    store.save("admin", "postgresql://owner@localhost/calu", None)
+    # The detail names the entries that have no password; the advice the commands for them.
+    store.save(logins.DB_ADMIN, "postgresql://calu_owner@localhost/calu", None)
+    store.save("mykey", "a key of the user's own", None)
     (finding,) = doctor.self_approval_findings(store)
-    assert finding.detail.startswith("admin, operator have no password")
-    assert "(`calu setup --set-passwords`, `calu credential set operator`)" in finding.advice
+    assert finding.detail.startswith("db-admin, mykey, user have no password")
+    assert "(`calu setup --set-password`, `calu credential set mykey`)" in finding.advice
     # A store only root can read is out of reach of Claude Code's user.
     monkeypatch.setattr(doctor.asuser, "only_root_writes", lambda path: True)
     assert doctor.self_approval_findings(store) == []
@@ -433,10 +462,10 @@ def test_a_store_only_root_reads_is_not_called_the_wrong_place(
     store: CredentialStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """After `sudo calu setup --no-password` the report called `/etc/calu` a wrong choice."""
-    store.save("admin", bytearray(b"postgresql://owner@db"), None)
-    store.save("session", bytearray(b"postgresql://session@db"), None)
-    risky = doctor.credential_findings(store)[-1]
-    assert not risky.ok and "wrong entry" in risky.advice
+    store.save(logins.USER, bytearray(b"postgresql://calu_admin@db"), None)
+    store.save(logins.DB_ADMIN, bytearray(b"postgresql://calu_owner@db"), None)
+    open_to_you = doctor.credential_findings(store)[-1]
+    assert "every program that runs as you can use the login" in open_to_you.detail
     monkeypatch.setattr(doctor.asuser, "only_root_writes", lambda path: True)
     stated = doctor.credential_findings(store)[-1]
     assert stated.ok and "only root can read" in stated.detail and stated.advice == ""

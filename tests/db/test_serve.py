@@ -40,7 +40,7 @@ async def serving(
     """Run a server with fake runners and fake checker models for the duration of the block.
 
     Args:
-        session_url: The session login.
+        session_url: The user login the server runs as (`calu_admin`, D265).
         hostname: The host whose requests the server answers.
         user: The OS user whose requests the server answers.
         **options: Fields of `ServeOptions`.
@@ -216,31 +216,13 @@ async def test_only_recent_requests_for_this_host_and_user_are_claimed(db_url: s
             assert row is not None and row.state == "pending"
 
 
-async def test_a_session_login_cannot_ask_for_a_session(db_url: str, tmp_path: Path):
-    """What a running session holds is not enough to start another one, or to read requests."""
-    session_url = await prepare(db_url, tmp_path)
-    conn = await connect(session_url)
-    try:
-        db = Db(conn)
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            await session_requests.file(db, request(tmp_path))
-        await conn.rollback()
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            await db.all("SELECT prompt FROM session_requests")
-        await conn.rollback()
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            await session_requests.withdraw(db, 1)
-    finally:
-        await conn.close()
-
-
 async def test_calu_start_as_a_process_gets_a_session_and_attaches(db_url: str, tmp_path: Path):
     """The command a user runs: no address, no token, no password; then `/shutdown`."""
     session_url = await prepare(db_url, tmp_path)
     workspace = tmp_path / "project"
     workspace.mkdir()
     config = tmp_path / "config"
-    CredentialStore(config / "calu" / "credentials.json").save("operator", db_url, None)
+    CredentialStore(config / "calu" / "credentials.json").save("user", session_url, None)
     environment = dict(os.environ) | {"PYTHONUNBUFFERED": "1", "XDG_CONFIG_HOME": str(config)}
     errors = tmp_path / "start-stderr.log"
     async with serving(session_url, hostname=socket.gethostname(), user=os_user()) as server:
@@ -274,9 +256,9 @@ async def test_calu_start_as_a_process_gets_a_session_and_attaches(db_url: str, 
 
 @pytest.mark.slow
 async def test_calu_start_without_a_server_says_what_to_do(db_url: str, tmp_path: Path):
-    await prepare(db_url, tmp_path)
+    user_url = await prepare(db_url, tmp_path)
     config = tmp_path / "config"
-    CredentialStore(config / "calu" / "credentials.json").save("operator", db_url, None)
+    CredentialStore(config / "calu" / "credentials.json").save("user", user_url, None)
     environment = dict(os.environ) | {"XDG_CONFIG_HOME": str(config)}
     done = await anyio.run_process(
         [sys.executable, "-m", "calu", "start", "--no-attach"],
@@ -321,7 +303,7 @@ async def test_calu_serve_as_a_process_answers_and_stops_on_sigterm(db_url: str,
     session_url = await prepare(db_url, tmp_path)
     config = tmp_path / "config"
     CredentialStore(config / "calu" / "credentials.json").save(
-        "session", session_url, bytearray(b"a long enough password")
+        "user", session_url, bytearray(b"a long enough password")
     )
     environment = dict(os.environ) | {
         "PYTHONUNBUFFERED": "1",
@@ -555,9 +537,9 @@ async def test_the_relay_reaches_every_session_with_one_server_token(db_url: str
             await servers.mint(db, server_id)
 
 
-async def test_a_session_login_cannot_read_server_tokens_or_file_without_one(
-    db_url: str, tmp_path: Path
-):
+async def test_a_request_through_the_relay_needs_a_valid_server_token(db_url: str, tmp_path: Path):
+    """`calu_relay_session_request` refuses a token the server does not have, also for the
+    user login that the server itself runs as (D242, D265)."""
     from calu import servers
 
     session_url = await prepare(db_url, tmp_path)
@@ -566,9 +548,6 @@ async def test_a_session_login_cannot_read_server_tokens_or_file_without_one(
         db = Db(conn)
         server_id = await servers.record_start(db, HOST, USER, "ws://127.0.0.1:1")
         await conn.commit()
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            await db.all("SELECT token_sha256 FROM server_tokens")
-        await conn.rollback()
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             await servers.file_request(db, server_id, "0" * 64, request(tmp_path))
         await conn.rollback()

@@ -13,9 +13,9 @@
 #      was installed system-wide.
 #   2. `calu setup --database server --no-password` (cluster on port 5432): `calu ide` as
 #      dev asks no password. The sandbox is switched off (no user namespaces in Docker).
-#   3. A second store WITH passwords below ~/pwstore (cluster on port 5433; admin password
-#      `admin-pw`, session password `sess-pw`), reached with the calu command
-#      /home/dev/pwstore/calu: for the one-password rule over SSH.
+#   3. A second store WITH passwords below ~/pwstore (cluster on port 5433; calu user
+#      password `user-pw`), reached with the calu command /home/dev/pwstore/calu: for the
+#      one-password rule over SSH.
 #   4. /home/dev/project: a git repository with Python files, a .gitignore, a binary file,
 #      `many/` with 300 small files, a link inside the tree and one that points outside.
 #   5. Starts the scripted servers (sshbox-server).
@@ -36,13 +36,17 @@ as_dev "uv tool install --quiet --force --reinstall-package calu /opt/calu-src" 
 ln -sf /home/dev/.local/bin/calu /usr/local/bin/calu
 as_dev "calu --version"
 
-if ! as_dev "calu credential list 2>/dev/null" | grep -q '^admin\b'; then
-    # The answers, in the order of the prompts: the owner's password, then the new session
-    # password twice (blank).
-    as_dev "printf 'owner-pw\n\n\n' | calu setup --database server --host 127.0.0.1 --port 5432 --dbname calu --user calu_owner --sslmode disable --no-password"
+STORED="$(as_dev "calu credential list 2>/dev/null" || true)"
+if grep -q '^db-admin ' <<<"$STORED"; then
+    # The migrations of a newer calu (the logins have no password here: nothing is asked).
+    as_dev "calu db migrate </dev/null"
+elif grep -q '^admin ' <<<"$STORED"; then
+    # The logins of a calu from before the one user login, without a password: the setup
+    # converts them to `user` and `db-admin` and asks nothing.
+    as_dev "calu setup --no-password </dev/null"
 else
-    # The migrations of a newer calu (the admin login has no password here: a blank answer).
-    as_dev "printf '\n' | calu db migrate"
+    # The one answer: the owner's password (`--no-password`: no user password is asked).
+    as_dev "printf 'owner-pw\n' | calu setup --database server --host 127.0.0.1 --port 5432 --dbname calu --user calu_owner --sslmode disable --no-password"
 fi
 as_dev "calu config set claude.sandbox.enabled false"
 
@@ -56,10 +60,14 @@ export XDG_CONFIG_HOME="$STORE/config" XDG_STATE_HOME="$STORE/state" XDG_DATA_HO
 exec /home/dev/.local/bin/calu "\$@"
 WRAP
     chown dev:dev "$STORE/calu" && chmod 0755 "$STORE/calu"
-    # The answers: the owner's password, the admin password twice, the session password twice.
-    as_dev "printf 'owner-pw\nadmin-pw\nadmin-pw\nsess-pw\nsess-pw\n' | $STORE/calu setup --database server --host 127.0.0.1 --port 5433 --dbname calu --user calu_owner --sslmode disable"
+    # The answers: the owner's password, then the new calu user password twice.
+    as_dev "printf 'owner-pw\nuser-pw\nuser-pw\n' | $STORE/calu setup --database server --host 127.0.0.1 --port 5433 --dbname calu --user calu_owner --sslmode disable"
+elif grep -q '"db-admin"' "$STORE/config/calu/credentials.json"; then
+    as_dev "printf 'user-pw\n' | $STORE/calu db migrate"
 else
-    as_dev "printf 'admin-pw\n' | $STORE/calu db migrate"
+    # A store of a calu from before the one user login: its admin password `admin-pw` opens
+    # it once, and `--set-password` takes the new user password (twice) instead of keeping it.
+    as_dev "printf 'admin-pw\nuser-pw\nuser-pw\n' | $STORE/calu setup --set-password"
 fi
 
 PROJECT=/home/dev/project
@@ -127,6 +135,6 @@ git -c user.name=sshbox -c user.email=sshbox@example.org commit -q -m "Test proj
 PROJ
 fi
 as_dev "cd $PROJECT && calu project add . --name project >/dev/null 2>&1 || true"
-as_dev "cd $PROJECT && printf 'admin-pw\n' | $STORE/calu project add . --name project >/dev/null 2>&1 || true"
+as_dev "cd $PROJECT && printf 'user-pw\n' | $STORE/calu project add . --name project >/dev/null 2>&1 || true"
 
 su - dev -c /usr/local/sbin/sshbox-server

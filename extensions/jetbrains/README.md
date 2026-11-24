@@ -187,7 +187,7 @@ only after the next full comparison.
       protocol/  error codes of the bridge
       state/     the chat's view state and its reducer (ported from viewState.ts)
       logic/     what the chat shows and offers, as pure functions (ports of the VSCode extension's
-                 shared modules): one-password decisions, server command, session list and menu, hints
+                 shared modules): password decisions, server command, session list and menu, hints
                  and setup cards, tabs, held steps, usage, slash commands, item menus, images, comments,
                  the settings model, installing calu, Markdown, bidi neutralising
       bridge/    the launchers (local, WSL, SSH, scripted) and the supervisor of `calu ide`
@@ -221,9 +221,11 @@ host and `frontend` in the thin client; `shared` is in both.
 - **Native Swing.** The transcript is drawn with JetBrains components, because an embedded
   browser is not reliable in remote development. `ChatSurface` is the seam for a browser surface
   in local mode later. Components are created once and changed in place; all Swing work is on the EDT.
-- **Passwords.** At most one password per IDE start: asked by a dialog, sent with `ide.unlock`,
-  kept in memory in the backend (`PasswordMemory`), and sent again by itself when a bridge is
-  restarted. Never stored, never logged; an empty password is sent like any other.
+- **Passwords.** The calu user password at most once per IDE start, and never if it is empty:
+  asked by a dialog, sent with `ide.unlock`, kept in memory in the backend (`PasswordMemory`),
+  and sent again by itself when a bridge is restarted. Never stored, never logged; an empty
+  entry is sent like any other. A cancelled dialog fails the waiting action with "Not done: no
+  password was given. The next action that needs the database asks again."
 - **Contracts.** Every class, function and property has a KDoc comment with its contract.
 - Module descriptors (`calu.<module>.xml`) hold the registrations; `plugin.xml` only lists the modules.
 
@@ -289,8 +291,8 @@ The tool window "calu" is in the right stripe (below "More tool windows" until i
 
     header     the session (click: switch, new, resume, fork, rename, detach; type to filter),
                what Claude does and since when, the honesty chip (mode, marks, review, trust)
-    cards      what is missing, each with its button: install calu, unlock (one password), the
-               server command for tmux or screen with "Open terminal with this command",
+    cards      what is missing, each with its button: install calu, unlock (the calu user
+               password), the server command for tmux or screen with "Open terminal with this command",
                the running sessions, a session request that waits (with Cancel), in SSH mode the
                synchronisation and "Set up running and debugging on <host>"; the cards scroll, so
                that the composer and the footer stay visible in a short tool window

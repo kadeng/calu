@@ -14,11 +14,12 @@ import pytest
 
 pytest.importorskip("textual")
 
-from calu import admin, herd
+from calu import admin, herd, logins
 from calu.credentials import CredentialStore, KdfParams
+from calu.db.target import Target
 from calu.tui import adminaccess, gittool
 from calu.tui.actions import Actions
-from calu.tui.adminaccess import AdminFailed, PasswordNeeded, StoreAdmin, weakens
+from calu.tui.adminaccess import CREDENTIAL, AdminFailed, PasswordNeeded, StoreAdmin, weakens
 from calu.tui.app import describe_commit
 from calu.tui.connection import Link
 from calu.tui.fake import FakeAdmin, FakeSession, fake_connector
@@ -194,41 +195,69 @@ def store_at(path: Path) -> CredentialStore:
     return CredentialStore(path, KdfParams(time_cost=1, memory_cost=8, parallelism=1))
 
 
-async def test_without_the_admin_credential_nothing_is_changed(tmp_path: Path) -> None:
+async def test_without_the_user_login_nothing_is_changed(tmp_path: Path) -> None:
     access = StoreAdmin(store_at(tmp_path / "c.json"))
+    assert CREDENTIAL == logins.USER
     assert access.problem() == adminaccess.NO_CREDENTIAL and not access.needs_password()
-    with pytest.raises(AdminFailed, match="no 'admin' credential"):
+    with pytest.raises(AdminFailed) as missing:
         await access.save_instructions("command", "text", None)
+    assert str(missing.value) == adminaccess.NO_CREDENTIAL
     with pytest.raises(AdminFailed, match="one of off, track, enforce"):
         await access.set_honesty_mode("strict", None, None)
 
 
-async def test_a_protected_credential_needs_the_right_password(tmp_path: Path) -> None:
+async def test_a_protected_user_login_needs_the_right_password(tmp_path: Path) -> None:
+    """A wrong and a blank password are refused with the words of `calu.logins.refused`;
+    nothing connects, because the store does not open."""
     store = store_at(tmp_path / "c.json")
-    store.save("admin", "postgresql://owner@127.0.0.1:1/calu", "secret")
+    store.save(CREDENTIAL, "postgresql://calu_admin@127.0.0.1:1/calu", "secret")
     access = StoreAdmin(store)
     assert access.problem() is None and access.needs_password()
-    with pytest.raises(PasswordNeeded, match="needs its password"):
+    with pytest.raises(PasswordNeeded, match="needs the calu user password"):
         await access.save_instructions("command", "text", None)
-    with pytest.raises(PasswordNeeded, match="wrong password"):
+    with pytest.raises(PasswordNeeded) as wrong:
         await access.save_instructions("command", "text", "other")
+    assert str(wrong.value) == logins.refused(blank=False)
+    with pytest.raises(PasswordNeeded) as blank:
+        await access.save_instructions("command", "text", "")
+    assert str(blank.value) == logins.refused(blank=True)
 
 
-async def test_instructions_and_mode_are_stored_through_calu_admin(
+async def test_a_stored_login_the_database_refuses_is_called_outdated(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The entry opened, so the password is right; the database's refusal means the stored
+    login is outdated (`calu.logins.outdated`), not that the user typed a wrong password."""
+    import psycopg
+
+    url = "postgresql://calu_admin@db/calu"
     store = store_at(tmp_path / "c.json")
-    store.save("admin", "postgresql://owner@db/calu", None)
+    store.save(CREDENTIAL, url, None)
+
+    async def refusing(url: Any) -> Any:
+        """Refuse the login as PostgreSQL does after the password was changed."""
+        raise psycopg.OperationalError('password authentication failed for user "calu_admin"')
+
+    monkeypatch.setattr(adminaccess, "connect", refusing)
+    with pytest.raises(AdminFailed) as refused:
+        await StoreAdmin(store).set_honesty_mode("track", None, None)
+    assert not isinstance(refused.value, PasswordNeeded)
+    assert str(refused.value) == logins.outdated(Target.parse(url).place)
+
+
+async def test_instructions_and_mode_are_stored_with_the_user_login_as_it_is(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stored `user` login is used without narrowing its role (D265): the connection runs
+    no statement of its own before the work."""
+    store = store_at(tmp_path / "c.json")
+    store.save(CREDENTIAL, "postgresql://calu_admin@db/calu", None)
     calls: list[tuple[Any, ...]] = []
 
     class Conn:
-        """A connection that takes a role and closes."""
+        """A connection that only closes; a statement on it would fail the test."""
 
         autocommit = True
-
-        async def execute(self, statement: Any) -> None:
-            """Record the role the connection takes (`calu.db.roles.narrow`)."""
-            calls.append(("role", statement.as_string(None).split()[-1].strip('"')))
 
         async def close(self) -> None:
             """Record the close."""
@@ -274,8 +303,7 @@ async def test_instructions_and_mode_are_stored_through_calu_admin(
     saved = await access.save_instructions("command", "new text", None)
     assert (saved.name, saved.version) == ("command", 13)
     assert calls == [
-        ("connect", "postgresql://owner@db/calu"),
-        ("role", "calu_admin"),
+        ("connect", "postgresql://calu_admin@db/calu"),
         ("set_checker", "command", "new text"),
         ("close",),
     ]
@@ -401,7 +429,7 @@ async def test_saving_asks_for_the_password_until_it_is_right() -> None:
         await run.press("x", "enter")
         await run.pilot.pause()
         again = run.app.screen
-        assert isinstance(again, PasswordScreen) and "wrong password" in again.problem
+        assert isinstance(again, PasswordScreen) and again.problem == logins.refused(False)
         assert access.saved == []
         await run.press(*"secret", "enter")
         await run.pilot.pause()
@@ -649,6 +677,28 @@ async def test_the_mode_needs_the_credential_and_its_password() -> None:
         assert access.modes == [("track", "myproject")]
 
 
+async def test_a_cancelled_or_wrong_password_says_what_was_not_done() -> None:
+    """`_with_admin` (here through `/rename`): Escape at the prompt flashes the failure with
+    "no password given"; a wrong password asks again with `calu.logins.refused`."""
+    session = FakeSession()
+    access = FakeAdmin(session, password="secret")
+    async with running("simple_turn", session=session, admin=access) as run:
+        await command(run, "/rename payments")
+        assert isinstance(run.app.screen, PasswordScreen)
+        await run.press("escape")
+        await run.pilot.pause()
+        assert run.app.message == "the name was not stored: no password given"
+        assert access.renamed == []
+        await command(run, "/rename payments")
+        await run.press("x", "enter")
+        await run.pilot.pause()
+        again = run.app.screen
+        assert isinstance(again, PasswordScreen) and again.problem == logins.refused(False)
+        await run.press(*"secret", "enter")
+        await run.pilot.pause()
+        assert access.renamed == [(session.calu_session_id, "payments")]
+
+
 # ------------------------------------------------------------------ f4
 
 
@@ -834,14 +884,13 @@ async def test_without_the_credential_fork_names_the_command_instead() -> None:
 
 async def test_with_the_sessions_database_known_nothing_is_read_from_the_store(tmp_path) -> None:
     """The access logs in as `calu_admin` with a typed password; the store is not opened."""
-    from calu.db.target import Target
-    from calu.setup import ADMIN_ROLE, admin_login
+    from calu.setup import USER_ROLE, user_login
 
-    place = admin_login(Target.parse("host=127.0.0.1 port=1 dbname=calu user=calu_operator"), "")
-    assert place.conninfo["user"] == ADMIN_ROLE
+    place = user_login(Target.parse("host=127.0.0.1 port=1 dbname=calu user=calu_owner"), "")
+    assert place.conninfo["user"] == USER_ROLE
     access = StoreAdmin(CredentialStore(tmp_path / "none.json"), database=place)
     assert access.problem() is None and access.needs_password()
-    with pytest.raises(PasswordNeeded, match="needs the admin password"):
+    with pytest.raises(PasswordNeeded, match="needs the calu user password"):
         await access.set_honesty_mode("track", None, None)
     # Nothing listens on that port: the failure is reported, not taken for a wrong password.
     with pytest.raises(AdminFailed) as failed:
@@ -1009,8 +1058,6 @@ def test_git_for_a_commit_runs_as_the_user_the_client_works_for(
 
 
 def test_a_login_held_in_memory_needs_no_typed_password(tmp_path) -> None:
-    from calu.db.target import Target
-
     held = Target.parse("host=127.0.0.1 port=1 dbname=calu user=calu_owner password=pw")
     access = StoreAdmin(CredentialStore(tmp_path / "none.json"), database=held)
     assert access.problem() is None and not access.needs_password()

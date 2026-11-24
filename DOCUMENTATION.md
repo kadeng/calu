@@ -164,7 +164,7 @@ locate a problem or to learn on which machine a command belongs.
   commands in the lower left of the diagram need nothing but the database, so you can still
   unblock a session on a machine you cannot reach.
 - **The configuration is out of Claude's reach.** Checker instructions, rules and settings are
-  database rows that a session's login may only read.
+  database rows, and Calu never gives Claude the login that changes them.
 - **No part of Calu listens on a public network interface.** Sessions, the relay of `calu
   serve` and the web interface listen on 127.0.0.1 only. Another machine reaches them through
   SSH ([From another machine](#from-another-machine)).
@@ -175,7 +175,7 @@ This section defines the terms the rest of the document uses, in alphabetical or
 
 | Term | Meaning |
 |---|---|
-| **Admin, operator, session (credentials)** | The three database logins. A running session uses `session`; this login reads the configuration and writes the session's own history. `operator` reads everything, resolves escalations and mints tokens. `admin` changes settings, checker instructions and rules. See [credentials and tokens](#credentials-and-tokens). |
+| **User login, user password** | Calu's one database login per person (the store entry `user`, the role `calu_admin`): sessions, decisions, settings, the web interface and the IDEs all use it. The calu user password, chosen at `calu setup`, protects it; an empty one means Calu never asks. The database owner's login (`db-admin`) is kept for migrations. See [credentials and tokens](#credentials-and-tokens). |
 | **Auto mode** | A permission mode of Claude Code in which its own classifier approves or refuses each step. Calu starts sessions in it by default. |
 | **Baseline** | Code honesty: the nearest trusted commit among the ancestors of `HEAD`. File changes are measured against it. |
 | **Changeset checker** | The checker that reads the whole diff of a `git commit` before the commit runs. |
@@ -533,16 +533,22 @@ calu doctor                                          # reports what is in place 
   (`.../kadeng/calu/<commit>/install.sh`), read it, and run `sudo bash install.sh --ref <commit>`.
 
 **Step 2: set up the database.** `calu setup` asks which database to use (a local one in
-Docker, an existing server, or RDS), creates the tables, and asks for two new passwords:
-
-| Password | Protects | You type it when |
-|---|---|---|
-| admin password | changing settings, checker instructions and rules; signing in to the web interface | you change something |
-| session password | starting sessions | `calu run` or `calu serve` starts |
+Docker, an existing server, or RDS), creates the tables, and asks you to choose one password,
+the **calu user password**. Calu asks for it when a session starts (`calu run`, `calu
+serve`), when you decide a step or change a setting from a terminal, and when a browser or
+an IDE signs in. For an existing server, setup also asks for a database user that may create
+tables and roles; Calu keeps that login, protected by the same password, for later
+migrations.
 
 ```bash
-calu setup                 # asks for the database, the two passwords and the sandbox
+calu setup                 # asks for the database, the user password and the sandbox
 ```
+
+An empty user password means Calu never asks for one. Then every program that runs as you
+can use Calu's login, Claude's commands outside the sandbox included, so they could decide
+their own escalations. Use it for tests, or together with the sandbox or [Calu as
+root](#calu-as-root-claude-code-as-another-user). `calu setup --set-password` changes the
+password later ([credentials](#credentials-and-tokens)).
 
 `calu setup` also asks whether to switch Claude Code's sandbox on. It offers "on" when
 `bubblewrap` and `socat` are installed. [The database](#the-database) describes the three
@@ -592,7 +598,7 @@ A session started without a registered project reaches nothing on the network
 
 ```bash
 calu doctor .          # this machine and this project directory
-calu doctor --db       # also asks the database (needs a password)
+calu doctor --db       # also asks the database (asks the user password)
 ```
 
 `calu doctor` starts nothing. It reports missing programs, the permission mode a session
@@ -608,8 +614,8 @@ purpose. Read it after the setup, to see Calu work before you write any rule.
 
 | Command | Use it for |
 |---|---|
-| `calu run` | one session in the foreground of this terminal; asks for the session password each time |
-| `calu serve`, then `calu start` | a server that asks for the session password once and runs many sessions; the IDE extensions and `/new` need it |
+| `calu run` | one session in the foreground of this terminal; asks for the user password each time |
+| `calu serve`, then `calu start` | a server that asks for the user password once and runs many sessions; the IDE extensions and `/new` need it |
 
 ```bash
 calu run -p "fix the failing test"            # one session, here
@@ -890,17 +896,17 @@ The web interface shows every session of every machine that uses the database. U
 watch a herd, read a session's history, decide escalations and change settings.
 
 ```bash
-calu web          # prints http://calu.localhost:8800/ : sign in with the admin password
+calu web          # prints http://calu.localhost:8800/ : sign in with the calu user password
 calu web --sudo   # the same, run as root on your behalf: Claude Code cannot reach the process
 ```
 
 **Signing in**
 
-- The page asks for the admin password. The database checks it; Calu stores it nowhere. Each
+- The page asks for the calu user password. The database checks it; Calu stores it nowhere. Each
   wrong password makes the next answer wait longer; the count starts again after a minute
   without a wrong one.
-- On a database where `calu setup` has not given the admin role a password yet, `calu web`
-  prints an address with a login token (`...?token=...`), to be opened once per browser.
+- With an empty user password, `calu web` prints an address with a login token
+  (`...?token=...`), to be opened once per browser.
 - The interface answers only under the host name `calu.localhost`. Chrome, Edge and Firefox
   resolve `*.localhost` themselves; for another browser or tool, add `127.0.0.1
   calu.localhost` to the hosts file.
@@ -994,7 +1000,7 @@ chat pane: http://calu.localhost:8800/pane#token=... (also in an iframe of a loc
 - **Login.** The token after `#` is the login of `calu web`. The browser never sends the part
   after `#` to a server; the pane keeps the token for the tab and removes it from the address.
   Treat an address with the token like the token itself. When `calu web` signs browsers in
-  with the admin password, it prints the pane's address without a token: the pane then works in
+  with the user password, it prints the pane's address without a token: the pane then works in
   its own window or in a frame of `calu web` after you signed in, not in a frame of another
   site.
 - **Embedding.** Only `/pane` may be shown in a frame, and only by the origins in
@@ -1049,9 +1055,9 @@ An editor on Windows with the project inside WSL starts the adapter inside WSL:
 { "command": "wsl.exe", "args": ["-d", "Ubuntu", "--cd", "/home/you/project", "/usr/local/bin/calu", "acp"] }
 ```
 
-- **No password prompt.** The adapter has no terminal. Store the operator credential without a
-  password (`calu credential set operator --no-password`). When the credential has a password,
-  the adapter reports that and stops.
+- **No password prompt.** The adapter has no terminal, so it finds the session of the
+  directory only with an empty user password. Otherwise give it the session's address and
+  `--token` (`calu token mint`); without them it says so and stops.
 - **One session.** The adapter offers the session of that directory. An editor that opens
   several chats gets one ACP session id per chat; all show the same Calu session.
 - **Escalations** appear as the editor's permission question, with the command or the file.
@@ -1173,8 +1179,7 @@ Every client shows an escalated step as a card with the same content:
 
 ### From the command line, with only the database
 
-These commands need a database login (the `operator` credential, else `admin`) and no
-connection to the session. They work from any machine that reaches the database, including for
+These commands need the user login and no connection to the session. They work from any machine that reaches the database, including for
 a session on a machine you cannot reach.
 
 ```bash
@@ -1190,8 +1195,9 @@ calu resolve 14 cancel "the session is gone"    # removes an escalation no sessi
   the question with its options, the step as the checker rendered it, the file before an edit,
   and the conversation as the checkers see it.
 - The waiting session picks the answer up within a second.
-- Calu records who decided. `operator:kai@buildbox` means the database role `calu_operator`,
-  used by the OS user `kai` on the host `buildbox` (`admin:` for `calu_admin`). For a decision
+- Calu records who decided. `admin:kai@buildbox` means the user login (the role `calu_admin`),
+  used by the OS user `kai` on the host `buildbox` (`operator:` in decisions made before the
+  one login). For a decision
   made in the web interface, Calu records the OS user and the host that `calu web` runs as. A
   decision through the relay is recorded with the client's name and the token's label
   (`client:calu attach via relay (laptop)`). `calu escalation 12` shows this record as
@@ -1286,8 +1292,8 @@ calu checker set edit --instructions-file rules/edit.md   # from a file, without
 
 The web interface (Settings), the VSCode extension ("Checkers") and the full-screen client
 (`/checkers`, then `e` to edit and `ctrl+s` to save) edit the same text. Each of these ways
-needs the admin password or the `admin` credential, so that a session cannot change the rules
-that judge it.
+needs the user login, which Calu never gives to Claude, so that the agent cannot change the
+rules that judge it.
 
 A running session uses changed instructions from its next step.
 
@@ -1796,7 +1802,7 @@ without a path asks for one. The honesty menu of both IDEs has "Trust HEAD…", 
 branch…" and "Trust a file…". VSCode also offers "Trust This File as Honest" in the context
 menus of the explorer and the editor. Every trust asks for confirmation first.
 
-On the command line, with the `operator` or `admin` credential:
+On the command line, with the user login:
 
 ```bash
 calu honesty trust main --note "reviewed before the release"
@@ -2109,10 +2115,8 @@ calu traces finalize --staged       # the final pass over the staged files (the 
   finalize --staged`. For pre-commit: a `local` hook with `language: system`,
   `pass_filenames: false` and `always_run: true`.
 - The hook needs no running session. It reads nothing and needs no login when the staged
-  trace files have no new part. Otherwise it reads the project's settings with the first login
-  it finds: the one of `sudo calu setup --no-password`, a `calu_admin` entry stored without a
-  password, or the `operator` or `admin` credential. It asks for a password only on a
-  terminal.
+  trace files have no new part. Otherwise it reads the project's settings with the user login.
+  It asks for the user password only on a terminal.
 - The hook refuses the commit when it cannot read the settings or reach the redaction
   agent: run `calu traces finalize --staged` in a terminal and commit again.
 - `git commit --no-verify` skips the hook and commits the trace files as the per-block
@@ -2390,7 +2394,7 @@ calu list-sessions 20     # the last 20
 - A conversation appears in the list once it has its first message, even when it was stopped
   during its first turn. A fork appears when it starts. Until the fork has a message of its
   own, the list shows the last message of the conversation it copied.
-- The command reads the database with the `operator` or `admin` credential. `calu sessions`
+- The command reads the database with the user login. `calu sessions`
   lists the sessions of every directory, host and user.
 
 **Continue.**
@@ -2446,7 +2450,7 @@ commands that watch all sessions of all machines. Read it when you run more than
 
 ### Calu serve and Calu start
 
-`calu serve` asks for the session password once and then runs as many sessions as you ask
+`calu serve` asks for the user password once and then runs as many sessions as you ask
 for, in its projects directory and the directories below it, until you stop it.
 
 ```bash
@@ -2474,9 +2478,8 @@ calu start ~/src/other --no-attach      # another directory; attach later
   `--prompt-file`, `--fork-before-turn`, `--model`, `--effort`). It waits until the session
   runs, prints its Claude session id and attaches the terminal client (`--plain` and a pipe
   get the line client).
-- **No password per session.** The server holds the session login. `calu start` uses the
-  `operator` credential, as `calu attach` does. When that credential is stored without a
-  password (`calu credential set operator --no-password`), `calu start` asks for no password.
+- **No password per session.** The server holds the user login. `calu start` uses the user
+  login as well, as `calu attach` does, and asks for the user password unless it is empty.
 - **The request travels through the database.** The server offers no socket of its own for such
   requests. A database login that may write the request table is therefore required to start a
   session, and Claude Code has none: a running session cannot ask for another one.
@@ -2625,7 +2628,7 @@ therefore goes through the database or through SSH.
 
 | Way | You run on your machine | You get |
 |---|---|---|
-| A. The database | `calu sessions`, `calu escalations`, `calu resolve` with an `operator` credential | lists and decisions for the whole herd; no live stream |
+| A. The database | `calu sessions`, `calu escalations`, `calu resolve` with the user login | lists and decisions for the whole herd; no live stream |
 | B. The client on the server | `ssh -t the-host`, then `calu attach` in the project | everything, with the server's credentials |
 | C. The server's web interface | `ssh -N -L 8800:127.0.0.1:8800 the-host`, then the address `calu web` printed there | every session of that machine, live, through one tunnel |
 | D. A local client through the relay | `ssh -N -L <port>:127.0.0.1:<port> the-host` with the relay port, then `calu attach ws://127.0.0.1:<port>` with a server token | every session of that `calu serve` through one forward; no Calu setup on your machine |
@@ -2635,17 +2638,16 @@ therefore goes through the database or through SSH.
 ### A. Through the database
 
 The commands of [Deciding a step](#from-the-command-line-with-only-the-database) need only a
-reachable PostgreSQL. This is the intended way to supervise a herd. Give the person who
-supervises an `operator` credential, not the `admin` one:
+reachable PostgreSQL. This is the intended way to supervise a herd. On your machine, store
+the user login of that database, as a connection string with the calu user password:
 
 ```bash
-calu credential new operator     # on the database machine; prints a connection string once
-calu credential set operator     # on the operator's machine; paste it there
-calu credential set operator --no-password   # optional: no password prompt per command
+calu credential set user     # paste postgresql://calu_admin:<user password>@db.example:5432/calu
 ```
 
-[Credentials and tokens](#credentials-and-tokens) describes the operator login's rights and
-the cost of `--no-password`.
+`calu credential set` then asks for a password to protect the entry on your machine (Enter
+for none). Everyone who has the user login can decide escalations and change settings: Calu has
+one login per database until per-user schemas exist.
 
 ### B. The client on the server
 
@@ -2667,9 +2669,8 @@ ssh -N -L 8800:127.0.0.1:8800 the-host      # on your machine; leave it open
 Then open the address that `calu web` printed on the server (`http://calu.localhost:8800/`).
 
 `calu web` can also run on your own machine. It then uses the server's database through a
-forwarded PostgreSQL port and an `operator` credential (`calu web --database operator` asks for
-the admin password of that database). Lists, history, escalations, triage and settings work as
-on the server. The live view of a session needs one more forwarded port: the session's own
+forwarded PostgreSQL port and the user login stored as above. Lists, history, escalations,
+triage and settings work as on the server. The live view of a session needs one more forwarded port: the session's own
 port, or, for a session of `calu serve`, the server's relay port. `calu web` mints the server
 token for the relay itself (labelled "calu web (live view)"), and the page names the `ssh -L`
 line to use.
@@ -2761,7 +2762,7 @@ curl -fsSL https://raw.githubusercontent.com/kadeng/calu/main/install.sh | sudo 
 ```
 
 ```bash
-sudo calu setup              # 2. root's credentials in /etc/calu
+sudo calu setup              # 2. the database and root's logins in /etc/calu (one user password)
 calu doctor --sudo .         # 3. check the arrangement; starts nothing
 calu login --sudo            # 4. only if Claude Code is not logged in for you yet
 calu serve --sudo            # 5. calu as root, Claude Code as you
@@ -2773,8 +2774,8 @@ calu web --sudo              #    the web interface runs as root; it reads and w
   password it requires.
 - Calu refuses `--sudo` when a non-root user can change Calu's files, because that user could
   then run code of their own as root. Step 1 installs Calu so that only root can change it.
-- The `operator` credential that `calu attach` and `calu start` use stays in your own
-  account.
+- Your own `calu attach` and `calu start` without `--sudo` log in with the user password you
+  type; root's logins stay in `/etc/calu`.
 
 ### As root directly: --user
 
@@ -2816,38 +2817,31 @@ ignores `XDG_CONFIG_HOME` and `XDG_STATE_HOME`.
 |---|---|
 | `calu attach --sudo`, `calu web --sudo` | none. They use the root-only Unix socket: the client checks that the socket and its directory are root's alone, and the session asks the kernel whether the peer is root. `calu attach --sudo` in the project directory finds its session through these sockets, without the database |
 | your own `calu attach` without `--sudo` | a token. This also applies to a session that runs Claude Code as you: every program that Claude Code starts runs as you too, and the kernel cannot tell your client from such a program |
-| the IDE extensions (`calu ide` runs as you) | the admin password, asked in a dialog at the first action that needs the database (attaching, a new session, the settings) and kept in the memory of the editor window's bridge until the window closes. Never written to a file. After `sudo calu setup --no-password` nothing is asked |
+| the IDE extensions (`calu ide` runs as you) | the calu user password, asked in a dialog at the first action that needs the database (attaching, a new session, the settings) and kept in the memory of the editor window's bridge until the window closes. Never written to a file. With an empty user password nothing is asked |
 
 - **One password per client run.** The full-screen client of `calu attach --sudo` and `calu
-  start --sudo` asks for the admin password at most once, before it starts, and keeps the
-  database login it needs in memory until it ends. `/running`, `/switch`, `/new`, `/fork`,
-  `/rename`, saving a checker's instructions, changing `honesty.mode`, and minting and revoking
-  the client's tokens then ask for no password. The login is never written to a file and never
-  given to Claude Code or to a program the client starts (the editor, the git program).
-- Which login the client keeps: the role `calu_admin` with the admin password you typed, where
-  the database accepts it (every `sudo calu setup` with a typed admin password sets it). With a
-  blank admin password, which PostgreSQL does not accept for a login, the client keeps the
-  owner login that the password opened in `/etc/calu`. Each command then uses only the
-  privileges it needs: listing and requesting sessions and the tokens as `calu_operator`,
-  settings as `calu_admin`.
+  start --sudo` asks for the user password at most once, before it starts, and keeps the user
+  login in memory until it ends. `/running`, `/switch`, `/new`, `/fork`, `/rename`, saving a
+  checker's instructions, changing `honesty.mode`, and minting and revoking the client's tokens
+  then ask for no password. The login is never written to a file and never given to Claude
+  Code or to a program the client starts (the editor, the git program).
 - When it asks: `calu start --sudo`, and `calu attach --sudo` for a session that it finds only
-  in the database, ask for the password of the `admin` credential in `/etc/calu` to find the
-  session, and that one answer is the only one. `calu attach --sudo` that finds its session
-  through a root-only socket asks for the admin password once before the client starts. Ctrl-D
-  at that prompt skips it; the client then attaches and says that these commands are not
-  available. After three passwords that open nothing it does the same.
-- It asks nothing after `sudo calu setup --no-password`: it then takes the `calu_admin` entry
-  without a password in `/etc/calu`, or the login in `/var/lib/calu/database.json`. The line
-  client (`--plain`) asks no admin password either.
-- Your own `calu attach` without `--sudo` keeps no password: it asks for the admin password at
+  in the database, ask for the user password to open the `user` entry in `/etc/calu`, and that
+  one answer is the only one. `calu attach --sudo` that finds its session through a root-only
+  socket asks for it once before the client starts. Ctrl-D at that prompt skips it; the client
+  then attaches and says that these commands are not available. After three passwords that
+  open nothing it does the same, with a pointer to [a forgotten user
+  password](#a-forgotten-user-password).
+- It asks nothing with an empty user password. The line client (`--plain`) asks no password
+  either.
+- Your own `calu attach` without `--sudo` keeps no password: it asks for the user password at
   each of these commands, because every program that Claude Code starts as you could read it
   from that process.
 - No program that Claude Code starts can read or steer a client that runs as root. The
   client's editor and git program still run as you.
-- A client that found a root session through a socket learns the database from an entry
-  without a password in root's store. Without such an entry it reads `/var/lib/calu/database.json`
-  (after checking that only root can write it) and logs in there with the admin password you
-  type. Until `sudo calu setup` has run once after an update, such a client says that it does
+- A client that found a root session through a socket and runs as you reads
+  `/var/lib/calu/database.json` (after checking that only root can write it) and logs in there
+  with the user password you type. Until `sudo calu setup` has run once after an update, such a client says that it does
   not know the database.
 
 **`--secure` and `--insecure`** (on `calu run` and `calu serve`)
@@ -2876,58 +2870,44 @@ sudo does not pass on.
 
 ### Changing settings from your own account
 
-A user without root can change settings with the admin password. `calu setup` gives the
-database role `calu_admin` the admin password you chose.
+A user without root can change settings with the calu user password: `calu setup` gives the
+database role `calu_admin` that password, so a command in your own account logs in where
+`/var/lib/calu/database.json` says, with the password you type.
 
-- With only an `operator` credential in your own store, `calu config`, `calu checker`, `calu
-  rules`, `calu honesty` and `calu web` ask for the admin password and log in as that role. The
-  full-screen client does the same when you save a checker's instructions or change
-  `honesty.mode`. You type the password each time, and Calu stores it nowhere.
+- `calu config`, `calu checker`, `calu rules`, `calu honesty` and `calu web` ask for the user
+  password and log in as that role. The full-screen client does the same when you save a
+  checker's instructions or change `honesty.mode`. You type the password each time, and Calu
+  stores it nowhere.
 - Before such a command changes anything it prints the target on stderr: `changing settings
   in db.example:5432/calu as calu_admin`.
 - The role changes settings and reads everything. It cannot change the schema or create
   logins.
-- After an upgrade, run `sudo calu setup` once so that the role gets its password.
 
 Calu chooses the database in this order:
 
 ```
-1. the login in /var/lib/calu/database.json        (sudo calu setup --no-password)
-2. a calu_admin entry of your store that needs no password
-3. your admin or operator entry
-```
-
-If your store holds both `admin` and `operator` and they name different databases, the
-command changes nothing, prints both, and asks you to repeat it with `--database`:
-
-```bash
-calu config set claude.model claude-sonnet-4-5 --database operator
+1. the login in /var/lib/calu/database.json        (an empty user password, sudo calu setup)
+2. the user entry of your own store
+3. /var/lib/calu/database.json without a password  (the user password is asked)
 ```
 
 ### Without passwords
 
-`sudo calu setup --no-password` is for a machine that is yours alone.
+`sudo calu setup --no-password` (an empty user password) is for a machine that is yours alone.
 
 | Aspect | Effect |
 |---|---|
 | Logins in `/etc/calu` | stored without encryption; only the file mode protects them (only root can read the directory) |
-| The role that changes settings | gets a generated password, stored the same way **and** written to `/var/lib/calu/database.json`, which every user and program of the machine can read |
-| Prompts | `calu run --sudo`, `calu serve --sudo`, `calu attach --sudo` and `calu web --sudo` ask for no Calu password; `calu web --sudo` prints its address with a token; your plain `calu attach` saves settings without a password |
+| The user login | `calu_admin` gets a generated password, stored the same way **and** written to `/var/lib/calu/database.json`, which every user and program of the machine can read |
+| Prompts | `calu run --sudo`, `calu serve --sudo`, `calu attach --sudo` and `calu web --sudo` ask for no password; `calu web --sudo` prints its address with a token; your plain `calu attach` saves settings without a password |
 | **Security** | **deliberately weak: every program on the machine, including a command of Claude Code, can read the login that changes the checkers. Only the checkers' judgement of a command then keeps Claude Code from changing the checkers** |
 
-- Calu converts an existing setup and asks for its passwords one last time.
-- `sudo calu setup` without the option withdraws the login that was published in
-  `/var/lib/calu/database.json`: the role gets a new generated password, which Calu keeps in
-  `/etc/calu` only. The logins in `/etc/calu` stay stored without a password, and nobody knows
-  an admin password then, so a client that is not root cannot change settings.
-- `sudo calu setup --set-passwords` restores passwords that you type: it asks for a new admin
-  and a new session password, encrypts the two stored logins with them, and gives the role that
-  changes settings the admin password. Running sessions continue. The same option changes the
-  passwords of a setup that has them (Calu asks for the old ones first).
-- Do not use `--no-password` in your own account unless you accept that every program running
-  as you, Claude Code's commands included, can read the logins. In your own account, starting a
-  session needs the session password in any case: `calu run` accepts a session login without a
-  password only from a store that root alone can write.
+- `sudo calu setup --set-password` puts a password back: it encrypts the stored logins with
+  it, gives `calu_admin` that password and removes the login from
+  `/var/lib/calu/database.json`. A running `calu serve --sudo` keeps its connection until it
+  drops; restart it.
+- Do not use an empty user password in your own account unless you accept that every program
+  running as you, Claude Code's commands included, can use the login.
 
 ### Checks, stopping and known limits
 
@@ -3110,8 +3090,10 @@ traceback is in the log file that the line names: `~/.local/state/calu/log/run.l
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| A command asks for a password every time | the credential is stored with a password | for `operator`: `calu credential set operator --no-password` |
-| `calu acp` stops and names a password | the adapter cannot prompt | the same |
+| A command asks for a password every time | the user login has a password | that is its purpose; `calu setup --set-password` with an empty answer removes it (then every program that runs as you can use the login) |
+| `calu acp` stops and names a password | the adapter cannot prompt | give it the address and `--token`, or use an empty user password |
+| "The database ... refused the stored calu login: it is outdated" | a later `calu setup --set-password` (here or on another machine) changed the password, or the database was set up again | `calu setup` renews the stored login; on a machine that only has `user`, `calu credential set user` with the new login |
+| "This machine still has the logins of an earlier calu" | a store from before the one user login | `calu setup` once |
 | The browser cannot open `calu.localhost` | the browser does not resolve `*.localhost` | add `127.0.0.1 calu.localhost` to the hosts file |
 | The web page says that a new sign-in is needed | `calu web` was restarted; a login lasts until it stops | sign in again |
 | "connection lost, try N" in a terminal client | the tunnel or the network is gone | open the tunnel again; the client continues |
@@ -3129,46 +3111,47 @@ traceback is in the log file that the line names: `~/.local/state/calu/log/run.l
 
 ## Commands
 
-This section lists every `calu` command with its purpose and the credential it uses.
+This section lists every `calu` command with its purpose and the login it uses (`user`: the user login, asking the user password
+unless it is empty; `db-admin`: the database owner's login, the same password).
 `calu <command> --help` prints the options.
 
 **Sessions**
 
-| Command | Purpose | Credential |
+| Command | Purpose | Login |
 |---|---|---|
-| `calu run [DIR]` | one checked session in the foreground | session password |
-| `calu serve` | a server that runs many sessions | session password, once |
-| `calu start [DIR]` | ask the running `calu serve` for a session and attach | operator |
-| `calu attach [ADDRESS]` | terminal client of a running session | operator, or a token |
-| `calu list-sessions [N]` | the last conversations of this directory, to resume or fork | operator |
+| `calu run [DIR]` | one checked session in the foreground | user |
+| `calu serve` | a server that runs many sessions | user, once |
+| `calu start [DIR]` | ask the running `calu serve` for a session and attach | user |
+| `calu attach [ADDRESS]` | terminal client of a running session | user, or a token |
+| `calu list-sessions [N]` | the last conversations of this directory, to resume or fork | user |
 | `calu login` | Claude Code's own login for the user it runs as | - |
 
 **The herd (database only)**
 
-| Command | Purpose | Credential |
+| Command | Purpose | Login |
 |---|---|---|
-| `calu sessions` | the sessions of all hosts | operator |
-| `calu escalations` | the open escalations | operator |
-| `calu escalation ID` | one escalation with everything needed to decide it | operator |
-| `calu resolve ID allow\|deny\|answer\|cancel` | decide one | operator |
-| `calu token mint\|list\|revoke` | client tokens and server tokens | operator |
-| `calu web` | the web interface on 127.0.0.1 | admin password in the browser |
+| `calu sessions` | the sessions of all hosts | user |
+| `calu escalations` | the open escalations | user |
+| `calu escalation ID` | one escalation with everything needed to decide it | user |
+| `calu resolve ID allow\|deny\|answer\|cancel` | decide one | user |
+| `calu token mint\|list\|revoke` | client tokens and server tokens | user |
+| `calu web` | the web interface on 127.0.0.1 | user password in the browser |
 
 **Steering the checkers**
 
-| Command | Purpose | Credential |
+| Command | Purpose | Login |
 |---|---|---|
-| `calu checker list\|show\|edit\|set\|diff\|update` | checker definitions: instructions, model, limits, enabled | admin |
-| `calu checker template list\|show\|use` | the templates of checker instructions shipped with Calu; `use` loads one into a checker | none for `list` and `show`; admin for `use` |
-| `calu checker stats`, `calu checker misses` | the checkers' track record | operator |
-| `calu rules list\|add\|edit\|remove\|enable\|disable\|add-set` | the allow and deny lists | admin |
-| `calu config list\|get\|set\|unset\|add\|remove\|models` | settings, global or per project (`--project`) | admin |
-| `calu project add\|list\|network` | register a project; its network policy | admin |
-| `calu honesty show\|edit\|reset` | the honesty rules | admin |
-| `calu honesty trust\|untrust\|trusted\|prune` | trusted commits and files | operator or admin |
-| `calu summary SESSION [--edit]` | the chat summary the checkers read | admin |
-| `calu evals [FILES]` | measure the checkers against labelled cases | operator |
-| `calu traces instructions\|finalize\|hook` | session traces | admin for instructions |
+| `calu checker list\|show\|edit\|set\|diff\|update` | checker definitions: instructions, model, limits, enabled | user |
+| `calu checker template list\|show\|use` | the templates of checker instructions shipped with Calu; `use` loads one into a checker | none for `list` and `show`; user for `use` |
+| `calu checker stats`, `calu checker misses` | the checkers' track record | user |
+| `calu rules list\|add\|edit\|remove\|enable\|disable\|add-set` | the allow and deny lists | user |
+| `calu config list\|get\|set\|unset\|add\|remove\|models` | settings, global or per project (`--project`) | user |
+| `calu project add\|list\|network` | register a project; its network policy | user |
+| `calu honesty show\|edit\|reset` | the honesty rules | user |
+| `calu honesty trust\|untrust\|trusted\|prune` | trusted commits and files | user |
+| `calu summary SESSION [--edit]` | the chat summary the checkers read | user |
+| `calu evals [FILES]` | measure the checkers against labelled cases | user |
+| `calu traces instructions\|finalize\|hook` | session traces | user for instructions |
 
 **Installation**
 
@@ -3177,7 +3160,7 @@ This section lists every `calu` command with its purpose and the credential it u
 | `calu setup` | choose the database, migrate, create the logins, load the default checkers |
 | `calu doctor [DIR]` | report what is in place and what a session would miss |
 | `calu db up\|down\|migrate\|reset` | the local database and schema migrations |
-| `calu credential list\|set\|remove\|new` | the encrypted credential store |
+| `calu credential list\|set\|remove` | the encrypted credential store |
 
 **For programs**
 
@@ -3187,9 +3170,8 @@ This section lists every `calu` command with its purpose and the credential it u
 | `calu ide` | the bridge the IDE extensions start (stdin/stdout) |
 | `calu protocol` | print the JSON Schema of the client protocol |
 
-A command asks for Calu's password at most once. When its credential is protected by a
-password, `calu attach` asks for the password once, to find the session. It does not ask again
-at its end, when it would need the credential to revoke its client token. It reports that it
+A command asks for the user password at most once. When it is needed, `calu attach` asks for the password once, to find the session. It does not ask again
+at its end, when it would need the login to revoke its client token. It reports that it
 left the token unrevoked. Only that client knew the token, and the token ends with its session
 (`calu token revoke <id>` revokes it at once).
 
@@ -3210,7 +3192,7 @@ for Claude. A `/word` that Calu does not know goes to Claude Code as typed.
 | `/answer <id> TEXT` | answer a question Claude asked (line client) |
 | `/why <id>` | the checker's full input and answer for that step: its verdict, the step as it rendered it, the file before the change, the conversation as the checkers read it |
 | `/mode [default \| acceptEdits \| auto]` | Claude Code's permission mode. Without an argument the full-screen client opens a list of the modes to choose from, with the current one marked; the line client prints the current mode |
-| `/checkers` | the checker definitions (line client: name, model, version; full-screen: read the instructions, `e` edits, `ctrl+s` saves with the admin credential) |
+| `/checkers` | the checker definitions (line client: name, model, version; full-screen: read the instructions, `e` edits, `ctrl+s` saves with the user login) |
 | `/checker-context` | the conversation as the checkers read it |
 | `/usage` | the usage panel |
 | `/honesty`, `/trust [commit or branch]`, `/trust-file <path>`, `/honesty-review`, `/clear-mark <id>` | code honesty |
@@ -3237,7 +3219,7 @@ for Claude. A `/word` that Calu does not know goes to Claude Code as typed.
 |---|---|
 | `/model`, `/effort` | the model for the session; an effort applies at the next start |
 | `/level [name]` | the supervision level |
-| `/honesty off \| track \| enforce` | set `honesty.mode` (admin credential) |
+| `/honesty off \| track \| enforce` | set `honesty.mode` (user login) |
 | `/agent <part of a name>`, `ctrl+o`, `alt+←/→` | choose an agent |
 | `/btw <question>`, `f3` | a side question |
 | `/git`, `f4` | gitui in the project directory |
@@ -3249,7 +3231,7 @@ for Claude. A `/word` that Calu does not know goes to Claude Code as typed.
 | Tab | where the next message goes |
 
 - `/new`, `/fork`, `/rewind`, `/running`, `/switch`, `/rename` and saving a checker's
-  instructions use the `admin` credential of this machine (or the relay, where [From another
+  instructions use the user login of this machine (or the relay, where [From another
   machine](#d-a-local-client-through-the-relay) says so).
 - `f4` starts gitui. `CALU_GIT_TOOL` (a command line) or `git_tool` in
   `~/.config/calu/tui.toml` name another program. When gitui is not installed, the client
@@ -3384,12 +3366,12 @@ the option the stored value stays.
 | on | a session refuses to start without `bubblewrap` and `socat` (`claude.sandbox.fail_if_unavailable`; `false` turns the refusal into a warning) |
 | off | neither program is needed. Only the checkers and the deny lists stand between Claude's commands and the machine, and the commands run with the rights of the user Claude Code runs as |
 
-**With the sandbox off**, protect the logins with passwords (the default of `calu setup`; `calu
-setup --set-passwords` restores them after `--no-password`) or run Calu with `--sudo` ([Calu as
+**With the sandbox off**, protect the logins with a user password (the default of `calu setup`;
+`calu setup --set-password` puts one back after `--no-password`) or run Calu with `--sudo` ([Calu as
 root](#calu-as-root-claude-code-as-another-user)), or both. While the sandbox is off, `calu
 setup`, every session start and `calu doctor --db` print a warning. They print none when two
 conditions hold. First, Calu runs as root and Claude Code as another user, or every entry of
-the credential store has a password. Second, `/var/lib/calu/database.json` publishes no admin
+the credential store has a password. Second, `/var/lib/calu/database.json` publishes no user
 login. Calu also warns when it cannot determine one of these facts.
 
 ### File access
@@ -3482,47 +3464,72 @@ source changes them.
 
 ## Credentials and tokens
 
-This section describes the three database logins, the encrypted credential store, and the
-tokens that clients show to sessions and servers.
+This section describes Calu's login, the encrypted credential store, and the tokens that
+clients show to sessions and servers.
 
-### The three logins
+### The calu login and the user password
 
-| Credential | Database role | May | Used by |
-|---|---|---|---|
-| `session` | `calu_session` | read the configuration; write its own session's rows only | `calu run`, `calu serve` |
-| `operator` | `calu_operator` | read every table, resolve escalations, mint and revoke tokens, file session requests. It cannot change a rule, a checker's instructions or a setting | `calu sessions`, `calu escalations`, `calu escalation`, `calu resolve`, `calu token`, `calu evals`, `calu attach`, `calu start`, `calu acp`; these fall back to `admin` when no `operator` is stored |
-| `admin` | the database owner, or `calu_admin` | change settings, instructions and rules; the owner also migrates and creates roles | `calu config`, `calu checker`, `calu rules`, `calu honesty`, `calu setup`, `calu db`, `calu web` |
+Calu has one login per person, the **user login**, and keeps the database owner's login for
+migrations:
 
-A session's login reaches only its own rows, so one session cannot rewrite another session's
-history.
+| Credential | Database role | Used by |
+|---|---|---|
+| `user` | `calu_admin` | every command that works with the database: `calu run`, `calu serve`, `calu start`, `calu attach`, `calu sessions`, `calu escalations`, `calu resolve`, `calu token`, `calu config`, `calu checker`, `calu rules`, `calu honesty`, `calu evals`, `calu web`, the IDE extensions |
+| `db-admin` | the database owner (`calu_owner` for the local database, the database user you gave for a server) | `calu setup`, `calu db migrate`, `calu db reset`, `calu db up` |
+
+- One password protects both, the **calu user password**, chosen at `calu setup`. The role
+  `calu_admin` logs in with the same password, so a browser, an IDE or a client in another
+  account that knows only where the database is signs in with it.
+- An **empty** user password means Calu never asks for one: both entries are stored protected
+  by the file's mode alone, and `calu_admin` gets a generated password. Every program that
+  runs as you can then use the login (see "Protection from Claude" below).
+- `calu setup --set-password` chooses a new password (an empty answer removes it). A running
+  `calu serve` or `calu web` keeps working until its connection drops; restart it afterwards.
+- A store from a Calu before this change holds `admin`, `session` and `operator`. `calu
+  setup` converts it once: it asks the earlier admin password, offers to keep it as the user
+  password, and removes the old entries. Other commands on such a store tell you to run
+  `calu setup`.
+
+**When Calu asks.**
+
+| Situation | What Calu says and does |
+|---|---|
+| a command needs the login | `calu user password:`; three tries, each wrong answer says how many are left |
+| a wrong password, the last try | "Not done: that is not the calu user password", with a pointer to [a forgotten user password](#a-forgotten-user-password) |
+| Enter on an empty prompt | "No password was typed, and this login has one" (an empty answer is never taken for a real empty password, which is never asked) |
+| Ctrl-D, Escape, a closed dialog | "Not done: no password was entered", and how to retry |
+| no terminal to ask on (`calu acp`, a script) | why Calu cannot ask, and the two ways out: give the password where the front end asks for it, or remove it |
+| the database refuses a stored login | the login is outdated (a later setup changed its password, or the database was set up again); `calu setup` renews it |
+
+### A forgotten user password
+
+The password encrypts the stored logins, so Calu cannot open them without it.
+
+- **A database another machine set up:** `calu credential remove user`, then `calu credential
+  set user` with the user login that machine's owner gives you.
+- **An existing server or RDS:** `calu credential remove user` and `calu credential remove
+  db-admin`, then `calu setup --database server` (or `rds-iam`) with the database user's own
+  login. It sets a new user password; nothing in the database is lost.
+- **Calu's local database:** its owner has a generated password that only the `db-admin`
+  entry holds, and the container accepts no login without a password (not even from inside),
+  so Calu's commands cannot reach the data any more. Start over: `calu db down`, move the
+  data directory away, `calu credential remove user`, `calu credential remove db-admin`,
+  `calu setup`. (An administrator of the machine can still read the old data directory with
+  PostgreSQL's single-user mode.)
 
 ### The credential store
 
 - Calu keeps the logins in `~/.config/calu/credentials.json` (file mode 0600, directory
-  0700; as root `/etc/calu`). Each entry is encrypted under a password of its own (Argon2id,
-  AES-GCM), and each command that uses an entry asks for that password.
+  0700; as root `/etc/calu`), encrypted under the user password (Argon2id, AES-GCM).
 - The store also holds the database's location: host, login, and for the local database its
   port and directory. No unencrypted file describes the database.
 
 ```bash
 calu credential list
-calu credential new operator                 # on the database machine; prints a connection string once
-calu credential set operator                 # on the operator's machine; paste it there
-calu credential set operator --no-password   # store it protected by the file mode only
-calu credential remove operator
+calu credential set user                   # the user login of a database set up elsewhere
+calu credential set user --no-password     # the same, protected by the file mode only
+calu credential remove user
 ```
-
-**`--no-password`**
-
-| Credential | Allowed | Consequence |
-|---|---|---|
-| `operator` | yes | the commands that read the database and resolve escalations ask for no password. Everyone and everything that can read the file can use the credential: another process of your user, a backup, a synchronised dotfile directory |
-| `session` | refused in your own account | starting a session is protected by a password by design; `calu run` asks for it once per session |
-| `admin` | possible | `calu doctor` reports it as a problem, because `admin` owns the schema |
-
-- `calu credential set operator` without the switch puts a password back.
-- Running `calu credential new operator` again replaces the password. Every copy of the
-  credential that was handed out before then stops working.
 
 **Protection from Claude.** Claude runs as your user in the default arrangement, so Calu
 keeps the store from it in two ways:
@@ -3603,14 +3610,14 @@ answer in the encrypted credential store. In a script, options select the varian
 ```bash
 calu setup                                             # asks
 calu setup --database docker --data-dir /srv/calu/db --port 5433
-calu setup --database server --host db.example.org --dbname calu --user calu_admin
-calu setup --database rds-iam --host calu.abc.eu-central-1.rds.amazonaws.com --user calu_admin --aws-profile calu --sslrootcert global-bundle.pem
+calu setup --database server --host db.example.org --dbname calu --user calu_owner
+calu setup --database rds-iam --host calu.abc.eu-central-1.rds.amazonaws.com --user calu_owner --aws-profile calu --sslrootcert global-bundle.pem
 calu setup --database docker --no-sandbox    # no bubblewrap here; warns unless the logins are protected
 ```
 
 Calu never takes a password as a command-line option. It asks for the passwords without echo on
-a terminal, or reads them as lines from standard input, in this order: the database password
-(existing server only), the new admin password twice, the new session password twice.
+a terminal, or reads them as lines from standard input, in this order: the database user's
+password (existing server only), then the new user password twice (none with `--no-password`).
 
 | Variant | Use it when | You need |
 |---|---|---|
@@ -3624,7 +3631,7 @@ a terminal, or reads them as lines from standard input, in this order: the datab
   directory you name (default `~/.local/state/calu/db`). The directory is private to you;
   the cluster's files inside belong to the container's own user.
 - **You never have to start it.** `calu run` and every other command that needs the database
-  start the container when it does not answer (`calu run` does so after you typed the session
+  start the container when it does not answer (`calu run` does so after you typed the user
   password, because the database's location is stored inside the encrypted credential entry).
 - `calu db down` stops it and `calu db up` starts it by hand. A session that is running while
   the database is stopped waits for it and does not start it.
@@ -3638,15 +3645,16 @@ a terminal, or reads them as lines from standard input, in this order: the datab
 
 ### 2. A PostgreSQL server that exists already
 
-Calu asks for host, port, database, user and password. That user becomes the owner login of
-Calu's database: it creates the tables and the roles `calu_session` and `calu_operator`. `calu
-run` never uses that login.
+Calu asks for host, port, database, and a database user with its password. That user
+administers Calu's database: it creates the tables and Calu's role `calu_admin`, the user
+login. Calu keeps its login as `db-admin`, protected by the user password, for later
+migrations; sessions never use it.
 
 An administrator prepares the server once:
 
 ```sql
-CREATE ROLE calu_admin LOGIN CREATEROLE PASSWORD '...';
-CREATE DATABASE calu OWNER calu_admin;
+CREATE ROLE calu_owner LOGIN CREATEROLE PASSWORD '...';
+CREATE DATABASE calu OWNER calu_owner;
 ```
 
 Before setup stores or changes anything, it connects, checks the requirements, and prints
@@ -3656,14 +3664,13 @@ the missing ones together with the SQL for an administrator:
 |---|---|
 | a database of its own | Calu creates none and refuses one that holds other tables |
 | the right to create tables in it | the user owns the database |
-| the right to create roles (`CREATEROLE`) | from PostgreSQL 16 on, if the two roles exist already (another Calu database on the server), they must be granted to the user with the admin option. No superuser is needed |
+| the right to create roles (`CREATEROLE`) | from PostgreSQL 16 on, if Calu's roles (`calu_admin`, `calu_operator`, `calu_session`) exist already (another Calu database on the server), they must be granted to the user with the admin option. No superuser is needed |
 
 - For a server on another host the connection is encrypted (`sslmode=require`). `--sslmode
   verify-full --sslrootcert FILE` also verifies the server's certificate. `--sslmode disable`
   switches encryption off and says so.
-- The two roles belong to the whole server. A second Calu database on the same server shares
-  them, and setup refuses to replace an existing session login unless you pass
-  `--renew-session`.
+- Calu's roles belong to the whole server. A second Calu database on the same server shares
+  them, and with them the user login's password: the last `calu setup` sets it.
 - A connection pooler in transaction mode is not supported: a session needs its own
   long-lived connections.
 
@@ -3674,19 +3681,19 @@ the missing ones together with the SQL for an administrator:
 No database password exists. At every connection Calu has the AWS SDK sign a login token (valid
 for 15 minutes for new logins) with the AWS profile you name, and sends it over a verified TLS
 connection (`verify-full` with the CA bundle from AWS, which setup copies next to its
-credential store). By default the session login uses tokens too, so a running session can get
-new tokens for reconnects; `--session-auth password` gives it a generated password instead.
+credential store). Only the owner login uses tokens; the user login (`calu_admin`) logs in with
+the user password, so sessions need no AWS credential.
 
 An administrator prepares the instance once:
 
 ```sql
-CREATE ROLE calu_admin LOGIN CREATEROLE;
-GRANT rds_iam TO calu_admin WITH ADMIN OPTION;   -- it passes rds_iam on to calu_session
-CREATE DATABASE calu OWNER calu_admin;
+CREATE ROLE calu_owner LOGIN CREATEROLE;
+GRANT rds_iam TO calu_owner;
+CREATE DATABASE calu OWNER calu_owner;
 ```
 
 The administrator also creates an IAM policy that allows `rds-db:connect` for the database
-users `calu_admin` and `calu_session`.
+user `calu_owner`.
 
 **Protection in this variant.** The AWS policy and access to that AWS profile on the machine
 decide who may log in; there is no password that only Calu holds. While Calu and Claude Code
@@ -3695,11 +3702,11 @@ run as the same OS user, only the sandbox's read deny list keeps Claude's comman
 
 ### A second machine
 
-A second machine that should start sessions against the same database needs the session login.
-At present the only way is to run `calu setup --renew-session` on the second machine. That
-command replaces the session login for every machine, so a session that is still running
-elsewhere ends at its next reconnect. Machines that only watch and decide need the `operator`
-credential ([From another machine](#a-through-the-database)).
+A second machine that should start sessions against the same database, or only watch and
+decide, needs the user login: `calu credential set user` with
+`postgresql://calu_admin:<user password>@<host>:<port>/calu` ([From another
+machine](#a-through-the-database)). For migrations from that machine, `calu credential set
+db-admin` with the database user's login as well.
 
 ### An unreachable database
 
@@ -3812,7 +3819,7 @@ is a language model that reads a step, and a model can be wrong.
 
 | Threat | Mechanism | Limit |
 |---|---|---|
-| Claude changes the rules it is judged by | instructions, rules and settings are database rows that the session's login may only read; the admin login needs a password Claude never has | weak when you chose `--no-password` |
+| Claude changes the rules it is judged by | instructions, rules and settings are database rows; the user login that changes them is never in Claude's environment and needs the user password, which Claude never has | weak with an empty user password (`--no-password`) and the sandbox off |
 | Claude reads Calu's credentials or checker keys | the sandbox hides Calu's directories; a built-in rule escalates commands that name them or run `calu`; the keys are blanked in Claude Code's environment; in the root arrangement the operating system separates the users | with the sandbox off and one shared user, only the rule and the passwords remain |
 | Claude approves its own steps | a client needs a token; requests for new sessions need a database login | `--insecure` deliberately removes this protection |
 | Text in the conversation instructs a checker (prompt injection) | Claude's words reach the checkers only narrated; tool output and file content reach them fenced and labelled as data; the permissive test triggers count only in the user's own messages | a model can still be misled |
@@ -3930,9 +3937,11 @@ calu db migrate               # new schema versions (`calu setup` applies them t
 - **Stop the running sessions before a migration.** One migration changed the way a session
   proves its identity to the database; a session that runs across it loses access to its
   rows and stops.
-- `calu setup` run again applies new migrations and keeps both logins. `calu setup
-  --renew-session` replaces the session login; a session that is still running then ends at
-  its next reconnect.
+- `calu setup` run again applies new migrations and keeps the logins. `calu setup
+  --set-password` changes the user password; a running `calu serve` then needs a restart.
+- The upgrade to the one user login (migration 43) takes the logins of `calu_session` and
+  `calu_operator`: run `calu setup` once afterwards, which converts the stored logins, and
+  restart `calu serve`.
 - In the root arrangement, run `sudo calu setup` once after an upgrade.
 - `calu setup` reports shipped checker instructions that are out of date
   ([updates](#updates-of-the-shipped-instructions)).
@@ -3941,7 +3950,8 @@ calu db migrate               # new schema versions (`calu setup` applies them t
 that a fresh `calu setup` produces. Sessions, steps, escalations, projects, rules, checker
 instructions and all settings are gone. The stored credentials keep working.
 
-- It asks for the admin password and then for the phrase `yes delete the db`, typed by hand.
+- It asks for the user password (none if it is empty) and then for the phrase `yes delete the
+  db`, typed by hand.
   A phrase that arrives in under two seconds (a pipe, a paste, an automatic answer) is
   refused.
 - Stop running sessions first; they lose their rows.

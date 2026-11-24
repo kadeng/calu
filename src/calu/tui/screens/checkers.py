@@ -13,7 +13,7 @@
 
 Reading goes through the session (`checkers.get`): the list shows what the session judges
 with. Writing does not: a session cannot change what it is judged by. `e` opens the
-instructions in an editor, and saving stores them with the `admin` credential of this machine
+instructions in an editor, and saving stores them with this machine's `user` login
 (`calu.tui.adminaccess.AdminAccess`), as `calu checker edit` does; the screen asks for the
 credential's password if it has one. Without the credential the screen only reads and says
 which command changes the instructions. A running session uses saved instructions from its
@@ -320,7 +320,7 @@ class CheckersScreen(Screen[None]):
     def edit(self) -> None:
         """Open the selected checker's instructions in the editor.
 
-        Without the `admin` credential nothing opens and the message line says how the
+        Without the `user` login nothing opens and the message line says how the
         instructions are changed instead. The version the text was read at is kept, so that
         the save can tell whether somebody changed the checker meanwhile.
         """
@@ -435,7 +435,7 @@ class CheckersScreen(Screen[None]):
                 reads = f"version {seen.get('version')}" if seen is not None else "no such checker"
                 self.message = (
                     f"stored as version {saved.version} in the database of this machine's "
-                    f"admin credential, but the attached session reads {reads} with other "
+                    f"calu login, but the attached session reads {reads} with other "
                     "instructions: it uses another database, or has not read the change"
                 )
                 self.message_error = True

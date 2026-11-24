@@ -122,7 +122,7 @@ export type WebviewMessage =
   | { type: 'itemAction'; toolUseId: string; action: ItemActionId }
   /** Show the extension's log (the "calu" output channel). */
   | { type: 'showLog' }
-  /** Ask the one calu password now (the "Unlock" button of the locked state). */
+  /** Ask the calu user password now (the "Unlock" button of the locked state). */
   | { type: 'unlock' }
   /**
    * Undo: after a confirmation, start a new session that continues the conversation from before

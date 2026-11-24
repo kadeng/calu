@@ -66,10 +66,11 @@ Notifications from the bridge:
 | `ide.link` | `{state: "attached"/"reconnecting"/"lost", message}`: the connection to the session; "lost" also carries `cause`: "unreachable" (nothing answers at the address: the session or its server stopped, or the network is down), "revoked" (close code 4001), "refused" (the session refused the connection), "closed" (connections stood but were closed again and again). After "unreachable" with no server running the VSCode extension says "The calu server stopped" (Start server, Retry); otherwise it offers to attach again |
 | `ide.log` | `{level, message}` |
 
-Credential rules (never a prompt): the shared login of the place file (`cli._shared_admin`),
-then a password-free `calu_admin`, `operator` or `admin` entry of the store; reading uses the
-narrowest that works, changing settings needs `calu_admin`/`admin`. With only password-protected
-entries: error -32010 and the `password` parameter.
+Credential rules (never a prompt; since D265 one login, the "user" login of the role
+`calu_admin`, serves reading and changing alike; `src/calu/ide/access.py`): a login held after
+`ide.unlock`, then root's place file, then the `user` entry of the store without a password.
+With a password-protected `user` entry: error -32010 with `data.needs` "user" and the
+`password` parameter.
 
 Reconnect: as `calu acp` (`acp/serve.py`): on close 4002 reconnect with `after_seq`; on
 another loss try again with backoff for 15 s while reporting `ide.link reconnecting`, then
@@ -231,8 +232,8 @@ decides where the table left it open:
 - **`password` on every request that reads the database**, not only on the changing ones:
   `ide.sessions`, `ide.attach`, `ide.start`, `ide.session.rename`, `ide.settings.get`,
   `ide.models.presets`, `ide.checker.get`. A store with only protected entries answers each
-  of them with -32010. For a change with only an `operator` entry stored, `data.needs` is
-  `"admin"` and `password` is the admin password (the login is `calu_admin`, nothing is stored).
+  of them with -32010. (Until D265 a change with only an `operator` entry stored asked the
+  admin password; since D265 `data.needs` is always `"user"`.)
 - **Error -32017** (new): no database credential is stored here, or the database cannot be
   reached or refuses. The message names the command that helps.
 - **`ide.attach`** takes two more optional parameters, `address` and `token`: an explicit
@@ -277,11 +278,10 @@ decides where the table left it open:
 - **Reconnect**: after close 4002 at once, otherwise with a growing wait (0.25 s to 2 s) for
   15 s; a revoked or refused token and four connections in a row without a new event end in
   `lost` at once. `session.call` waits up to 15 s while the bridge is connecting again.
-- **`ide.unlock` (section 8)**: in `unlocked`, a store entry has its name (`operator`, `admin`,
-  `calu_admin`) and the login of the role `calu_admin` with a typed password is called
-  `calu_admin role`. The password is tried as the role's password only while no login that
-  changes settings is available. An unlock that opens nothing is -32010 only while a login
-  is still missing; with reading and changing both available it returns the state.
+- **`ide.unlock` (section 8)**: since D265 `unlocked` is `[]` or `["user"]`, and `reading`
+  equals `changing` (one login does both). The password opens the `user` entry, or logs in as
+  `calu_admin` where only root's place file names the database. (Before D265 the entries
+  `operator`, `admin` and `calu_admin` were tried one by one.)
   `ide.status` has `unlocked` (the held names) next to `locked`. Every -32010 carries
   `data.unlocked`, also from a request that brought its own `password`.
 
@@ -313,19 +313,22 @@ showing the mode and state; its menu switches off / track / enforce through
 
 "By default, the extensions should require only one password on startup, maximum."
 
-- After `sudo calu setup --no-password`, or with password-free store entries, nothing is asked.
-- Otherwise the first request that needs a protected credential makes the extension ask ONE
-  password, once per bridge process. It is sent with `ide.unlock {password}`: the bridge tries
-  it on every protected entry it may need (`admin`, `operator`) and as the password of the role
-  `calu_admin`, keeps the logins that opened in memory until it exits, and answers
-  `{unlocked: [names], reading: bool, changing: bool}`. Later requests use the held logins and
-  carry no password. The `password` parameter per request stays for other clients.
-- Only if that one password does not cover changing settings (an `operator` entry with one
-  password and a different admin password) is a second one asked, at the moment a setting is
-  first changed, and then also kept by the bridge.
-- A wrong password is said so and asked again; Escape stops asking until the user starts an
-  action that needs it. Background requests (the session list, the status) never open a
-  prompt.
+- With an empty calu user password (`calu setup --no-password`, D265) nothing is asked.
+- Otherwise the first request that needs the database makes the extension ask the calu user
+  password ("calu user password (asked once)"), once per bridge process. It is sent with
+  `ide.unlock {password}`: the bridge opens the user login with it (the role `calu_admin`, D265),
+  keeps it in memory until it exits, and answers `{unlocked: ["user"], reading, changing}`
+  (both true). Later requests use the held login and carry no password. The `password`
+  parameter per request stays for other clients. There is no second password: the one login
+  reads and changes settings.
+- A wrong password is said so (the bridge's message and the tries left in front of the
+  prompt, e.g. "That is not the calu user password. Forgot it? ... (2 tries left) — calu user
+  password (asked once)") and asked again, three times per round. Escape stops
+  asking until the user starts an action that needs it; the waiting action fails with "Not
+  done: no password was given. The next action that needs the database asks again." After
+  three refused passwords it fails with "Not done: the password was refused 3 times. The next
+  action that needs the database asks again." Background requests (the session list, the
+  status) never open a prompt.
 - "Remember on this machine" (off by default, offered after the first successful unlock):
   the password is kept in VSCode's secret storage (the OS keychain) and sent with
   `ide.unlock` at start, so that nothing is asked at all. "calu: Forget stored password"
@@ -339,8 +342,8 @@ showing the mode and state; its menu switches off / track / enforce through
 - Nothing on the client side runs as root or calls sudo: the extension and `calu ide` run as
   the user. They reach a root server's sessions as that user: through the user-side socket of
   an `--insecure` session, or through the database with a minted token (the shared login after
-  `calu setup --no-password`, or the one password of section 8). They change settings through
-  the database as `calu_admin`, not through root's files.
+  `calu setup --no-password`, or the calu user password of section 8). They change settings
+  through the database as `calu_admin`, not through root's files.
 - Starting the server is the one step that may need sudo, and a person does it: the extension
   shows the command (tmux or screen, section 6) and can open a terminal with it, where sudo
   asks its password. The same holds for the root installation of calu. Neither is run by the
@@ -352,13 +355,14 @@ showing the mode and state; its menu switches off / track / enforce through
 ## 10. The one password, made precise (the owner, 2026-11-18)
 
 One password at the start of the extension, and again after each restart of the IDE, is fine;
-more often is not. The client may keep the password in memory. So:
+more often is not. The client may keep the password in memory. Since D265 that password is the
+calu user password. So:
 
-- The extension host keeps the password it asked for in memory (a variable, never a file, a
-  setting, the webview state or a log) until the IDE window closes. When the bridge process is
+- The extension host keeps the calu user password it asked for in memory (a variable, never a
+  file, a setting, the webview state or a log) until the IDE window closes. When the bridge process is
   restarted within that time (a crash, "Restart bridge", an update of calu), the extension
   sends `ide.unlock` again by itself and asks nothing.
-- The bridge keeps the opened logins in memory, as section 8 says.
+- The bridge keeps the opened user login in memory, as section 8 says.
 - "Remember on this machine" (VSCode's secret storage) is therefore not needed and is not
   part of the first version; section 8's last point is withdrawn. If it was already built, it
   stays off by default and is not offered by a notification.

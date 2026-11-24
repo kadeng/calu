@@ -185,10 +185,10 @@ export class Bridge extends BridgeCore implements vscode.Disposable {
  */
 export function inputBoxPasswordDeps(): PasswordDeps {
   return {
-    ask: (kind, problem) =>
+    ask: (problem, left) =>
       vscode.window.showInputBox({
         title: PROMPT_TITLE,
-        prompt: promptText(kind, problem),
+        prompt: promptText(problem, left),
         password: true,
         ignoreFocusOut: true,
       }),

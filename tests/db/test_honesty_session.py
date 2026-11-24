@@ -1,9 +1,10 @@
 """Code honesty of a session on the real database: certifying by hand and after a commit.
 
 `tests/unit/test_honesty_session.py` runs the same flows on the in-memory store. This file
-checks that the session's writes pass the database functions of migration 0029 with the rights
-of the session login: a person's `/trust`, the stored verification of a checked edit, and the
-certification of a commit made in a clean state.
+checks that the session's writes pass the database functions of migrations 0029 and 0044 with
+the rights of the user login (`calu_admin`, which sessions use since D265): a person's
+`/trust`, the stored verification of a checked edit, and the certification of a commit made in
+a clean state.
 """
 
 from pathlib import Path
@@ -19,7 +20,7 @@ from calu.protocol.messages import ChatSendParams, HonestyUpdate, TurnResult
 from calu.session import Session
 from calu.store import DatabaseSessionStore
 from calu.testing import fake_models, marking_checker
-from tests.db.test_trust import git, logins
+from tests.db.test_trust import git, user_login
 from tests.unit.helpers import Recorder, default_settings
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -49,8 +50,8 @@ async def test_a_session_certifies_by_hand_and_after_a_clean_commit(
             {"tool": "Bash", "input": {"command": "git commit -m second"}, "run": COMMIT},
         ]
     ]
-    session_url, _operator_url = await logins(db_url)
-    conn = await connect(session_url)
+    user_url = await user_login(db_url)
+    conn = await connect(user_url)
     owner = await connect(db_url)
     try:
         store = DatabaseSessionStore(Db(conn))
@@ -83,8 +84,8 @@ async def test_a_session_certifies_by_hand_and_after_a_clean_commit(
             )
         ).fetchall()
         assert rows == [
-            (first, "user", "attach:kai", store.session_id, "calu_session"),
-            (head, "check", "calu session", store.session_id, "calu_session"),
+            (first, "user", "attach:kai", store.session_id, "calu_admin"),
+            (head, "check", "calu session", store.session_id, "calu_admin"),
         ]
         files = await (
             await owner.execute("SELECT path, method, certified_by FROM trusted_files")
@@ -109,8 +110,8 @@ async def test_an_honesty_review_stores_what_it_verified_with_the_session_login(
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "first")
     head = git(repo, "rev-parse", "HEAD")
-    session_url, _operator_url = await logins(db_url)
-    conn = await connect(session_url)
+    user_url = await user_login(db_url)
+    conn = await connect(user_url)
     owner = await connect(db_url)
     try:
         store = DatabaseSessionStore(Db(conn))
@@ -149,7 +150,7 @@ async def test_an_honesty_review_stores_what_it_verified_with_the_session_login(
 
 async def test_a_mark_cleared_by_hand_outlasts_the_session(db_url: str, tmp_path: Path) -> None:
     """G9: the clearing is a person's decision about that content, stored with source "user"
-    through the session login; the next session does not count the file as unreviewed."""
+    through the user login; the next session does not count the file as unreviewed."""
     repo = tmp_path / "project"
     repo.mkdir()
     git(repo, "init", "-q", "-b", "main")
@@ -157,13 +158,13 @@ async def test_a_mark_cleared_by_hand_outlasts_the_session(db_url: str, tmp_path
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "first")
     (repo / "app.py").write_text("x = 2\n", encoding="utf-8")
-    session_url, _operator_url = await logins(db_url)
+    user_url = await user_login(db_url)
     owner = await connect(db_url)
     settings = default_settings(repo, Config(honesty=HonestyConfig(mode="enforce")))
     unreviewed: list[tuple[str, ...]] = []
     try:
         for run in (1, 2):
-            conn = await connect(session_url)
+            conn = await connect(user_url)
             try:
                 rec = Recorder()
                 session = Session(
@@ -196,7 +197,7 @@ async def test_a_mark_cleared_by_hand_outlasts_the_session(db_url: str, tmp_path
             )
         ).fetchall()
         assert files == [
-            ("app.py", "user", "attach:kai", "calu_session", "mark cleared by hand: app.py")
+            ("app.py", "user", "attach:kai", "calu_admin", "mark cleared by hand: app.py")
         ]
         assert unreviewed == [("app.py",), ()]
     finally:

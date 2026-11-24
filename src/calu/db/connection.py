@@ -458,8 +458,9 @@ async def migrate(conn: psycopg.AsyncConnection) -> list[Migration]:
     """Apply all migrations that are not applied yet.
 
     The connection must belong to the database owner (it creates tables, functions and the
-    roles `calu_session` and `calu_operator`). Each migration runs in one transaction together
-    with its `schema_migrations` row, so a failed migration leaves nothing behind.
+    roles `calu_session`, `calu_operator` and `calu_admin`). Each migration runs in one
+    transaction together with its `schema_migrations` row, so a failed migration leaves
+    nothing behind.
 
     Args:
         conn: An open connection in autocommit mode (see `connect`).

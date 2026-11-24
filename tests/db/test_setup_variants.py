@@ -1,4 +1,5 @@
-"""`calu setup` for a server that exists already, and what it refuses (agent/records/PLAN.md D205).
+"""`calu setup` for a server that exists already, and what it refuses (agent/records/PLAN.md D205,
+D265).
 
 The local Docker variant is tested without Docker in tests/unit/test_setup_dialog.py; RDS with
 IAM authentication needs an RDS instance and is on the manual checklist (docs/TESTING.md),
@@ -15,12 +16,12 @@ import pytest
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 
-from calu import cli
+from calu import cli, logins
 from calu.credentials import CredentialStore
-from calu.db import connect
+from calu.db import connect, roles
 from calu.db.connection import open_stored
-from calu.db.target import PasswordAuth, RdsIamAuth, Target
-from calu.setup import enable_session_login, preflight
+from calu.db.target import PasswordAuth, Target
+from calu.setup import MANAGED_ROLES, generated_password, preflight, set_user_password
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -46,48 +47,38 @@ def server_flags(db_url: str) -> tuple[list[str], str]:
 async def test_an_existing_server_is_set_up_from_host_port_user_password_and_database(
     db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """The database user's password, then the new user password twice: both entries are
+    stored under the user password, and `calu_admin` logs in with it. Gives the server-wide
+    role `calu_admin` the password "user-pw"."""
     store = CredentialStore(tmp_path / "credentials.json")
     flags, password = server_flags(db_url)
-    # The role calu_session belongs to the whole server. Give it a login, as another calu
-    # database on the server would have: a first setup then has to say that it replaces it.
-    other = await connect(db_url)
-    try:
-        cur = await other.execute("SELECT 1 FROM pg_roles WHERE rolname = 'calu_session'")
-        if await cur.fetchone() is None:
-            await other.execute("CREATE ROLE calu_session NOLOGIN")
-        await other.execute(
-            sql.SQL("ALTER ROLE calu_session WITH LOGIN PASSWORD {}").format(
-                sql.Literal(uuid.uuid4().hex)
-            )
-        )
-    finally:
-        await other.close()
-    lines = f"{password}\nadmin-pw\nadmin-pw\nsession-pw\nsession-pw\n"
-    assert await run_setup(store, monkeypatch, flags, lines) == 1
-    refused = capsys.readouterr().err
-    assert "calu_session has a login already" in refused and "--renew-session" in refused
-    assert store.names() == ["admin"], "the checked owner login is stored, no session login"
+    lines = f"{password}\nuser-pw\nuser-pw\n"
+    assert await run_setup(store, monkeypatch, flags, lines) == 0
+    said = capsys.readouterr()
+    assert "migrations applied" in said.out, said.err
+    assert logins.choose_intro(False) in said.out
 
-    lines = "admin-pw\nsession-pw\nsession-pw\n"
-    assert await run_setup(store, monkeypatch, ["--renew-session"], lines) == 0
-    printed = capsys.readouterr().out
-    assert "migrations applied" in printed and "stored credential 'session'" in printed
-
-    owner = Target.parse(store.load("admin", "admin-pw"))
-    session = Target.parse(store.load("session", "session-pw"))
-    assert (owner.variant, session.variant) == ("server", "server")
-    assert session.user == "calu_session" and session.conninfo["dbname"] == owner.conninfo["dbname"]
-    conn = await open_stored(session)
+    assert store.names() == [logins.DB_ADMIN, logins.USER]
+    owner = Target.parse(store.load(logins.DB_ADMIN, "user-pw"))
+    user = Target.parse(store.load(logins.USER, "user-pw"))
+    assert (owner.variant, user.variant) == ("server", "server")
+    assert user.user == roles.ADMIN and user.conninfo["dbname"] == owner.conninfo["dbname"]
+    assert user.auth == PasswordAuth(password="user-pw")
+    # Only where the database is travels with the user login, not the owner's other
+    # parameters.
+    assert sorted(user.conninfo) == ["dbname", "host", "port", "user"]
+    conn = await open_stored(user)
     try:
         cur = await conn.execute("SELECT current_user")
-        assert await cur.fetchone() == ("calu_session",)
+        assert await cur.fetchone() == (roles.ADMIN,)
     finally:
         await conn.close()
 
-    # A second setup keeps the login: sessions that run and other machines go on working.
-    assert await run_setup(store, monkeypatch, [], "admin-pw\n") == 0
-    assert "session login kept" in capsys.readouterr().out
-    conn = await open_stored(session)
+    # A second setup asks the user password once and keeps the login: sessions that run and
+    # other machines go on working.
+    assert await run_setup(store, monkeypatch, [], "user-pw\n") == 0
+    capsys.readouterr()
+    conn = await open_stored(user)
     await conn.close()
 
     assert await run_setup(store, monkeypatch, flags, "") == 1
@@ -150,9 +141,10 @@ async def test_a_database_that_holds_other_tables_is_not_taken_over(db_url: str)
         await owner.close()
 
 
-async def test_a_session_login_with_iam_gets_no_password(db_url: str) -> None:
-    """On RDS a role that is a member of `rds_iam` logs in with a token. calu then stores
-    where the database is and which AWS profile signs, and no secret."""
+async def test_the_user_login_leaves_rds_iam_to_log_in_with_its_password(db_url: str) -> None:
+    """D265 (3): on RDS the user login uses a password, not IAM. A member of `rds_iam` is
+    asked for a token there, so `set_user_password` takes `calu_admin` out of the role.
+    Creates the role `rds_iam` on the test server if it is missing, and drops it again."""
     owner = await connect(db_url)
     created = False
     try:
@@ -160,22 +152,18 @@ async def test_a_session_login_with_iam_gets_no_password(db_url: str) -> None:
         if await cur.fetchone() is None:
             await owner.execute("CREATE ROLE rds_iam NOLOGIN")  # what RDS provides
             created = True
-        admin = Target.parse(db_url)
-        iam = RdsIamAuth(region="eu-central-1", profile="calu-sessions")
-        session = await enable_session_login(owner, admin, iam)
-        assert session.user == "calu_session" and session.auth == iam
-        assert b"password" not in session.dump()
-        cur = await owner.execute("SELECT pg_has_role('calu_session', 'rds_iam', 'MEMBER')")
-        assert await cur.fetchone() == (True,)
-        # Back to a password (`--session-auth password`): RDS accepts no password from a
-        # member of rds_iam, so the membership has to go with it.
-        with_password = await enable_session_login(owner, admin)
-        assert isinstance(with_password.auth, PasswordAuth)
-        cur = await owner.execute("SELECT pg_has_role('calu_session', 'rds_iam', 'MEMBER')")
+        cur = await owner.execute("SELECT 1 FROM pg_roles WHERE rolname = 'calu_admin'")
+        if await cur.fetchone() is None:
+            await owner.execute("CREATE ROLE calu_admin NOLOGIN")
+        await owner.execute("GRANT rds_iam TO calu_admin")
+        await set_user_password(owner, generated_password())
+        cur = await owner.execute("SELECT pg_has_role('calu_admin', 'rds_iam', 'MEMBER')")
         assert await cur.fetchone() == (False,)
+        with pytest.raises(ValueError):
+            await set_user_password(owner, "")
     finally:
         try:
-            await owner.execute("REVOKE rds_iam FROM calu_session")
+            await owner.execute("REVOKE rds_iam FROM calu_admin")
             if created:
                 await owner.execute("DROP ROLE rds_iam")
         except psycopg.Error:
@@ -187,8 +175,9 @@ async def test_a_login_with_createrole_passes_and_one_that_cannot_manage_the_rol
     db_url: str,
 ) -> None:
     """The preflight asked for the admin option on every version and passed a login without
-    CREATEROLE that held it. What giving a role a login needs: CREATEROLE always, and from
-    PostgreSQL 16 on the admin option for a role that somebody else created."""
+    CREATEROLE that held it. What changing calu's roles needs: CREATEROLE always, and from
+    PostgreSQL 16 on the admin option for each role of `MANAGED_ROLES` that somebody else
+    created."""
     role = f"calu_t_{uuid.uuid4().hex[:10]}"
     owner = await connect(db_url)
     try:
@@ -207,7 +196,7 @@ async def test_a_login_with_createrole_passes_and_one_that_cannot_manage_the_rol
             )
         )
         await owner.execute(sql.SQL("ALTER SCHEMA public OWNER TO {}").format(sql.Identifier(role)))
-        for existing in ("calu_session", "calu_operator"):
+        for existing in MANAGED_ROLES:
             cur = await owner.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (existing,))
             if await cur.fetchone() is None:
                 await owner.execute(
@@ -218,8 +207,9 @@ async def test_a_login_with_createrole_passes_and_one_that_cannot_manage_the_rol
         try:
             problems = await preflight(conn)
             if version >= 160000:
-                assert len(problems) == 2 and all("WITH ADMIN OPTION" in p for p in problems)
-                for existing in ("calu_session", "calu_operator"):
+                assert len(problems) == len(MANAGED_ROLES)
+                assert all("WITH ADMIN OPTION" in p for p in problems)
+                for existing in MANAGED_ROLES:
                     await owner.execute(
                         sql.SQL("GRANT {} TO {} WITH ADMIN OPTION").format(
                             sql.Identifier(existing), sql.Identifier(role)

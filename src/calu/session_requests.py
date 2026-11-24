@@ -1,6 +1,6 @@
 """Requests for a session: the rows a `calu serve` process answers (agent/records/PLAN.md D208).
 
-    requester (operator login)                      calu serve (session login)
+    requester (user login)                          calu serve (user login)
     file ──► session_requests row, state pending
                                                     claim ──► claimed
                                                     start the session
@@ -181,12 +181,12 @@ async def claim(db: Db, hostname: str, os_user: str, pid: int) -> SessionRequest
 
     Each request is claimed at most once, also when several servers ask at the same moment.
 
-    The host and the user are the caller's word: every holder of the session login may claim
+    The host and the user are the caller's word: every holder of the user login may claim
     the requests of any host and user, prompt and directory included. That is intended (the
-    owner, 2026-11-17): the session login is trusted with it.
+    owner, 2026-11-17): the user login is trusted with it.
 
     Args:
-        db: A connection with the session login.
+        db: A connection with the user login.
         hostname: This machine's host name.
         os_user: The OS user the server starts sessions for.
         pid: The server's process id, recorded with the claim.
@@ -213,7 +213,7 @@ async def claim_served(db: Db, server_id: str, pid: int) -> SessionRequest | Non
     outside. Each request is claimed at most once.
 
     Args:
-        db: A connection with the session login.
+        db: A connection with the user login.
         server_id: The id of the server's `servers` row (`calu.servers.record_start`).
         pid: The server's process id, recorded with the claim.
 
@@ -240,7 +240,7 @@ async def finish(
     """Write the outcome of a claimed request.
 
     Args:
-        db: A connection with the session login.
+        db: A connection with the user login.
         request_id: The row's id.
         outcome: "started" or "failed".
         session_id: The id of the `sessions` row of the started session, or None.

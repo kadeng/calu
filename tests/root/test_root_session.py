@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from calu import logins
 from calu.credentials import CredentialStore
 from tests.db.test_run import prepare
 from tests.root.box import AS_ROOT, OTHER_UID, WHY_NOT
@@ -74,11 +75,11 @@ async def test_a_session_as_root_for_another_uid_writes_as_that_uid(
     `/var/lib/calu/claude/<uid>` (owned by the uid) and `/run/calu/sessions`; writes a
     session row to the test database; prints the child's stdout and stderr on a failure.
     """
-    session_url = await prepare(db_url, project)
+    user_url = await prepare(db_url, project)
     config, state = tmp_path / "etc", tmp_path / "var"
     store = CredentialStore(config / "calu" / "credentials.json")
     # Without a password: accepted because only root can write this store (D228 4a).
-    store.save("session", session_url, None)
+    store.save(logins.USER, user_url, None)
     # Beside the project, where the user can read it: the runner is created after calu
     # switched its file access, and pytest's own temporary directory is root's alone.
     script = project.parent / "script.json"
@@ -160,9 +161,9 @@ async def test_a_session_whose_claude_code_is_root_has_no_token_free_socket(
     """`--user root`: a command of Claude Code would be a root client of the root socket."""
     workspace = tmp_path / "project"
     workspace.mkdir()
-    session_url = await prepare(db_url, workspace)
+    user_url = await prepare(db_url, workspace)
     config = tmp_path / "etc"
-    CredentialStore(config / "calu" / "credentials.json").save("session", session_url, None)
+    CredentialStore(config / "calu" / "credentials.json").save(logins.USER, user_url, None)
     script = tmp_path / "script.json"
     script.write_text(json.dumps(SCRIPT))
     done = subprocess.run(

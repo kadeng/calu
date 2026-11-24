@@ -11,19 +11,22 @@
  *                                (not after a diagnosis that says a new start cannot help)
  *
  *     request(method, params) ──► calu ide
- *         error -32010, interactive ──► one prompt (shared by concurrent requests)
+ *         error -32010, interactive ──► one prompt for the calu user password (shared by
+ *                                       concurrent requests)
  *                                         ├─ password ──► ide.unlock ── ok ──► same request again
  *                                         │                           └─ refused ──► prompt again
- *                                         └─ cancelled ──► the waiting requests fail, `locked` is true
+ *                                         └─ cancelled ──► the waiting requests fail with
+ *                                                          NOT_DONE_NO_PASSWORD, `locked` is true
  *         error -32010, background  ──► passed to the caller, never a prompt
  *     session(method, params) = request("session.call", {method, params})
  *
  *     start: ide.initialize ok ──► password in memory? ──► ide.unlock ── refused ──► forget it
  *
- * The one-password rule (spec sections 8 and 10): the password the user typed is kept in a
- * `PasswordMemory` (a variable, never a file, a setting or a log) until the IDE closes, and a
- * restarted bridge is unlocked with it without a prompt. An empty password is sent like any
- * other; nothing here refuses one. The decisions are in `logic/Unlock.kt`.
+ * The one-password rule (spec sections 8 and 10): the calu user password the user typed is kept
+ * in a `PasswordMemory` (a variable, never a file, a setting or a log) until the IDE closes, and
+ * a restarted bridge is unlocked with it without a prompt. An empty entry is sent like any
+ * other; nothing here refuses one (an empty user password itself means calu never asks). The
+ * decisions are in `logic/Unlock.kt`.
  *
  * Ported from `extensions/vscode/src/bridge.ts`; no IntelliJ Platform dependency.
  */
@@ -31,18 +34,17 @@ package io.github.kadeng.calu.bridge
 
 import io.github.kadeng.calu.json.EMPTY_OBJECT
 import io.github.kadeng.calu.json.asObj
-import io.github.kadeng.calu.json.bool
 import io.github.kadeng.calu.json.int
 import io.github.kadeng.calu.json.str
 import io.github.kadeng.calu.logic.ExplicitAction
 import io.github.kadeng.calu.logic.NeedAction
-import io.github.kadeng.calu.logic.PROMPT_ADMIN
-import io.github.kadeng.calu.logic.PROMPT_FIRST
 import io.github.kadeng.calu.logic.PasswordNeed
+import io.github.kadeng.calu.logic.RoundEnd
 import io.github.kadeng.calu.logic.RoundOutcome
 import io.github.kadeng.calu.logic.UnlockResult
 import io.github.kadeng.calu.logic.UnlockState
 import io.github.kadeng.calu.logic.initialUnlockState
+import io.github.kadeng.calu.logic.notDoneText
 import io.github.kadeng.calu.logic.onDismiss
 import io.github.kadeng.calu.logic.onExplicitUnlock
 import io.github.kadeng.calu.logic.onNeedsPassword
@@ -94,24 +96,25 @@ const val STDERR_TAIL_CHARS: Int = 4000
  */
 data class BridgeStatusInfo(val status: String, val message: String? = null, val version: String? = null)
 
-/** Holds the one password in memory for as long as the IDE runs. Thread-safe. */
+/** Holds the calu user password in memory for as long as the IDE runs. Thread-safe. */
 class PasswordMemory {
     /** The password the bridge accepted last; `null` if none was typed yet or it was refused. */
     @Volatile
     var password: String? = null
 }
 
-/** Asks the user for a password. The implementation shows a dialog; tests answer from a list. */
+/** Asks the user for the calu user password. The implementation shows a dialog; tests answer from a list. */
 fun interface PasswordPrompt {
     /**
-     * Ask for a password.
+     * Ask for the calu user password (the text is `promptText(problem, left)`).
      *
-     * @param kind `PROMPT_FIRST` for the one password, `PROMPT_ADMIN` for the admin password
-     *   that changing settings needs.
-     * @param problem Why the previous entry was not accepted; `null` for the first entry of a round.
+     * @param problem Why the previous entry was not accepted (the bridge's message); `null` for
+     *   the first entry of a round.
+     * @param left How many entries the round still allows after a refused one; `null` for the
+     *   first entry.
      * @return The password (possibly empty), or `null` if the user cancelled.
      */
-    suspend fun ask(kind: String, problem: String?): String?
+    suspend fun ask(problem: String?, left: Int?): String?
 }
 
 /**
@@ -140,7 +143,7 @@ class BridgeSupervisor(
     private class Running(val process: BridgeProcess, val rpc: RpcClient) {
         @Volatile var stopping = false
         @Volatile var unlock: UnlockState = initialUnlockState()
-        @Volatile var round: CompletableDeferred<Boolean>? = null
+        @Volatile var round: CompletableDeferred<RoundEnd>? = null
         val exited = CompletableDeferred<Unit>()
         val stderrTail = StringBuilder()
     }
@@ -225,8 +228,9 @@ class BridgeSupervisor(
      *   prompt is shown and error -32010 is passed to the caller.
      * @return The response's `result`.
      * @throws IllegalStateException if the bridge is not running.
-     * @throws RpcRequestException for an error answer (also -32010 if the user cancelled, ran
-     *   out of attempts, or the request started before a cancel).
+     * @throws RpcRequestException for an error answer, also -32010 if no password unlocked the
+     *   bridge: its message is then `notDoneText`'s (the user cancelled, before or after the
+     *   request started; every password of the round was refused) or else the bridge's own.
      * @throws RpcClosedException if the bridge exits before answering.
      */
     suspend fun request(method: String, params: JsonObject = EMPTY_OBJECT, interactive: Boolean = true): JsonElement {
@@ -240,7 +244,11 @@ class BridgeSupervisor(
             } catch (error: RpcRequestException) {
                 if (error.code != BridgeError.NEEDS_PASSWORD || method == "ide.unlock") throw error
                 val need = PasswordNeed(interactive, unlockedLogins(error.data), startedAtDismissals, sentAtUnlocks, retries)
-                if (!unlockFor(r, need)) throw error
+                val end = unlockFor(r, need)
+                if (end != RoundEnd.UNLOCKED) {
+                    val text = notDoneText(r.unlock, need, end) ?: throw error
+                    throw RpcRequestException(error.method, error.code, text, error.data)
+                }
             }
             retries++
         }
@@ -263,8 +271,8 @@ class BridgeSupervisor(
 
     /**
      * Open the password prompt now (the chat's "Unlock" button), also after an earlier cancel.
-     * Starts the bridge if it does not run; joins a prompt that is open; asks the admin password
-     * if a login is held that may not change settings, and nothing if one that may is held.
+     * Starts the bridge if it does not run; joins a prompt that is open; asks nothing if a login
+     * is held.
      *
      * @return True if the bridge holds a login afterwards.
      * @throws LaunchException if the bridge cannot be started.
@@ -274,13 +282,12 @@ class BridgeSupervisor(
         val r = requireRunning()
         val decision = synchronized(lock) { onExplicitUnlock(r.unlock).also { r.unlock = it.state } }
         reportLocked()
-        val opened = when (decision.action) {
-            ExplicitAction.NONE -> false
-            ExplicitAction.JOIN -> r.round?.await() ?: false
-            ExplicitAction.PROMPT_FIRST -> runRoundRegistered(r, PROMPT_FIRST)
-            ExplicitAction.PROMPT_ADMIN -> runRoundRegistered(r, PROMPT_ADMIN)
+        val end = when (decision.action) {
+            ExplicitAction.NONE -> null
+            ExplicitAction.JOIN -> r.round?.await()
+            ExplicitAction.PROMPT -> runRoundRegistered(r)
         }
-        return opened || r.unlock.unlocked.isNotEmpty()
+        return end == RoundEnd.UNLOCKED || r.unlock.unlocked.isNotEmpty()
     }
 
     /**
@@ -524,45 +531,45 @@ class BridgeSupervisor(
      *
      * @param r The process that answered.
      * @param need The request's facts.
-     * @return True if the request is to be sent again, false if its caller gets the error.
+     * @return `RoundEnd.UNLOCKED` if the request is to be sent again (also for `RETRY`); else
+     *   how the round it opened or joined ended, or `null` if it fails without one (`FAIL`, or
+     *   the round to join was already over).
      */
-    private suspend fun unlockFor(r: Running, need: PasswordNeed): Boolean {
+    private suspend fun unlockFor(r: Running, need: PasswordNeed): RoundEnd? {
         val decision = synchronized(lock) { onNeedsPassword(r.unlock, need).also { r.unlock = it.state } }
         reportLocked()
         return when (decision.action) {
-            NeedAction.FAIL -> false
-            NeedAction.RETRY -> true
-            NeedAction.JOIN -> r.round?.await() ?: false
-            NeedAction.PROMPT_FIRST -> runRoundRegistered(r, PROMPT_FIRST)
-            NeedAction.PROMPT_ADMIN -> runRoundRegistered(r, PROMPT_ADMIN)
+            NeedAction.FAIL -> null
+            NeedAction.RETRY -> RoundEnd.UNLOCKED
+            NeedAction.JOIN -> r.round?.await()
+            NeedAction.PROMPT -> runRoundRegistered(r)
         }
     }
 
     /**
      * Run a prompt round and register it as the open one, so that other requests can wait for
-     * it. Precondition: `r.unlock.promptOpen == kind`.
+     * it. Precondition: `r.unlock.promptOpen` is true.
      *
      * @param r The process to unlock.
-     * @param kind Which password is asked.
-     * @return True after a successful `ide.unlock`; false after a cancel, too many wrong
-     *   passwords or any failure. Postcondition: no prompt is open in the state.
+     * @return How the round ended; `ABORTED` for a cancelled coroutine or any failure.
+     *   Postcondition: no prompt is open in the state.
      */
-    private suspend fun runRoundRegistered(r: Running, kind: String): Boolean {
-        val round = CompletableDeferred<Boolean>()
+    private suspend fun runRoundRegistered(r: Running): RoundEnd {
+        val round = CompletableDeferred<RoundEnd>()
         r.round = round
-        val opened = try {
-            runRound(r, kind)
+        val end = try {
+            runRound(r)
         } catch (error: CancellationException) {
-            false
+            RoundEnd.ABORTED
         } catch (error: Exception) {
             log("[calu] unlocking failed: ${errorText(error)}")
-            false
+            RoundEnd.ABORTED
         }
         r.round = null
-        synchronized(lock) { if (r.unlock.promptOpen != null) r.unlock = onRoundAborted(r.unlock) }
+        synchronized(lock) { if (r.unlock.promptOpen) r.unlock = onRoundAborted(r.unlock) }
         reportLocked()
-        round.complete(opened)
-        return opened
+        round.complete(end)
+        return end
     }
 
     /**
@@ -571,32 +578,38 @@ class BridgeSupervisor(
      * `PasswordMemory`.
      *
      * @param r The process to unlock.
-     * @param kind Which password is asked.
-     * @return True if the round ended with an accepted password.
+     * @return `UNLOCKED` after an accepted password, `DISMISSED` after a cancel, `REFUSED` after
+     *   `MAX_ATTEMPTS_PER_ROUND` refused passwords.
      * @throws Exception what the prompt throws, and errors of `ide.unlock` other than -32010.
      */
-    private suspend fun runRound(r: Running, kind: String): Boolean {
+    private suspend fun runRound(r: Running): RoundEnd {
         var problem: String? = null
+        var left: Int? = null
         var attempt = 1
         while (true) {
-            val password = prompt.ask(kind, problem)
+            val password = prompt.ask(problem, left)
             if (password == null) {
                 synchronized(lock) { r.unlock = onDismiss(r.unlock) }
                 reportLocked()
-                return false
+                return RoundEnd.DISMISSED
             }
             val step = try {
                 val result = r.rpc.request("ide.unlock", buildJsonObject { put("password", JsonPrimitive(password)) })
-                if (kind == PROMPT_FIRST) memory.password = password
-                synchronized(lock) { onUnlockResult(r.unlock, kind, unlockFacts(result), attempt) }
+                memory.password = password
+                synchronized(lock) { onUnlockResult(r.unlock, unlockFacts(result)) }
             } catch (error: RpcRequestException) {
                 if (error.code != BridgeError.NEEDS_PASSWORD) throw error
                 synchronized(lock) { onUnlockRefused(r.unlock, error.bridgeMessage, attempt) }
             }
             synchronized(lock) { r.unlock = step.state }
             reportLocked()
-            if (step.outcome != RoundOutcome.ASK_AGAIN) return step.outcome == RoundOutcome.DONE
+            when (step.outcome) {
+                RoundOutcome.DONE -> return RoundEnd.UNLOCKED
+                RoundOutcome.GIVE_UP -> return RoundEnd.REFUSED
+                RoundOutcome.ASK_AGAIN -> {}
+            }
             problem = step.problem
+            left = step.left
             attempt++
         }
     }
@@ -659,13 +672,12 @@ class BridgeSupervisor(
 }
 
 /**
- * Reduce an `ide.unlock` result to the two facts the decisions use, tolerating missing members.
+ * Reduce an `ide.unlock` result to the fact the decisions use, tolerating a missing member.
  *
  * @param result The result as received (any JSON value).
- * @return The login names in `result.unlocked` and whether `changing` is true.
+ * @return The login names in `result.unlocked` (empty if missing).
  */
-fun unlockFacts(result: JsonElement?): UnlockResult =
-    UnlockResult(unlockedLogins(result), result.asObj()?.bool("changing") == true)
+fun unlockFacts(result: JsonElement?): UnlockResult = UnlockResult(unlockedLogins(result))
 
 /**
  * Return a printable message for any failure of a bridge request.

@@ -17,7 +17,8 @@ import httpx
 import pytest
 
 from calu.db import Db, connect
-from calu.setup import setup
+from calu.db.target import Target
+from calu.setup import set_user_password, setup, user_login
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio, pytest.mark.slow]
 
@@ -27,27 +28,36 @@ START_TIMEOUT_S = 40
 async def test_calu_web_serves_the_fleet_and_refuses_a_public_address(
     db_url: str, tmp_path: Path
 ) -> None:
-    """The command starts the server on loopback and will not bind anything else."""
+    """The command starts the server on loopback and will not bind anything else; a browser
+    signs in with the calu user password (D216, D265).
+
+    Gives the server-wide role `calu_admin` the password "web-process-test"; stores the user
+    login in a credential store below `tmp_path`. One wrong password makes the server wait
+    about a second, which is the gate's delay.
+    """
+    password = "web-process-test"
     conn = await connect(db_url)
     try:
         await setup(conn, db_url, "test:model")
+        await set_user_password(conn, password)
         await Db(conn).execute("SELECT 1")
     finally:
         await conn.close()
+    user_url = user_login(Target.parse(db_url), password).libpq_string()
 
     home = tmp_path / "config"
     home.mkdir()
     environment = {**os.environ, "XDG_CONFIG_HOME": str(home), "PYTHONUNBUFFERED": "1"}
-    password = "web-process-test"
 
-    # Store the admin credential the way a person does: the connection string, then a password.
+    # Store the user login the way a person does: the connection string, then the user
+    # password, which protects the entry and is the password of `calu_admin`.
     setting = await anyio.open_process(
-        [sys.executable, "-m", "calu", "credential", "set", "admin"],
+        [sys.executable, "-m", "calu", "credential", "set", "user"],
         env=environment,
         stdin=-1,
     )
     assert setting.stdin is not None
-    await setting.stdin.send(f"{db_url}\n{password}\n{password}\n".encode())
+    await setting.stdin.send(f"{user_url}\n{password}\n{password}\n".encode())
     await setting.stdin.aclose()
     await setting.wait()
     assert setting.returncode == 0, "the credential was not stored"
@@ -95,16 +105,16 @@ async def test_calu_web_serves_the_fleet_and_refuses_a_public_address(
     await server.stdin.send(f"{password}\n".encode())
     try:
         with anyio.fail_after(START_TIMEOUT_S):
-            # The address it prints carries the login token (D161).
+            # The address it prints carries no token: the browser is asked the user password.
             assert server.stdout is not None
             printed = b""
-            while b"?token=" not in printed or not printed.endswith(b"\n"):
+            while b"sign in with" not in printed or not printed.endswith(b"\n"):
                 printed += await server.stdout.receive(4096)
-            line = next(x for x in printed.decode().splitlines() if "?token=" in x)
-            address = line.split()[3]
+            line = next(x for x in printed.decode().splitlines() if "sign in with" in x)
+            assert "?token=" not in printed.decode()
             # Not the bound address: the interface answers to its own host name only, so the
             # browser keeps its login apart from every other server on loopback.
-            assert address.startswith(f"http://calu.localhost:{port}/?token=")
+            assert line.split()[3] == f"http://calu.localhost:{port}/"
             # This client does what a browser does by itself: `calu.localhost` is the loopback
             # interface. It connects there and names the host in the request.
             named = {"Host": f"calu.localhost:{port}"}
@@ -112,16 +122,19 @@ async def test_calu_web_serves_the_fleet_and_refuses_a_public_address(
             async with httpx.AsyncClient(follow_redirects=True) as client:
                 while True:
                     try:
-                        refused = await client.get(f"{local}/", headers=named, timeout=2)
+                        asked = await client.get(f"{local}/", headers=named, timeout=2)
                         break
                     except httpx.HTTPError:
                         await anyio.sleep(0.3)
-                assert refused.status_code == 401, "no token, no page"
-                bare = await client.get(f"{local}/?{address.split('?')[1]}", timeout=5)
+                assert asked.status_code == 401 and "calu user password" in asked.text
+                bare = await client.get(f"{local}/", timeout=5)
                 assert bare.status_code == 403, "not under the bare loopback address"
-                assert f"http://calu.localhost:{port}/" in bare.text
-                login = await client.get(
-                    f"{local}/?{address.split('?')[1]}", headers=named, timeout=5
+                wrong = await client.post(
+                    f"{local}/_login", headers=named, data={"password": "a guess", "onward": "/"}
+                )
+                assert wrong.status_code == 401 and "not the calu user password" in wrong.text
+                login = await client.post(
+                    f"{local}/_login", headers=named, data={"password": password, "onward": "/"}
                 )
                 assert login.status_code == 200 and "calu-key" in login.text
                 # The login set the cookie, so the fleet page is served now.

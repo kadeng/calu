@@ -202,7 +202,7 @@ EOF
 
 Next steps:
   calu doctor      what is in place and what is missing
-  calu setup       the database and the two passwords
+  calu setup       the database and your calu user password
   calu serve       the server; then calu web, the VSCode extension or calu attach
 Run this script again to update calu.
 EOF

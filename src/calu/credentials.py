@@ -1,7 +1,7 @@
 """Encrypted store for database credentials (agent/records/PLAN.md D12).
 
 The store is one JSON file, by default `~/.config/calu/credentials.json` (directory mode 0700,
-file mode 0600). It maps a credential name (`admin`, `session`) to an encrypted secret, usually
+file mode 0600). It maps a credential name (`user`, `db-admin`) to an encrypted secret, usually
 a PostgreSQL connection URL:
 
     password ──Argon2id(salt, t, m, p)──► 32-byte key
@@ -10,21 +10,21 @@ a PostgreSQL connection URL:
 File format (version 1):
 
     {"version": 1,
-     "entries": {"admin": {"kdf": "argon2id", "time_cost": 3, "memory_cost": 65536,
-                           "parallelism": 4, "salt": "<base64>", "nonce": "<base64>",
-                           "ciphertext": "<base64>"}}}
+     "entries": {"user": {"kdf": "argon2id", "time_cost": 3, "memory_cost": 65536,
+                          "parallelism": 4, "salt": "<base64>", "nonce": "<base64>",
+                          "ciphertext": "<base64>"}}}
 
 An entry can also be stored **unprotected** (`calu credential set <name> --no-password`), and
 then only the file's permissions protect it:
 
-    {"version": 1, "entries": {"operator": {"kdf": "none", "secret": "<base64>"}}}
+    {"version": 1, "entries": {"user": {"kdf": "none", "secret": "<base64>"}}}
 
 That is the trade every database client makes with `~/.pgpass`, and calu offers it for one
 reason: a password typed again for every `calu sessions` is a password people take off
 altogether. What it costs is stated where it is chosen and reported by `calu doctor`: anyone who
 can read the file -- another process of the same user, a backup, a synchronised dotfile
-directory -- has the credential. The `session` and `admin` entries should stay protected; the
-narrow `operator` credential (read and resolve, no schema rights) is the one worth unprotecting.
+directory -- has the credential. calu stores its two logins this way when the calu user password
+is empty (agent/records/PLAN.md D265).
 
 The name is the associated data of the encryption, so an entry copied under another name does
 not decrypt. Decrypted secrets are returned as `bytearray`, so callers can overwrite them with
@@ -256,7 +256,7 @@ class CredentialStore:
         An existing entry of the same name is replaced; other entries are kept.
 
         Args:
-            name: The credential name, e.g. "admin" or "session". Must not be empty.
+            name: The credential name, e.g. "user" or "db-admin". Must not be empty.
             secret: The secret, e.g. a connection URL.
             password: The password that will be needed to decrypt it; a blank one is a
                 password like any other (the entry is encrypted, and `load` asks for it).

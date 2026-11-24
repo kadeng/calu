@@ -183,26 +183,29 @@ async def test_a_root_client_finds_its_session_through_the_sockets_alone(
 def test_a_root_client_found_by_socket_keeps_only_a_login_without_password(
     tmp_path: Path, monkeypatch
 ):
-    """D226: nothing is asked; a password-free entry of root's store is kept, a protected one
-    is not touched."""
-    from calu import cli
+    """D226: nothing is asked; a password-free `user` entry of root's store is kept, a
+    protected one is not touched."""
+    from calu import cli, logins
     from calu.credentials import CredentialStore, KdfParams
-    from calu.setup import ADMIN_ROLE
+    from calu.setup import USER_ROLE
 
     store = CredentialStore(
         tmp_path / "store.json", KdfParams(time_cost=1, memory_cost=8, parallelism=1)
     )
-    store.save("admin", "postgresql://calu_owner:x@db.example:5432/calu", "secret")
+    store.save(logins.USER, "postgresql://calu_admin:x@db.example:5432/calu", "secret")
     monkeypatch.setattr(cli, "_hold", [True])
     monkeypatch.setattr(cli, "_held", [])
     monkeypatch.setattr(cli, "_admin_place", [])
+    monkeypatch.setattr(cli, "_shared_user", lambda: None)
     cli._hold_password_free(store)
     assert cli._held == [] and cli._admin_place == []
 
-    store.save("operator", "postgresql://calu_operator:y@db.example:5432/calu", None)
+    store.save(logins.USER, "postgresql://calu_admin:y@db.example:5432/calu", None)
     cli._hold_password_free(store)
-    assert [target.user for target in cli._held] == ["calu_operator"]
-    assert [target.user for target in cli._admin_place] == [ADMIN_ROLE]
+    assert [target.user for target in cli._held] == [USER_ROLE]
+    assert [(target.user, target.place) for target in cli._admin_place] == [
+        (USER_ROLE, "db.example:5432/calu")
+    ]
 
 
 def test_loopback_addresses_are_told_from_others():

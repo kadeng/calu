@@ -201,7 +201,7 @@ COMMANDS: tuple[Command, ...] = (
         "Checkers and their instructions",
         "",
         "/checkers",
-        about="Read them; e edits and saves with the admin credential of this machine.",
+        about="Read them; e edits and saves with this machine's calu login.",
     ),
     Command(
         "honesty",
@@ -256,7 +256,7 @@ COMMANDS: tuple[Command, ...] = (
         "Name this session, for the lists of sessions",
         "",
         "/rename [name]",
-        about="Stored with this machine's admin credential; without a name the name is "
+        about="Stored with this machine's calu login; without a name the name is "
         "removed. `/running`, `calu sessions` and the web interface show it.",
     ),
     Command(
@@ -264,7 +264,7 @@ COMMANDS: tuple[Command, ...] = (
         "New session in this directory, from calu serve",
         "",
         "/new [first message]",
-        about="Needs a running `calu serve` and this machine's admin credential. The client "
+        about="Needs a running `calu serve` and this machine's calu login. The client "
         "switches to the new session; this one keeps running.",
     ),
     Command(

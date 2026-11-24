@@ -1,7 +1,7 @@
 """The rows of `calu serve` processes and their server tokens (agent/records/PLAN.md D242).
 
-    calu serve (session login)                   operator (`calu token`)
-    ──────────────────────────                   ───────────────────────
+    calu serve (user login)                      a client (`calu token`, user login)
+    ───────────────────────                      ───────────────────────────────────
     record_start    ──► servers row              mint ──► server_tokens row (hash only)
     beat            ──► last_seen, every 10 s    tokens, revoke
     end_gone_peers  ──► dead servers' rows ended running ──► the servers that run
@@ -184,7 +184,7 @@ async def record_start(
     (`calu.machine.here`).
 
     Args:
-        db: A connection of the session login (or the owner).
+        db: A connection of the user login (or the owner).
         hostname: The host the server answers requests for.
         os_user: The OS user it answers requests for.
         relay_address: The relay's address, or "" without a relay.
@@ -216,7 +216,7 @@ async def record_end(db: Db, server_id: str) -> bool:
     """End a server's row and revoke every token of it.
 
     Args:
-        db: A connection of the session login (or the owner).
+        db: A connection of the user login (or the owner).
         server_id: The row's id.
 
     Returns:
@@ -237,7 +237,7 @@ async def beat(db: Db, server_id: str) -> bool:
     refused (migration 0040).
 
     Args:
-        db: A connection of the session login (or the owner).
+        db: A connection of the user login (or the owner).
         server_id: The server's row id.
 
     Returns:
@@ -262,7 +262,7 @@ async def end_gone_peers(db: Db, server_id: str) -> list[str]:
     claimed by another server at once, without waiting until the row is stale.
 
     Args:
-        db: A connection of the session login (or the owner).
+        db: A connection of the user login (or the owner).
         server_id: This server's row id.
 
     Returns:
@@ -290,12 +290,13 @@ async def session_details(
 ) -> dict[str, tuple[str, datetime]]:
     """Read the names and state times of this server's sessions, for `relay.sessions`.
 
-    The session login cannot read `sessions` rows other than its own session's, so the
+    A login without row-level access to other sessions' rows (`calu_session` before
+    migration 0043) could not read them, so the
     database answers through `calu_server_sessions` for the holder of a valid token of a
     running server, and only about the sessions of that server's process.
 
     Args:
-        db: A connection of the session login (or the owner).
+        db: A connection of the user login (or the owner).
         server_id: The server's row id.
         sha: SHA-256 of the client's server token.
         session_ids: The session row ids to describe.
@@ -323,7 +324,7 @@ async def token_label(db: Db, server_id: str, sha: str) -> str | None:
     Side effect: stamps the token's `last_used_at`.
 
     Args:
-        db: A connection of the session login (or the owner).
+        db: A connection of the user login (or the owner).
         server_id: The server's row id.
         sha: SHA-256 of the token a client sent (`calu.tokens.token_hash`).
 
@@ -348,7 +349,7 @@ async def file_request(db: Db, server_id: str, sha: str, wanted: SessionRequest)
     Side effect: inserts a `session_requests` row; the trigger notifies the servers.
 
     Args:
-        db: A connection of the session login (or the owner).
+        db: A connection of the user login (or the owner).
         server_id: The server's row id.
         sha: SHA-256 of the client's server token.
         wanted: What to start: directory, kind, ids, prompt, model, effort, project, label.
@@ -419,7 +420,7 @@ async def running(
     ending its row is left out.
 
     Args:
-        db: A connection of `calu_operator`, `calu_admin` or the owner.
+        db: A connection of the user login or the owner.
         hostname: Only servers of this host; None for every host.
         os_user: Only servers of this OS user; None for every user.
 
@@ -445,7 +446,7 @@ async def server(db: Db, server_id: str) -> ServerRow | None:
     """Read one server by its id or the beginning of it, whether it runs or not.
 
     Args:
-        db: A connection of `calu_operator`, `calu_admin` or the owner.
+        db: A connection of the user login or the owner.
         server_id: The id, or at least its first 4 characters.
 
     Returns:
@@ -473,7 +474,7 @@ async def mint(db: Db, server_id: str, label: str = "") -> tuple[int, str]:
     Only the token's hash is stored, so the returned token is the only copy.
 
     Args:
-        db: A connection of `calu_operator`, `calu_admin` or the owner.
+        db: A connection of the user login or the owner.
         server_id: The server's row id.
         label: What the token is for, e.g. "laptop".
 
@@ -503,7 +504,7 @@ async def tokens(db: Db) -> list[ServerTokenRow]:
     """Read every server token, newest first.
 
     Args:
-        db: A connection of `calu_operator`, `calu_admin` or the owner.
+        db: A connection of the user login or the owner.
 
     Returns:
         The rows, each with its server's state (`ServerTokenRow.state`): a token of a server
@@ -535,7 +536,7 @@ async def revoke(db: Db, token_id: int) -> bool:
     """Revoke a server token; the relay closes its connections within seconds.
 
     Args:
-        db: A connection of `calu_operator`, `calu_admin` or the owner.
+        db: A connection of the user login or the owner.
         token_id: Id from `calu token list`.
 
     Returns:

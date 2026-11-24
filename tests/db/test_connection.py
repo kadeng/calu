@@ -12,7 +12,7 @@ from psycopg.conninfo import make_conninfo
 from calu.db import ConnectionSource, Db, Dirty, LoginRefused, Notifier, connect
 from calu.db import connection as connection_module
 from calu.db.connection import REFUSED_ATTEMPTS, refuses_for_good
-from calu.setup import enable_session_login, setup
+from calu.setup import generated_password, set_user_password, setup
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -197,21 +197,23 @@ async def test_a_stopping_process_does_not_sit_out_a_long_pause_between_attempts
         await db.aclose()
 
 
-async def session_login(db_url: str) -> str:
-    """Migrate the test database and return a working `calu_session` connection string."""
+async def user_login(db_url: str) -> str:
+    """Migrate the test database and return a working connection string of the user login
+    (`calu_admin`, D265), which sessions use."""
     owner = await connect(db_url)
     try:
-        _, session_url = await setup(owner, db_url, "test:model")
+        _, user_url = await setup(owner, db_url, "test:model")
     finally:
         await owner.close()
-    return session_url
+    return user_url
 
 
-async def replace_session_credential(db_url: str) -> None:
-    """Give `calu_session` a new password, as every `calu setup` does."""
+async def replace_user_password(db_url: str) -> None:
+    """Give `calu_admin` a new password, as `calu setup --set-password` does: the stored
+    login stops working."""
     owner = await connect(db_url)
     try:
-        await enable_session_login(owner, db_url)
+        await set_user_password(owner, generated_password())
     finally:
         await owner.close()
 
@@ -227,7 +229,7 @@ def test_which_refusals_of_a_login_do_not_heal() -> None:
 async def test_a_refusal_is_recognised_by_a_python_without_memfd_create(
     db_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The Python 3.14.0 that uv installs has no `os.memfd_create`: a wrong admin password
+    """The Python 3.14.0 that uv installs has no `os.memfd_create`: a wrong password
     ended in an AttributeError traceback in the root box."""
     wrong = make_conninfo(db_url, password="not-the-password", connect_timeout=5)
     assert await anyio.to_thread.run_sync(connection_module._login_answer, wrong, 5.0) == "28P01"
@@ -261,16 +263,16 @@ async def test_a_failed_reconnect_is_a_warning_once_per_reason(
 async def test_a_refused_login_ends_the_reconnecting_and_says_why(db_url: str) -> None:
     """An unattended session must not wait for ever for a login that will not work again.
 
-    The session credential was replaced while the session ran. When its connection is lost,
+    The user password was replaced while the session ran. When its connection is lost,
     the wrapper tries a bounded number of times and then raises an error that names the cause.
     """
-    source = ConnectionSource(await session_login(db_url))
+    source = ConnectionSource(await user_login(db_url))
     db = Db(await source.open(), source=source)
     refused: list[LoginRefused] = []
     db.on_refused(refused.append)
     try:
         pid = await db.scalar("SELECT pg_backend_pid()")
-        await replace_session_credential(db_url)
+        await replace_user_password(db_url)
         assert await db.scalar("SELECT 1") == 1  # the open connection is not affected
         await kill(db_url, pid)
         with anyio.fail_after(15):
@@ -334,7 +336,7 @@ async def test_a_refusal_that_passes_within_the_attempts_is_survived(db_url: str
 
 
 async def test_the_notifier_stops_when_its_login_is_refused_for_good(db_url: str) -> None:
-    source = ConnectionSource(await session_login(db_url))
+    source = ConnectionSource(await user_login(db_url))
     listener = await source.open()
     notifier = Notifier(listener, source=source)
     notifier.on("config_changed", lambda _payload: None)
@@ -348,7 +350,7 @@ async def test_the_notifier_stops_when_its_login_is_refused_for_good(db_url: str
                 tg.start_soon(notifier.run)
                 while not listening:
                     await anyio.sleep(0.01)
-                await replace_session_credential(db_url)
+                await replace_user_password(db_url)
                 await kill(db_url, listener.info.backend_pid)
                 # `run` returns by itself: the task group ends without being cancelled.
         assert len(refused) == 1 and refused[0].code == "28P01"

@@ -251,7 +251,7 @@ class ChatController(
     }
 
     /**
-     * Ask the one password now ("Unlock"), then load what needed it.
+     * Ask the calu user password now ("Unlock"), then load what needed it.
      *
      * @return True if the bridge holds a login afterwards.
      */

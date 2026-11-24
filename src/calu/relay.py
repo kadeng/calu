@@ -17,7 +17,7 @@ takes none away. A revoked server token closes the connection with
 
 With `insecure` (`calu serve --insecure`, D227) a peer on a loopback address needs no server
 token to attach; `relay.start` still needs one, so that only a holder of a token or of an
-operator login can make the server start a session (D208). A loopback peer that sends a
+user login can make the server start a session (D208). A loopback peer that sends a
 valid server token is a token holder as on any relay.
 """
 

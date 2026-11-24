@@ -7,8 +7,8 @@ arguments it was given, after replacing two names in `calu.cli`:
     calu.cli.run_session    ──► calu.run.run_session with the same
 
 Everything else is calu's own code path: the options (`--user`, `--from-sudo`, `--secure`,
-`--insecure`), the credential store, the session password, `calu.asuser.resolve`, `prepare` and
-`enter`, the sockets and the log file. So `fakecalu serve --user ada` as root runs sessions
+`--insecure`), the credential store, the calu user password, `calu.asuser.resolve`, `prepare`
+and `enter`, the sockets and the log file. So `fakecalu serve --user ada` as root runs sessions
 whose files in the project are written with ada's file identity, without `claude`, an API
 key or a network. The scripted conversations are those of `uitest/fake_server.py`
 (`scenario: <name>` as the first message; anything else plays `tour`).

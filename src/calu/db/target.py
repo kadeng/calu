@@ -5,9 +5,8 @@
     variant     the database is ...                          the login authenticates with ...
     docker      a PostgreSQL container calu starts itself    a password calu generated
     server      a PostgreSQL server that exists already      a password
-    rds-iam     an AWS RDS instance                          an IAM token (the session login
-                                                             too, unless setup was told
-                                                             `--session-auth password`)
+    rds-iam     an AWS RDS instance                          an IAM token (the owner login;
+                                                             the user login has a password)
 
 A `Target` is one login of one such database. It is the secret of an entry of the credential
 store (`calu.credentials`), so everything in it is encrypted and authenticated by the entry's
@@ -242,7 +241,7 @@ class Target(_Model):
             raise TargetError(
                 "the stored owner login names a libpq service; calu needs host, port and "
                 "database spelled out to derive the logins of its roles (`calu credential set "
-                "admin` with an explicit connection string)"
+                "db-admin` with an explicit connection string)"
             )
         conninfo = {key: self.conninfo[key] for key in INHERITED if key in self.conninfo}
         conninfo["user"] = user
@@ -331,8 +330,7 @@ class Target(_Model):
     def libpq_string(self) -> str:
         """Return this password login as a libpq connection string (a form 1 secret).
 
-        For handing a login to another machine (`calu credential new operator` prints it, and
-        `calu credential set` stores it there).
+        For handing a login to another machine (`calu credential set user` stores it there).
 
         Returns:
             The connection string with the password.

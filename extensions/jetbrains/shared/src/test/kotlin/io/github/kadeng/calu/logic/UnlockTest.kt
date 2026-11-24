@@ -34,15 +34,18 @@ class UnlockTest {
         retries = retries,
     )
 
+    /** The bridge's message after a wrong calu user password (`logins.refused`). */
+    private val refusedMessage =
+        "That is not the calu user password. Forgot it? DOCUMENTATION.md, \"A forgotten user password\", says how to set a new one."
+
     /**
-     * Build a state in which the first password was accepted.
+     * Build a state in which the calu user password was accepted in a prompt.
      *
-     * @param changing Whether the held login may change settings.
-     * @return The state after one prompt round of kind "first".
+     * @return The state after one successful prompt round.
      */
-    private fun unlockedState(changing: Boolean): UnlockState {
+    private fun unlockedState(): UnlockState {
         val prompted = onNeedsPassword(initialUnlockState(), need(initialUnlockState())).state
-        return onUnlockResult(prompted, PROMPT_FIRST, UnlockResult(listOf("operator"), changing), 1).state
+        return onUnlockResult(prompted, UnlockResult(listOf("user"))).state
     }
 
     // ------------------------------------------------------------------ onNeedsPassword
@@ -52,7 +55,7 @@ class UnlockTest {
         val state = initialUnlockState()
         val decision = onNeedsPassword(state, need(state, interactive = false))
         assertEquals(NeedAction.FAIL, decision.action)
-        assertNull(decision.state.promptOpen)
+        assertFalse(decision.state.promptOpen)
         assertTrue(decision.state.locked)
     }
 
@@ -60,12 +63,10 @@ class UnlockTest {
     fun `opens one prompt for the first interactive request, concurrent requests join it`() {
         val state = initialUnlockState()
         val first = onNeedsPassword(state, need(state))
-        assertEquals(NeedAction.PROMPT_FIRST, first.action)
-        assertEquals("first", first.state.promptOpen)
-        val second = onNeedsPassword(first.state, need(state))
-        assertEquals(NeedAction.JOIN, second.action)
-        val background = onNeedsPassword(first.state, need(state, interactive = false))
-        assertEquals(NeedAction.FAIL, background.action)
+        assertEquals(NeedAction.PROMPT, first.action)
+        assertTrue(first.state.promptOpen)
+        assertEquals(NeedAction.JOIN, onNeedsPassword(first.state, need(state)).action)
+        assertEquals(NeedAction.FAIL, onNeedsPassword(first.state, need(state, interactive = false)).action)
     }
 
     @Test
@@ -75,47 +76,34 @@ class UnlockTest {
         val prompted = onNeedsPassword(start, waiting).state
         val dismissed = onDismiss(prompted)
         assertTrue(dismissed.locked)
-        assertNull(dismissed.promptOpen)
+        assertFalse(dismissed.promptOpen)
         // A request that was already under way when the user pressed Escape.
         assertEquals(NeedAction.FAIL, onNeedsPassword(dismissed, waiting).action)
         // A request the user starts afterwards.
-        assertEquals(NeedAction.PROMPT_FIRST, onNeedsPassword(dismissed, need(dismissed)).action)
+        assertEquals(NeedAction.PROMPT, onNeedsPassword(dismissed, need(dismissed)).action)
     }
 
     @Test
     fun `retries without a prompt if an unlock succeeded after the request was sent`() {
-        val before = initialUnlockState()
-        val sentEarly = need(before)
-        val after = unlockedState(false)
-        assertEquals(NeedAction.RETRY, onNeedsPassword(after, sentEarly).action)
+        val sentEarly = need(initialUnlockState())
+        assertEquals(NeedAction.RETRY, onNeedsPassword(unlockedState(), sentEarly).action)
     }
 
     @Test
-    fun `asks the admin password only when a login is held that may not change settings`() {
-        val reading = unlockedState(false)
-        val decision = onNeedsPassword(reading, need(reading, unlockedReported = listOf("operator")))
-        assertEquals(NeedAction.PROMPT_ADMIN, decision.action)
-        assertEquals("admin", decision.state.promptOpen)
+    fun `asks no second password while a login is held`() {
+        val held = unlockedState()
+        val decision = onNeedsPassword(held, need(held))
+        assertEquals(NeedAction.FAIL, decision.action)
+        assertFalse(decision.state.promptOpen)
         assertFalse(decision.state.locked)
-        val changing = unlockedState(true)
-        assertEquals(NeedAction.FAIL, onNeedsPassword(changing, need(changing)).action)
     }
 
     @Test
     fun `uses the logins the bridge reports when the state knows none`() {
         val state = initialUnlockState()
-        val decision = onNeedsPassword(state, need(state, unlockedReported = listOf("operator")))
-        assertEquals(NeedAction.PROMPT_ADMIN, decision.action)
+        val decision = onNeedsPassword(state, need(state, unlockedReported = listOf("user")))
+        assertEquals(NeedAction.FAIL, decision.action)
         assertFalse(decision.state.locked)
-    }
-
-    @Test
-    fun `asks no third password after the admin password was accepted`() {
-        val reading = unlockedState(false)
-        val prompted = onNeedsPassword(reading, need(reading)).state
-        val step = onUnlockResult(prompted, PROMPT_ADMIN, UnlockResult(listOf("operator", "admin"), true), 1)
-        assertEquals(RoundOutcome.DONE, step.outcome)
-        assertEquals(NeedAction.FAIL, onNeedsPassword(step.state, need(step.state, retries = 2)).action)
     }
 
     @Test
@@ -123,7 +111,7 @@ class UnlockTest {
         val state = initialUnlockState()
         assertEquals(NeedAction.FAIL, onNeedsPassword(state, need(state, retries = MAX_RETRIES_PER_REQUEST)).action)
         assertEquals(
-            NeedAction.PROMPT_FIRST,
+            NeedAction.PROMPT,
             onNeedsPassword(state, need(state, retries = MAX_RETRIES_PER_REQUEST - 1)).action,
         )
     }
@@ -134,127 +122,122 @@ class UnlockTest {
     fun `asks again with the bridge message after a wrong password, up to the cap`() {
         val start = initialUnlockState()
         val prompted = onNeedsPassword(start, need(start)).state
-        val refused = onUnlockRefused(prompted, "wrong password for the 'admin' credential", 1)
+        val refused = onUnlockRefused(prompted, refusedMessage, 1)
         assertEquals(RoundOutcome.ASK_AGAIN, refused.outcome)
-        assertEquals("wrong password for the 'admin' credential", refused.problem)
-        assertEquals("first", refused.state.promptOpen)
-        assertEquals(
-            "Wrong password for the 'admin' credential — calu password (asked once)",
-            promptText(PROMPT_FIRST, refused.problem),
-        )
-        val last = onUnlockRefused(refused.state, "wrong password", MAX_ATTEMPTS_PER_ROUND)
+        assertEquals(refusedMessage, refused.problem)
+        assertTrue(refused.state.promptOpen)
+        assertEquals(2, refused.left)
+        assertEquals("$refusedMessage (2 tries left) — calu user password (asked once)", promptText(refused.problem, refused.left))
+        val second = onUnlockRefused(refused.state, refusedMessage, 2)
+        assertEquals(1, second.left)
+        assertEquals("$refusedMessage (1 try left) — calu user password (asked once)", promptText(second.problem, second.left))
+        val last = onUnlockRefused(refused.state, refusedMessage, MAX_ATTEMPTS_PER_ROUND)
         assertEquals(RoundOutcome.GIVE_UP, last.outcome)
-        assertNull(last.state.promptOpen)
+        assertFalse(last.state.promptOpen)
         // Giving up is not an Escape: a new request may prompt again.
         assertEquals(0, last.state.dismissals)
-        assertEquals(NeedAction.PROMPT_FIRST, onNeedsPassword(last.state, need(last.state)).action)
+        assertEquals(NeedAction.PROMPT, onNeedsPassword(last.state, need(last.state)).action)
     }
 
     @Test
-    fun `holds the logins, clears locked and offers Remember once after the first unlock`() {
+    fun `holds the logins, clears locked and offers Remember once after the unlock`() {
         val start = onStatusLocked(initialUnlockState(), true)
         val prompted = onNeedsPassword(start, need(start)).state
-        val step = onUnlockResult(prompted, PROMPT_FIRST, UnlockResult(listOf("operator"), false), 1)
+        val step = onUnlockResult(prompted, UnlockResult(listOf("user")))
         assertEquals(RoundOutcome.DONE, step.outcome)
         assertTrue(step.offerRemember)
-        assertEquals(listOf("operator"), step.state.unlocked)
+        assertEquals(listOf("user"), step.state.unlocked)
         assertFalse(step.state.locked)
-        assertNull(step.state.promptOpen)
+        assertFalse(step.state.promptOpen)
         assertEquals(1, step.state.unlocks)
-        val again = onUnlockResult(step.state, PROMPT_FIRST, UnlockResult(listOf("operator"), false), 1)
-        assertFalse(again.offerRemember)
-    }
-
-    @Test
-    fun `does not offer Remember for the admin password`() {
-        val reading = unlockedState(false)
-        val fresh = reading.copy(rememberSettled = false)
-        val step = onUnlockResult(fresh, PROMPT_ADMIN, UnlockResult(listOf("operator", "admin"), true), 1)
-        assertFalse(step.offerRemember)
-    }
-
-    @Test
-    fun `asks the admin password again if the entered one does not allow changes`() {
-        val reading = unlockedState(false)
-        val prompted = onNeedsPassword(reading, need(reading)).state
-        val step = onUnlockResult(prompted, PROMPT_ADMIN, UnlockResult(listOf("operator"), false), 1)
-        assertEquals(RoundOutcome.ASK_AGAIN, step.outcome)
-        assertTrue(step.problem!!.contains("does not allow changing settings"))
-        assertEquals("admin", step.state.promptOpen)
-        val last = onUnlockResult(
-            step.state,
-            PROMPT_ADMIN,
-            UnlockResult(listOf("operator"), false),
-            MAX_ATTEMPTS_PER_ROUND,
-        )
-        assertEquals(RoundOutcome.GIVE_UP, last.outcome)
-        assertNull(last.state.promptOpen)
-    }
-
-    @Test
-    fun `keeps locked unchanged when the admin prompt is dismissed`() {
-        val reading = unlockedState(false)
-        val prompted = onNeedsPassword(reading, need(reading)).state
-        val dismissed = onDismiss(prompted)
-        assertFalse(dismissed.locked)
-        assertEquals(1, dismissed.dismissals)
-        assertEquals(listOf("operator"), dismissed.unlocked)
+        assertFalse(onUnlockResult(step.state, UnlockResult(listOf("user"))).offerRemember)
     }
 
     @Test
     fun `closes the prompt when the round is aborted`() {
         val start = initialUnlockState()
-        val prompted = onNeedsPassword(start, need(start)).state
-        val aborted = onRoundAborted(prompted)
-        assertNull(aborted.promptOpen)
+        val aborted = onRoundAborted(onNeedsPassword(start, need(start)).state)
+        assertFalse(aborted.promptOpen)
         assertEquals(0, aborted.dismissals)
+    }
+
+    // ------------------------------------------------------------------ notDoneText
+
+    @Test
+    fun `says what did not happen and how to go on after an Escape`() {
+        val start = initialUnlockState()
+        val waiting = need(start)
+        val dismissed = onDismiss(onNeedsPassword(start, waiting).state)
+        assertEquals("Not done: no password was given. The next action that needs the database asks again.", NOT_DONE_NO_PASSWORD)
+        // The request that opened the prompt, and one that started before the Escape without a round.
+        assertEquals(NOT_DONE_NO_PASSWORD, notDoneText(dismissed, waiting, RoundEnd.DISMISSED))
+        assertEquals(NOT_DONE_NO_PASSWORD, notDoneText(dismissed, waiting, null))
+    }
+
+    @Test
+    fun `says that the passwords were refused after a round gave up`() {
+        val start = initialUnlockState()
+        assertEquals(
+            "Not done: the password was refused 3 times. The next action that needs the database asks again.",
+            NOT_DONE_REFUSED,
+        )
+        assertEquals(NOT_DONE_REFUSED, notDoneText(start, need(start), RoundEnd.REFUSED))
+    }
+
+    @Test
+    fun `keeps the bridge message for background requests and other failures`() {
+        val start = initialUnlockState()
+        val dismissed = onDismiss(onNeedsPassword(start, need(start)).state)
+        assertNull(notDoneText(dismissed, need(start, interactive = false), null))
+        assertNull(notDoneText(start, need(start), RoundEnd.ABORTED))
+        assertNull(notDoneText(start, need(start, retries = MAX_RETRIES_PER_REQUEST), null))
     }
 
     // ------------------------------------------------------------------ onExplicitUnlock
 
     @Test
-    fun `prompts after an Escape, joins an open prompt, and asks nothing when all is held`() {
+    fun `explicit unlock prompts after an Escape, joins an open prompt, and asks nothing while a login is held`() {
         val start = initialUnlockState()
         val dismissed = onDismiss(onNeedsPassword(start, need(start)).state)
         val explicit = onExplicitUnlock(dismissed)
-        assertEquals(ExplicitAction.PROMPT_FIRST, explicit.action)
+        assertEquals(ExplicitAction.PROMPT, explicit.action)
+        assertTrue(explicit.state.promptOpen)
         assertEquals(ExplicitAction.JOIN, onExplicitUnlock(explicit.state).action)
-        assertEquals(ExplicitAction.PROMPT_ADMIN, onExplicitUnlock(unlockedState(false)).action)
-        assertEquals(ExplicitAction.NONE, onExplicitUnlock(unlockedState(true)).action)
+        assertEquals(ExplicitAction.NONE, onExplicitUnlock(unlockedState()).action)
     }
 
     // ------------------------------------------------------------------ stored password
 
     @Test
-    fun `is sent at the start only if one is stored`() {
+    fun `a stored password is sent at the start only if one is stored`() {
         assertTrue(onStoredPassword("secret"))
         assertFalse(onStoredPassword(null))
         assertFalse(onStoredPassword(""))
     }
 
     @Test
-    fun `unlocks without offering Remember again`() {
-        val step = onStoredResult(initialUnlockState(), UnlockResult(listOf("admin"), true), refused = false)
+    fun `a stored password unlocks without offering Remember again`() {
+        val step = onStoredResult(initialUnlockState(), UnlockResult(listOf("user")), refused = false)
         assertFalse(step.forget)
-        assertEquals(listOf("admin"), step.state.unlocked)
-        assertTrue(step.state.changing)
+        assertEquals(listOf("user"), step.state.unlocked)
         assertFalse(step.state.locked)
         assertTrue(step.state.rememberSettled)
+        val prompted = step.state.copy(unlocked = emptyList(), promptOpen = true)
+        assertFalse(onUnlockResult(prompted, UnlockResult(listOf("user"))).offerRemember)
     }
 
     @Test
-    fun `is forgotten when refused, the next interactive request then asks and offers again`() {
+    fun `a refused stored password is forgotten, and the next interactive request asks and offers again`() {
         val step = onStoredResult(initialUnlockState(), null, refused = true)
         assertTrue(step.forget)
         assertTrue(step.state.locked)
         val asked = onNeedsPassword(step.state, need(step.state))
-        assertEquals(NeedAction.PROMPT_FIRST, asked.action)
-        val unlocked = onUnlockResult(asked.state, PROMPT_FIRST, UnlockResult(listOf("admin"), true), 1)
-        assertTrue(unlocked.offerRemember)
+        assertEquals(NeedAction.PROMPT, asked.action)
+        assertTrue(onUnlockResult(asked.state, UnlockResult(listOf("user"))).offerRemember)
     }
 
     @Test
-    fun `is kept when the unlock failed for another reason`() {
+    fun `a stored password is kept when the unlock failed for another reason`() {
         val start = initialUnlockState()
         val step = onStoredResult(start, null, refused = false)
         assertFalse(step.forget)
@@ -265,9 +248,16 @@ class UnlockTest {
 
     @Test
     fun `builds the prompt texts`() {
-        assertEquals("calu password (asked once)", promptText(PROMPT_FIRST, null))
-        assertEquals("calu admin password, needed to change settings (asked once)", promptText(PROMPT_ADMIN, null))
-        assertEquals("calu admin password, needed to change settings (asked once)", promptText(PROMPT_ADMIN, ""))
+        assertEquals("calu user password (asked once)", promptText(null, null))
+        assertEquals("calu user password (asked once)", promptText("", 2))
+        assertEquals(
+            "No password was typed, and this login has one. (2 tries left) — calu user password (asked once)",
+            promptText("no password was typed, and this login has one.", 2),
+        )
+        assertEquals(
+            "No password was typed, and this login has one. — calu user password (asked once)",
+            promptText("no password was typed, and this login has one.", null),
+        )
     }
 
     @Test
@@ -280,12 +270,12 @@ class UnlockTest {
     @Test
     fun `reads the held logins from error data`() {
         assertEquals(
-            listOf("operator"),
-            unlockedLogins(CaluJson.parseToJsonElement("""{"needs":"admin","unlocked":["operator",3,""]}""")),
+            listOf("user"),
+            unlockedLogins(CaluJson.parseToJsonElement("""{"needs":"user","unlocked":["user",3,""]}""")),
         )
-        assertEquals(emptyList<String>(), unlockedLogins(CaluJson.parseToJsonElement("""{"needs":"admin"}""")))
+        assertEquals(emptyList<String>(), unlockedLogins(CaluJson.parseToJsonElement("""{"needs":"user"}""")))
         assertEquals(emptyList<String>(), unlockedLogins(JsonNull))
         assertEquals(emptyList<String>(), unlockedLogins(null))
-        assertEquals(emptyList<String>(), unlockedLogins(CaluJson.parseToJsonElement("""{"unlocked":"operator"}""")))
+        assertEquals(emptyList<String>(), unlockedLogins(CaluJson.parseToJsonElement("""{"unlocked":"user"}""")))
     }
 }

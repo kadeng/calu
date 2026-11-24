@@ -8,13 +8,13 @@ import pytest
 
 from calu.db import place
 from calu.db.target import Target
-from calu.setup import ADMIN_ROLE
+from calu.setup import USER_ROLE
 
 ME = os.getuid()
 OWNER = Target.parse("postgresql://calu_owner:secret@127.0.0.1:5433/calu?sslmode=disable")
 
 
-def test_the_place_is_written_without_any_secret_and_read_as_the_admin_login(tmp_path: Path):
+def test_the_place_is_written_without_any_secret_and_read_as_the_user_login(tmp_path: Path):
     path = tmp_path / "state" / "database.json"
     place.write(OWNER, path)
     text = path.read_text()
@@ -27,7 +27,7 @@ def test_the_place_is_written_without_any_secret_and_read_as_the_admin_login(tmp
     }
     assert path.stat().st_mode & 0o777 == 0o644
     login = place.read(path, ME)
-    assert login.user == ADMIN_ROLE and login.place == "127.0.0.1:5433/calu"
+    assert login.user == USER_ROLE and login.place == "127.0.0.1:5433/calu"
     assert getattr(login.auth, "password", None) == ""
 
 
@@ -58,11 +58,11 @@ def test_a_place_file_others_could_have_written_is_refused(tmp_path: Path):
         place.read(path, ME)
 
 
-def test_a_setup_without_passwords_shares_the_admin_login(tmp_path: Path, monkeypatch):
+def test_a_setup_without_a_user_password_shares_the_user_login(tmp_path: Path, monkeypatch):
     """D228, the owner's ruling: without passwords, security is weak, and a client asks for
-    nothing. The login is then in the file every user can read."""
+    nothing. The login is then in the file every user can read (D265: an empty user password)."""
     from calu import cli
-    from calu.setup import admin_login
+    from calu.setup import user_login
 
     path = tmp_path / "database.json"
     place.write(OWNER, path, admin_password="generated")
@@ -71,13 +71,13 @@ def test_a_setup_without_passwords_shares_the_admin_login(tmp_path: Path, monkey
 
     # A client that knows the database without a password takes the shared one ...
     monkeypatch.setattr(cli.db_place, "read", lambda: login)
-    asked = admin_login(OWNER, "")
+    asked = user_login(OWNER, "")
     filled = cli._with_shared_password(asked)
     assert filled is not None and getattr(filled.auth, "password", None) == "generated"
     # ... but not for another database, and it keeps a password it already has.
-    other = admin_login(Target.parse("postgresql://u:p@db.example:5432/calu"), "")
+    other = user_login(Target.parse("postgresql://u:p@db.example:5432/calu"), "")
     assert cli._with_shared_password(other) is other
-    typed = admin_login(OWNER, "typed")
+    typed = user_login(OWNER, "typed")
     assert cli._with_shared_password(typed) is typed
     # After a setup with passwords the file holds no secret again.
     place.write(OWNER, path)
@@ -90,16 +90,16 @@ def test_commands_use_the_shared_login_and_ask_nothing(tmp_path: Path, monkeypat
     from calu import cli
     from calu.credentials import CredentialStore
 
-    assert cli._shared_admin() is None, "the tests never read this machine's own place file"
+    assert cli._shared_user() is None, "the tests never read this machine's own place file"
     path = tmp_path / "shared" / "database.json"
     place.write(OWNER, path, admin_password="generated")
     really = place.read
     monkeypatch.setattr(place, "read", lambda: really(path, ME))
-    shared = cli._shared_admin()
-    assert shared is not None and shared.user == ADMIN_ROLE
+    shared = cli._shared_user()
+    assert shared is not None and shared.user == USER_ROLE
     store = CredentialStore(tmp_path / "empty-store.json")
-    secret = Target.parse(cli._admin_secret(store))
-    assert secret.user == ADMIN_ROLE and getattr(secret.auth, "password", "") == "generated"
+    login = cli._user_target(store, may_ask=False)
+    assert login.user == USER_ROLE and getattr(login.auth, "password", "") == "generated"
     # Without a password in the file, nothing is shared.
     place.write(OWNER, path)
-    assert cli._shared_admin() is None
+    assert cli._shared_user() is None

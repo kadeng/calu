@@ -11,11 +11,13 @@ from pathlib import Path
 import anyio
 import pytest
 
-from calu import __version__, doctor
+from calu import __version__, doctor, logins
 from calu.bus import Bus
 from calu.claude import FakeRunner, FakeScript
 from calu.config import BEDROCK_EU_HAIKU
 from calu.credentials import CredentialStore
+from calu.db import place as db_place
+from calu.db.target import Target
 from calu.ide import presets as ide_presets
 from calu.model_choice import FIREWORKS_MODEL
 from calu.protocol.schema import protocol_schema
@@ -44,6 +46,20 @@ def own_runtime_directory(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     with tempfile.TemporaryDirectory(prefix="calu-ide-") as directory:
         monkeypatch.setenv("XDG_RUNTIME_DIR", directory)
         yield Path(directory)
+
+
+@pytest.fixture(autouse=True)
+def no_place_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep this machine's place file (`/var/lib/calu/database.json`) out of every test.
+
+    The bridge's logins (`calu.ide.access`) and `calu doctor`'s findings read it; with it, a
+    test of a machine without a calu login would depend on whether root's calu is set up here.
+    """
+
+    def no_file(path: Path | None = None, owner: int = 0) -> Target:
+        raise db_place.PlaceError("no place file in this test")
+
+    monkeypatch.setattr(db_place, "read", no_file)
 
 
 async def test_initialize_says_who_the_bridge_is(tmp_path: Path, store: CredentialStore):
@@ -292,7 +308,7 @@ async def test_the_presets_need_no_database_and_hold_no_large_mistral_model(
     async with bridged(tmp_path, store) as editor:
         answer = await editor.request("ide.models.presets")
     assert answer["roles"] == [] and answer["claude"] is None
-    assert "no database credential" in answer["problem"]
+    assert answer["problem"] == logins.no_login()
     by_id = {preset["id"]: preset for preset in answer["presets"]}
     assert list(by_id) == [
         "default",
@@ -346,22 +362,39 @@ async def test_the_status_reports_the_tools_and_a_missing_database(
         assert set(finding) == {"name", "ok", "level", "message", "advice"}
         assert finding["level"] in ("ok", "missing", "note")
     assert status["database"]["reachable"] is False
-    assert "no database credential" in status["database"]["problem"]
+    assert status["database"]["problem"] == logins.no_login()
     assert status["server"] == {"sessions_running": 0, "servers_running": None}
     assert status["locked"] is False and status["unlocked"] == []
 
 
-async def test_an_unlock_without_anything_to_open_says_the_password_was_wrong(
-    tmp_path: Path, store: CredentialStore
-):
+async def test_an_unlock_without_a_login_says_there_is_none(tmp_path: Path, store: CredentialStore):
+    """D265: nothing to open is no wrong password; the answer names `calu setup`."""
     async with bridged(tmp_path, store) as editor:
         with pytest.raises(Failed) as nothing:
             await editor.request("ide.unlock", {"password": "anything"})
-        assert nothing.value.code == -32010 and "wrong password" in nothing.value.message
-        assert nothing.value.data == {"needs": "admin", "unlocked": []}
+        assert nothing.value.code == -32017 and nothing.value.message == logins.no_login()
         with pytest.raises(Failed) as missing:
             await editor.request("ide.unlock", {"password": None})
         assert missing.value.code == -32602
+
+
+async def test_a_protected_user_login_is_asked_for_and_unlocked_once(
+    tmp_path: Path, store: CredentialStore
+):
+    """D265: a request without the password asks for the user password (`data.needs` is
+    "user"); a wrong one is refused with `calu.logins.refused`; the right one is held. Nothing
+    connects: the unlock opens the store entry only."""
+    store.save(logins.USER, "postgresql://calu_admin:gen@127.0.0.1:1/calu", "pw")
+    async with bridged(tmp_path, store) as editor:
+        with pytest.raises(Failed) as asked:
+            await editor.request("ide.sessions", {})
+        assert asked.value.code == -32010
+        assert asked.value.data == {"needs": logins.USER, "unlocked": []}
+        with pytest.raises(Failed) as wrong:
+            await editor.request("ide.unlock", {"password": "not it"})
+        assert wrong.value.code == -32010 and wrong.value.message == logins.refused(False)
+        answer = await editor.request("ide.unlock", {"password": "pw"})
+        assert answer == {"unlocked": [logins.USER], "reading": True, "changing": True}
 
 
 async def test_the_bridge_ends_when_asked_or_when_the_editor_closes_its_end(

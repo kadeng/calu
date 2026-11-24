@@ -1,24 +1,26 @@
 /**
  * Decisions of the "one password, asked once" flow (agent/records/notes/vscode-extension-spec.md,
- * section 8). Pure: no IntelliJ Platform import, no UI, no I/O. The bridge code of the plugin
- * connects these functions to the password dialog, to the IDE's password store and to the bridge
- * request `ide.unlock`.
+ * section 8). calu has one login for everything an editor does, the "user" login, protected by
+ * the calu user password (D265). Pure: no IntelliJ Platform import, no UI, no I/O. The bridge
+ * code of the plugin connects these functions to the password dialog, to the IDE's password
+ * store and to the bridge request `ide.unlock`.
  *
  *     bridge process starts
  *       stored password? ── onStoredPassword ──► ide.unlock ── onStoredResult ──► forget it if refused
  *
  *     a request answers error -32010 ── onNeedsPassword ──►
- *       FAIL          background request, or a request that started before the user pressed
- *                     Escape, or nothing more can be asked: the caller gets the error
- *       RETRY         an unlock succeeded after the request was sent: send it again
- *       JOIN          a prompt is open: wait for it, then send the request again
- *       PROMPT_FIRST  open the prompt for the one password
- *       PROMPT_ADMIN  a login is held, but it may not change settings: ask the admin password
+ *       FAIL    background request, or a request that started before the user pressed
+ *               Escape, or a login is held already: the caller gets the error
+ *       RETRY   an unlock succeeded after the request was sent: send it again
+ *       JOIN    a prompt is open: wait for it, then send the request again
+ *       PROMPT  open the prompt for the calu user password
  *
  *     prompt ── Escape ───────────────────────► onDismiss        (waiting requests fail)
- *            ── password ──► ide.unlock ── ok ─► onUnlockResult  DONE | ASK_AGAIN | GIVE_UP
+ *            ── password ──► ide.unlock ── ok ─► onUnlockResult  DONE
  *                                       ── refused ─► onUnlockRefused   ASK_AGAIN | GIVE_UP
  *                                       ── other error ─► onRoundAborted
+ *
+ *     a request that failed without a password ── notDoneText ──► the message its caller shows
  *
  * One `UnlockState` belongs to one bridge process. All functions return a new state and leave
  * their argument unchanged. No function receives or stores a password.
@@ -26,12 +28,6 @@
  * Ported from `extensions/vscode/src/shared/unlock.ts`.
  */
 package io.github.kadeng.calu.logic
-
-/** Prompt kind (`UnlockState.promptOpen`, parameter `kind`): the prompt asks the one password. */
-const val PROMPT_FIRST: String = "first"
-
-/** Prompt kind (`UnlockState.promptOpen`, parameter `kind`): the prompt asks the admin password for changes. */
-const val PROMPT_ADMIN: String = "admin"
 
 /** How many passwords may be entered in one prompt round before the round gives up. */
 const val MAX_ATTEMPTS_PER_ROUND: Int = 3
@@ -42,15 +38,24 @@ const val MAX_RETRIES_PER_REQUEST: Int = 3
 /** Title of the password input dialog. */
 const val PROMPT_TITLE: String = "calu: password"
 
+/** The prompt's question, without a problem in front (see `promptText`). */
+const val PROMPT_ASK: String = "calu user password (asked once)"
+
+/** Message of a request that failed because the user dismissed the prompt (Escape). */
+const val NOT_DONE_NO_PASSWORD: String =
+    "Not done: no password was given. The next action that needs the database asks again."
+
+/** Message of a request that failed because every password of its prompt round was refused. */
+const val NOT_DONE_REFUSED: String =
+    "Not done: the password was refused $MAX_ATTEMPTS_PER_ROUND times. The next action that needs the database asks again."
+
 /**
  * What the plugin knows about the logins of one bridge process.
  *
  * @property unlocked Names of the logins the bridge holds, as far as the plugin knows.
- * @property changing True if the bridge holds a login that may change settings (no admin prompt
- *   is needed).
- * @property locked True if a protected credential exists and no login is held (shown as "locked").
- * @property promptOpen The kind of the prompt that is open now (`PROMPT_FIRST` or `PROMPT_ADMIN`);
- *   `null` if none is open.
+ * @property locked True if the user login has a password and the bridge holds no login (shown
+ *   as "locked").
+ * @property promptOpen True while the password prompt is open.
  * @property dismissals How often the user dismissed a prompt with Escape. Requests remember it at
  *   their start.
  * @property unlocks How many `ide.unlock` requests succeeded. Requests remember it when they are
@@ -60,21 +65,19 @@ const val PROMPT_TITLE: String = "calu: password"
  */
 data class UnlockState(
     val unlocked: List<String>,
-    val changing: Boolean,
     val locked: Boolean,
-    val promptOpen: String?,
+    val promptOpen: Boolean,
     val dismissals: Int,
     val unlocks: Int,
     val rememberSettled: Boolean,
 )
 
 /**
- * The members of an `ide.unlock` result that the decisions use.
+ * The member of an `ide.unlock` result that the decisions use.
  *
  * @property unlocked Names of all logins the bridge holds now.
- * @property changing True if a request that changes settings now finds a login.
  */
-data class UnlockResult(val unlocked: List<String>, val changing: Boolean)
+data class UnlockResult(val unlocked: List<String>)
 
 /**
  * One request that was answered with error -32010.
@@ -106,26 +109,20 @@ enum class NeedAction {
     /** A prompt is open: wait for it, then send the request again. */
     JOIN,
 
-    /** Open the prompt for the one password. */
-    PROMPT_FIRST,
-
-    /** Open the prompt for the admin password. */
-    PROMPT_ADMIN,
+    /** Open the prompt for the calu user password. */
+    PROMPT,
 }
 
 /** What the explicit "Unlock" action does (see `onExplicitUnlock`). */
 enum class ExplicitAction {
-    /** A login that may change settings is held: nothing is left to unlock. */
+    /** A login is held: nothing is left to unlock. */
     NONE,
 
     /** A prompt is open: wait for it. */
     JOIN,
 
-    /** Open the prompt for the one password. */
-    PROMPT_FIRST,
-
-    /** Open the prompt for the admin password. */
-    PROMPT_ADMIN,
+    /** Open the prompt for the calu user password. */
+    PROMPT,
 }
 
 /** What to do after one answer of `ide.unlock` inside a prompt round. */
@@ -138,6 +135,21 @@ enum class RoundOutcome {
 
     /** Fail the waiting requests. */
     GIVE_UP,
+}
+
+/** How a prompt round ended. */
+enum class RoundEnd {
+    /** A password was accepted. */
+    UNLOCKED,
+
+    /** The user dismissed the prompt (Escape, a closed dialog). */
+    DISMISSED,
+
+    /** `MAX_ATTEMPTS_PER_ROUND` passwords were refused. */
+    REFUSED,
+
+    /** The bridge ended, the database was unreachable, or the prompt failed. */
+    ABORTED,
 }
 
 /**
@@ -162,6 +174,8 @@ data class ExplicitDecision(val action: ExplicitAction, val state: UnlockState)
  * @property outcome `DONE`: retry the waiting requests. `ASK_AGAIN`: show the prompt again.
  *   `GIVE_UP`: fail them.
  * @property problem Text to show with the next prompt (`ASK_AGAIN` only); `null` otherwise.
+ * @property left How many entries the round still allows (`ASK_AGAIN` only, >= 1); `null`
+ *   otherwise.
  * @property offerRemember True if "Remember on this machine" is to be offered now (at most once
  *   per state).
  * @property state The new state.
@@ -171,6 +185,7 @@ data class RoundStep(
     val problem: String?,
     val offerRemember: Boolean,
     val state: UnlockState,
+    val left: Int? = null,
 )
 
 /**
@@ -188,9 +203,8 @@ data class StoredDecision(val forget: Boolean, val state: UnlockState)
  */
 fun initialUnlockState(): UnlockState = UnlockState(
     unlocked = emptyList(),
-    changing = false,
     locked = false,
-    promptOpen = null,
+    promptOpen = false,
     dismissals = 0,
     unlocks = 0,
     rememberSettled = false,
@@ -206,9 +220,8 @@ fun initialUnlockState(): UnlockState = UnlockState(
  *     request was already sent again MAX_RETRIES times -> FAIL   (no endless loop)
  *     an unlock succeeded after the attempt was sent   -> RETRY  (the answer is out of date)
  *     a prompt is open                                 -> JOIN
- *     no login is held                                 -> PROMPT_FIRST
- *     a login is held that may not change settings     -> PROMPT_ADMIN
- *     a login is held that may change settings         -> FAIL   (no third password)
+ *     no login is held                                 -> PROMPT
+ *     a login is held                                  -> FAIL   (no second password)
  *
  * "Escape stops asking until the user starts an action that needs it" is implemented by the
  * second rule: a request that starts after the dismissal has `startedAtDismissals ==
@@ -216,10 +229,9 @@ fun initialUnlockState(): UnlockState = UnlockState(
  *
  * @param state The state of the bridge process.
  * @param need The request's facts.
- * @return The action and the new state. With `PROMPT_FIRST`/`PROMPT_ADMIN` the new state has
- *   `promptOpen` set: the caller must open the prompt and later call `onDismiss`,
- *   `onUnlockResult`, `onUnlockRefused` or `onRoundAborted`. `locked` becomes true if no login
- *   is held.
+ * @return The action and the new state. With `PROMPT` the new state has `promptOpen` set: the
+ *   caller must open the prompt and later call `onDismiss`, `onUnlockResult`, `onUnlockRefused`
+ *   or `onRoundAborted`. `locked` becomes true if no login is held.
  */
 fun onNeedsPassword(state: UnlockState, need: PasswordNeed): NeedDecision {
     val holds = state.unlocked.isNotEmpty() || need.unlockedReported.isNotEmpty()
@@ -228,10 +240,9 @@ fun onNeedsPassword(state: UnlockState, need: PasswordNeed): NeedDecision {
     if (need.startedAtDismissals < state.dismissals) return NeedDecision(NeedAction.FAIL, next)
     if (need.retries >= MAX_RETRIES_PER_REQUEST) return NeedDecision(NeedAction.FAIL, next)
     if (need.sentAtUnlocks < state.unlocks) return NeedDecision(NeedAction.RETRY, next)
-    if (!state.promptOpen.isNullOrEmpty()) return NeedDecision(NeedAction.JOIN, next)
-    if (!holds) return NeedDecision(NeedAction.PROMPT_FIRST, next.copy(promptOpen = PROMPT_FIRST))
-    if (state.changing) return NeedDecision(NeedAction.FAIL, next)
-    return NeedDecision(NeedAction.PROMPT_ADMIN, next.copy(promptOpen = PROMPT_ADMIN))
+    if (state.promptOpen) return NeedDecision(NeedAction.JOIN, next)
+    if (!holds) return NeedDecision(NeedAction.PROMPT, next.copy(promptOpen = true))
+    return NeedDecision(NeedAction.FAIL, next)
 }
 
 /**
@@ -239,17 +250,14 @@ fun onNeedsPassword(state: UnlockState, need: PasswordNeed): NeedDecision {
  * The action ignores an earlier Escape.
  *
  * @param state The state of the bridge process.
- * @return `NONE` if a login that may change settings is held (nothing is left to unlock);
- *   `JOIN` if a prompt is open; else the prompt to open, with `promptOpen` set in the new state
- *   (the caller's duties are those of `onNeedsPassword`).
+ * @return `NONE` if a login is held (nothing is left to unlock); `JOIN` if a prompt is open;
+ *   else `PROMPT`, with `promptOpen` set in the new state (the caller's duties are those of
+ *   `onNeedsPassword`).
  */
 fun onExplicitUnlock(state: UnlockState): ExplicitDecision {
-    if (!state.promptOpen.isNullOrEmpty()) return ExplicitDecision(ExplicitAction.JOIN, state)
-    if (state.unlocked.isEmpty()) {
-        return ExplicitDecision(ExplicitAction.PROMPT_FIRST, state.copy(promptOpen = PROMPT_FIRST))
-    }
-    if (state.changing) return ExplicitDecision(ExplicitAction.NONE, state)
-    return ExplicitDecision(ExplicitAction.PROMPT_ADMIN, state.copy(promptOpen = PROMPT_ADMIN))
+    if (state.promptOpen) return ExplicitDecision(ExplicitAction.JOIN, state)
+    if (state.unlocked.isNotEmpty()) return ExplicitDecision(ExplicitAction.NONE, state)
+    return ExplicitDecision(ExplicitAction.PROMPT, state.copy(promptOpen = true))
 }
 
 /**
@@ -257,14 +265,11 @@ fun onExplicitUnlock(state: UnlockState): ExplicitDecision {
  *
  * @param state The state with an open prompt.
  * @return The new state: no prompt open, `dismissals` one higher (so that every request
- *   started before now fails without a prompt). Dismissing the first prompt sets `locked`;
- *   dismissing the admin prompt leaves `locked` unchanged, because a login is held.
+ *   started before now fails without a prompt), `locked` true (a prompt is only opened while
+ *   no login is held).
  */
-fun onDismiss(state: UnlockState): UnlockState = state.copy(
-    promptOpen = null,
-    dismissals = state.dismissals + 1,
-    locked = if (state.promptOpen == PROMPT_FIRST) true else state.locked,
-)
+fun onDismiss(state: UnlockState): UnlockState =
+    state.copy(promptOpen = false, dismissals = state.dismissals + 1, locked = true)
 
 /**
  * Record that a prompt round ended without an answer about the password (the bridge exited,
@@ -273,37 +278,27 @@ fun onDismiss(state: UnlockState): UnlockState = state.copy(
  * @param state The state with an open prompt.
  * @return The new state: no prompt open. Later requests may prompt again.
  */
-fun onRoundAborted(state: UnlockState): UnlockState = state.copy(promptOpen = null)
+fun onRoundAborted(state: UnlockState): UnlockState = state.copy(promptOpen = false)
 
 /**
  * Record a successful `ide.unlock` of a prompt round.
  *
- * @param state The state with the open prompt of kind `kind`.
- * @param kind The kind of the open prompt: `PROMPT_FIRST` or `PROMPT_ADMIN`.
+ * @param state The state with the open prompt.
  * @param result The answer of `ide.unlock`.
- * @param attempt Number of passwords entered in this round so far, this one included (>= 1).
- * @return `DONE`, except for an admin prompt whose password still does not allow changing
- *   settings: then `ASK_AGAIN` with a `problem` text, or `GIVE_UP` after
- *   `MAX_ATTEMPTS_PER_ROUND` entries. In every case the new state holds `result.unlocked`, is
- *   not locked and has `unlocks` one higher. `offerRemember` is true for the first successful
- *   first-kind unlock of the state; `promptOpen` is cleared unless the outcome is `ASK_AGAIN`.
+ * @return Always `DONE`. The new state holds `result.unlocked`, is not locked, has no prompt
+ *   open and has `unlocks` one higher. `offerRemember` is true unless an earlier unlock of the
+ *   state (by a prompt or by the stored password) settled it.
  */
-fun onUnlockResult(state: UnlockState, kind: String, result: UnlockResult, attempt: Int): RoundStep {
-    val offerRemember = kind == PROMPT_FIRST && !state.rememberSettled
+fun onUnlockResult(state: UnlockState, result: UnlockResult): RoundStep {
+    val offerRemember = !state.rememberSettled
     val held = state.copy(
         unlocked = result.unlocked.toList(),
-        changing = result.changing,
         locked = false,
+        promptOpen = false,
         unlocks = state.unlocks + 1,
-        rememberSettled = state.rememberSettled || offerRemember,
+        rememberSettled = true,
     )
-    if (kind == PROMPT_FIRST || result.changing) {
-        return RoundStep(RoundOutcome.DONE, null, offerRemember, held.copy(promptOpen = null))
-    }
-    if (attempt >= MAX_ATTEMPTS_PER_ROUND) {
-        return RoundStep(RoundOutcome.GIVE_UP, null, offerRemember, held.copy(promptOpen = null))
-    }
-    return RoundStep(RoundOutcome.ASK_AGAIN, "This password does not allow changing settings", offerRemember, held)
+    return RoundStep(RoundOutcome.DONE, null, offerRemember, held)
 }
 
 /**
@@ -312,15 +307,15 @@ fun onUnlockResult(state: UnlockState, kind: String, result: UnlockResult, attem
  * @param state The state with an open prompt.
  * @param message The bridge's error message (shown with the next prompt).
  * @param attempt Number of passwords entered in this round so far, this one included (>= 1).
- * @return `ASK_AGAIN` with `problem = message` (the prompt stays open), or `GIVE_UP` after
- *   `MAX_ATTEMPTS_PER_ROUND` entries (the prompt is closed; a later new request may prompt
- *   again). `offerRemember` is always false.
+ * @return `ASK_AGAIN` with `problem = message` and `left = MAX_ATTEMPTS_PER_ROUND - attempt`
+ *   (the prompt stays open), or `GIVE_UP` after `MAX_ATTEMPTS_PER_ROUND` entries (the prompt
+ *   is closed; a later new request may prompt again). `offerRemember` is always false.
  */
 fun onUnlockRefused(state: UnlockState, message: String, attempt: Int): RoundStep {
     if (attempt >= MAX_ATTEMPTS_PER_ROUND) {
-        return RoundStep(RoundOutcome.GIVE_UP, null, false, state.copy(promptOpen = null))
+        return RoundStep(RoundOutcome.GIVE_UP, null, false, state.copy(promptOpen = false))
     }
-    return RoundStep(RoundOutcome.ASK_AGAIN, message, false, state)
+    return RoundStep(RoundOutcome.ASK_AGAIN, message, false, state, left = MAX_ATTEMPTS_PER_ROUND - attempt)
 }
 
 /**
@@ -351,7 +346,6 @@ fun onStoredResult(state: UnlockState, result: UnlockResult?, refused: Boolean):
             forget = false,
             state = state.copy(
                 unlocked = result.unlocked.toList(),
-                changing = result.changing,
                 locked = false,
                 unlocks = state.unlocks + 1,
                 rememberSettled = true,
@@ -373,26 +367,50 @@ fun onStatusLocked(state: UnlockState, locked: Boolean): UnlockState =
     if (state.locked == locked) state else state.copy(locked = locked)
 
 /**
+ * Choose the message of a request whose error -32010 no password resolved, so that the user
+ * reads what did not happen and how to go on instead of the bridge's request for a password.
+ *
+ * Rules, in this order:
+ *
+ *     background request                                 -> null (the bridge's message)
+ *     the round the request waited for ended REFUSED     -> NOT_DONE_REFUSED
+ *     the round ended DISMISSED, or the user pressed
+ *       Escape after the request started                 -> NOT_DONE_NO_PASSWORD
+ *     otherwise                                          -> null (the bridge's message)
+ *
+ * @param state The state after the request's failure was decided.
+ * @param need The request's facts.
+ * @param end How the prompt round the request opened or joined ended; `null` if it failed
+ *   without one (`onNeedsPassword` said `FAIL`).
+ * @return The message to fail the request with, or `null` to keep the bridge's error.
+ */
+fun notDoneText(state: UnlockState, need: PasswordNeed, end: RoundEnd?): String? {
+    if (!need.interactive) return null
+    if (end == RoundEnd.REFUSED) return NOT_DONE_REFUSED
+    if (end == RoundEnd.DISMISSED || state.dismissals > need.startedAtDismissals) return NOT_DONE_NO_PASSWORD
+    return null
+}
+
+/**
  * Build the text of the password prompt.
  *
  * Examples:
  *
- *     promptText("first", null)  -> "calu password (asked once)"
- *     promptText("admin", null)  -> "calu admin password, needed to change settings (asked once)"
- *     promptText("first", "wrong password for the 'admin' credential")
- *         -> "Wrong password for the 'admin' credential — calu password (asked once)"
+ *     promptText(null, null)  -> "calu user password (asked once)"
+ *     promptText("that is not the calu user password.", 2)
+ *         -> "That is not the calu user password. (2 tries left) — calu user password (asked once)"
+ *     promptText("that is not the calu user password.", 1)
+ *         -> "That is not the calu user password. (1 try left) — calu user password (asked once)"
  *
- * @param kind Which password is asked: `PROMPT_ADMIN` for the admin password; every other value
- *   counts as `PROMPT_FIRST`.
- * @param problem Why the previous entry was not accepted; `null` or "" for the first entry.
- * @return The prompt text; a problem is put in front with its first letter in upper case.
+ * @param problem Why the previous entry was not accepted (the bridge's message); `null` or ""
+ *   for the first entry.
+ * @param left How many entries the round still allows (`RoundStep.left`); `null` to say nothing
+ *   about it. Used only together with a problem.
+ * @return `PROMPT_ASK`; a problem is put in front with its first letter in upper case, followed
+ *   by the tries left.
  */
-fun promptText(kind: String, problem: String?): String {
-    val ask = if (kind == PROMPT_ADMIN) {
-        "calu admin password, needed to change settings (asked once)"
-    } else {
-        "calu password (asked once)"
-    }
-    if (problem.isNullOrEmpty()) return ask
-    return "${problem.substring(0, 1).uppercase()}${problem.substring(1)} — $ask"
+fun promptText(problem: String?, left: Int?): String {
+    if (problem.isNullOrEmpty()) return PROMPT_ASK
+    val tries = if (left == null) "" else " ($left ${if (left == 1) "try" else "tries"} left)"
+    return "${problem.substring(0, 1).uppercase()}${problem.substring(1)}$tries — $PROMPT_ASK"
 }

@@ -1,8 +1,8 @@
 # calu configuration
 
 Every value below is a row in the database, not a file in the project: a session may read the
-configuration and may not change it (`agent/records/PLAN.md` §6.2). Read and change it with the
-`admin` credential:
+configuration and Claude cannot change it (`agent/records/PLAN.md` §6.2). Read and change it
+with the user login:
 
 ```bash
 calu config list --changed                       # what is set, where it comes from, defaults

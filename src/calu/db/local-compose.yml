@@ -1,6 +1,6 @@
 # Local PostgreSQL for simple setups, managed by `calu db up` / `calu db down`.
 # The owner password is set only when the data volume is initialized (first start); calu passes
-# it in CALU_DB_OWNER_PASSWORD and keeps it encrypted as the `admin` credential.
+# it in CALU_DB_OWNER_PASSWORD and keeps it encrypted as the `db-admin` credential.
 name: calu-db
 
 services:

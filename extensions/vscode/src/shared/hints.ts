@@ -4,7 +4,7 @@
  *
  *     calu not found            -> "calu-missing"   button: Install calu
  *     claude not found          -> "claude-missing" button: How to install (opens the docs)
- *     password not given yet    -> "locked"         button: Unlock (asks the one password)
+ *     password not given yet    -> "locked"         button: Unlock (asks the calu user password)
  *     database not reachable    -> "database"       button: Open settings (Setup card)
  *     no session attached and
  *       the server stopped       -> "server-stopped" buttons: Start server, Retry (serverLoss.ts)
@@ -27,7 +27,7 @@ export interface HintInput {
   attached: boolean;
   /** True if `ide.start` last failed because no server answered (error -32013). */
   noServer: boolean;
-  /** True if calu's logins need the one password and it was not given yet (default false). */
+  /** True if calu's user login needs its password and it was not given yet (default false). */
   locked?: boolean;
   /**
    * True while the link was lost because the calu server stopped (`serverStoppedAfterLoss`)
@@ -81,7 +81,8 @@ export function buildHints(input: HintInput): SetupHint[] {
     hints.push({
       id: 'locked',
       level: 'warning',
-      message: 'calu needs its password once to list and attach to sessions. It is kept in memory until this window closes.',
+      message:
+        'calu needs the calu user password once to list and attach to sessions. It is kept in memory until this window closes.',
       action: 'unlock',
       actionLabel: 'Unlock',
     });

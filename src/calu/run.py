@@ -2,7 +2,7 @@
 
 See agent/records/PLAN.md phase 3.
 
-    password ──► decrypt the `session` credential ──► two database connections
+    password ──► decrypt the `user` credential ──► two database connections
                  │                                     queries + notifications
                  └► the password, the derived key and the decrypted buffer are wiped;
                     the connection string stays in one object in this process's memory
@@ -899,7 +899,7 @@ async def run_session(
     that a lost connection can be reopened (see the module docstring).
 
     Args:
-        url: The `calu_session` connection string (a `bytearray` is wiped by this function).
+        url: The user login's connection string (a `bytearray` is wiped by this function).
         options: What to run.
         runner_factory: Creates the runner from workspace, Claude settings and the names of the
             hidden environment variables; None uses `SdkRunner` (tests pass a fake runner).

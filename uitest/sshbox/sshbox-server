@@ -29,12 +29,12 @@ if [ "${1:-}" = "--stop" ]; then
     echo "scripted servers stopped"
     exit 0
 fi
-# stdin is /dev/null: the blank session password is read from it, nothing is asked.
+# The user login of the first store has no password, so nothing is asked; stdin is /dev/null.
 tmux new-session -d -s calu-fake -c "$SRC" \
     "'$PY' uitest/fake_server.py </dev/null 2>&1 | tee /tmp/calu-fake-server.log"
 if [ -x "$STORE/calu" ]; then
     tmux new-session -d -s calu-fake-pw -c "$SRC" \
-        "export XDG_CONFIG_HOME='$STORE/config' XDG_STATE_HOME='$STORE/state' XDG_DATA_HOME='$STORE/data'; printf 'sess-pw\n' | '$PY' uitest/fake_server.py 2>&1 | tee /tmp/calu-fake-pw-server.log"
+        "export XDG_CONFIG_HOME='$STORE/config' XDG_STATE_HOME='$STORE/state' XDG_DATA_HOME='$STORE/data'; printf 'user-pw\n' | '$PY' uitest/fake_server.py 2>&1 | tee /tmp/calu-fake-pw-server.log"
 fi
 sleep 3
 tmux ls

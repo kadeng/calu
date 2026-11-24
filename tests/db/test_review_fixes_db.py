@@ -1,4 +1,4 @@
-"""Migration 0035 against the test database: expired claims, narrower grants, search path.
+"""Migration 0035 against the test database: expired claims, the audit log, search path.
 
 Runs against the test database; creates the roles and a schema there and prints nothing.
 """
@@ -12,23 +12,10 @@ from calu import session_requests
 from calu.db import Db, connect
 from calu.db.connection import open_stored
 from calu.session_requests import SessionRequest
-from calu.setup import enable_admin_login
+from calu.setup import set_user_password
 from tests.db.test_admin_role import PASSWORD, prepared
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
-
-SESSION_COLUMNS = {
-    "last_seen",
-    "state",
-    "state_since",
-    "ended_at",
-    "claude_session_id",
-    "model",
-    "address",
-    "forked_from",
-    "forked_before_turn",
-}
-"""The `sessions` columns the session login may still update."""
 
 
 async def test_a_claim_older_than_the_limit_expires(db_url: str, tmp_path: Path):
@@ -64,37 +51,7 @@ async def test_a_claim_older_than_the_limit_expires(db_url: str, tmp_path: Path)
         await owner.close()
 
 
-async def test_the_session_login_cannot_expire_requests(db_url: str):
-    owner = await connect(db_url)
-    try:
-        await prepared(db_url)
-        cur = await owner.execute(
-            "SELECT has_function_privilege('calu_session',"
-            " 'calu_expire_session_request(bigint)', 'EXECUTE'),"
-            " has_function_privilege('calu_operator',"
-            " 'calu_expire_session_request(bigint)', 'EXECUTE')"
-        )
-        assert await cur.fetchone() == (False, True)
-    finally:
-        await owner.close()
-
-
-async def test_the_session_login_updates_only_the_columns_the_store_writes(db_url: str):
-    await prepared(db_url)
-    owner = await connect(db_url)
-    try:
-        cur = await owner.execute(
-            "SELECT attname, has_column_privilege('calu_session', 'sessions', attname, 'UPDATE')"
-            " FROM pg_attribute WHERE attrelid = 'sessions'::regclass AND attnum > 0"
-            " AND NOT attisdropped"
-        )
-        allowed = {name for name, granted in await cur.fetchall() if granted}
-        assert allowed == SESSION_COLUMNS
-    finally:
-        await owner.close()
-
-
-async def test_the_admin_cannot_change_or_delete_audit_entries(db_url: str):
+async def test_the_user_login_cannot_change_or_delete_audit_entries(db_url: str):
     login = await prepared(db_url)
     conn = await open_stored(login, start_local=False)
     try:
@@ -124,7 +81,7 @@ async def test_migration_0035_runs_again_without_harm(db_url: str):
             / "0035_review_fixes.sql"
         )
         await owner.execute(migration.read_text(encoding="utf-8"))  # type: ignore[arg-type]
-        await enable_admin_login(owner, PASSWORD)
+        await set_user_password(owner, PASSWORD)
     finally:
         await owner.close()
 

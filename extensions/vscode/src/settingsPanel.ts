@@ -12,8 +12,8 @@
  *     runStatus                 ──► ide.status          ──► status | error {key: "status"}
  *     fix {action}              ──► the `fix` callback (install, update, terminal, clipboard, browser)
  *
- * Requests that change settings may need the `admin` credential's password; `Bridge.request`
- * asks for it and does not keep it.
+ * Requests may need the calu user password; `Bridge.request` asks for it once per bridge and
+ * does not log it.
  */
 
 import * as vscode from 'vscode';

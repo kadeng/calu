@@ -6,12 +6,25 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
 
 ## Pick up here
 
-### First: `agent/records/NEXT_STEP.md` (2026-11-24)
+### First: one calu login (D265, 2026-11-24) and the migration squash
 
-The owner decided to merge calu's three logins (admin, operator, session) into one "user"
-login, with the database owner kept for migrations, one password for both on a local
-database, and an empty user password meaning "never ask". The plan, his words, the decisions
-taken and the code map are in `NEXT_STEP.md`; nothing of it is built yet. Do that next.
+Built on 2026-11-24 (PLAN D265, REQUIREMENTS 48): the logins `admin`, `session`, `operator`
+and `calu_admin` are replaced by `user` (the role calu_admin, used by every command) and
+`db-admin` (the owner, for migrations), both protected by one calu user password; an empty
+one means calu never asks. Messages live in `src/calu/logins.py`; both IDE plugins ask one
+password with tries left; migration 0043 takes the logins of calu_session/calu_operator;
+`calu setup` converts an old store. `NEXT_STEP.md` (the plan) is deleted.
+
+Next, decided by the owner the same day ("Squash only"): replace the 43 migrations by one
+baseline that reproduces today's final schema (roles, policies and functions kept); a
+database created from the old chain is refused with "`calu db reset` recreates it". He has no
+database he needs to keep.
+
+Not yet run with the one login: the rootbox tests (`docker exec calu-rootbox rootbox-tests`,
+needs a root box), the Cua GUI runs of both plugins and the pane, checklist item 53 of
+`docs/TESTING.md` (the password experience in every front end). backtester1, the owner's WSL
+machine and the Cua desktop need `calu setup` once (the Cua desktop's demo store was
+converted by `uitest/setup-demo.sh`); backtester1 also a restart of `calu serve --sudo`.
 
 State on 2026-11-24 before that: everything up to `9656f41` is pushed and CI is green.
 Built on 2026-11-22/24 (PLAN D256-D264): subagent task review (D256); Claude Code's own
@@ -31,14 +44,13 @@ calu: the owner reinstalls with `curl -fsSL .../install.sh | sudo bash` and rest
 **Waiting for the owner** (he does these himself; he types every password):
 
 - backtester1: reinstall (`curl -fsSL https://raw.githubusercontent.com/kadeng/calu/main/install.sh | sudo bash`),
-  restart `calu serve --sudo` in the screen session `calu` (it asks the session password),
+  `sudo calu setup` once (converts root's old logins; it asks the earlier admin password), restart `calu serve --sudo` in the screen session `calu` (it asks the user password),
   `sudo calu config models auto` (the roles still name `claude:haiku`, which no longer exists:
   every check escalates until then; the key is in `/etc/calu/.env`, mode 600, root's),
   rebuild/reinstall the `.vsix` in VSCode Remote-SSH, try `calu web --sudo` and the pane.
   From this machine, `ssh backtester1` needs `-o HostName=66.163.113.110 -o
   HostKeyAlias=backtester1` (the local `~/.ssh/config` entry has the port but no HostName).
-- The "operator password" prompt of `calu sessions` that confused him is what
-  `NEXT_STEP.md` removes; until then `calu credential remove operator` makes it use `admin`.
+- The "operator password" prompt of `calu sessions` that confused him is gone with D265.
 - Human diffs did not show up for him (PLAN D253): not diagnosed; he was asked which file,
   which VSCode folder and whether a session was attached, and offered per-save logging of the
   reason a save is not recorded. No answer yet.

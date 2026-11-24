@@ -44,7 +44,7 @@ async def test_sigterm_stops_calu_run_in_order(db_url: str, tmp_path: Path, runt
     session_url = await prepare(db_url, workspace)
     config = tmp_path / "config"
     CredentialStore(config / "calu" / "credentials.json").save(
-        "session", session_url, bytearray(b"a long enough password")
+        "user", session_url, bytearray(b"a long enough password")
     )
     script = tmp_path / "script.json"
     script.write_text(json.dumps(SCRIPT.model_dump()))

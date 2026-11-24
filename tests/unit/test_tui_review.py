@@ -3,7 +3,7 @@
 The keys of a decision must reach the step they were pressed for and no other; a reply that
 begins with a letter of the card must be typed; nothing of a step may be hidden without the
 card saying so; the layout must follow one resize; the client must come back from a program
-it handed the terminal to; and what it stores with the `admin` credential must be compared
+it handed the terminal to; and what it stores with the user login must be compared
 with what the attached session reports.
 """
 
@@ -847,7 +847,7 @@ async def test_falling_behind_during_the_first_attach_is_not_a_failed_attach() -
         link.detach()
 
 
-# ------------------------------------------------------------------ the admin credential
+# ------------------------------------------------------------------ the user login
 
 
 async def test_a_save_that_the_session_does_not_show_is_reported_as_such(
@@ -872,7 +872,7 @@ async def test_a_save_that_the_session_does_not_show_is_reported_as_such(
         await run.press("ctrl+s")
         await run.pilot.pause(0.2)
         assert access.saved and screen.message_error
-        assert "in the database of this machine's admin credential" in screen.message
+        assert "in the database of this machine's calu login" in screen.message
         assert "the attached session reads version" in screen.message
         assert "saved:" not in screen.message
 

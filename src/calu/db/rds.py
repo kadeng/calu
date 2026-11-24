@@ -2,11 +2,9 @@
 
 See agent/records/PLAN.md D205.
 
-The owner login of the variant `rds-iam` uses them (`calu.db.target`): `calu setup`, the admin
-commands and `calu web`. By default the session login `calu_session` uses them too (it is made a
-member of `rds_iam`), so `calu run` needs the session's AWS profile and makes a token for every
-connection and reconnect. With `calu setup --session-auth password` a session logs in with a
-generated password instead and needs no AWS credential.
+The owner login of the variant `rds-iam` uses them (`calu.db.target`): `calu setup` and the
+migrations. The user login (`calu_admin`) logs in with the calu user password, also on RDS
+(agent/records/PLAN.md D265), and needs no AWS credential.
 
 A token is a signed request, made locally with the credentials of one AWS profile; it is valid
 for new logins for 15 minutes and is sent as the password, which is why the connection must

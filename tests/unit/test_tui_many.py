@@ -404,7 +404,7 @@ async def test_running_names_the_projects_directory_of_each_server() -> None:
 
 async def test_running_offers_rename_only_where_a_session_can_be_renamed() -> None:
     class ThroughRelay(FakeAdmin):
-        """Lists sessions (the relay answers) but changes nothing (no admin credential)."""
+        """Lists sessions (the relay answers) but changes nothing (no user login)."""
 
         def problem(self) -> str | None:
             return "through a relay /running and /switch go through the relay"
@@ -460,23 +460,24 @@ async def test_sessions_lists_only_conversations_in_which_something_was_said() -
         assert session.sent("session.list") == [{"limit": 200}]
 
 
-def test_a_stored_admin_login_without_a_password_is_used_instead_of_asking(tmp_path) -> None:
+def test_a_stored_user_login_without_a_password_is_used_instead_of_asking(tmp_path) -> None:
     """After `calu setup --no-password` the client of `calu start` asked for a password
-    nobody had chosen: it was handed the login of `calu_admin` without its password."""
+    nobody had chosen: it was handed the login of `calu_admin` without its password. The
+    `user` entry without a password (an empty user password, D265) completes it."""
     from calu.credentials import CredentialStore
     from calu.db.target import Target
-    from calu.setup import admin_login
-    from calu.tui.adminaccess import STORED_ADMIN, StoreAdmin
+    from calu.setup import user_login
+    from calu.tui.adminaccess import CREDENTIAL, StoreAdmin
 
     owner = Target.parse("host=127.0.0.1 port=1 dbname=calu user=calu_owner")
     store = CredentialStore(tmp_path / "credentials.json")
-    store.save(STORED_ADMIN, admin_login(owner, "generated").dump(), None)
-    access = StoreAdmin(store, database=admin_login(owner, ""))
+    store.save(CREDENTIAL, user_login(owner, "generated").dump(), None)
+    access = StoreAdmin(store, database=user_login(owner, ""))
     assert not access.needs_password(), "the stored login is complete"
     elsewhere = Target.parse("host=127.0.0.1 port=2 dbname=calu user=calu_owner")
-    other = StoreAdmin(store, database=admin_login(elsewhere, ""))
+    other = StoreAdmin(store, database=user_login(elsewhere, ""))
     assert other.needs_password(), "a login for another database is not used"
-    empty = StoreAdmin(CredentialStore(tmp_path / "none.json"), database=admin_login(owner, ""))
+    empty = StoreAdmin(CredentialStore(tmp_path / "none.json"), database=user_login(owner, ""))
     assert empty.needs_password()
 
 

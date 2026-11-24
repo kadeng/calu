@@ -8,13 +8,14 @@ are needed, and the VSCode extension's "New session" plays the conversation belo
 
 Run it inside the UI-testing desktop, from a checkout that has calu's dependencies::
 
-    uv run python uitest/fake_server.py                  # session login from the credential store
-    uv run python uitest/fake_server.py --dsn postgresql://calu_session:...@127.0.0.1/calu
-    uv run python uitest/fake_server.py </dev/null       # a blank session password, no prompt
+    uv run python uitest/fake_server.py                  # the user login from the credential store
+    uv run python uitest/fake_server.py --dsn postgresql://calu_admin:...@127.0.0.1/calu
+    echo user-pw | uv run python uitest/fake_server.py   # the user password from stdin
 
-The session login is the `session` entry of the credential store (`calu setup` wrote it). If it
-is protected by a password, the password is asked on the terminal, or read as one line from
-stdin when stdin is no terminal. `--dsn` skips the store.
+The login is the `user` entry of the credential store (the role `calu_admin`, which `calu
+serve` uses too; `calu setup` wrote it). If the calu user password is not empty, it is asked on
+the terminal, or read as one line from stdin when stdin is no terminal; with an empty one
+nothing is asked. `--dsn` skips the store.
 
 A session plays one scripted turn per user message. The first message chooses the scenario:
 `scenario: <name>` (anything else plays `tour`). After the last scripted turn every message is
@@ -85,6 +86,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from calu import logins
 from calu.claude import FakeRunner
 from calu.claude.fake_runner import FakeScript
 from calu.cli import CliError, load_credential
@@ -877,25 +879,27 @@ def make_runner(workspace: Path, _config: ClaudeConfig, _hidden: set[str]) -> Fa
     return ScenarioRunner(workspace)
 
 
-def session_login(dsn: str | None) -> str | bytearray:
+def server_login(dsn: str | None) -> str | bytearray:
     """Return the login the server opens its database connections with.
 
-    Side effect: may ask for the session password (on the terminal, or one line of stdin).
+    Side effect: may ask for the calu user password (on the terminal, or one line of stdin),
+    up to `calu.logins.MAX_ATTEMPTS` times.
 
     Args:
-        dsn: A connection string given on the command line, or None to read the `session`
+        dsn: A connection string given on the command line, or None to read the `user`
             entry of the credential store.
 
     Returns:
-        The connection string or the stored record of the role `calu_session`.
+        The connection string or the stored record of the user login (the role `calu_admin`).
 
     Raises:
-        CliError: If the store has no `session` entry.
-        CredentialError: If the password is wrong or the store cannot be read.
+        CliError: If the store has no `user` entry (or holds only the logins of a calu from
+            before D265), the input ended at the prompt, or every try was wrong.
+        CredentialError: If the store cannot be read.
     """
     if dsn:
         return dsn
-    return load_credential(CredentialStore(), "session", "Session password: ")
+    return load_credential(CredentialStore(), logins.USER, logins.USER_PROMPT)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -913,7 +917,7 @@ def main(argv: list[str] | None = None) -> int:
         projects directory is refused.
     """
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
-    parser.add_argument("--dsn", help="the calu_session connection string (default: the store)")
+    parser.add_argument("--dsn", help="the calu_admin connection string (default: the store)")
     parser.add_argument(
         "--insecure",
         action="store_true",
@@ -929,7 +933,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         projects = check_projects_dir(args.projects)
-        url = session_login(args.dsn)
+        url = server_login(args.dsn)
     except (CliError, CredentialError, ProjectsDirRefused) as exc:
         print(f"fake_server: {exc}", file=sys.stderr)
         return 1

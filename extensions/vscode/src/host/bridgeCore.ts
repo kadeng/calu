@@ -11,10 +11,12 @@
  *     running --stop()--> stopped        exited/error/missing --ensureStarted()/restart()--> starting
  *
  *     request(method, params) ──► calu ide
- *         error -32010, interactive ──► one prompt (shared by concurrent requests)
+ *         error -32010, interactive ──► one prompt for the calu user password (shared by
+ *                                       concurrent requests)
  *                                         ├─ password ──► ide.unlock ── ok ──► same request again
  *                                         │                           └─ refused ──► prompt again
- *                                         └─ Escape ──► the waiting requests fail, `locked` is true
+ *                                         └─ Escape ──► the waiting requests fail with
+ *                                                       NOT_DONE_NO_PASSWORD, `locked` is true
  *         error -32010, background  ──► passed to the caller, never a prompt
  *     session(method, params) = request("session.call", {method, params})
  *
@@ -42,6 +44,7 @@ import { PROTOCOL_VERSION, type RequestMethod } from '../protocol.generated';
 import { RpcClient, RpcRequestError, type RpcEvent } from '../rpc';
 import {
   initialUnlockState,
+  notDoneText,
   onDismiss,
   onExplicitUnlock,
   onNeedsPassword,
@@ -52,7 +55,7 @@ import {
   onUnlockRefused,
   onUnlockResult,
   type PasswordNeed,
-  type PromptKind,
+  type RoundEnd,
   type RoundStep,
   type UnlockState,
 } from '../shared/unlock';
@@ -65,15 +68,15 @@ export const STOP_TIMEOUT_MS = 5000;
 /** What the password flow needs from its surroundings. */
 export interface PasswordDeps {
   /**
-   * Ask the user for a password.
+   * Ask the user for the calu user password (the text is `promptText(problem, left)`).
    *
-   * @param kind "first" for the one password, "admin" for the admin password that changing
-   *   settings needs.
    * @param problem Why the previous entry was not accepted (the bridge's message); `undefined`
    *   for the first entry of a prompt round.
+   * @param left How many entries the round still allows after a refused one; `undefined` for
+   *   the first entry.
    * @returns The password, or `undefined` if the user cancelled.
    */
-  ask(kind: PromptKind, problem: string | undefined): PromiseLike<string | undefined>;
+  ask(problem: string | undefined, left: number | undefined): PromiseLike<string | undefined>;
   /**
    * Read the remembered password.
    *
@@ -184,8 +187,8 @@ interface Running {
   stopping: boolean;
   /** Password state of this bridge (`shared/unlock.ts`); a new bridge starts with a new one. */
   unlock: UnlockState;
-  /** The open prompt round; resolves true if it ended with a successful `ide.unlock`. */
-  round: Promise<boolean> | undefined;
+  /** The open prompt round; resolves to how it ended ("unlocked" after a successful `ide.unlock`). */
+  round: Promise<RoundEnd> | undefined;
 }
 
 /** The status event of `BridgeCore.onStatus`. */
@@ -301,9 +304,10 @@ export class BridgeCore {
    * @param interactive False for requests the user did not ask for (start-up, timers): no
    *   password prompt is shown and error -32010 is passed to the caller.
    * @returns The response's `result`.
-   * @throws (rejects) Error if the bridge is not running; RpcRequestError for an error answer
-   *   (also -32010 if the user cancelled, ran out of attempts, or the request started before a
-   *   cancel); RpcClosedError if the bridge ends before answering.
+   * @throws (rejects) Error if the bridge is not running; RpcRequestError for an error answer,
+   *   also -32010 if no password unlocked the bridge: its message is then `notDoneText`'s (the
+   *   user cancelled, before or after the request started; every password of the round was
+   *   refused) or else the bridge's own; RpcClosedError if the bridge ends before answering.
    */
   async request<M extends BridgeMethod>(
     method: M,
@@ -320,16 +324,19 @@ export class BridgeCore {
         if (!isNeedsPassword(error) || method === 'ide.unlock') throw error;
         const unlockedReported = unlockedLogins(error.data);
         const need = { interactive, unlockedReported, startedAtDismissals, sentAtUnlocks, retries };
-        if (!(await this.unlockFor(running, need))) throw error;
+        const next = await this.unlockFor(running, need);
+        if (next === 'retry') continue;
+        const text = notDoneText(running.unlock, need, next === 'fail' ? undefined : next);
+        if (text === undefined) throw error;
+        throw new RpcRequestError(method, { code: error.code, message: text, data: error.data });
       }
     }
   }
 
   /**
    * Open the password prompt now (the chat's "Unlock" button), also after an earlier cancel.
-   * Starts the bridge if it does not run. Joins a prompt that is already open. Asks the admin
-   * password if a login is held that may not change settings, and nothing if a login that may
-   * change settings is held.
+   * Starts the bridge if it does not run. Joins a prompt that is already open. Asks nothing if
+   * a login is held.
    *
    * @returns True if the bridge holds a login afterwards, false after a cancel or after too
    *   many wrong passwords.
@@ -340,11 +347,10 @@ export class BridgeCore {
     const running = this.requireRunning();
     const decision = onExplicitUnlock(running.unlock);
     this.setUnlock(running, decision.state);
-    let opened = false;
-    if (decision.action === 'join') opened = await (running.round ?? Promise.resolve(false));
-    if (decision.action === 'prompt-first') opened = await this.startRound(running, 'first');
-    if (decision.action === 'prompt-admin') opened = await this.startRound(running, 'admin');
-    return opened || running.unlock.unlocked.length > 0;
+    let end: RoundEnd | undefined;
+    if (decision.action === 'join') end = await running.round;
+    if (decision.action === 'prompt') end = await this.startRound(running);
+    return end === 'unlocked' || running.unlock.unlocked.length > 0;
   }
 
   /**
@@ -556,45 +562,47 @@ export class BridgeCore {
    *
    * @param running The bridge that answered.
    * @param need The request's facts.
-   * @returns True if the request is to be sent again, false if its caller gets the error.
-   *   Never rejects.
+   * @returns "retry" if the request is to be sent again; else why its caller gets the error:
+   *   "fail" (no prompt was opened or joined) or how the round it waited for ended
+   *   ("dismissed", "refused", "aborted"). Never rejects.
    */
-  private async unlockFor(running: Running, need: PasswordNeed): Promise<boolean> {
+  private async unlockFor(running: Running, need: PasswordNeed): Promise<'retry' | 'fail' | Exclude<RoundEnd, 'unlocked'>> {
     const decision = onNeedsPassword(running.unlock, need);
     this.setUnlock(running, decision.state);
+    let end: RoundEnd | undefined;
     switch (decision.action) {
       case 'fail':
-        return false;
+        return 'fail';
       case 'retry':
-        return true;
+        return 'retry';
       case 'join':
-        return running.round ?? false;
-      case 'prompt-first':
-        return this.startRound(running, 'first');
-      case 'prompt-admin':
-        return this.startRound(running, 'admin');
+        end = await running.round;
+        break;
+      case 'prompt':
+        end = await this.startRound(running);
+        break;
     }
+    if (end === undefined) return 'fail';
+    return end === 'unlocked' ? 'retry' : end;
   }
 
   /**
    * Start a prompt round and register it as the open one, so that other requests can wait for
-   * it. Precondition: `running.unlock.promptOpen === kind` and no round is registered.
+   * it. Precondition: `running.unlock.promptOpen` is true and no round is registered.
    *
    * @param running The bridge to unlock.
-   * @param kind Which password is asked.
-   * @returns The round's promise: true after a successful `ide.unlock`, false after a cancel,
-   *   too many wrong passwords or any failure. Never rejects.
+   * @returns The round's promise: how it ended; "aborted" for any failure. Never rejects.
    */
-  private startRound(running: Running, kind: PromptKind): Promise<boolean> {
-    const round = this.runRound(running, kind)
-      .catch((error: unknown) => {
+  private startRound(running: Running): Promise<RoundEnd> {
+    const round = this.runRound(running)
+      .catch((error: unknown): RoundEnd => {
         this.log.line(`[calu] unlocking failed: ${errorText(error)}`);
-        return false;
+        return 'aborted';
       })
-      .then((opened) => {
+      .then((end) => {
         running.round = undefined;
         if (running.unlock.promptOpen) this.setUnlock(running, onRoundAborted(running.unlock));
-        return opened;
+        return end;
       });
     running.round = round;
     return round;
@@ -606,24 +614,27 @@ export class BridgeCore {
    * it is offered without waiting for the answer.
    *
    * @param running The bridge to unlock.
-   * @param kind Which password is asked.
-   * @returns True if the round ended with an accepted password.
+   * @returns "unlocked" after an accepted password, "dismissed" after a cancel, "refused" after
+   *   `MAX_ATTEMPTS_PER_ROUND` refused passwords.
    * @throws (rejects) What `PasswordDeps.ask` rejects with, and errors of `ide.unlock` other
    *   than -32010. `startRound` handles both.
    */
-  private async runRound(running: Running, kind: PromptKind): Promise<boolean> {
+  private async runRound(running: Running): Promise<RoundEnd> {
     let problem: string | undefined;
+    let left: number | undefined;
     for (let attempt = 1; ; attempt++) {
-      const password = await this.passwords.ask(kind, problem);
+      const password = await this.passwords.ask(problem, left);
       if (password === undefined) {
         this.setUnlock(running, onDismiss(running.unlock));
-        return false;
+        return 'dismissed';
       }
-      const step = await this.tryPassword(running, kind, password, attempt);
+      const step = await this.tryPassword(running, password, attempt);
       this.setUnlock(running, step.state);
       if (step.offerRemember) this.offerRemember(password);
-      if (step.outcome !== 'ask-again') return step.outcome === 'done';
+      if (step.outcome === 'done') return 'unlocked';
+      if (step.outcome === 'give-up') return 'refused';
       problem = step.problem;
+      left = step.left;
     }
   }
 
@@ -631,16 +642,15 @@ export class BridgeCore {
    * Send one entered password with `ide.unlock` and let `shared/unlock.ts` judge the answer.
    *
    * @param running The bridge to unlock.
-   * @param kind The kind of the open prompt.
    * @param password The entered password; not logged and not kept.
    * @param attempt Number of entries in this round so far, this one included.
    * @returns The step for an accepted or a refused (-32010) password.
    * @throws (rejects) Every other error of the request.
    */
-  private async tryPassword(running: Running, kind: PromptKind, password: string, attempt: number): Promise<RoundStep> {
+  private async tryPassword(running: Running, password: string, attempt: number): Promise<RoundStep> {
     try {
       const result = await running.rpc.request<IdeUnlockResult>('ide.unlock', { password });
-      return onUnlockResult(running.unlock, kind, unlockFacts(result), attempt);
+      return onUnlockResult(running.unlock, unlockFacts(result));
     } catch (error) {
       if (!isNeedsPassword(error)) throw error;
       return onUnlockRefused(running.unlock, errorText(error), attempt);
@@ -732,14 +742,13 @@ export class BridgeCore {
 }
 
 /**
- * Reduce an `ide.unlock` result to the two facts the decisions use, tolerating missing members.
+ * Reduce an `ide.unlock` result to the fact the decisions use, tolerating a missing member.
  *
  * @param result The result as received (any JSON value).
- * @returns The login names in `result.unlocked` (`[]` if missing) and `changing === true`.
+ * @returns The login names in `result.unlocked` (`[]` if missing).
  */
-function unlockFacts(result: unknown): { unlocked: string[]; changing: boolean } {
-  const changing = typeof result === 'object' && result !== null && (result as IdeUnlockResult).changing === true;
-  return { unlocked: unlockedLogins(result), changing };
+function unlockFacts(result: unknown): { unlocked: string[] } {
+  return { unlocked: unlockedLogins(result) };
 }
 
 /**

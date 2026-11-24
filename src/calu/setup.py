@@ -5,8 +5,8 @@ Steps, all idempotent:
 1. apply the migrations (`calu.db.migrate`);
 2. load the built-in checker definitions and rule lists (`calu/defaults/`) into the database,
    without touching definitions or rules that already exist;
-3. give the role `calu_session` a new random login password and return its connection string,
-   which the CLI stores encrypted as the `session` credential.
+3. give the role `calu_admin`, the user login, its password (`set_user_password`; the CLI
+   stores the login as the `user` entry, agent/records/PLAN.md D265).
 """
 
 import secrets
@@ -19,8 +19,9 @@ from psycopg import sql
 from calu.config import CHANGESET_REQUEST_LIMIT, CheckerConfig, changeset_limits
 from calu.db import migrate, roles
 from calu.db.connection import open_stored
-from calu.db.target import PasswordAuth, RdsIamAuth, Target
+from calu.db.target import PasswordAuth, Target
 from calu.defaults.instructions import shipped_status
+from calu.logins import refused_by_database
 
 DEFAULT_CHECKER_MODEL = ""
 """The model new checker types are stored with: blank, which means the default model of
@@ -52,8 +53,12 @@ RULE_LISTS = (
     "write-deny",
 )
 
-SESSION_ROLE = roles.SESSION
-OPERATOR_ROLE = roles.OPERATOR
+USER_ROLE = roles.ADMIN
+"""The role of the user login (`calu.logins.USER`): every calu process of the person who set
+calu up logs in as it, with the calu user password (migrations 0033, 0043)."""
+
+MANAGED_ROLES = (roles.SESSION, roles.OPERATOR, roles.ADMIN)
+"""The roles the migrations create or change, which the owner's login must manage."""
 
 MIN_SERVER_VERSION = 140000
 """`server_version_num` of the oldest PostgreSQL `calu setup` accepts (14)."""
@@ -61,9 +66,6 @@ MIN_SERVER_VERSION = 140000
 ADMIN_OPTION_VERSION = 160000
 """`server_version_num` from which a login with CREATEROLE may change only the roles it created
 or was granted with the admin option (PostgreSQL 16)."""
-"""Role of a human who watches a herd: reads every table and resolves an escalation, and may
-change nothing else (migration 0001). It is created `NOLOGIN`; `enable_operator_login` gives it
-a password when an operator needs one (agent/records/PLAN.md D48)."""
 
 
 @dataclass(frozen=True)
@@ -228,8 +230,7 @@ async def preflight(conn: psycopg.AsyncConnection) -> list[str]:
     calu needs a database of its own (it creates its tables in the schema `public`, grants
     its operator role read access to every table there, and `calu db reset` drops that
     schema) and a login that may create roles (`CREATEROLE`) and, from PostgreSQL 16 on, may
-    manage the two roles `calu_session` and `calu_operator` if they exist already. It needs
-    no superuser.
+    manage the roles of `MANAGED_ROLES` if they exist already. It needs no superuser.
 
     Args:
         conn: An open connection of the login that `calu setup` was given.
@@ -272,11 +273,10 @@ async def preflight(conn: psycopg.AsyncConnection) -> list[str]:
         # Giving a role a login needs CREATEROLE on every supported version, whether or not
         # an administrator created the role beforehand.
         problems.append(
-            f"{user} may not create or change roles, and calu gives its two roles "
-            f"({SESSION_ROLE}, {OPERATOR_ROLE}) their logins. An administrator runs "
-            f"`ALTER ROLE {user} CREATEROLE;`"
+            f"{user} may not create or change roles, and calu creates its roles and gives "
+            f"{USER_ROLE} its login. An administrator runs `ALTER ROLE {user} CREATEROLE;`"
         )
-    for role in (SESSION_ROLE, OPERATOR_ROLE):
+    for role in MANAGED_ROLES:
         if superuser or not may_create or version < ADMIN_OPTION_VERSION:
             continue
         # From PostgreSQL 16 on, CREATEROLE alone changes only roles the login created
@@ -312,26 +312,6 @@ async def preflight(conn: psycopg.AsyncConnection) -> list[str]:
     return problems
 
 
-async def session_can_log_in(conn: psycopg.AsyncConnection) -> bool:
-    """Tell whether the role `calu_session` has a login already.
-
-    Args:
-        conn: An open connection.
-
-    Returns:
-        True if the role exists and may log in: an earlier setup, on this machine or on
-        another one, gave it a password.
-
-    Raises:
-        psycopg.Error: On database errors.
-    """
-    cur = await conn.execute(
-        b"SELECT rolcanlogin FROM pg_roles WHERE rolname = %s", (SESSION_ROLE,)
-    )
-    row = await cur.fetchone()
-    return bool(row and row[0])
-
-
 async def _leave_rds_iam(conn: psycopg.AsyncConnection, role: str) -> None:
     """Take `role` out of the RDS role `rds_iam` if it is a member, so a password works.
 
@@ -356,49 +336,14 @@ async def _leave_rds_iam(conn: psycopg.AsyncConnection, role: str) -> None:
         await conn.execute(sql.SQL("REVOKE rds_iam FROM {}").format(sql.Identifier(role)))
 
 
-async def _enable_login(conn: psycopg.AsyncConnection, admin: Target, role: str) -> Target:
-    """Give `role` a new random password and build its login record.
-
-    Any earlier password of the role stops working, which is how a credential is taken back.
+def user_login(place: Target, password: str) -> Target:
+    """Describe the user login (the role `calu_admin`) at the database another login names.
 
     Args:
-        conn: An open connection of the database owner, schema migrated.
-        admin: The owner's login; where the database is and how its server is verified are
-            taken from it (`Target.for_role`), nothing else.
-        role: The role to give a login, one of `SESSION_ROLE` and `OPERATOR_ROLE`.
-
-    Returns:
-        The login of that role, with a password, whatever the owner authenticates with.
-
-    Raises:
-        TargetError: If the owner's record cannot be taken over (`Target.for_role`); the role
-            is not changed then.
-        psycopg.Error: On database errors.
-    """
-    password = secrets.token_urlsafe(32)
-    # Built first: an owner record that cannot be taken over must not cost the role its login.
-    login = admin.for_role(role, PasswordAuth(password=password))
-    await _leave_rds_iam(conn, role)
-    await conn.execute(
-        sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
-            sql.Identifier(role), sql.Literal(password)
-        )
-    )
-    return login
-
-
-ADMIN_ROLE = roles.ADMIN
-"""The role a person changes settings as, with a password that is typed and never stored
-(migration 0033)."""
-
-
-def admin_login(place: Target, password: str) -> Target:
-    """Describe the login of `calu_admin` at the database another login names.
-
-    Args:
-        place: Any login of the same database (the owner's, the operator's): where the
+        place: Any login of the same database (the owner's, the place file's): where the
             database is and how its server is verified are taken from it, nothing else.
-        password: The admin password.
+        password: The password of `calu_admin`: the user password, or the generated one of
+            an empty user password.
 
     Returns:
         The login of `calu_admin`.
@@ -406,10 +351,10 @@ def admin_login(place: Target, password: str) -> Target:
     Raises:
         TargetError: If `place` finds its server through a libpq service file.
     """
-    return place.for_role(ADMIN_ROLE, PasswordAuth(password=password))
+    return place.for_role(USER_ROLE, PasswordAuth(password=password))
 
 
-async def admin_can_log_in(conn: psycopg.AsyncConnection) -> bool:
+async def user_can_log_in(conn: psycopg.AsyncConnection) -> bool:
     """Tell whether the role `calu_admin` exists and may log in.
 
     Args:
@@ -422,19 +367,19 @@ async def admin_can_log_in(conn: psycopg.AsyncConnection) -> bool:
     Raises:
         psycopg.Error: On database errors.
     """
-    cur = await conn.execute("SELECT rolcanlogin FROM pg_roles WHERE rolname = %s", (ADMIN_ROLE,))
+    cur = await conn.execute("SELECT rolcanlogin FROM pg_roles WHERE rolname = %s", (USER_ROLE,))
     row = await cur.fetchone()
     return bool(row and row[0])
 
 
-async def is_admin_password(place: Target, password: str) -> bool:
-    """Ask the database whether `password` is the admin password, by logging in with it.
+async def is_user_password(place: Target, password: str) -> bool:
+    """Ask the database whether `password` is the user password, by logging in with it.
 
     Side effect: one connection as `calu_admin`, opened and closed.
 
     Args:
-        place: Any login of the database (`admin_login` takes the place from it).
-        password: The password to check.
+        place: Any login of the database (`user_login` takes the place from it).
+        password: The password to check; a blank one is sent like any other.
 
     Returns:
         True if the server accepted the login; False if it refused the password.
@@ -445,17 +390,16 @@ async def is_admin_password(place: Target, password: str) -> bool:
         TargetError: If `place` cannot be taken over (`Target.for_role`).
     """
     try:
-        conn = await open_stored(admin_login(place, password), False)
+        conn = await open_stored(user_login(place, password), False)
     except psycopg.OperationalError as exc:
-        # A blank password is sent like any other; the server's two ways of refusing one.
-        if "password authentication failed" in str(exc) or "no password supplied" in str(exc):
+        if refused_by_database(str(exc)):
             return False
         raise
     await conn.close()
     return True
 
 
-async def enable_admin_login(conn: psycopg.AsyncConnection, password: str) -> None:
+async def set_user_password(conn: psycopg.AsyncConnection, password: str) -> None:
     """Let `calu_admin` log in with `password`; an earlier password stops working.
 
     The server gets the SCRAM verifier, computed here, and never the password itself, so the
@@ -464,111 +408,50 @@ async def enable_admin_login(conn: psycopg.AsyncConnection, password: str) -> No
 
     Args:
         conn: An open connection of the database owner, schema migrated (version 33).
-        password: The admin password a person will type; not empty.
+        password: The user password, or a generated one; not empty.
 
     Raises:
-        ValueError: If the password is empty.
+        ValueError: If the password is empty: PostgreSQL lets no role log in with one.
         psycopg.Error: On database errors.
     """
     if not password:
-        raise ValueError("the admin password must not be empty")
+        raise ValueError("the password of calu_admin must not be empty")
     verifier = conn.pgconn.encrypt_password(
-        password.encode(), ADMIN_ROLE.encode(), b"scram-sha-256"
+        password.encode(), USER_ROLE.encode(), b"scram-sha-256"
     ).decode()
-    await _leave_rds_iam(conn, ADMIN_ROLE)
+    await _leave_rds_iam(conn, USER_ROLE)
     await conn.execute(
         sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
-            sql.Identifier(ADMIN_ROLE), sql.Literal(verifier)
+            sql.Identifier(USER_ROLE), sql.Literal(verifier)
         )
     )
 
 
-async def enable_operator_login(conn: psycopg.AsyncConnection, admin: Target | str) -> str:
-    """Give `calu_operator` a new random password and return its connection string (D48).
-
-    An operator who watches a herd needs to read the fleet and resolve escalations and nothing
-    else; the `admin` credential is the database owner and can migrate, create roles and change
-    every setting, so sharing it with a person is more than the job needs. Calling this again
-    renews the password, which takes every earlier copy out of use.
-
-    Args:
-        conn: An open connection of the database owner, schema migrated.
-        admin: The owner's login, or its connection string.
+def generated_password() -> str:
+    """Make a password for `calu_admin` when the user password is empty.
 
     Returns:
-        What `calu credential set operator` stores on the machine that will use it: a libpq
-        connection string for `calu_operator`; for calu's own local database the form 2
-        record instead, which also says where the container's files are. A string that names
-        a CA file (`sslrootcert`) names the file on this machine.
-
-    Raises:
-        TargetError: If the owner's record cannot be taken over; the role is not changed.
-        psycopg.Error: On database errors.
+        43 random URL-safe characters.
     """
-    owner = admin if isinstance(admin, Target) else Target.parse(admin)
-    login = await _enable_login(conn, owner, OPERATOR_ROLE)
-    return login.dump().decode() if login.docker is not None else login.libpq_string()
-
-
-async def enable_session_login(
-    conn: psycopg.AsyncConnection, admin: Target | str, iam: RdsIamAuth | None = None
-) -> Target:
-    """Give `calu_session` a login and return it.
-
-    With a password (the default): the role gets a new random one, and any earlier password
-    stops working, so sessions that use it cannot reconnect and other machines that hold it
-    cannot start sessions.
-
-    With IAM authentication (an RDS instance): the role is allowed to log in and is made a
-    member of `rds_iam`, which is what makes RDS ask it for a token instead of a password.
-    Nothing secret is created; who may connect as `calu_session` is decided by the AWS policy
-    (`rds-db:connect` for that database user) and by who can use the named AWS profile.
-
-    Args:
-        conn: An open connection of the database owner, schema migrated.
-        admin: The owner's login, or its connection string.
-        iam: Region and AWS profile for a login with IAM tokens; None for a password.
-
-    Returns:
-        The login of the role `calu_session`.
-
-    Raises:
-        psycopg.Error: On database errors, among them a server without the role `rds_iam`
-            (one that is no RDS instance).
-    """
-    owner = admin if isinstance(admin, Target) else Target.parse(admin)
-    if iam is None:
-        return await _enable_login(conn, owner, SESSION_ROLE)
-    login = owner.for_role(SESSION_ROLE, iam)
-    await conn.execute(sql.SQL("ALTER ROLE {} WITH LOGIN").format(sql.Identifier(SESSION_ROLE)))
-    await conn.execute(sql.SQL("GRANT rds_iam TO {}").format(sql.Identifier(SESSION_ROLE)))
-    return login
+    return secrets.token_urlsafe(32)
 
 
 async def setup_database(
-    conn: psycopg.AsyncConnection,
-    admin: Target,
-    model: str,
-    renew_session: bool,
-    session_iam: RdsIamAuth | None = None,
-    update_outdated: bool = True,
-) -> tuple[str, Target | None]:
-    """Run all setup steps (see the module docstring), keeping a session login that exists.
+    conn: psycopg.AsyncConnection, model: str, update_outdated: bool = True
+) -> str:
+    """Run the preflight, the migrations and the seeding of the defaults (steps 1 and 2).
+
+    The user login (step 3) is set by the caller (`set_user_password`), which knows the
+    password.
 
     Args:
         conn: An open connection of the database owner in autocommit mode.
-        admin: The owner's login.
         model: Pydantic AI model string for new checker types.
-        renew_session: True gives `calu_session` a new login; False leaves the role as it
-            is.
-        session_iam: With `renew_session`: region and AWS profile if the session login uses
-            IAM tokens (`enable_session_login`); None gives it a password.
         update_outdated: Whether `seed_defaults` replaces unedited older shipped checker
             instructions with the present ones.
 
     Returns:
-        (a human-readable report of what was done, the new login of `calu_session` or None
-        if it was left alone).
+        A human-readable report of what was done.
 
     Raises:
         SetupRefused: If `preflight` finds a problem; nothing was changed.
@@ -579,17 +462,13 @@ async def setup_database(
         raise SetupRefused("\n".join(f"- {line}" for line in problems))
     applied = await migrate(conn)
     checkers, rules = await seed_defaults(conn, model, update_outdated)
-    session = await enable_session_login(conn, admin, session_iam) if renew_session else None
-    login = "renewed" if renew_session else "kept"
-    report = (
-        f"migrations applied: {len(applied)}; checker types added: {checkers}; "
-        f"rules added: {rules}; login of {SESSION_ROLE} {login}"
+    return (
+        f"migrations applied: {len(applied)}; checker types added: {checkers}; rules added: {rules}"
     )
-    return report, session
 
 
 async def setup(conn: psycopg.AsyncConnection, admin_url: str, model: str) -> tuple[str, str]:
-    """Run all setup steps and renew the session login (the form the tests and spikes use).
+    """Run all setup steps with a generated user password (the form tests and spikes use).
 
     Args:
         conn: An open connection of the database owner in autocommit mode.
@@ -597,12 +476,14 @@ async def setup(conn: psycopg.AsyncConnection, admin_url: str, model: str) -> tu
         model: Pydantic AI model string for new checker types.
 
     Returns:
-        (a human-readable report of what was done, the `calu_session` connection string).
+        (a human-readable report of what was done, the connection string of the user login:
+        `calu_admin` with its new generated password).
 
     Raises:
         SetupRefused: If `preflight` finds a problem; nothing was changed.
         psycopg.Error: On database errors.
     """
-    report, session = await setup_database(conn, Target.parse(admin_url), model, True)
-    assert session is not None
-    return report, session.libpq_string()
+    report = await setup_database(conn, model)
+    password = generated_password()
+    await set_user_password(conn, password)
+    return report, user_login(Target.parse(admin_url), password).libpq_string()

@@ -71,7 +71,7 @@ async def test_an_editor_configured_with_calu_acp_alone_reaches_the_session(
     workspace.mkdir()
     async with running(db_url, workspace, [[{"text": "I looked."}]]) as (_base, session_id, _s):
         config = tmp_path / "config"
-        CredentialStore(config / "calu" / "credentials.json").save("operator", db_url, None)
+        CredentialStore(config / "calu" / "credentials.json").save("user", db_url, None)
         errors = tmp_path / "acp-stderr.log"
         process = await _spawn(workspace, config, errors, [])
         editor = Editor(process, errors)
@@ -121,7 +121,7 @@ async def test_a_credential_with_a_password_is_refused_without_reading_the_proto
     workspace = tmp_path / "project"
     workspace.mkdir()
     config = tmp_path / "config"
-    CredentialStore(config / "calu" / "credentials.json").save("operator", db_url, "a password")
+    CredentialStore(config / "calu" / "credentials.json").save("user", db_url, "a password")
     errors = tmp_path / "acp-stderr.log"
     process = await _spawn(workspace, config, errors, [])
     try:
@@ -139,7 +139,7 @@ async def test_a_credential_with_a_password_is_refused_without_reading_the_proto
         assert out == b"", f"stdout must carry protocol or nothing, not {out!r}"
         assert process.returncode == 1
         said = errors.read_text(encoding="utf-8", errors="replace")
-        assert "no terminal" in said and "--no-password" in said, said
+        assert "cannot ask for it here" in said and "--set-password" in said, said
     finally:
         if process.returncode is None:
             process.terminate()

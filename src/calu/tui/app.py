@@ -483,8 +483,8 @@ class CaluApp(App[None]):
     async def _read_name(self) -> None:
         """Show the name the attached session has in the database, where that asks nothing.
 
-        Called once, when the session has said which one it is (`_changed`). Without the
-        admin credential, with one that needs a password, or when the database cannot be
+        Called once, when the session has said which one it is (`_changed`). Without a
+        calu login, with one that needs the user password, or when the database cannot be
         read, the status line shows no name; `/running` and `/rename` read it later.
         """
         if self.admin.sessions_problem() is not None or self.admin.needs_password():
@@ -2994,9 +2994,10 @@ class CaluApp(App[None]):
         then: Callable[[T], None],
         failed: str,
     ) -> None:
-        """Run one piece of work with this machine's admin credential.
+        """Run one piece of work with the user login.
 
-        A credential with a password is asked for it first, and again after a wrong one.
+        A login that needs the user password asks for it first, and again after a wrong one;
+        Escape (or an empty answer) says that nothing was done.
         The caller has checked `self.admin.problem()`.
 
         Args:
@@ -3032,12 +3033,14 @@ class CaluApp(App[None]):
                 then(result)
 
             def answered(password: str | None) -> None:
-                """Go on with the password; without one nothing is done.
+                """Go on with the password; without one nothing is done, and that is said.
 
                 Args:
                     password: What the user typed, or None.
                 """
-                if password is not None:
+                if password is None:
+                    self.flash(f"{failed}: no password given", error=True)
+                else:
                     self._spawn(run(password))
 
             if self.admin.needs_password():
@@ -3173,7 +3176,7 @@ class CaluApp(App[None]):
             for server in served:
                 body.append(Text(server.line(), self.palette.muted))
             count = f"{len(listed)} of {len(rows)} running sessions" if wanted else ""
-            # `/rename` needs this machine's admin credential (not there through a relay).
+            # `/rename` needs this machine's calu login (not there through a relay).
             rename = (
                 " · /rename <name> names the session this client shows"
                 if self.admin.problem() is None
@@ -3195,7 +3198,7 @@ class CaluApp(App[None]):
     def _cmd_rename(self, rest: str) -> None:
         """Give the attached session a name, or take its name away (`/rename [name]`).
 
-        The name is stored in the database with this machine's admin credential
+        The name is stored in the database with this machine's calu login
         (`sessions.name`); `/running`, `calu sessions` and the other front ends show it. The
         session itself does not read it.
 
@@ -3353,7 +3356,7 @@ class CaluApp(App[None]):
     def _request_session(
         self, kind: Literal["new", "fork", "rewind"], prompt: str, before_turn: int | None = None
     ) -> None:
-        """File a session request with this machine's admin credential, then switch (D208).
+        """File a session request with this machine's calu login, then switch (D208).
 
             no credential            ──► say which command does the same
             password needed          ──► ask for it (again after a wrong one)
@@ -3932,7 +3935,7 @@ class CaluApp(App[None]):
 
         Without an argument a page shows the mode, the baseline, the marked code, the
         unreviewed files and whether a review is required or running. With a mode the
-        setting `honesty.mode` is stored with the `admin` credential of this machine, after a
+        setting `honesty.mode` is stored with this machine's `user` login, after a
         confirmation when the new mode enforces less; the session announces the mode it
         then uses. Without the credential the command that does the same is shown.
 
@@ -3998,7 +4001,7 @@ class CaluApp(App[None]):
                 else:
                     self.flash(
                         f"stored honesty.mode = {saved.mode} ({saved.scope} setting) in the "
-                        "database of this machine's admin credential, but the attached "
+                        "database of this machine's calu login, but the attached "
                         f"session still reports {self.model.honesty_mode}: it uses another "
                         "database, or has not read the change",
                         error=True,

@@ -1,7 +1,8 @@
-"""Asks for the password of a credential of the local credential store.
+"""Asks for the calu user password.
 
-Used before the client changes something in the database with the `admin` credential
-(`calu.tui.adminaccess`): saving a checker's instructions, setting `honesty.mode`. The typed
+Used before the client changes something in the database with the user login
+(`calu.tui.adminaccess`): saving a checker's instructions, setting `honesty.mode`, the
+session list of `/running` and `/switch`, a new session. The typed
 password is shown as dots, is passed to the caller once and is not kept by the screen.
 """
 
@@ -39,7 +40,7 @@ class PasswordScreen(ModalScreen[str | None]):
         """
         palette = self.palette
         with Vertical(id="password-box"):
-            yield Static(Text("Password of the 'admin' credential", f"bold {palette.orange}"))
+            yield Static(Text("calu user password", f"bold {palette.orange}"))
             yield Static(Text(self.purpose, palette.fg))
             if self.problem:
                 yield Static(Text(self.problem, palette.red))
@@ -51,7 +52,7 @@ class PasswordScreen(ModalScreen[str | None]):
         self.query_one(Input).focus()
 
     def on_input_submitted(self, message: Input.Submitted) -> None:
-        """Hand the password to the caller.
+        """Hand the password to the caller; an empty input counts as a cancel.
 
         Args:
             message: The submitted input.

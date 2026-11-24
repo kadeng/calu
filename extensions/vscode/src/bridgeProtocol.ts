@@ -6,8 +6,9 @@
  *     extension --request--> calu ide            ide.* and session.call {method, params}
  *     extension <--notification-- calu ide       session.event {method, params}, ide.link, ide.log
  *
- * Passwords (section 8): the extension sends one password with `ide.unlock`, once per bridge
- * process; the bridge holds the logins it opened, and later requests carry no password.
+ * Passwords (section 8): the extension sends the calu user password with `ide.unlock`, once per
+ * bridge process; the bridge holds the user login it opened, and later requests carry no
+ * password. An empty user password means calu never asks (no error -32010).
  *
  *     request --> error -32010 {needs, unlocked} --> ide.unlock {password} --> same request again
  *
@@ -56,7 +57,7 @@ export const BridgeError = {
 
 /** `data` of error -32010. */
 export interface NeedsPasswordData {
-  /** Name of the credential whose password is needed, e.g. "admin". */
+  /** Name of the login whose password is needed: "user". */
   needs: string;
   /** Names of the logins this bridge process already holds; missing means none. */
   unlocked?: string[];
@@ -124,9 +125,9 @@ export interface IdeStatusResult {
 export interface IdeUnlockResult {
   /** Names of all logins the bridge holds after this request. */
   unlocked: string[];
-  /** True if a reading request now finds a login without a password. */
+  /** True if a reading request now finds a login without a password (always equal to `changing`). */
   reading: boolean;
-  /** True if a request that changes settings now finds a login without a password. */
+  /** True if a request that changes settings now finds a login without a password (one login does both). */
   changing: boolean;
 }
 
@@ -302,7 +303,7 @@ interface WithPassword {
 export interface BridgeRequestParams {
   'ide.initialize': { client: string; client_version: string };
   'ide.status': Record<string, never>;
-  /** The one password; a wrong one is answered with error -32010. */
+  /** The calu user password; a wrong one is answered with error -32010. */
   'ide.unlock': { password: string };
   'ide.sessions': { all?: boolean } & WithPassword;
   'ide.attach': { session: string | null; after_seq?: number; address?: string; token?: string };

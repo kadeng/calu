@@ -5,7 +5,7 @@
  *
  *     calu not found            -> "calu-missing"   button: Open settings (set the calu command)
  *     claude not found          -> "claude-missing" button: How to install (opens the docs)
- *     password not given yet    -> "locked"         button: Unlock (asks the one password)
+ *     password not given yet    -> "locked"         button: Unlock (asks the calu user password)
  *     database not reachable    -> "database"       button: Open settings (Setup card)
  *     no session attached and
  *       the server stopped       -> "server-stopped" buttons: Start server, Retry (ServerLoss.kt)
@@ -38,7 +38,7 @@ const val CLAUDE_DOCS_URL: String = "https://docs.anthropic.com/en/docs/claude-c
  * @property status The last `ide.status` result, or `null` if it was not asked yet or failed.
  * @property attached True if a session is attached.
  * @property noServer True if `ide.start` last failed because no server answered (error -32013).
- * @property locked True if calu's logins need the one password and it was not given yet.
+ * @property locked True if calu's user login needs its password and it was not given yet.
  * @property serverStopped True while the link was lost because the calu server stopped
  *   (`serverStoppedAfterLoss`) and no server was found since.
  * @property serverRetriedAt Local time of the last Retry that found no server ("14:02:11");
@@ -101,8 +101,8 @@ fun buildHints(input: HintInput): List<SetupHint> {
             SetupHint(
                 id = "locked",
                 level = "warning",
-                message = "calu needs its password once to list and attach to sessions. It is kept in memory until " +
-                    "this window closes.",
+                message = "calu needs the calu user password once to list and attach to sessions. " +
+                    "It is kept in memory until this window closes.",
                 action = "unlock",
                 actionLabel = "Unlock",
             ),

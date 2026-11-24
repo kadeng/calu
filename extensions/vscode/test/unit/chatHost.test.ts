@@ -1,7 +1,7 @@
 // The shared host logic (src/host/): the bridge client over a scripted bridge, and ChatHost's
 // flows with a fake view and fake dialogs. Both the VSCode extension and the browser pane run it.
 import { describe, expect, it } from 'vitest';
-import { BridgeCore, LaunchError, type Launched, type Launcher } from '../../src/host/bridgeCore';
+import { BridgeCore, LaunchError, errorCode, errorText, type Launched, type Launcher } from '../../src/host/bridgeCore';
 import { ChatHost, type ChatView, type HostUi } from '../../src/host/chatHost';
 import type { SessionsUi } from '../../src/host/sessions';
 import type { HostMessage } from '../../src/shared/messages';
@@ -155,6 +155,52 @@ describe('BridgeCore', () => {
     });
     await expect(core.ensureStarted()).rejects.toThrow('calu was not found');
     expect(core.status).toBe('missing');
+  });
+
+  it('asks the calu user password once; Escape or refused passwords fail with what to do next', async () => {
+    const needs = Object.assign(new Error('calu needs the calu user password (the one chosen at `calu setup`)'), {
+      code: -32010,
+    });
+    const refused = Object.assign(new Error('That is not the calu user password.'), { code: -32010 });
+    const bridge = new ScriptedBridge({
+      'ide.initialize': () => ({ bridge_version: '1', workspace: '/w' }),
+      'ide.sessions': () => {
+        throw needs;
+      },
+      'ide.unlock': () => {
+        throw refused;
+      },
+    });
+    const answers: (string | undefined)[] = [undefined, 'a', 'b', 'c'];
+    const asked: [string | undefined, number | undefined][] = [];
+    const core = new BridgeCore({ line: () => undefined, append: () => undefined, warn: () => undefined }, 't', '0', bridge, {
+      ask: async (problem, left) => {
+        asked.push([problem, left]);
+        return answers.shift();
+      },
+      stored: async () => undefined,
+      store: async () => undefined,
+      forget: async () => undefined,
+      offerRemember: async () => false,
+    });
+    await core.ensureStarted();
+    // Escape: the request fails with -32010 and says what did not happen.
+    const dismissed = await core.request('ide.sessions', {}).catch((error: unknown) => error);
+    expect(errorCode(dismissed)).toBe(-32010);
+    expect(errorText(dismissed)).toBe(
+      'Not done: no password was given. The next action that needs the database asks again.',
+    );
+    // A new action asks again; three refused passwords end the round.
+    const gaveUp = await core.request('ide.sessions', {}).catch((error: unknown) => error);
+    expect(errorText(gaveUp)).toBe(
+      'Not done: the password was refused 3 times. The next action that needs the database asks again.',
+    );
+    expect(asked).toEqual([
+      [undefined, undefined],
+      [undefined, undefined],
+      ['That is not the calu user password.', 2],
+      ['That is not the calu user password.', 1],
+    ]);
   });
 });
 

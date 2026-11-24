@@ -12,7 +12,7 @@
  *
  * The instructions are Markdown, so VSCode highlights them and saving works as for any file.
  * Files cannot be created, renamed or deleted here: checkers are defined in calu's settings.
- * A save may need the password of the `admin` credential; `Bridge.request` asks for it.
+ * A save may need the calu user password; `Bridge.request` asks for it.
  */
 
 import * as vscode from 'vscode';

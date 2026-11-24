@@ -2,11 +2,11 @@
 
 The start-up warnings of `calu.preflight` only reach someone who already got a session to run.
 This answers the question before that: is `claude` there, can the sandbox be built, where do the
-credentials live, which checker keys are set, and — with the `admin` credential — does the
+credentials live, which checker keys are set, and — with the user login — does the
 database answer and is its schema current.
 
     calu doctor               # everything that needs no password
-    calu doctor --db          # ... and the database, with the `admin` credential
+    calu doctor --db          # ... and the database, with the user login
     calu doctor --user ada    # as root: also what Claude Code would find as that user
     calu doctor --sudo        # the same for you, through sudo
 
@@ -24,7 +24,7 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
-from calu import __version__, admin, asuser, launch, preflight
+from calu import __version__, admin, asuser, launch, logins, preflight
 from calu.changes import default_root
 from calu.config import PROVIDER_KEYS_BY_PREFIX, SETTINGS_KEY, Config, user_env_file
 from calu.credentials import CredentialStore
@@ -202,12 +202,16 @@ def credential_findings(store: CredentialStore) -> list[Finding]:
             protection are read.
 
     Returns:
-        A finding for each of the two credentials calu uses, and one more when an entry is
-        stored without a password (D104), which says so even when that is the right choice:
-        in a store that root alone can read (`calu.asuser.only_root_writes`) as a plain
-        statement, elsewhere with what it costs for `admin` and `session`. An empty store
-        on a machine whose calu runs as root (a trustworthy place file, `calu.db.place`)
-        gives one line instead: this user needs no credential of their own.
+        One finding for the user login (`calu.logins.USER`) and one for the database owner's
+        (`calu.logins.DB_ADMIN`); one more when the store holds the user login and still
+        the logins of before D265, which are unused then (without the user login, the user
+        login's advice says what to do with them, `calu.logins.old_logins`); and one when
+        the `user` or `db-admin` entry is stored without a password (an empty user
+        password), which says so even when that is the choice: in a store that root alone
+        can read (`calu.asuser.only_root_writes`) as a plain
+        statement, elsewhere with what it costs. An empty store on a machine whose calu runs
+        as root (a trustworthy place file, `calu.db.place`) gives one line instead: this
+        user needs no credential of their own.
     """
     names = set(store.names())
     if not names:
@@ -222,59 +226,63 @@ def credential_findings(store: CredentialStore) -> list[Finding]:
                     True,
                     f"none in this account; calu runs as root here (database {root_db.place}). "
                     "`calu attach --sudo` needs none; the editor and your own `calu attach` "
-                    "ask for the admin password",
+                    "ask for the calu user password",
                 )
             ]
-    unprotected = sorted(name for name in names if not store.needs_password(name))
+    old = [name for name in logins.OLD_ENTRIES if name in names]
     found = [
         Finding(
-            "credential 'admin'",
-            "admin" in names,
-            "stored" if "admin" in names else "not stored",
-            "`calu setup` creates it (it asks which database to use), or `calu credential set "
-            "admin` stores the owner login of a database that is set up already.",
-        ),
-        Finding(
-            "credential 'session'",
-            "session" in names,
-            "stored" if "session" in names else "not stored",
-            "`calu setup` creates it; without it `calu run` cannot start a session.",
+            "calu login ('user')",
+            logins.USER in names,
+            "stored" if logins.USER in names else "not stored",
+            logins.old_logins("admin" in old) if old else logins.no_login(),
             essential=True,
         ),
+        Finding(
+            "database admin login ('db-admin')",
+            logins.DB_ADMIN in names or logins.USER in names,
+            "stored"
+            if logins.DB_ADMIN in names
+            else "not stored here; migrations run where it is"
+            if logins.USER in names
+            else "not stored",
+            "`calu setup` stores it with the user login.",
+        ),
     ]
+    if old and logins.USER in names:
+        found.append(
+            Finding(
+                "logins of an earlier calu",
+                False,
+                f"{', '.join(old)} still stored, unused",
+                f"`calu credential remove NAME` removes each ({', '.join(old)}).",
+            )
+        )
+    unprotected = sorted(
+        name for name in names & {logins.USER, logins.DB_ADMIN} if not store.needs_password(name)
+    )
     if unprotected:
-        # Not a defect: it is a choice, made for the commands that would otherwise ask for a
-        # password every time (D104). It is reported because it is invisible otherwise, and
-        # because `session` and `admin` are the wrong entries to choose it for.
-        # `session` cannot get here any more (D115 refuses it), but a store written by an
-        # older calu can still hold one, and that is exactly when a report has to say so.
-        risky = [name for name in unprotected if name in ("admin", "session")]
         if asuser.only_root_writes(store.path):
             # `sudo calu setup --no-password` (D228): the store is root's alone, which is
             # what protects these entries; nothing Claude Code runs as its user reads it.
-            return [
-                *found,
+            found.append(
                 Finding(
                     "credential protection",
                     True,
                     f"{', '.join(unprotected)} stored without a password; only root can "
                     f"read {store.path}",
-                ),
-            ]
-        found.append(
-            Finding(
-                "credential protection",
-                not risky,
-                f"{', '.join(unprotected)} stored without a password (file mode only)",
-                f"{', '.join(risky)} is the wrong entry for that: 'admin' owns the "
-                "schema, and 'session' can read any session's rows by claiming its id. "
-                "Store those with a password (`calu credential set <name>`) and leave "
-                "only 'operator' unprotected -- it reads and resolves and can change "
-                "nothing else."
-                if risky
-                else "",
+                )
             )
-        )
+        else:
+            found.append(
+                Finding(
+                    "credential protection",
+                    True,
+                    f"{', '.join(unprotected)} stored without a password (an empty calu user "
+                    "password): calu asks for none, and every program that runs as you can "
+                    "use the login; `calu setup --set-password` sets a password",
+                )
+            )
     return found
 
 
@@ -583,7 +591,7 @@ async def database_findings(url: str) -> list[Finding]:
     """Check that the database answers and that its schema is current.
 
     Args:
-        url: The owner connection string from the `admin` credential.
+        url: The connection string of the user login.
 
     Returns:
         Findings for the connection and for the migrations. A connection that fails is one
@@ -600,7 +608,7 @@ async def database_findings(url: str) -> list[Finding]:
                 "database",
                 False,
                 f"cannot connect ({type(exc).__name__}: {exc})",
-                "`calu setup` sets a database up; for a server, check the `admin` credential.",
+                "`calu setup` sets a database up; for a server, check the stored `user` login.",
                 essential=True,
             )
         ]
@@ -625,7 +633,7 @@ async def instruction_findings(url: str) -> list[Finding]:
     """Compare the stored checker instructions and text settings with the shipped texts (D248).
 
     Args:
-        url: The owner connection string from the `admin` credential.
+        url: The connection string of the user login.
 
     Returns:
         One finding per stored text: ok for the present shipped text; a note for an older
@@ -666,7 +674,7 @@ async def stored_sandbox(url: str) -> bool | None:
     """Read `claude.sandbox.enabled` from the global settings of the database.
 
     Args:
-        url: The owner connection string from the `admin` credential.
+        url: The connection string of the user login.
 
     Returns:
         The stored value; True (the default) if the settings hold none; None if the database

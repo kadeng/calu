@@ -240,19 +240,29 @@ def test_the_user_passed_through_sudo_must_be_the_one_who_ran_it(monkeypatch):
         _run_as(options("--user", "1000", "--from-sudo"))
 
 
-def test_without_an_admin_entry_settings_use_the_typed_admin_password(tmp_path, monkeypatch):
-    """Only an `operator` entry is stored: the login is `calu_admin` at that database."""
+def test_without_a_user_entry_settings_use_the_typed_user_password(tmp_path, monkeypatch):
+    """Only root's place file names the database: the login is `calu_admin` there (D228).
+
+    Stand-ins answer the prompt and the database's check of the password; nothing connects.
+    """
     from calu import cli
     from calu.credentials import CredentialStore
     from calu.db.target import PasswordAuth, Target
 
     store = CredentialStore(tmp_path / "credentials.json")
-    store.save("operator", "host=db.example port=5432 dbname=calu user=calu_operator", None)
+    place = Target.parse("host=db.example port=5432 dbname=calu user=calu_admin")
+    monkeypatch.setattr(cli, "_place_or_none", lambda: place)
+    monkeypatch.setattr(cli, "_shared_user", lambda: None)
     monkeypatch.setattr(cli, "read_password", lambda prompt, confirm=False: bytearray(b"typed"))
-    login = Target.parse(cli._admin_secret(store))
+
+    async def accepted(place: Target, password: str) -> bool:
+        return password == "typed"
+
+    monkeypatch.setattr(cli, "is_user_password", accepted)
+    login = Target.parse(cli._settings_login(store))
     assert login.conninfo["user"] == "calu_admin" and login.conninfo["host"] == "db.example"
     assert login.auth == PasswordAuth(password="typed")
-    assert "admin" not in store, "nothing was stored"
+    assert store.names() == [], "nothing was stored"
 
 
 def test_threads_that_are_just_ending_are_waited_for_before_the_switch():

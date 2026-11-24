@@ -1,4 +1,4 @@
-"""What the full-screen client changes in the database, with the `admin` credential.
+"""What the full-screen client changes in the database, with the user login.
 
 A session may read the checkers' instructions and its settings and cannot change them: it
 must not be able to change what it is judged by. Two things of the client therefore do not go
@@ -7,10 +7,12 @@ through the session at all:
 * saving a checker's instructions (the checkers screen), as `calu checker edit` does;
 * setting `honesty.mode` (`/honesty off | track | enforce`), as `calu config set` does.
 
-Both use the `admin` credential of the local credential store (`calu.credentials`), which is
-the connection string of the database owner, and the functions of `calu.admin`. The client
-asks for the credential's password when it has one. Where the machine has no such credential,
-`AdminAccess.problem` says so and the client shows the command that does the same.
+Both use the user login (the role `calu_admin`, `calu.logins`, agent/records/PLAN.md D265):
+the `user` entry of the local credential store (`calu.credentials`), or, given a database
+login without a password, that login with the user password a person types; and the
+functions of `calu.admin`. The client asks for the user password when it is needed. Where
+the machine has no login, `AdminAccess.problem` says so and the client shows the command that
+does the same.
 
 `AdminAccess` is the interface the client uses; `StoreAdmin` is the real one, and tests pass
 their own. This module imports nothing from Textual.
@@ -31,21 +33,16 @@ from typing import Any, NoReturn, Protocol
 import anyio
 import psycopg
 
-from calu import admin, herd, servers, session_requests
+from calu import admin, herd, logins, servers, session_requests
 from calu.credentials import CredentialError, CredentialStore, WrongPassword, wipe
-from calu.db import roles
 from calu.db.connection import Db
 from calu.db.connection import open_stored as connect
 from calu.db.target import PasswordAuth, Target
 from calu.protocol.client import RelayTarget, RequestFailed, relay_call
 from calu.session_requests import SessionRequest
 
-CREDENTIAL = "admin"
-"""The credential both changes need: only the database owner may write these tables."""
-
-STORED_ADMIN = "calu_admin"
-"""The store entry in which `calu setup --no-password` keeps the login of the role
-`calu_admin` without a password (`calu.cli.ADMIN_ENTRY`, D228)."""
+CREDENTIAL = logins.USER
+"""The credential the changes use: the user login (`calu_admin`)."""
 
 CONFLICT_HELP = "the text stays in the editor; leave it with esc esc, press r, edit again"
 """What follows "changed meanwhile to version N" when a checker's instructions were stored by
@@ -53,8 +50,8 @@ someone else since the editor read them: the keys in the order they work (`r` re
 only outside the editor, and leaving the editor drops the text)."""
 
 NO_CREDENTIAL = (
-    "this machine has no 'admin' credential (calu credential set admin stores one; it is the "
-    "connection string of the database owner)"
+    "this machine has no calu login: `calu setup` sets one up (for a database another machine "
+    "set up: `calu credential set user`)"
 )
 """What `StoreAdmin.problem` says without the credential."""
 
@@ -313,14 +310,11 @@ class StoreAdmin:
         Args:
             store: The credential store; the default store of this user if None.
             database: The login of the role `calu_admin` at the database of the attached
-                session, without its password (`calu.setup.admin_login`). With it, every change logs
-                in there as `calu_admin` with the admin password the user types; nothing is read
-                from the store and nothing is stored (agent/records/PLAN.md D213). A client
-                that runs as root passes instead the complete login it holds in memory
-                (`calu_admin` with the admin password it asked once, or the owner's): no
-                password is asked at all (D249). None uses the store's `admin` credential.
-                Whatever the login, each action narrows its connection to `calu_operator`
-                or `calu_admin` (`calu.db.roles.narrow`).
+                session, without its password (`calu.setup.user_login`). With it, every change
+                logs in there as `calu_admin` with the user password the user types; nothing
+                is stored (agent/records/PLAN.md D213). A client that runs as root passes
+                instead the complete login it holds in memory: no password is asked at all
+                (D249). None uses the store's `user` entry.
             unavailable: Why nothing can be changed from this client, when neither a
                 database login nor this user's store applies (a session of root's calu whose
                 database is not known, D228); `problem` then returns it and the store is
@@ -334,8 +328,8 @@ class StoreAdmin:
     def _complete(self) -> None:
         """Take the password of a `calu_admin` login from the store, if it lies there open.
 
-        `calu setup --no-password` stores the login of `calu_admin` protected by the file's
-        mode alone (`STORED_ADMIN`). A client that was handed that login without its password
+        An empty user password stores the login of `calu_admin` protected by the file's
+        mode alone (`CREDENTIAL`). A client that was handed that login without its password
         (`database`) would ask the user for a password nobody chose. If the store holds the
         entry without a password and it names the same database and role, `database` becomes
         that complete login; nothing is asked afterwards. Looked up once; an unreadable
@@ -345,9 +339,9 @@ class StoreAdmin:
             return
         self._looked_in_store = True
         try:
-            if STORED_ADMIN not in self.store or self.store.needs_password(STORED_ADMIN):
+            if CREDENTIAL not in self.store or self.store.needs_password(CREDENTIAL):
                 return
-            url = self.store.load(STORED_ADMIN, None)
+            url = self.store.load(CREDENTIAL, None)
         except CredentialError, OSError:
             return
         try:
@@ -364,16 +358,20 @@ class StoreAdmin:
         """Say why nothing can be changed from this machine.
 
         Returns:
-            None with a database login or a stored `admin` credential; `unavailable` if that
-            was given; `NO_CREDENTIAL` without the credential; or the store's own message if
-            its file cannot be read.
+            None with a database login or a stored `user` credential; `unavailable` if that
+            was given; `calu.logins.old_logins` for a store that holds only the logins of
+            before D265; `NO_CREDENTIAL` without the credential; or the store's own message
+            if its file cannot be read.
         """
         if self.database is not None:
             return None
         if self.unavailable is not None:
             return self.unavailable
         try:
-            return None if CREDENTIAL in self.store else NO_CREDENTIAL
+            if CREDENTIAL in self.store:
+                return None
+            old = [name for name in logins.OLD_ENTRIES if name in self.store]
+            return logins.old_logins("admin" in old) if old else NO_CREDENTIAL
         except CredentialError as error:
             return f"the credential store cannot be read: {error}"
 
@@ -394,7 +392,7 @@ class StoreAdmin:
         return socket.gethostname()
 
     def needs_password(self) -> bool:
-        """Tell whether the `admin` credential is protected by a password.
+        """Tell whether the user login needs the user password.
 
         Returns:
             True if it is; False without a password, without the credential or when the
@@ -410,16 +408,15 @@ class StoreAdmin:
 
     @staticmethod
     async def _as_admin[T](
-        database: Target, password: str | None, work: Callable[[Db], Awaitable[T]], role: str
+        database: Target, password: str | None, work: Callable[[Db], Awaitable[T]]
     ) -> T:
-        """Log in as `calu_admin` with the typed password, run `work` as `role` and close.
+        """Log in as `calu_admin` with the typed password, run `work` and close.
 
         Args:
             database: The login of `calu_admin` without its password, or a complete login
                 that a client running as root holds in memory (then `password` is not used).
-            password: The admin password the user typed, or None.
+            password: The user password the user typed, or None.
             work: `async (Db) -> T`.
-            role: The narrowest role that can do `work` (`calu.db.roles.narrow`).
 
         Returns:
             What `work` returned.
@@ -432,7 +429,7 @@ class StoreAdmin:
         if _has_secret(database):
             login = database
         elif password is None:
-            raise PasswordNeeded("changing this needs the admin password")
+            raise PasswordNeeded("this needs the calu user password")
         else:
             login = database.model_copy(update={"auth": PasswordAuth(password=password)})
         try:
@@ -444,13 +441,13 @@ class StoreAdmin:
                     f"the database did not answer within {CONNECT_TIMEOUT_S:.0f} seconds"
                 ) from error
             except psycopg.OperationalError as error:
-                refused = ("password authentication failed", "no password supplied")
-                if any(text in str(error) for text in refused):
-                    raise PasswordNeeded("wrong admin password") from error
+                if logins.refused_by_database(str(error)):
+                    if not _has_secret(database):
+                        raise PasswordNeeded(logins.refused(not password)) from error
+                    raise AdminFailed(logins.outdated(database.place)) from error
                 first = str(error).strip().splitlines()[0] if str(error).strip() else ""
                 raise AdminFailed(f"the database cannot be reached: {first}") from error
             try:
-                await roles.narrow(conn, role)
                 return await work(Db(conn))
             finally:
                 await conn.close()
@@ -460,20 +457,14 @@ class StoreAdmin:
             first = str(error).strip().splitlines()[0] if str(error).strip() else "no detail"
             raise AdminFailed(f"the database refused: {first}") from error
 
-    async def _with_db[T](
-        self, password: str | None, work: Callable[[Db], Awaitable[T]], role: str
-    ) -> T:
-        """Open the connection, run `work` with it as `role` and close it.
+    async def _with_db[T](self, password: str | None, work: Callable[[Db], Awaitable[T]]) -> T:
+        """Open the connection with the user login, run `work` with it and close it.
 
-        The decrypted connection string is wiped as soon as the connection is open. Before
-        `work` runs, the connection takes the narrowest role that can do it
-        (`calu.db.roles.narrow`): `calu_operator` for reading the sessions and asking for
-        one, `calu_admin` for changing settings (agent/records/PLAN.md D249).
+        The decrypted connection string is wiped as soon as the connection is open.
 
         Args:
-            password: The credential's password, or None if it has none.
+            password: The user password, or None if none was typed.
             work: `async (Db) -> T`.
-            role: `roles.OPERATOR` or `roles.ADMIN`.
 
         Returns:
             What `work` returned.
@@ -485,17 +476,17 @@ class StoreAdmin:
         """
         self._complete()
         if self.database is not None:
-            return await self._as_admin(self.database, password, work, role)
+            return await self._as_admin(self.database, password, work)
         missing = self.problem()
         if missing is not None:
             raise AdminFailed(missing)
         if self.store.needs_password(CREDENTIAL) and password is None:
-            raise PasswordNeeded("the 'admin' credential needs its password")
+            raise PasswordNeeded("this needs the calu user password")
         try:
             # deriving the key takes a noticeable time: not on the event loop
             url = await anyio.to_thread.run_sync(self.store.load, CREDENTIAL, password)
         except WrongPassword as error:
-            raise PasswordNeeded("wrong password for the 'admin' credential") from error
+            raise PasswordNeeded(logins.refused(not password)) from error
         except CredentialError as error:
             raise AdminFailed(str(error)) from error
         try:
@@ -506,10 +497,14 @@ class StoreAdmin:
                 raise AdminFailed(
                     f"the database did not answer within {CONNECT_TIMEOUT_S:.0f} seconds"
                 ) from error
+            except psycopg.OperationalError as error:
+                if logins.refused_by_database(str(error)):
+                    raise AdminFailed(logins.outdated(Target.parse(url).place)) from error
+                first = str(error).strip().splitlines()[0] if str(error).strip() else ""
+                raise AdminFailed(f"the database cannot be reached: {first}") from error
             finally:
                 wipe(url)
             try:
-                await roles.narrow(conn, role)
                 return await work(Db(conn))
             finally:
                 await conn.close()
@@ -532,7 +527,7 @@ class StoreAdmin:
             PasswordNeeded: If the password is missing or wrong.
             AdminFailed: If the database cannot be reached.
         """
-        return await self._with_db(password, herd.sessions, roles.OPERATOR)
+        return await self._with_db(password, herd.sessions)
 
     async def served(self, password: str | None) -> list[Served]:
         """List the `calu serve` processes that run, with the directory each one serves.
@@ -570,7 +565,7 @@ class StoreAdmin:
                 return []
             return [Served(row.hostname, row.os_user, row.projects_directory) for row in rows]
 
-        return await self._with_db(password, work, roles.OPERATOR)
+        return await self._with_db(password, work)
 
     async def rename_session(self, session_id: str, name: str, password: str | None) -> str:
         """Give a session a name, or take its name away (`calu.herd.rename_session`).
@@ -595,7 +590,7 @@ class StoreAdmin:
             """Store the name.
 
             Args:
-                db: The owner's connection.
+                db: The connection of the user login.
 
             Returns:
                 The stored name.
@@ -608,7 +603,7 @@ class StoreAdmin:
             except (ValueError, LookupError) as error:
                 raise AdminFailed(str(error)) from error
 
-        return await self._with_db(password, work, roles.OPERATOR)
+        return await self._with_db(password, work)
 
     async def request_session(self, wanted: SessionRequest, password: str | None) -> str:
         """Ask the `calu serve` of this machine for a session and wait until it runs (D208).
@@ -634,7 +629,7 @@ class StoreAdmin:
             """File the request and wait for its outcome.
 
             Args:
-                db: The owner's connection.
+                db: The connection of the user login.
 
             Returns:
                 The session's row id.
@@ -656,7 +651,7 @@ class StoreAdmin:
                 raise AdminFailed(f"the server did not start the session: {done.message}")
             return done.session_id
 
-        return await self._with_db(password, work, roles.OPERATOR)
+        return await self._with_db(password, work)
 
     async def save_instructions(
         self, name: str, text: str, password: str | None, base_version: int | None = None
@@ -684,7 +679,7 @@ class StoreAdmin:
             """Check that the checker exists, then store the text.
 
             Args:
-                db: The owner's connection.
+                db: The connection of the user login.
 
             Returns:
                 The checker after the change.
@@ -700,7 +695,7 @@ class StoreAdmin:
             row = await admin.set_checker(db, name, instructions_text=text)
             return SavedChecker(row.name, row.version)
 
-        return await self._with_db(password, work, roles.ADMIN)
+        return await self._with_db(password, work)
 
     async def set_honesty_mode(
         self, mode: str, project: str | None, password: str | None
@@ -731,7 +726,7 @@ class StoreAdmin:
             """Find the scope that decides, then store the mode there.
 
             Args:
-                db: The owner's connection.
+                db: The connection of the user login.
 
             Returns:
                 The stored mode and its scope.
@@ -747,7 +742,7 @@ class StoreAdmin:
             await admin.set_setting(db, "honesty.mode", mode, scope)
             return SavedMode(mode, f"project {scope}" if scope else "global")
 
-        return await self._with_db(password, work, roles.ADMIN)
+        return await self._with_db(password, work)
 
 
 RELAY_START_TIMEOUT_S = 150.0

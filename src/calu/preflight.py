@@ -522,19 +522,19 @@ def self_approval_warnings(config: Config, store: CredentialStore | None = None)
 def password_commands(unprotected: Sequence[str]) -> str:
     """Name the commands that put passwords back on credentials stored without one.
 
-    `calu setup --set-passwords` encrypts the logins of `calu setup` (`admin`, `session`, and
-    it drops the password-free `calu_admin`); any other entry, such as `operator`, gets its
-    password from `calu credential set NAME`.
+    `calu setup --set-password` encrypts the logins of `calu setup` (`user`, `db-admin`, and
+    the entries of before D265 it converts); any other entry gets its password from `calu
+    credential set NAME`.
 
     Args:
         unprotected: Names of the entries stored without a password.
 
     Returns:
-        A text in backticks, e.g. "`calu setup --set-passwords`" or "`calu setup
-        --set-passwords`, `calu credential set operator`".
+        A text in backticks, e.g. "`calu setup --set-password`" or "`calu setup
+        --set-password`, `calu credential set mykey`".
     """
-    setup = {"admin", "session", "calu_admin"}
-    parts = ["`calu setup --set-passwords`"] if any(n in setup for n in unprotected) else []
+    setup = {"user", "db-admin", "admin", "session", "operator", "calu_admin"}
+    parts = ["`calu setup --set-password`"] if any(n in setup for n in unprotected) else []
     parts += [f"`calu credential set {n}`" for n in unprotected if n not in setup]
     return ", ".join(parts)
 
@@ -568,7 +568,7 @@ class LoginProtection:
     """calu runs as root and Claude Code as another user (`--sudo`, `--user`)."""
     unprotected: tuple[str, ...] | None = None
     """Names of the credential store's entries stored without a password; None if the store
-    could not be read or holds no `session` entry (nothing is known then)."""
+    could not be read or holds no `user` entry (nothing is known then)."""
     published: bool | None = None
     """Whether the place file holds the password of `calu_admin`; None if not checked."""
 
@@ -619,13 +619,13 @@ def login_protection(
 
     Returns:
         The facts. `unprotected` is None when the store is None, cannot be read, or holds
-        no `session` entry.
+        no `user` entry.
     """
     unprotected: tuple[str, ...] | None = None
     if store is not None:
         try:
             names = store.names()
-            if "session" in names:
+            if "user" in names:
                 unprotected = tuple(n for n in names if not store.needs_password(n))
         except CredentialError, OSError:
             unprotected = None
@@ -634,8 +634,8 @@ def login_protection(
 
 SANDBOX_OFF_ADVICE = (
     "With Claude Code's sandbox off (claude.sandbox.enabled false), it is strongly "
-    "recommended to at least protect the session and database logins with passwords "
-    "(`calu setup --set-passwords`) and/or run calu with --sudo, so that calu runs as a more "
+    "recommended to at least protect calu's logins with a user password "
+    "(`calu setup --set-password`) and/or run calu with --sudo, so that calu runs as a more "
     "privileged process than Claude Code and Claude's commands cannot reach its logins."
 )
 """The recommendation of requirement 42, the same at setup, at a session's start and in
@@ -652,7 +652,7 @@ def sandbox_off_warnings(config: Config, protection: LoginProtection | None) -> 
     Returns:
         [] when the sandbox is on or the recommendation is known to be met
         (`LoginProtection.met`); otherwise `SANDBOX_OFF_ADVICE`, followed by what was found
-        against it: the entries without a password, a published admin password.
+        against it: the entries without a password, a published user login.
     """
     if config.claude.sandbox.enabled or (protection is not None and protection.met()):
         return []
@@ -660,7 +660,7 @@ def sandbox_off_warnings(config: Config, protection: LoginProtection | None) -> 
     if protection is not None and protection.unprotected and not protection.privileged:
         found.append(f"stored without a password: {', '.join(protection.unprotected)}")
     if protection is not None and protection.published:
-        found.append("the place file publishes the password of calu_admin")
+        found.append("the place file publishes the user login (calu_admin)")
     return [SANDBOX_OFF_ADVICE + (f" Found: {'; '.join(found)}." if found else "")]
 
 

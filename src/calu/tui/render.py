@@ -2281,7 +2281,7 @@ def honesty_page(model: SessionModel, view: View) -> list[Text]:
         ("", "/trust-file <path>", "certify one file as it is now"),
         ("r", "/honesty-review", "review the unreviewed files now"),
         ("x", "/clear-mark <id>", "close a mark by hand, after a yes"),
-        ("m", "/honesty off | track | enforce", "change the mode (admin credential)"),
+        ("m", "/honesty off | track | enforce", "change the mode (user login)"),
     )
     lines += [Text(""), Text("KEYS ON THIS PAGE AND COMMANDS", f"bold {palette.fg}")]
     lines += [

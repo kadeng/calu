@@ -1,4 +1,5 @@
-"""`calu db reset`: all is dropped and created again, behind a password and a typed phrase."""
+"""`calu db reset`: all is dropped and created again, behind the user password (if there is
+one) and a typed phrase."""
 
 import io
 
@@ -84,10 +85,10 @@ async def test_a_reset_needs_the_password_and_a_phrase_typed_by_hand(
 ) -> None:
     """The owner's ask: tables dropped and recreated, a password, and a phrase no script types."""
     store = CredentialStore(tmp_path / "credentials.json")
-    store.save("admin", db_url, "pw")
+    store.save("db-admin", db_url, "pw")
     conn = await connect(db_url)
     try:
-        _report, session_url = await setup(conn, db_url, "test:model")
+        _report, user_url = await setup(conn, db_url, "test:model")
         db = Db(conn)
         await admin.add_project(db, "demo")
         await admin.set_setting(db, "claude.effort", "high")
@@ -133,19 +134,36 @@ async def test_a_reset_needs_the_password_and_a_phrase_typed_by_hand(
     finally:
         await conn.close()
 
-    # The roles are not part of the schema: the session credential from before still works.
-    session = await connect(session_url)
+    # The roles are not part of the schema: the user login from before still works.
+    user = await connect(user_url)
     try:
-        assert await Db(session).scalar("SELECT count(*) FROM checker_types") >= 3
+        assert await Db(user).scalar("SELECT count(*) FROM checker_types") >= 3
     finally:
-        await session.close()
+        await user.close()
 
 
-async def test_a_reset_is_refused_for_an_admin_credential_without_a_password(
-    db_url: str, tmp_path, capsys: pytest.CaptureFixture[str]
+async def test_with_an_empty_user_password_a_reset_asks_only_for_the_phrase(
+    db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Without a password to type, one of the two confirmations would be missing."""
+    """D265: an empty user password means calu never asks for one; the phrase stays."""
     store = CredentialStore(tmp_path / "credentials.json")
-    store.save("admin", db_url, None)
+    store.save("db-admin", db_url, None)
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        await admin.add_project(Db(conn), "demo")
+    finally:
+        await conn.close()
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))  # a password prompt would fail on this
+    typist = Typist(cli.RESET_PHRASE, 0.3)
+    monkeypatch.setattr(cli, "confirm_reset", lambda: CONFIRM(typist.read, typist.clock))
     assert await run(store) == 1
-    assert "stored without a password" in capsys.readouterr().err
+    assert "nothing was deleted" in capsys.readouterr().err
+    typist = Typist(cli.RESET_PHRASE, 3.0)
+    assert await run(store) == 0
+    assert "the database is empty again" in capsys.readouterr().out
+    conn = await connect(db_url)
+    try:
+        assert await admin.projects(Db(conn)) == []
+    finally:
+        await conn.close()

@@ -2,7 +2,7 @@
 
 See agent/records/PLAN.md D208.
 
-    password ──► decrypt the `session` credential ──► kept in one ConnectionSource
+    password ──► decrypt the `user` credential ──► kept in one ConnectionSource
     loop:  notified (`session_requested`) or every POLL_S seconds
            claim the oldest pending request for this host and OS user
            ──► one task per request:
@@ -12,7 +12,7 @@ See agent/records/PLAN.md D208.
                  ──► write "started" with the session id, or "failed" with the reason
     stop:  cancel ──► every session stops in order (`calu.run._run`)
 
-A request is a database row written with the operator login (`calu.session_requests`), so who
+A request is a database row written with the user login (`calu.session_requests`), so who
 may start a session is decided by the database's logins, not by who can reach a socket of
 this process. The server prints one line per event of a session's life; the conversation is
 shown by the session's clients.
@@ -159,7 +159,7 @@ class Server:
         """Prepare a server; nothing is opened until `run`.
 
         Args:
-            source: Where database connections with the session login come from.
+            source: Where database connections with the user login come from.
             hidden: Names of environment variables Claude Code must not see.
             options: Limits and addresses; None uses the defaults.
             runner_factory: Creates each session's runner; None uses the Agent SDK runner
@@ -201,7 +201,7 @@ class Server:
 
         Raises:
             psycopg.Error: If the database cannot be reached at the start or refuses the
-                session login (then or later: a refused login ends the server).
+                user login (then or later: a refused login ends the server).
         """
         db = Db(await self.source.open(), source=self.source)
         try:
@@ -223,7 +223,7 @@ class Server:
             notifier: The connection that hears of new requests.
 
         Raises:
-            LoginRefused: If the database refuses the session login for good.
+            LoginRefused: If the database refuses the user login for good.
         """
         wake = Dirty()
         refused: list[LoginRefused] = []
@@ -817,7 +817,7 @@ async def serve(
     lost connections reopened.
 
     Args:
-        url: The `calu_session` connection string or record.
+        url: The user login's connection string or record.
         options: Limits and addresses; None uses the defaults.
         runner_factory: Creates each session's runner; None uses the Agent SDK runner.
         checker_models: Replacements for the configured checker models, or None.
@@ -825,7 +825,7 @@ async def serve(
             with `options.run_as` the name or the number of that user.
 
     Returns:
-        0 after a stop by signal; 1 if the database refused the session login for good, or the
+        0 after a stop by signal; 1 if the database refused the user login for good, or the
         relay port named with `--relay-port` cannot be bound.
 
     Raises:
@@ -857,7 +857,7 @@ async def serve(
             await server.run()
         except LoginRefused as exc:
             say(
-                f"calu: the database refuses the session login ({exc}); the session "
+                f"calu: the database refuses the user login ({exc}); the session "
                 "credential was probably replaced by a later `calu setup`. The server stops.",
                 error=True,
             )

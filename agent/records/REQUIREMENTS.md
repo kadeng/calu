@@ -364,6 +364,20 @@ broken down or extended. Derived requirements and design decisions belong in
     default. In the settings, when enabling the traces, it's offered to also switch it on
     (if possible)." Clarified: "When enabling human diff collection I mean." (stated
     2026-11-20)
+48. One login (stated 2026-11-24, after `calu sessions` asked for an "operator password" the
+    owner had never knowingly set): "For now, we can subsume all of these under a single
+    "user" role for now (including the setup). We could have a separate DB admin role
+    (that's a database user not necessarily a calu role) that's capable of changing settings
+    that the regular user can't and work with multiple tablespaces (each for a single user).
+    Ensure this is changed, the code and documentation is updated and simplified
+    accordingly. When setting up the DB and the DB is preexisting, we might want to ask for a
+    DB user. When setting it up locally, the DB password and the user password can be
+    identical." "In addition, we could have (for example for testing) an empty user
+    password. In this scenario we don't ask for a password at all." "The user experience
+    must be taken into account when requiring passwords, including for the case that a wrong
+    or no password can be entered. Error messages and prompt messages must be helpful and
+    explanatory (still concise), not just technically correct."
+
 ## Soft goals and priorities
 
 1. Simple requirements first: calu should become functional before anything else; a port to Go

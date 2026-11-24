@@ -1,9 +1,9 @@
 """The web interface: many sessions at once, their history, and what steers their checkers.
 
-    calu web                # http://calu.localhost:8800/?token=..., needs the `admin` credential
+    calu web                # http://calu.localhost:8800/, signs in with the calu user password
 
 It is the herd client of agent/records/PLAN.md §6.2: it works on the database, so it sees the
-sessions of every host without a process of its own on them, and it holds the `admin` credential, so
+sessions of every host without a process of its own on them, and it holds the user login, so
 it can also change what steers the checkers. For the live view of one session it is a client of that
 session as well (D34): it mints a client token, connects to the address the session recorded and
 relays the event stream to the browser, so the browser needs no token and the session needs no new
@@ -31,7 +31,7 @@ interface: reach it from another machine through an SSH tunnel
     ssh -L 8800:127.0.0.1:8800 the-host      # then open the printed address at home
 
 or put a TLS proxy with its own authentication in front of it. Everything the pages can do, the
-`admin` credential can do, including changing the rules a session is judged by.
+user login can do, including changing the rules a session is judged by.
 
 Who may do what (the three middlewares, outermost first):
 
@@ -71,7 +71,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from calu import __version__, admin, asuser, herd, localsocket, servers, session_requests
+from calu import __version__, admin, asuser, herd, localsocket, logins, servers, session_requests
 from calu.credentials import CredentialStore
 from calu.db import Db
 from calu.homes import short_path
@@ -81,7 +81,7 @@ from calu.protocol.messages import (
     RELAY_SESSION_PATH,
     SWITCHABLE_PERMISSION_MODES,
 )
-from calu.setup import ADMIN_ROLE
+from calu.setup import USER_ROLE
 from calu.web import git
 from calu.web import settings as web_settings
 from calu.web.pane import (
@@ -258,7 +258,7 @@ def check_host(host: str) -> None:
 
     Raises:
         NotLocal: If the address is not a loopback address. The web interface has no login yet,
-            so binding it to a reachable interface would hand everything the `admin` credential
+            so binding it to a reachable interface would hand everything the user login
             can do to whoever finds the port.
     """
     try:
@@ -294,12 +294,12 @@ def create_app(
     a database that cannot be reached is answered with status 503 (`_database_down`).
 
     Args:
-        db: The database connection (owner or `calu_operator` rights).
+        db: The database connection (the user login).
         git_url_template: `web.git_url_template` for commit links to a git browser that is
             neither GitHub, GitLab nor Bitbucket ("" guesses from the project's remote).
         token: The login token (`TokenGate`, D161). `calu web` always passes one; None leaves
             the gate out, for in-process tests.
-        check_password: Says whether a typed password is the admin password: with it and a
+        check_password: Says whether a typed password is the calu user password: with it and a
             token, a browser without a login is asked for the password (D216).
         host_name: The only host name a request may carry (`LocalOnly`). `calu web` always
             passes `WEB_HOST_NAME`; "" accepts every loopback name, for in-process tests.
@@ -551,7 +551,7 @@ def _header(scope: Any, name: bytes) -> str:
 
 
 PasswordCheck = Callable[[str], Awaitable[bool]]
-"""Says whether a typed password is the admin password (`TokenGate`)."""
+"""Says whether a typed password is the calu user password (`TokenGate`)."""
 
 LOGIN_PATH = "/_login"
 """Where the password page posts to."""
@@ -605,8 +605,9 @@ class TokenGate:
         Args:
             app: The ASGI application.
             token: The secret a browser logs in with, as `?token=`.
-            check_password: Says whether a typed password is the admin password; with it, a browser
-                without a login gets a page that asks for the password (agent/records/PLAN.md D216).
+            check_password: Says whether a typed password is the calu user password; with
+                it, a browser without a login gets a page that asks for the password
+                (agent/records/PLAN.md D216).
                 None leaves the token as the only login.
         """
         self.app = app
@@ -733,7 +734,7 @@ class TokenGate:
         return "/" + str(scope.get("path", "/")).lstrip("/") + (f"?{rest}" if rest else "")
 
     async def _ask_password(self, send: Any, onward: str, problem: str) -> None:
-        """Answer with the page that asks for the admin password.
+        """Answer with the page that asks for the calu user password.
 
         Args:
             send: The ASGI send channel.
@@ -756,7 +757,7 @@ class TokenGate:
         await send({"type": "http.response.body", "body": page.encode("utf-8")})
 
     async def _password_login(self, scope: Any, receive: Any, send: Any) -> None:
-        """Check a typed admin password and log the browser in, or ask again.
+        """Check a typed calu user password and log the browser in, or ask again.
 
         One password is checked at a time, and after a wrong one the answer waits
         `min(LOGIN_DELAY_MAX_S, 2 ** wrong_in_a_row / 2)` seconds, so guessing is slow. The
@@ -782,7 +783,7 @@ class TokenGate:
         onward = "/" + (fields.get("onward") or ["/"])[0].lstrip("/")
         if onward.startswith(LOGIN_PATH):
             onward = "/"
-        problem = "Type the admin password."
+        problem = "Type the calu user password (the one chosen at `calu setup`)."
         delay = 0.0
         if "password" in fields:
             # Also a blank one: the database says whether it is right.
@@ -799,7 +800,7 @@ class TokenGate:
                         self._failed = 0
                         await self._logged_in(send, onward)
                         return
-                    problem = "That is not the admin password."
+                    problem = logins.refused(not password)
                     now = self._clock()
                     if now - self._last_failure > LOGIN_FAILURES_FORGET_S:
                         self._failed = 0
@@ -2521,7 +2522,7 @@ async def _database_down(request: Request, exc: Exception) -> Response:
 def _login_was_changed(exc: Exception) -> bool:
     """Tell whether a connection failed because the password of `calu_admin` is no longer valid.
 
-    `calu setup` after `--no-password` gives the role a new generated password. A `calu web`
+    `calu setup --set-password` gives the role a new password. A `calu web`
     that runs since before then keeps working until its connection is replaced, and is then
     refused with the login it holds.
 
@@ -2534,7 +2535,7 @@ def _login_was_changed(exc: Exception) -> bool:
     """
     text = str(exc)
     refused = getattr(exc, "code", None) == "28P01" or "password authentication failed" in text
-    return refused and f'"{ADMIN_ROLE}"' in text
+    return refused and f'"{USER_ROLE}"' in text
 
 
 async def _schema_too_old(request: Request, exc: Exception) -> Response:

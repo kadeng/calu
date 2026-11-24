@@ -218,10 +218,10 @@ def run_tui(
         after_seq: The first subscription continues after this sequence number.
         show_thinking: Whether thinking is shown in full at the start.
         database: The login of `calu_admin` at the session's database, without a password
-            (`calu.setup.admin_login`): settings are then changed there with the admin
-            password the user types. None uses this machine's `admin` credential.
+            (`calu.setup.user_login`): settings are then changed there with the calu user
+            password the user types. None uses this machine's `user` login.
         admin_problem: Why nothing can be changed from this client, when there is no
-            `database` and this machine's `admin` credential is not the session's (D228);
+            `database` and this machine's `user` login is not the session's (D228);
             None otherwise.
         relay: The `calu serve` relay the address goes through (D242): `/running`,
             `/switch`, `/new`, `/fork` and `/rewind` then ask the relay instead of the

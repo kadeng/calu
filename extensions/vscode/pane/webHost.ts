@@ -267,7 +267,7 @@ export function startPane(config: PaneConfig): { view: PaneView; host: ChatHost 
     diffs.set(diff.tool_use_id, diff);
     while (diffs.size > MAX_DIFFS) diffs.delete(diffs.keys().next().value as string);
   };
-  // The one password, as in VSCode: kept in this page until it closes, never stored.
+  // The calu user password, as in VSCode: kept in this page until it closes, never stored.
   let heldPassword: string | undefined;
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const query = config.dir ? `?${new URLSearchParams({ dir: config.dir }).toString()}` : '';
@@ -277,7 +277,7 @@ export function startPane(config: PaneConfig): { view: PaneView; host: ChatHost 
     CLIENT_VERSION,
     new SocketLauncher(`${scheme}//${location.host}/pane/rpc${query}`, loginProtocols(config)),
     {
-      ask: (kind, problem) => dialogs.input({ title: PROMPT_TITLE, prompt: promptText(kind, problem), password: true }),
+      ask: (problem, left) => dialogs.input({ title: PROMPT_TITLE, prompt: promptText(problem, left), password: true }),
       stored: async () => heldPassword,
       store: async (password) => {
         heldPassword = password;

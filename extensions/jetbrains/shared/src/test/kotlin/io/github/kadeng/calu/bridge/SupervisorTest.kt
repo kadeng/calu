@@ -37,13 +37,13 @@ class SupervisorTest {
         scope.cancel()
     }
 
-    /** A password prompt that answers from a list and records what it was asked. */
+    /** A password prompt that answers from a list and records the text it would show. */
     private class ListPrompt(vararg answers: String?) : PasswordPrompt {
-        val left = ArrayDeque(answers.toList())
-        val asked = CopyOnWriteArrayList<Pair<String, String?>>()
-        override suspend fun ask(kind: String, problem: String?): String? {
-            asked.add(kind to problem)
-            return if (left.isEmpty()) null else left.removeFirst()
+        val answers = ArrayDeque(answers.toList())
+        val asked = CopyOnWriteArrayList<String>()
+        override suspend fun ask(problem: String?, left: Int?): String? {
+            asked.add(io.github.kadeng.calu.logic.promptText(problem, left))
+            return if (answers.isEmpty()) null else answers.removeFirst()
         }
     }
 
@@ -58,12 +58,12 @@ class SupervisorTest {
                 "ide.initialize" -> buildJsonObject { put("bridge_version", JsonPrimitive("9.9")); put("protocol_version", JsonPrimitive(1)) }
                 "ide.unlock" -> if (params.str("password") == "secret") {
                     unlocked = true
-                    buildJsonObject { put("unlocked", JsonArray(listOf(JsonPrimitive("admin")))); put("changing", JsonPrimitive(true)) }
+                    buildJsonObject { put("unlocked", JsonArray(listOf(JsonPrimitive("user")))); put("reading", JsonPrimitive(true)); put("changing", JsonPrimitive(true)) }
                 } else {
-                    throw ScriptedError(-32010, "wrong password for the 'admin' credential")
+                    throw ScriptedError(-32010, "That is not the calu user password.")
                 }
                 "ide.sessions" -> if (unlocked) buildJsonObject { put("running", JsonArray(emptyList())) } else {
-                    throw ScriptedError(-32010, "needs a password", buildJsonObject { put("needs", JsonPrimitive("admin")) })
+                    throw ScriptedError(-32010, "calu needs the calu user password", buildJsonObject { put("needs", JsonPrimitive("user")) })
                 }
                 else -> EMPTY_OBJECT
             }
@@ -181,8 +181,8 @@ class SupervisorTest {
         val b = scope.async { s.request("ide.sessions") }
         a.await(); b.await()
         assertEquals(2, prompt.asked.size)
-        assertNull(prompt.asked[0].second)
-        assertTrue(prompt.asked[1].second!!.contains("wrong password"))
+        assertEquals("calu user password (asked once)", prompt.asked[0])
+        assertEquals("That is not the calu user password. (2 tries left) — calu user password (asked once)", prompt.asked[1])
         assertFalse(s.locked)
     }
 
@@ -204,8 +204,25 @@ class SupervisorTest {
             fail("expected -32010 after the cancel")
         } catch (error: RpcRequestException) {
             assertEquals(-32010, error.code)
+            assertEquals("Not done: no password was given. The next action that needs the database asks again.", error.bridgeMessage)
         }
         assertEquals(1, prompt.asked.size)
+    }
+
+    @Test
+    fun `one password - three refused passwords fail the action with what to do next`() = runBlocking {
+        val prompt = ListPrompt("a", "b", "c")
+        val s = supervisor(ScriptedLauncher { lockedHandler() }, prompt)
+        s.ensureStarted()
+        try {
+            s.request("ide.sessions")
+            fail("expected -32010")
+        } catch (error: RpcRequestException) {
+            assertEquals(-32010, error.code)
+            assertEquals("Not done: the password was refused 3 times. The next action that needs the database asks again.", error.bridgeMessage)
+        }
+        assertEquals("That is not the calu user password. (1 try left) — calu user password (asked once)", prompt.asked[2])
+        assertEquals(3, prompt.asked.size)
     }
 
     @Test
@@ -228,7 +245,7 @@ class SupervisorTest {
         val seen = CopyOnWriteArrayList<String?>()
         val handler = ScriptedHandler { _, method, params ->
             when (method) {
-                "ide.unlock" -> { seen.add(params.str("password")); buildJsonObject { put("unlocked", JsonArray(listOf(JsonPrimitive("admin")))); put("changing", JsonPrimitive(true)) } }
+                "ide.unlock" -> { seen.add(params.str("password")); buildJsonObject { put("unlocked", JsonArray(listOf(JsonPrimitive("user")))); put("reading", JsonPrimitive(true)); put("changing", JsonPrimitive(true)) } }
                 "ide.sessions" -> if (seen.isEmpty()) throw ScriptedError(-32010, "needs a password") else EMPTY_OBJECT
                 else -> EMPTY_OBJECT
             }

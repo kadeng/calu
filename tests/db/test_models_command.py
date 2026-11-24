@@ -45,7 +45,7 @@ async def test_one_model_for_every_role_reaches_both_places_it_is_kept(
     try:
         await setup(conn, db_url, "mistral:mistral-small-2603")
         store = CredentialStore(tmp_path / "credentials.json")
-        store.save("admin", db_url, None)
+        store.save("user", db_url, None)
 
         assert (
             await _run(store, ["config", "models", "anthropic:claude-haiku-4-5", "--effort", "low"])
@@ -87,10 +87,11 @@ async def test_setup_chooses_the_model_on_a_fresh_database_only(
         ),
     )
     store = CredentialStore(tmp_path / "credentials.json")
-    store.save("admin", db_url, None)
+    # An empty user password (D265): the `db-admin` entry without one, so nothing is asked.
+    store.save("db-admin", db_url, None)
 
-    monkeypatch.setattr("sys.stdin", io.StringIO("pw\npw\n"))
-    assert await _run(store, ["setup", "--renew-session"]) == 0
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    assert await _run(store, ["setup"]) == 0
     said = capsys.readouterr().out
     assert "models: the default for every role -- anthropic:claude-haiku-5-5" in said
 
@@ -112,14 +113,14 @@ async def test_setup_chooses_the_model_on_a_fresh_database_only(
         assert loaded.checkers["honesty"].model == bedrock
         # Someone chooses another model; setup runs again and leaves it alone.
         await admin.set_all_models(db, "anthropic:claude-sonnet-4-5")
-        monkeypatch.setattr("sys.stdin", io.StringIO("pw\npw\n"))
+        monkeypatch.setattr("sys.stdin", io.StringIO(""))
         assert await _run(store, ["setup"]) == 0
         capsys.readouterr()
         assert (await admin.settings(db))["context"][
             "narrator_model"
         ] == "anthropic:claude-sonnet-4-5"
         # `--checker-model auto` is the detection of D129, now only on request.
-        monkeypatch.setattr("sys.stdin", io.StringIO("pw\npw\n"))
+        monkeypatch.setattr("sys.stdin", io.StringIO(""))
         assert await _run(store, ["setup", "--checker-model", "auto"]) == 0
         assert "anthropic:claude-haiku-5-5, effort medium (Anthropic" in capsys.readouterr().out
         # `calu config models default` removes every stored model again.

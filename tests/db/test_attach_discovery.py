@@ -74,7 +74,7 @@ async def test_attach_with_no_arguments_finds_the_session_and_gives_its_token_ba
     async with running(db_url, workspace, [[{"text": "the answer"}]]) as (_base, session_id, _s):
         config = tmp_path / "config"
         store = CredentialStore(config / "calu" / "credentials.json")
-        store.save("operator", db_url, None)  # file-mode protection, so nothing is asked (D104)
+        store.save("user", db_url, None)  # file-mode protection, so nothing is asked (D104)
 
         environment = dict(os.environ)
         environment["PYTHONUNBUFFERED"] = "1"
@@ -129,7 +129,7 @@ async def test_attach_in_a_directory_without_a_session_says_what_to_do(
     """The common mistake: the right command in the wrong directory."""
     config = tmp_path / "config"
     store = CredentialStore(config / "calu" / "credentials.json")
-    store.save("operator", db_url, None)
+    store.save("user", db_url, None)
     conn = await connect(db_url)
     try:
         from calu.setup import setup

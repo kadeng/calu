@@ -39,7 +39,8 @@ IDENTITY = SessionIdentity(
 
 
 async def session_store(db_url: str) -> tuple[DatabaseSessionStore, psycopg.AsyncConnection]:
-    """Set up a database and return a store on a `calu_session` connection."""
+    """Set up a database and return a store on a connection of the user login (`calu_admin`),
+    which sessions use (agent/records/PLAN.md D265)."""
     owner = await connect(db_url)
     try:
         _, session_url = await setup(owner, db_url, "test:model")
@@ -71,7 +72,7 @@ async def test_session_row_records_identity_states_and_end(db_url: str) -> None:
             "claude-1",
             "box",
             "Linux",
-            "calu_session",
+            "calu_admin",
         )
         await store.end("failed")
         cur = await conn.execute(
@@ -221,7 +222,7 @@ async def test_turn_records_round_trip(db_url: str) -> None:
     )
 
 
-async def test_the_session_waits_for_an_operator_and_may_only_cancel(db_url: str) -> None:
+async def test_the_session_waits_for_a_decision_and_cancels_its_own(db_url: str) -> None:
     owner = await connect(db_url)
     _, session_url = await setup(owner, db_url, "test:model")
     conn = await connect(session_url)
@@ -231,9 +232,6 @@ async def test_the_session_waits_for_an_operator_and_may_only_cancel(db_url: str
         step_id = await store.add_step(StepRow(seq=1, tool_name="Bash", tool_input={}))
         first = await store.open_escalation("why", {"rendered": "rm -rf /"}, step_id)
         assert (await store.escalation(first)).open
-        # The session role cannot decide; only an operator's function call can.
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            await conn.execute(f"SELECT calu_resolve_escalation({first}, 'allowed', 'x')".encode())
         cur = await owner.execute(
             "SELECT calu_resolve_escalation(%s, 'allowed', 'go ahead')", (first,)
         )
@@ -281,9 +279,6 @@ async def test_a_client_of_the_session_decides_with_its_token(db_url: str) -> No
         row = await store.escalation(denied)
         assert row.state == "denied" and row.resolved_by == "client:ide"
 
-        # The role cannot read the token hashes back: they are a capability, not data.
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            await conn.execute(b"SELECT token_sha256 FROM client_tokens")
         # An escalation of another session is refused, even with this session's token.
         other = DatabaseSessionStore(Db(conn))
         await other.start(IDENTITY)
@@ -449,7 +444,7 @@ async def test_the_stored_context_of_an_escalation_comes_back_with_its_checker_r
         closed = await store.escalation_context(escalation)
         assert closed is not None and closed.state == "cancelled"
         assert closed.note == "the session was stopped"
-        assert closed.resolved_by == "calu_session"
+        assert closed.resolved_by == "calu_admin"
         assert await store.escalation_context(999_999) is None
     finally:
         await conn.close()

@@ -12,7 +12,7 @@
                  end                         state "stopped" or "failed", ended_at
 
 `SessionStore` is the interface the session orchestrator uses. `DatabaseSessionStore` implements
-it against PostgreSQL with the rights of the role `calu_session`; `MemorySessionStore`
+it against PostgreSQL with the rights of the user login (`calu_admin`, D265); `MemorySessionStore`
 (`calu.store.memory`) implements it without a database, for unit tests.
 
 Escalations can be resolved from two sides (agent/records/PLAN.md D28):
@@ -666,7 +666,7 @@ class SessionStore(Protocol):
 
 
 class DatabaseSessionStore:
-    """`SessionStore` on a PostgreSQL connection with the rights of `calu_session`.
+    """`SessionStore` on a PostgreSQL connection with the rights of the user login (`calu_admin`).
 
     The connection is opened by `calu run` before the credentials are wiped and stays open for
     the whole session; the store does not close it. Steps of the main agent and of subagents are

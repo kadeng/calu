@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from calu import cli
+from calu import cli, logins
 from calu.credentials import CredentialStore
 from calu.db import local
 from calu.db.target import PasswordAuth, Target
@@ -41,17 +41,41 @@ def test_the_local_database_is_created_in_the_chosen_directory_before_anything_c
     argv = ["setup", "--database", "docker", "--data-dir", str(data), "--port", "5599"]
     # The stub starts no server, so the command ends when it tries to connect -- after the
     # credential was stored and the container was asked for, which is what is checked here.
-    assert run_cli(monkeypatch, store, argv, "admin-pw\nadmin-pw\nsess\nsess\n") == 1
-    assert "the local database is not running" in capsys.readouterr().err
+    assert run_cli(monkeypatch, store, argv, "user-pw\nuser-pw\n") == 1
+    said = capsys.readouterr()
+    assert logins.choose_intro(True) in said.out, "the new user password is explained first"
+    assert "the local database is not running" in said.err
 
-    owner = Target.parse(store.load("admin", "admin-pw"))
+    owner = Target.parse(store.load(logins.DB_ADMIN, "user-pw"))
     assert owner.variant == "docker" and owner.docker == local.DockerBlock(
         port=5599, data=str(data)
     )
     assert isinstance(owner.auth, PasswordAuth) and len(owner.auth.password) >= 43
     assert started == [(5599, owner.auth.password, str(data))]
     assert (data / "pg").is_dir()
-    assert "session" not in store
+    assert store.names() == [logins.DB_ADMIN], "`user` is stored only after a setup succeeded"
+
+
+def test_db_up_without_a_stored_database_creates_the_local_one_with_a_user_password(
+    monkeypatch: pytest.MonkeyPatch,
+    store: CredentialStore,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    started: list[tuple[int, str | None, str]] = []
+    monkeypatch.setattr(local, "up", lambda port, pw, data: started.append((port, pw, data)))
+    data = tmp_path / "pgdata"
+    argv = ["db", "up", "--data-dir", str(data), "--port", "5598"]
+    assert run_cli(monkeypatch, store, argv, "user-pw\nuser-pw\n") == 0
+    assert "next: calu setup" in capsys.readouterr().out
+    owner = Target.parse(store.load(logins.DB_ADMIN, "user-pw"))
+    assert isinstance(owner.auth, PasswordAuth)
+    assert started == [(5598, owner.auth.password, str(data))]
+    # A store of before D265 is not given a second database.
+    store.remove(logins.DB_ADMIN)
+    store.save("admin", owner.dump(), "old-pw")
+    assert run_cli(monkeypatch, store, argv, "") == 1
+    assert logins.old_logins(True) in capsys.readouterr().err
 
 
 def test_setup_without_a_terminal_names_the_option_it_needs(
@@ -76,17 +100,17 @@ def test_db_up_takes_port_and_directory_from_the_stored_record(
     started: list[tuple[int, str | None, str]] = []
     monkeypatch.setattr(local, "up", lambda port, pw, data: started.append((port, pw, data)))
     data = str(local.prepare_data_dir(tmp_path / "db"))
-    store.save("admin", local.owner_target("owner-pw", 5599, data).dump(), "admin-pw")
+    store.save(logins.DB_ADMIN, local.owner_target("owner-pw", 5599, data).dump(), "user-pw")
 
-    assert run_cli(monkeypatch, store, ["db", "up"], "admin-pw\n") == 0
+    assert run_cli(monkeypatch, store, ["db", "up"], "user-pw\n") == 0
     assert started == [(5599, "owner-pw", data)], "nothing initialized yet: the first start"
     (Path(data) / "pg" / "18").mkdir()
-    assert run_cli(monkeypatch, store, ["db", "up"], "admin-pw\n") == 0
+    assert run_cli(monkeypatch, store, ["db", "up"], "user-pw\n") == 0
     assert started[-1] == (5599, None, data), "an existing cluster gets no password"
-    assert run_cli(monkeypatch, store, ["db", "up", "--port", "5433"], "admin-pw\n") == 1
+    assert run_cli(monkeypatch, store, ["db", "up", "--port", "5433"], "user-pw\n") == 1
     assert "was set up on port 5599" in capsys.readouterr().err
 
-    store.save("admin", "postgresql://me:pw@db.example.org/calu", None)
+    store.save(logins.DB_ADMIN, "postgresql://me:pw@db.example.org/calu", None)
     assert run_cli(monkeypatch, store, ["db", "up"], "") == 1
     assert "not a local one that calu starts" in capsys.readouterr().err
 
@@ -99,8 +123,8 @@ def test_calu_run_starts_a_stopped_local_database_after_the_password(
 ) -> None:
     order: list[str] = []
     owner = local.owner_target("owner-pw", 5599, str(tmp_path / "db"))
-    session = owner.for_role("calu_session", PasswordAuth(password="session-db-pw"))
-    store.save("session", session.dump(), "session-pw")
+    user = owner.for_role("calu_admin", PasswordAuth(password="user-pw"))
+    store.save(logins.USER, user.dump(), "user-pw")
 
     def ensure(block: local.DockerBlock) -> bool:
         order.append(f"docker {block.port} {block.data}")
@@ -113,24 +137,20 @@ def test_calu_run_starts_a_stopped_local_database_after_the_password(
     monkeypatch.setattr(local, "ensure_running", ensure)
     monkeypatch.setattr(cli, "run_session", fake_session)
     monkeypatch.setattr(cli, "harden_process", lambda: order.append("hardened"))
-    assert run_cli(monkeypatch, store, ["run", str(tmp_path), "--batch", "-p", "x"], "wrong\n") == 1
+    argv = ["run", str(tmp_path), "--batch", "-p", "x"]
+    assert run_cli(monkeypatch, store, argv, "wrong\n" * logins.MAX_ATTEMPTS) == 1
     assert order == ["hardened"], "a wrong password starts nothing"
+    assert logins.wrong(0) in capsys.readouterr().err
     order.clear()
-    assert (
-        run_cli(monkeypatch, store, ["run", str(tmp_path), "--batch", "-p", "x"], "session-pw\n")
-        == 0
-    )
-    assert order == ["hardened", f"docker 5599 {tmp_path / 'db'}", "session as calu_session"]
+    assert run_cli(monkeypatch, store, argv, "user-pw\n") == 0
+    assert order == ["hardened", f"docker 5599 {tmp_path / 'db'}", "session as calu_admin"]
     assert "started the local database on 127.0.0.1:5599" in capsys.readouterr().out
 
     # A server that exists already is never started by calu.
     order.clear()
-    store.save("session", "postgresql://calu_session:pw@db.example.org/calu", "session-pw")
-    assert (
-        run_cli(monkeypatch, store, ["run", str(tmp_path), "--batch", "-p", "x"], "session-pw\n")
-        == 0
-    )
-    assert order == ["hardened", "session as calu_session"]
+    store.save(logins.USER, "postgresql://calu_admin:pw@db.example.org/calu", "user-pw")
+    assert run_cli(monkeypatch, store, argv, "user-pw\n") == 0
+    assert order == ["hardened", "session as calu_admin"]
 
 
 # --------------------------------------------- requirement 42: the sandbox question of setup
@@ -257,14 +277,16 @@ def test_setup_warns_about_the_sandbox_only_where_it_matters(
     assert "sessions refuse to start" in note and "--no-sandbox" in note
     monkeypatch.setattr(cli, "missing_sandbox_tools", lambda: [])
     assert cli.sandbox_setup_notes(True, store) == []
-    # Off, with every login behind a password: the recommendation is met.
-    store.save("admin", "postgresql://a@db/calu", "pw")
-    store.save("session", "postgresql://s@db/calu", "pw")
+    # Off, with both logins behind the user password: the recommendation is met.
+    store.save(logins.DB_ADMIN, "postgresql://a@db/calu", "pw")
+    store.save(logins.USER, "postgresql://calu_admin:pw@db/calu", "pw")
     assert cli.sandbox_setup_notes(False, store) == []
     # Off, after --no-password in one's own account: it is not.
-    store.save("admin", "postgresql://a@db/calu", None)
+    store.save(logins.DB_ADMIN, "postgresql://a@db/calu", None)
+    store.save(logins.USER, "postgresql://calu_admin:gen@db/calu", None)
     (note,) = cli.sandbox_setup_notes(False, store)
-    assert "strongly recommended" in note and "without a password: admin" in note
+    assert "strongly recommended" in note
+    assert f"without a password: {logins.DB_ADMIN}, {logins.USER}" in note
     # As root the store is root's alone and sessions run with --sudo.
     monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
     assert cli.sandbox_setup_notes(False, store) == []

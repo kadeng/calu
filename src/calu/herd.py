@@ -6,9 +6,8 @@ These queries need no running session: they work on the database alone, from any
 can reach it. `resolve` calls `calu_resolve_escalation`, which notifies the waiting session, so
 the session continues within a second.
 
-`calu sessions`, `calu escalations`, `calu resolve` and `calu token` use the `admin` credential
-for now. A separate login for the role `calu_operator` (reads everything, resolves escalations,
-mints and revokes client tokens, changes nothing else) is still open (agent/records/PLAN.md Q4).
+`calu sessions`, `calu escalations`, `calu resolve` and `calu token` use the user login (the role
+`calu_admin`, agent/records/PLAN.md D265).
 
 `calu token` is the other half of D30: a session accepts every non-revoked token of its own
 session, so a token minted here lets a client (an editor's ACP adapter, a local command, a
@@ -247,7 +246,7 @@ async def close_gone(db: Db) -> int:
     `calu_close_session_escalations`, which send `escalation_resolved` for each closed row.
 
     Args:
-        db: A connection of the database owner or of `calu_operator`.
+        db: A connection of the user login or the database owner.
 
     Returns:
         How many escalations were closed; 0 as well when the connection's role may not close
@@ -320,7 +319,7 @@ async def sessions(db: Db, active_only: bool = True) -> list[SessionRow]:
     so `open_escalations` counts only questions somebody still waits for.
 
     Args:
-        db: A connection with read access to `sessions` (owner or `calu_operator`).
+        db: A connection with read access to `sessions` (the user login or the owner).
         active_only: Only sessions that have not ended.
 
     Returns:
@@ -407,7 +406,7 @@ async def rename_session(db: Db, session_id: str, name: str) -> str:
     the session itself does not read it.
 
     Args:
-        db: A connection of `calu_operator`, `calu_admin` or the owner.
+        db: A connection of the user login or the owner.
         session_id: Id of the `sessions` row.
         name: The name; surrounding white space is removed, and "" removes the name.
 
@@ -1081,7 +1080,7 @@ async def setting_changes(db: Db, session_id: str, limit: int = 50) -> list[Sett
     triggers of migration 0001, and are not returned here.
 
     Args:
-        db: The connection (needs SELECT on `audit_log`: the owner or `calu_operator`).
+        db: The connection (needs SELECT on `audit_log`: the user login or the owner).
         session_id: Id of the `sessions` row.
         limit: How many to read at most, newest first.
 
@@ -1787,7 +1786,7 @@ async def mint_token(db: Db, session_id: str, label: str = "") -> tuple[int, str
     it once. The session accepts it at its next `initialize`, without being restarted.
 
     Args:
-        db: The connection (owner or `calu_operator`).
+        db: The connection (the user login or the owner).
         session_id: Id of the `sessions` row (`calu sessions` prints it).
         label: What the token is for, e.g. "zed on my laptop"; shown by `calu token list`.
 
@@ -1897,7 +1896,7 @@ async def revoke_token(db: Db, token_id: int) -> bool:
     seconds (`calu.protocol.server`), and closes the connection of a revoked token.
 
     Args:
-        db: The connection (owner or `calu_operator`).
+        db: The connection (the user login or the owner).
         token_id: Id from `calu token list`.
 
     Returns:

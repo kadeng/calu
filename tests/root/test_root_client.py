@@ -1,10 +1,11 @@
-"""A client as real root asks the admin password once and keeps the login in memory (D249).
+"""A client as real root asks the user password once and keeps the login in memory (D249, D265).
 
-`calu attach --sudo` holds its database login before it switches to the user's file
-identity; afterwards root's credential store is closed to it, and every database feature of
-the full-screen client runs with the held login, without a dialog. The test runs that part
-of the client in a process of its own (the switch lasts for the rest of a process), against
-the box's test server, whose owner is not a superuser (the case of a managed database).
+`calu attach --sudo` holds its database login (the user login, the role `calu_admin`) before
+it switches to the user's file identity; afterwards root's credential store is closed to it,
+and every database feature of the full-screen client runs with the held login, without a
+dialog. The test runs that part of the client in a process of its own (the switch lasts for
+the rest of a process), against the box's test server, whose owner is not a superuser (the
+case of a managed database).
 """
 
 import json
@@ -18,9 +19,11 @@ from pathlib import Path
 
 import pytest
 
+from calu import logins
 from calu.credentials import CredentialStore
-from calu.db import connect
-from calu.setup import enable_admin_login, setup
+from calu.db import connect, place
+from calu.db.target import Target
+from calu.setup import set_user_password, setup, user_login
 from tests.root.box import AS_ROOT, OTHER_UID, WHY_NOT
 
 pytestmark = [pytest.mark.root, pytest.mark.skipif(not AS_ROOT, reason=WHY_NOT)]
@@ -90,28 +93,39 @@ def state_root() -> Iterator[Path]:
 
 @pytest.mark.db
 @pytest.mark.anyio
-@pytest.mark.parametrize("role_accepts", [True, False], ids=["calu_admin", "owner-fallback"])
-async def test_one_admin_password_serves_every_database_feature_after_the_switch(
-    db_url: str, tmp_path: Path, state_root: Path, role_accepts: bool
+@pytest.mark.parametrize("found_by", ["store", "place-file"])
+async def test_one_user_password_serves_every_database_feature_after_the_switch(
+    db_url: str, tmp_path: Path, state_root: Path, found_by: str
 ) -> None:
-    """D249: asked once; `calu_admin` held where the role accepts it, else the owner login.
+    """D249, D265: the user password is asked once, and the client holds `calu_admin`.
 
-    Without the role's login (a blank admin password: PostgreSQL accepts none) the owner
-    login that the password opened is kept, and the client still asks nothing again.
+    `store`: the password opens root's `user` entry. `place-file`: root's store holds no
+    login, the place file names the database without a secret (root's calu set up with a
+    user password), and the database accepts the typed password for `calu_admin`. Either
+    way the client asks nothing again.
+
+    Side effects (root box only): the test database's roles; a store and a place file
+    below `tmp_path`; a process that switches to the unprivileged uid.
     """
     owner = await connect(db_url)
     try:
         await setup(owner, db_url, "test:model")
-        if role_accepts:
-            await enable_admin_login(owner, PASSWORD)
+        await set_user_password(owner, PASSWORD)
     finally:
         await owner.close()
     store = CredentialStore(tmp_path / "etc" / "calu" / "credentials.json")
-    store.save("admin", db_url, PASSWORD)
+    place_file = tmp_path / "lib" / "database.json"
+    if found_by == "store":
+        login = user_login(Target.parse(db_url), PASSWORD)
+        store.save(logins.USER, login.dump(), PASSWORD)
+    else:
+        place.write(Target.parse(db_url), place_file)
     code = CLIENT.format(
         store=str(store.path), password=PASSWORD, uid=OTHER_UID, state=str(state_root)
     )
-    environment = dict(os.environ) | {"CALU_PLACE_FILE": "/nonexistent"}
+    environment = dict(os.environ) | {
+        place.PATH_ENV: str(place_file) if found_by == "place-file" else "/nonexistent"
+    }
     done = subprocess.run(
         [sys.executable, "-c", textwrap.dedent(code)],
         capture_output=True,
@@ -125,7 +139,7 @@ async def test_one_admin_password_serves_every_database_feature_after_the_switch
     assert seen == {
         "problem": None,
         "asked": 1,
-        "role": "calu_admin" if role_accepts else "calu_owner",
+        "role": "calu_admin",
         "needs_password": False,
         "store_after": "refused",
         "sessions": 0,

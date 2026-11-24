@@ -67,7 +67,12 @@ SCRIPT = FakeScript(
 
 
 async def prepare(db_url: str, workspace: Path) -> str:
-    """Migrate, seed and configure a database for one run; return the session connection."""
+    """Migrate, seed and configure a database for one run.
+
+    Returns:
+        The connection string of the user login (`calu_admin` with a generated password),
+        which sessions use (agent/records/PLAN.md D265).
+    """
     owner = await connect(db_url)
     try:
         _, session_url = await setup(owner, db_url, "test:model")
@@ -502,7 +507,7 @@ async def test_a_session_survives_the_loss_of_both_database_connections(
                     await anyio.sleep(0.05)
             cur = await owner.execute(
                 "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity"
-                " WHERE usename = 'calu_session' AND datname = current_database()"
+                " WHERE usename = 'calu_admin' AND datname = current_database()"
             )
             assert await cur.fetchone() == (2,), "the session holds two connections"
             await anyio.sleep(0.3)
@@ -561,12 +566,12 @@ async def test_a_session_whose_login_is_refused_for_good_stops_and_says_why(
 ) -> None:
     """An unattended run must neither hang for ever nor end silently.
 
-    The session waits for an operator. `calu setup` runs again, which replaces the session
-    credential, and then the session's connections are lost. No waiting brings that login
-    back, so the run ends with exit code 1 and names the cause; the step it was waiting for
-    never ran.
+    The session waits for an operator. `calu setup --set-password` runs, which replaces the
+    password of the user login, and then the session's connections are lost. No waiting
+    brings that login back, so the run ends with exit code 1 and names the cause; the step it
+    was waiting for never ran.
     """
-    from calu.setup import enable_session_login
+    from calu.setup import generated_password, set_user_password
 
     monkeypatch.setattr("calu.db.connection.RECONNECT_FIRST_S", 0.05)
     monkeypatch.setattr("calu.db.notify.RECONNECT_FIRST_S", 0.05)
@@ -594,10 +599,10 @@ async def test_a_session_whose_login_is_refused_for_good_stops_and_says_why(
                     if await cur.fetchone() is not None:
                         break
                     await anyio.sleep(0.05)
-            await enable_session_login(owner, db_url)
+            await set_user_password(owner, generated_password())
             await owner.execute(
                 "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity"
-                " WHERE usename = 'calu_session' AND datname = current_database()"
+                " WHERE usename = 'calu_admin' AND datname = current_database()"
             )
         finally:
             await owner.close()
@@ -781,13 +786,14 @@ async def test_projects_are_found_by_the_nearest_registered_directory(
 # ------------------------------------------------------------------ fork points (sd3)
 
 
-async def test_the_session_role_finds_a_fork_point(
+async def test_a_session_finds_a_fork_point(
     db_url: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """sd3: `calu run --resume X --fork-before-turn N` asks on a `calu_session` connection.
+    """sd3: `calu run --resume X --fork-before-turn N` asks before its own session row exists.
 
-    Row-level security hides every row from that connection before its own session exists, so
-    the direct query found nothing and the command the web interface offers always failed.
+    Row-level security hid every row from the session login of before D265, so the direct
+    query found nothing and the command the web interface offers always failed. Sessions now
+    log in as `calu_admin`; the lookup goes through the same function.
     """
     from calu.context.turns import TurnRecord
     from calu.run import Console, _fork_point

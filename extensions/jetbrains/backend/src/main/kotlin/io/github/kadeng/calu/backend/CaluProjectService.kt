@@ -160,10 +160,10 @@ class CaluProjectService(private val project: Project, private val scope: Corout
     private fun build(): Wiring {
         val settings = CaluSettings.of(project).toDto()
         val choice = chooseLauncher(settings, project.guessProjectDir()?.path ?: project.basePath)
-        val prompt = PasswordPrompt { kind, problem ->
+        val prompt = PasswordPrompt { problem, left ->
             val answer = CompletableDeferred<String?>()
             val id = synchronized(lock) { (nextPasswordId++).also { pendingPassword = it to answer } }
-            passwordFlow.value = PasswordRequestDto(id, kind, promptText(kind, problem))
+            passwordFlow.value = PasswordRequestDto(id, promptText(problem, left))
             try {
                 answer.await()
             } finally {

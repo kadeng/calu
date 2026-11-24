@@ -12,7 +12,7 @@ and it retries a reload that failed:
                                                                           .checkers  (by name)
     NOTIFY config_changed  ──►  ConfigStore.watch  ──► reload ──►         .rules      (Rules)
 
-`ConfigStore.load` needs read access only; the role `calu_session` has it. Nothing in this
+`ConfigStore.load` needs read access only. Nothing in this
 module writes.
 """
 

@@ -1,132 +1,292 @@
-"""`calu setup` through the command line, against an empty database (D121).
+"""`calu setup` through the command line, against an empty database (D121, D265).
 
 The `setup` **function** is called by nearly every database test; the **command** was called by
-none, so its own wiring was untested -- the two password prompts, the order of the steps (the
-session credential is stored only after the database accepted the setup), the report it prints,
-and `--checker-model` reaching the rows it writes. It is the second command a new user runs.
+none, so its own wiring was untested -- the password prompts, the order of the steps (the user
+login is stored only after the database accepted the setup), the report it prints, and
+`--checker-model` reaching the rows it writes. It is the second command a new user runs.
+
+Since D265 one password, the calu user password, protects both store entries (`user`, the
+login of `calu_admin`, and `db-admin`, the database owner's) and is the password of the role
+`calu_admin`. These tests give the server-wide role `calu_admin` passwords; the commands run
+in process, with stdin replaced and the local database's container replaced by the test
+server (`local_style`).
 """
 
 import io
+import json
 import os
+from pathlib import Path
 from typing import cast
 
 import anyio
 import pytest
 
-from calu import cli, herd
+from calu import cli, herd, logins
 from calu.credentials import CredentialStore
 from calu.db import Db, connect
+from calu.db import local as local_db
+from calu.db import place as db_place
 from calu.db.connection import open_stored
-from calu.db.target import Target
+from calu.db.target import DockerBlock, PasswordAuth, Target
+from calu.setup import USER_ROLE, is_user_password
 from calu.store.config import ConfigStore
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
 
-async def test_calu_setup_fills_an_empty_database_and_stores_the_session_credential(
+def local_style(monkeypatch: pytest.MonkeyPatch, db_url: str) -> list[int]:
+    """Make `calu setup --database docker` set up the test database instead of a container.
+
+    Side effects: replaces `calu.db.local.owner_target` by one that returns the owner login
+    of the test database as a record of the variant `docker` (port and data directory as
+    asked), and `calu.db.local.up` by a stub that records the port and starts nothing.
+
+    Args:
+        monkeypatch: Replaces the two functions for the test.
+        db_url: The owner login of the test database.
+
+    Returns:
+        The ports `up` was called with, filled in as the command runs.
+    """
+    test_db = Target.parse(db_url)
+    assert isinstance(test_db.auth, PasswordAuth)
+    started: list[int] = []
+
+    def owner_target(_password: str, port: int, data: str) -> Target:
+        """Return the test database's owner as a local database's record."""
+        return Target(
+            variant="docker",
+            conninfo=dict(test_db.conninfo),
+            auth=test_db.auth,
+            docker=DockerBlock(port=port, data=data),
+        )
+
+    monkeypatch.setattr(local_db, "owner_target", owner_target)
+    monkeypatch.setattr(local_db, "up", lambda port, _password, _data: started.append(port))
+    return started
+
+
+def run_setup(
+    monkeypatch: pytest.MonkeyPatch, store: CredentialStore, argv: list[str], stdin: str
+) -> int:
+    """Run `calu setup ARGV` with lines on stdin (no terminal: nothing else is asked).
+
+    `cli.main` calls `asyncio.run`, which refuses to start inside a running loop, so a test
+    runs this in a thread with a loop of its own (`anyio.to_thread.run_sync`), as in reality.
+
+    Args:
+        monkeypatch: Replaces `sys.stdin`.
+        store: The credential store.
+        argv: The arguments after `setup`.
+        stdin: What is typed, one answer per line.
+
+    Returns:
+        The exit code.
+    """
+    monkeypatch.setattr("sys.stdin", io.StringIO(stdin))
+    return cli.main(["setup", *argv], store_factory=lambda: cast(CredentialStore, store))
+
+
+def docker_flags(tmp_path: Path, db_url: str) -> list[str]:
+    """Return the options of a new local database: its data directory below `tmp_path`, and
+    the test server's port, where calu then finds the database "running"."""
+    port = Target.parse(db_url).conninfo["port"]
+    return ["--database", "docker", "--data-dir", str(tmp_path / "pgdata"), "--port", port]
+
+
+def stored_password(store: CredentialStore, password: str | None = None) -> str:
+    """Return the password of `calu_admin` that the `user` entry holds.
+
+    Args:
+        store: The credential store.
+        password: The password that opens the entry; None for an entry without one.
+
+    Returns:
+        The role's password in the stored login.
+    """
+    login = Target.parse(store.load(logins.USER, password))
+    assert login.user == USER_ROLE and isinstance(login.auth, PasswordAuth)
+    return login.auth.password
+
+
+async def test_a_local_setup_stores_both_logins_under_the_one_user_password(
     db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """One command on an empty database: migrations, checkers, rules, and a credential."""
+    """D265 (1): the user password is asked once, after its explanation; it protects `user`
+    and `db-admin` and is the password `calu_admin` logs in with. `--checker-model` reaches
+    every checker row."""
+    started = local_style(monkeypatch, db_url)
     store = CredentialStore(tmp_path / "credentials.json")
-    store.save("admin", db_url, None)  # file-mode protection, so only the session is asked for
-    monkeypatch.setattr("sys.stdin", io.StringIO("session-pw\nsession-pw\n"))
-
-    # `cli.main` calls `asyncio.run`, which refuses to start inside a running loop, so the
-    # command runs in a thread with a loop of its own -- as it does in reality.
+    argv = [*docker_flags(tmp_path, db_url), "--checker-model", "anthropic:claude-haiku-4-5"]
     code = await anyio.to_thread.run_sync(
-        lambda: cli.main(
-            ["setup", "--renew-session", "--checker-model", "anthropic:claude-haiku-4-5"],
-            store_factory=lambda: cast(CredentialStore, store),
-        )
+        lambda: run_setup(monkeypatch, store, argv, "user-pw\nuser-pw\n")
     )
-    printed = capsys.readouterr().out
-    assert code == 0, printed
-    assert "migrations applied" in printed and "checker types added" in printed
-    assert "stored credential 'session'" in printed
+    said = capsys.readouterr()
+    assert code == 0, said.out + said.err
+    assert started == [int(Target.parse(db_url).conninfo["port"])], "the container was started"
+    assert logins.choose_intro(True) in said.out
+    assert "migrations applied" in said.out and "checker types added" in said.out
+    assert "protected by the calu user password" in said.out
+    assert logins.EMPTY_MEANS not in said.err
 
-    # The session credential is readable with the password that was typed, and with no other.
-    assert store.needs_password("session") is True
-    secret = bytes(store.load("session", "session-pw"))
-    # The session gets its **own** login, not the admin one it was set up with (D48).
-    assert b'"user": "calu_session"' in secret and b"calu_owner" not in secret
-    # ... and only where the database is travels with it, not the owner's other parameters.
-    login = Target.parse(secret)
-    assert login.variant == "server" and sorted(login.conninfo) == [
-        "dbname",
-        "host",
-        "port",
-        "user",
-    ]
+    assert store.names() == [logins.DB_ADMIN, logins.USER]
+    assert store.needs_password(logins.DB_ADMIN) and store.needs_password(logins.USER)
+    owner = Target.parse(store.load(logins.DB_ADMIN, "user-pw"))
+    assert owner.variant == "docker" and owner.user == "calu_owner"
+    assert stored_password(store, "user-pw") == "user-pw"
+    assert await is_user_password(owner, "user-pw")
+    assert not await is_user_password(owner, "a guess")
+    conn = await open_stored(Target.parse(store.load(logins.USER, "user-pw")), start_local=False)
+    try:
+        assert await Db(conn).scalar("SELECT current_user") == USER_ROLE
+    finally:
+        await conn.close()
 
     conn = await connect(db_url)
     try:
         db = Db(conn)
         settings = await ConfigStore(db, tmp_path, None).load()
-        # `--checker-model` reached every checker row, which is what the flag is for.
         assert settings.config.command_checker.model == "anthropic:claude-haiku-4-5"
         assert settings.config.edit_checker.model == "anthropic:claude-haiku-4-5"
         assert [row.label for row in await herd.list_tokens(db)] == [], "no clients yet"
-        assert settings.rules, "the default rule lists are in"
         assert "command" in settings.checkers and "edit" in settings.checkers
     finally:
         await conn.close()
 
+    # A second setup asks the user password once, for both entries, and keeps it.
+    code = await anyio.to_thread.run_sync(lambda: run_setup(monkeypatch, store, [], "user-pw\n"))
+    said = capsys.readouterr()
+    assert code == 0, said.out + said.err
+    assert "user login (calu_admin): its password is the calu user password" in said.out
+    assert await is_user_password(owner, "user-pw")
 
-async def test_calu_setup_without_passwords_asks_nothing_and_stores_the_admin_login(
+
+async def test_an_empty_user_password_asks_nothing_and_keeps_the_generated_role_password(
     db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """D228: `calu setup --no-password` in a store only root writes (here: the tests' own
-    uid stands for root) asks no password; the logins are in the store, protected by its
-    file mode, and the stored `calu_admin` login works. In any other store the session
-    password stays."""
-    from calu.setup import ADMIN_ROLE
-
+    """D265 (2): `--no-password` stores both entries without encryption; `calu_admin` gets a
+    generated password, which a second setup keeps, so that running servers reconnect."""
+    local_style(monkeypatch, db_url)
     store = CredentialStore(tmp_path / "credentials.json")
-    store.save("admin", db_url, None)
-    monkeypatch.setattr("sys.stdin", io.StringIO(""))  # a prompt would fail on this
-    really = cli._only_root_writes
-    monkeypatch.setattr(cli, "_only_root_writes", lambda path: really(path, os.getuid()))
-
     code = await anyio.to_thread.run_sync(
-        lambda: cli.main(
-            ["setup", "--renew-session", "--no-password"],
-            store_factory=lambda: cast(CredentialStore, store),
+        lambda: run_setup(
+            monkeypatch, store, [*docker_flags(tmp_path, db_url), "--no-password"], ""
         )
     )
-    captured = capsys.readouterr()
-    assert code == 0, captured.out + captured.err
-    assert "stored credential 'calu_admin' (no password)" in captured.out
-    assert "WARNING: no password protects the logins" in captured.err  # not root here
-    for name in ("admin", "session", "calu_admin"):
-        assert store.needs_password(name) is False
-    login = Target.parse(store.load("calu_admin"))
-    assert login.user == ADMIN_ROLE
-    conn = await open_stored(login)
-    try:
-        assert await Db(conn).scalar("SELECT current_user") == ADMIN_ROLE
-    finally:
-        await conn.close()
-    # What changes settings from the command line uses that login and asks nothing.
-    assert Target.parse(cli._admin_secret(store)).user == ADMIN_ROLE
-    # `calu run` accepts the session entry without a password from such a store ...
-    assert Target.parse(cli._session_login(store)).user == "calu_session"
-    # ... and from no other: a store that somebody else could have written.
-    monkeypatch.setattr(cli, "_only_root_writes", really)
-    with pytest.raises(cli.CliError, match="stored without a password"):
-        cli._session_login(store)
-    # There, `--no-password` keeps asking for the session password.
-    monkeypatch.setattr("sys.stdin", io.StringIO("session-pw\nsession-pw\n"))
-    code = await anyio.to_thread.run_sync(
-        lambda: cli.main(
-            ["setup", "--renew-session", "--no-password"],
-            store_factory=lambda: cast(CredentialStore, store),
+    said = capsys.readouterr()
+    assert code == 0, said.out + said.err
+    assert logins.choose_intro(True) not in said.out, "nothing is asked"
+    assert "protected by no password (the file's mode)" in said.out
+    assert f"WARNING: {logins.EMPTY_MEANS}" in said.err
+    assert not store.needs_password(logins.DB_ADMIN) and not store.needs_password(logins.USER)
+    generated = stored_password(store)
+    assert len(generated) >= 43
+    owner = Target.parse(store.load(logins.DB_ADMIN))
+    assert await is_user_password(owner, generated)
+    # Commands find the login without asking (stdin is empty: a prompt would fail).
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    assert cli._user_target(store).user == USER_ROLE
+
+    code = await anyio.to_thread.run_sync(lambda: run_setup(monkeypatch, store, [], ""))
+    said = capsys.readouterr()
+    assert code == 0, said.out + said.err
+    assert "the role has a generated password, kept in the store" in said.out
+    assert stored_password(store) == generated
+    assert await is_user_password(owner, generated)
+
+
+async def test_set_password_changes_the_password_of_the_role(
+    db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """D265 (3): `--set-password` chooses a new user password; the present one is asked
+    first; an empty answer removes it again. The old password stops working each time."""
+    local_style(monkeypatch, db_url)
+    store = CredentialStore(tmp_path / "credentials.json")
+
+    def setup(argv: list[str], stdin: str) -> int:
+        """Run `calu setup` in a thread."""
+        return run_setup(monkeypatch, store, argv, stdin)
+
+    assert (
+        await anyio.to_thread.run_sync(
+            lambda: setup([*docker_flags(tmp_path, db_url), "--no-password"], "")
         )
+        == 0
     )
-    assert code == 0 and "the session password stays" in capsys.readouterr().out
-    assert store.needs_password("session") is True
+    generated = stored_password(store)
+    owner = Target.parse(store.load(logins.DB_ADMIN))
+    capsys.readouterr()
+
+    # From none to one: nothing to ask first, then the new password twice.
+    assert (
+        await anyio.to_thread.run_sync(lambda: setup(["--set-password"], "new-pw\nnew-pw\n")) == 0
+    )
+    said = capsys.readouterr()
+    assert logins.choose_intro(True) in said.out
+    assert store.needs_password(logins.DB_ADMIN) and store.needs_password(logins.USER)
+    assert stored_password(store, "new-pw") == "new-pw"
+    assert await is_user_password(owner, "new-pw")
+    assert not await is_user_password(owner, generated)
+
+    # From one to another: the present one first.
+    assert (
+        await anyio.to_thread.run_sync(lambda: setup(["--set-password"], "new-pw\nthird\nthird\n"))
+        == 0
+    )
+    capsys.readouterr()
+    assert stored_password(store, "third") == "third"
+    assert await is_user_password(owner, "third")
+    assert not await is_user_password(owner, "new-pw")
+
+    # An empty answer: no user password again, and a newly generated role password.
+    assert await anyio.to_thread.run_sync(lambda: setup(["--set-password"], "third\n\n\n")) == 0
+    capsys.readouterr()
+    assert not store.needs_password(logins.USER) and not store.needs_password(logins.DB_ADMIN)
+    again = stored_password(store)
+    assert again not in ("third", generated)
+    assert await is_user_password(owner, again)
+    assert not await is_user_password(owner, "third")
+
+    # Together with --no-password it is refused before anything is asked.
+    assert (
+        await anyio.to_thread.run_sync(lambda: setup(["--set-password", "--no-password"], "")) == 1
+    )
+    assert "contradict each other" in capsys.readouterr().err
 
 
-async def test_a_mismatched_session_password_leaves_the_database_alone(
+async def test_a_store_of_before_d265_is_converted_to_the_two_entries(
+    db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """D265 (5): the earlier admin password opens `admin` (the owner) and is kept as the user
+    password (the default answer without a terminal); `user` and `db-admin` are stored under
+    it, and `admin`, `session`, `operator` and `calu_admin` are removed."""
+    store = CredentialStore(tmp_path / "credentials.json")
+    store.save("admin", db_url, "old-admin-pw")
+    store.save("session", "host=127.0.0.1 user=calu_session password=x", "old-session-pw")
+    store.save("operator", "host=127.0.0.1 user=calu_operator password=y", None)
+    store.save("calu_admin", "host=127.0.0.1 user=calu_admin password=z", None)
+
+    # Another command says what to do instead of using the old entries.
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    with pytest.raises(cli.CliError, match="Run `calu setup` once"):
+        cli._user_target(store)
+
+    code = await anyio.to_thread.run_sync(
+        lambda: run_setup(monkeypatch, store, [], "old-admin-pw\n")
+    )
+    said = capsys.readouterr()
+    assert code == 0, said.out + said.err
+    assert "removed the logins of the earlier calu: admin, session, operator, calu_admin" in (
+        said.out
+    )
+    assert store.names() == [logins.DB_ADMIN, logins.USER]
+    owner = Target.parse(store.load(logins.DB_ADMIN, "old-admin-pw"))
+    assert owner.user == "calu_owner"
+    assert stored_password(store, "old-admin-pw") == "old-admin-pw"
+    assert await is_user_password(owner, "old-admin-pw")
+
+
+async def test_a_mismatched_new_password_leaves_the_database_alone(
     db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The password is asked **before** the database is touched, so a typo changes nothing.
@@ -135,14 +295,13 @@ async def test_a_mismatched_session_password_leaves_the_database_alone(
     holds rules must not rewrite them and then fail on the credential.
     """
     store = CredentialStore(tmp_path / "credentials.json")
-    store.save("admin", db_url, None)
-    monkeypatch.setattr("sys.stdin", io.StringIO("one\ntwo\n"))
-
-    assert cli.main(["setup"], store_factory=lambda: cast(CredentialStore, store)) == 1, (
-        capsys.readouterr().out
+    store.save(logins.DB_ADMIN, db_url, None)
+    code = await anyio.to_thread.run_sync(
+        lambda: run_setup(monkeypatch, store, ["--set-password"], "one\ntwo\n")
     )
-    assert "do not match" in capsys.readouterr().err
-    assert store.names() == ["admin"], "nothing was stored"
+    assert code == 1
+    assert logins.MISMATCH in capsys.readouterr().err
+    assert store.names() == [logins.DB_ADMIN], "nothing was stored"
 
     conn = await connect(db_url)
     try:
@@ -166,11 +325,11 @@ async def test_project_add_records_the_directory_it_was_given(
 
     conn = await connect(db_url)
     try:
-        await setup(conn, db_url, "test:model")
+        _, user_url = await setup(conn, db_url, "test:model")
     finally:
         await conn.close()
     store = CredentialStore(tmp_path / "credentials.json")
-    store.save("admin", db_url, None)
+    store.save(logins.USER, user_url, None)
     project_dir = tmp_path / "demo-src"
     project_dir.mkdir()
 
@@ -196,111 +355,55 @@ async def test_project_add_records_the_directory_it_was_given(
         await conn.close()
 
 
-async def test_a_setup_without_passwords_never_publishes_a_typed_password_and_is_taken_back(
+async def test_as_root_an_empty_user_password_publishes_only_a_generated_one(
     db_url: str,
     store: CredentialStore,
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """D228, as root (the tests' uid stands for it): converting a setup that has an admin
-    password publishes a generated password, never the typed one; a later setup without the
-    option gives the role a new password, so the published one stops working, and the place
-    file holds no secret again."""
-    import json
+    """D228 with D265, as root (the tests' uid stands for it): `--no-password` publishes the
+    generated password of `calu_admin` in the place file, never a typed one; a later
+    `--set-password` takes it back: the file holds no secret and the published one stops
+    working.
 
-    from calu.db import place
-    from calu.setup import is_admin_password
-
+    Writes the place file below `tmp_path` (`CALU_PLACE_FILE`)."""
     place_file = tmp_path / "state" / "database.json"
     monkeypatch.setenv("CALU_PLACE_FILE", str(place_file))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
     monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
-    monkeypatch.setattr(cli, "_only_root_writes", lambda path: True)
-    really_read = place.read
-    monkeypatch.setattr(place, "read", lambda: really_read(None, os.getuid()))
-    store.save("admin", db_url, "typed-admin-pw")
+    really_read = db_place.read
+    monkeypatch.setattr(db_place, "read", lambda: really_read(None, os.getuid()))
+    store.save(logins.DB_ADMIN, db_url, "typed-pw")
     owner = Target.parse(db_url)
 
-    def setup(*options: str, typed: str = "") -> int:
-        """Run `calu setup` with the given options and stdin."""
-        monkeypatch.setattr("sys.stdin", io.StringIO(typed))
-        return cli.main(["setup", *options], store_factory=lambda: cast(CredentialStore, store))
+    def setup(argv: list[str], stdin: str) -> int:
+        """Run `calu setup` in a thread."""
+        return run_setup(monkeypatch, store, argv, stdin)
 
-    code = await anyio.to_thread.run_sync(
-        lambda: setup("--renew-session", "--no-password", typed="typed-admin-pw\n")
-    )
-    assert code == 0, capsys.readouterr()
+    code = await anyio.to_thread.run_sync(lambda: setup(["--no-password"], "typed-pw\n"))
+    said = capsys.readouterr()
+    assert code == 0, said.out + said.err
+    assert "every user and every program of this machine can read" in said.err
     published = json.loads(place_file.read_text())["admin_password"]
-    assert published != "typed-admin-pw" and "typed-admin-pw" not in place_file.read_text()
-    assert await is_admin_password(owner, published)
-    assert not await is_admin_password(owner, "typed-admin-pw")
+    assert published != "typed-pw" and "typed-pw" not in place_file.read_text()
+    assert published == stored_password(store)
+    assert await is_user_password(owner, published)
+    assert not await is_user_password(owner, "typed-pw")
 
-    # Without the option: nothing is asked (the entries have no password any more), the role
-    # gets a new password that only the store holds, and the file loses the secret.
-    code = await anyio.to_thread.run_sync(setup)
+    # A setup without options keeps it published: nothing is asked.
+    assert await anyio.to_thread.run_sync(lambda: setup([], "")) == 0
+    capsys.readouterr()
+    assert json.loads(place_file.read_text())["admin_password"] == published
+
+    code = await anyio.to_thread.run_sync(lambda: setup(["--set-password"], "new-pw\nnew-pw\n"))
     said = capsys.readouterr()
-    assert code == 0, said
-    assert "the one a setup with --no-password had published stops working" in said.out
+    assert code == 0, said.out + said.err
     assert "admin_password" not in json.loads(place_file.read_text())
-    assert not await is_admin_password(owner, published), "the published login was revoked"
-    kept = Target.parse(store.load("calu_admin"))
-    assert await is_admin_password(owner, getattr(kept.auth, "password", ""))
-    assert "`calu setup --set-passwords` puts typed ones back" in said.out
-
-    # The way back to typed passwords (found missing in the root box): both entries are
-    # encrypted again, the role takes the new admin password, the generated login is dropped
-    # from the store, and the session login is the same one as before.
-    session_before = bytes(store.load("session"))
-    code = await anyio.to_thread.run_sync(
-        lambda: setup("--set-passwords", typed="new-admin\nnew-admin\nnew-sess\nnew-sess\n")
-    )
-    said = capsys.readouterr()
-    assert code == 0, said
-    assert store.needs_password("admin") and store.needs_password("session")
-    assert bytes(store.load("session", "new-sess")) == session_before
-    assert Target.parse(store.load("admin", "new-admin")).user == owner.user
-    assert "calu_admin" not in store
-    assert await is_admin_password(owner, "new-admin")
-    assert not await is_admin_password(owner, getattr(kept.auth, "password", ""))
-    assert "admin_password" not in json.loads(place_file.read_text())
-    # With passwords in place the option changes them: the old ones are asked first.
-    code = await anyio.to_thread.run_sync(
-        lambda: setup(
-            "--set-passwords", typed="new-admin\nthird\nthird\nnew-sess\nfourth\nfourth\n"
-        )
-    )
-    assert code == 0, capsys.readouterr()
-    assert bytes(store.load("session", "fourth")) == session_before
-    assert await is_admin_password(owner, "third")
-    assert not await is_admin_password(owner, "new-admin")
-    # Together with --no-password it is refused before anything is asked.
-    assert await anyio.to_thread.run_sync(lambda: setup("--set-passwords", "--no-password")) == 1
-    assert "contradict each other" in capsys.readouterr().err
-
-
-async def test_a_blank_admin_password_is_accepted_and_setup_says_what_it_costs(
-    db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A blank admin password protects the entry; the role `calu_admin` gets no login from it.
-
-    Run in the root box: the report said "the `admin` credential has no password and none was
-    typed", although the entry has one (a blank one) and it was typed.
-    """
-    store = CredentialStore(tmp_path / "credentials.json")
-    store.save("admin", db_url, b"")
-    monkeypatch.setattr("sys.stdin", io.StringIO("\nsession-pw\nsession-pw\n"))
-    code = await anyio.to_thread.run_sync(
-        lambda: cli.main(
-            ["setup", "--renew-session"], store_factory=lambda: cast(CredentialStore, store)
-        )
-    )
-    printed = capsys.readouterr().out
-    assert code == 0, printed
-    assert store.needs_password("admin") is True
-    assert "the admin password is blank and PostgreSQL accepts no blank password" in printed
-    assert "none was typed" not in printed
+    assert not await is_user_password(owner, published), "the published login was revoked"
+    assert await is_user_password(owner, "new-pw")
+    assert store.needs_password(logins.USER) and store.needs_password(logins.DB_ADMIN)
 
 
 async def test_calu_setup_stores_the_sandbox_choice_and_keeps_it_on_a_rerun(
@@ -311,16 +414,18 @@ async def test_calu_setup_stores_the_sandbox_choice_and_keeps_it_on_a_rerun(
     from calu import admin
 
     store = CredentialStore(tmp_path / "credentials.json")
-    store.save("admin", db_url, None)  # without a password: the recommendation is not met
-    monkeypatch.setattr("sys.stdin", io.StringIO("session-pw\nsession-pw\n"))
+    # An empty user password: the recommendation is not met.
+    store.save(logins.DB_ADMIN, db_url, None)
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
 
     def setup(*options: str) -> int:
         return cli.main(["setup", *options], store_factory=lambda: cast(CredentialStore, store))
 
-    assert await anyio.to_thread.run_sync(setup, "--renew-session", "--no-sandbox") == 0
+    assert await anyio.to_thread.run_sync(setup, "--no-sandbox") == 0
     said = capsys.readouterr()
     assert "Claude Code's sandbox: off (stored)" in said.out
-    assert "strongly recommended" in said.err and "without a password: admin" in said.err
+    assert "strongly recommended" in said.err
+    assert "without a password: db-admin, user" in said.err
 
     async def stored() -> object:
         db = Db(await connect(db_url))
@@ -348,13 +453,13 @@ async def test_calu_setup_offers_to_update_an_older_shipped_text_and_keeps_an_ed
     from calu.defaults.instructions import default_instructions, superseded_instructions
 
     store = CredentialStore(tmp_path / "credentials.json")
-    store.save("admin", db_url, None)
-    monkeypatch.setattr("sys.stdin", io.StringIO("session-pw\nsession-pw\n"))
+    store.save(logins.DB_ADMIN, db_url, None)
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
 
     def setup(*options: str) -> int:
         return cli.main(["setup", *options], store_factory=lambda: cast(CredentialStore, store))
 
-    assert await anyio.to_thread.run_sync(setup, "--renew-session") == 0
+    assert await anyio.to_thread.run_sync(setup) == 0
     capsys.readouterr()
     old = superseded_instructions("edit")[-1]
     db = Db(await connect(db_url))
@@ -397,13 +502,13 @@ async def test_checker_show_diff_and_update_say_how_the_text_relates_to_the_ship
     from calu.defaults.instructions import superseded_instructions
 
     store = CredentialStore(tmp_path / "credentials.json")
-    store.save("admin", db_url, None)
-    monkeypatch.setattr("sys.stdin", io.StringIO("session-pw\nsession-pw\n"))
+    store.save(logins.DB_ADMIN, db_url, None)
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
 
     def calu(*argv: str) -> int:
         return cli.main(list(argv), store_factory=lambda: cast(CredentialStore, store))
 
-    assert await anyio.to_thread.run_sync(calu, "setup", "--renew-session") == 0
+    assert await anyio.to_thread.run_sync(calu, "setup") == 0
     db = Db(await connect(db_url))
     try:
         await admin.set_checker(db, "edit", instructions_text=superseded_instructions("edit")[-1])
@@ -431,13 +536,13 @@ async def test_checker_template_lists_shows_and_loads_a_template(
     from calu.defaults import library
 
     store = CredentialStore(tmp_path / "credentials.json")
-    store.save("admin", db_url, None)
-    monkeypatch.setattr("sys.stdin", io.StringIO("session-pw\nsession-pw\n"))
+    store.save(logins.DB_ADMIN, db_url, None)
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
 
     def calu(*argv: str) -> int:
         return cli.main(list(argv), store_factory=lambda: cast(CredentialStore, store))
 
-    assert await anyio.to_thread.run_sync(calu, "setup", "--renew-session") == 0
+    assert await anyio.to_thread.run_sync(calu, "setup") == 0
     capsys.readouterr()
     assert await anyio.to_thread.run_sync(calu, "checker", "template", "list") == 0
     assert "review-findings          subagent-result" in capsys.readouterr().out

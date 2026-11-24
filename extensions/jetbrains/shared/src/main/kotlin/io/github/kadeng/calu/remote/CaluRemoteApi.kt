@@ -58,14 +58,13 @@ data class CallResultDto(
 )
 
 /**
- * A password the backend needs from the user.
+ * The calu user password, which the backend needs from the user.
  *
  * @property id Number of the request; the answer names it.
- * @property kind "first" for the one password, "admin" for the admin password.
  * @property text The prompt text (with the reason the previous entry was refused, if any).
  */
 @Serializable
-data class PasswordRequestDto(val id: Int, val kind: String, val text: String)
+data class PasswordRequestDto(val id: Int, val text: String)
 
 /**
  * The editor-side settings of the plugin for one project (stored by the backend, because the

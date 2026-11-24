@@ -5,7 +5,6 @@ import socket
 from datetime import UTC, datetime
 
 import anyio
-import psycopg
 import pytest
 
 from calu import herd
@@ -70,11 +69,10 @@ async def test_a_decision_from_the_database_names_who_made_it(
     db_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`calu resolve` recorded the database role alone, the same for everyone who holds it."""
-    from tests.db.test_trust import logins
+    from tests.db.test_trust import user_login
 
-    _session_url, operator_url = await logins(db_url)
     owner = await connect(db_url)
-    operator = await connect(operator_url)
+    user = await connect(await user_login(db_url))
     db = Db(owner)
     try:
         store = DatabaseSessionStore(db)
@@ -89,17 +87,17 @@ async def test_a_decision_from_the_database_names_who_made_it(
         monkeypatch.setenv("SUDO_USER", "ada")
         assert herd.caller() == "ada@buildbox", "the person who called sudo, not root"
 
-        assert await herd.resolve(Db(operator), ids[0], "allow", "ok", actor="kai@buildbox")
+        assert await herd.resolve(Db(user), ids[0], "allow", "ok", actor="kai@buildbox")
         assert await herd.resolve(db, ids[1], "deny", actor="kai@buildbox\x1b[2J\n" + "x" * 300)
         assert await herd.resolve(db, ids[2], "allow")
         by = [(await store.escalation(one)).resolved_by for one in ids[:3]]
-        assert by[0] == "operator:kai@buildbox"
+        assert by[0] == "admin:kai@buildbox"
         assert by[1] is not None and by[1].startswith("owner:kai@buildbox[2Jxxx")
         assert len(by[1]) == len("owner:") + 200 and "\x1b" not in by[1] and "\n" not in by[1]
         assert by[2] == "calu_owner", "without a caller the role alone, as before"
         row = await herd.escalation(db, ids[0])
         assert row is not None
-        assert "answered by operator:kai@buildbox: ok" in herd.render_escalation(row, {})
+        assert "answered by admin:kai@buildbox: ok" in herd.render_escalation(row, {})
 
         # A database from before version 37 has no function that takes the caller.
         await db.execute("DROP FUNCTION calu_resolve_escalation(bigint, text, text, text)")
@@ -107,7 +105,7 @@ async def test_a_decision_from_the_database_names_who_made_it(
         assert (await store.escalation(ids[3])).resolved_by == "calu_owner"
     finally:
         await owner.close()
-        await operator.close()
+        await user.close()
 
 
 async def test_resolved_escalations_become_evaluation_cases(db_url: str) -> None:
@@ -633,15 +631,16 @@ async def test_a_restart_of_the_database_does_not_count_as_silence_of_its_sessio
 
 
 async def test_a_session_that_ends_closes_its_open_escalations(db_url: str) -> None:
-    """With the real `calu_session` login: `end` leaves no open row, and only its own."""
+    """With the user login that sessions use (D265): `end` leaves no open row, and closes only
+    its own."""
     owner = await connect(db_url)
     try:
-        _, session_url = await setup(owner, db_url, "test:model")
-        first_conn = await connect(session_url)
-        second_conn = await connect(session_url)
+        _, user_url = await setup(owner, db_url, "test:model")
+        first_conn = await connect(user_url)
+        second_conn = await connect(user_url)
         try:
             first = DatabaseSessionStore(Db(first_conn))
-            first_id = await first.start(IDENTITY)
+            await first.start(IDENTITY)
             one = await first.open_escalation("why", {"rendered": "$ deploy"})
             two = await first.open_escalation("why", {"rendered": "$ ship"})
             second = DatabaseSessionStore(Db(second_conn))
@@ -649,13 +648,7 @@ async def test_a_session_that_ends_closes_its_open_escalations(db_url: str) -> N
             other = await second.open_escalation("why", {"rendered": "$ ls"})
             await herd.resolve(Db(owner), two, "allow", "fine")
 
-            # A session closes its own escalations only, and not those of the whole herd.
-            with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                await second_conn.execute(
-                    "SELECT calu_close_session_escalations(%s::uuid, 'x')", (first_id,)
-                )
-            with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                await second_conn.execute("SELECT calu_close_gone_escalations(0.001)")
+            # Both sessions are alive: looking for gone ones closes nothing.
             assert await herd.close_gone(Db(second_conn)) == 0
 
             await first.end("failed")
@@ -1046,7 +1039,7 @@ async def test_a_client_with_no_address_finds_the_session_and_mints_its_own_toke
         await store.set_address("ws://127.0.0.1:8765")
 
         credentials = CredentialStore(tmp_path / "credentials.json")
-        credentials.save("operator", db_url, None)  # no password: nothing is asked (D104)
+        credentials.save("user", db_url, None)  # no password: nothing is asked (D104)
         monkeypatch.chdir(tmp_path)
 
         endpoint = await anyio.to_thread.run_sync(_find_endpoint, credentials, None, "calu attach")

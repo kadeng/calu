@@ -10,8 +10,10 @@
 # What it does:
 #   1. Creates a second PostgreSQL cluster `pw` on port 5433 with the role `calu_owner` and the
 #      database `calu_pw` (calu's roles are server-wide: the first cluster keeps its own).
-#   2. Runs `calu setup` with its own XDG directories below ~/pwstore: the `admin` credential
-#      gets the password `admin-pw`, the session password is `sess-pw`.
+#   2. Runs `calu setup` with its own XDG directories below ~/pwstore: the calu user password
+#      is `user-pw`; it protects the logins `user` and `db-admin`. A store without `db-admin`
+#      (an earlier setup failed, or a calu from before the one user login stored it) starts
+#      again from an empty database.
 #   3. Starts uitest/fake_server.py for that store in the tmux session `calu-fake-pw`.
 #   4. Writes ~/pwstore/calu: a wrapper that runs calu with those XDG directories. An editor
 #      plugin reaches the store with the setting "calu command" = /home/cua/pwstore/calu.
@@ -54,7 +56,7 @@ fi
 if ! "${PSQL[@]}" -c "SELECT 1 FROM pg_database WHERE datname='calu_pw'" | grep -q 1; then
     sudo -u postgres createdb -p 5433 -O calu_owner calu_pw
 fi
-if [ ! -s "$STORE/config/calu/credentials.json" ] || ! grep -q calu_admin "$STORE/config/calu/credentials.json"; then
+if [ ! -s "$STORE/config/calu/credentials.json" ] || ! grep -q '"db-admin"' "$STORE/config/calu/credentials.json"; then
     rm -f "$STORE/config/calu/credentials.json"
     # A store that is incomplete (an earlier setup failed, or calu stores other logins now)
     # starts from an empty database: calu refuses to take over the roles of a setup whose
@@ -64,17 +66,17 @@ if [ ! -s "$STORE/config/calu/credentials.json" ] || ! grep -q calu_admin "$STOR
         "${PSQL[@]}" -c "DROP ROLE IF EXISTS $role" >/dev/null
     done
     sudo -u postgres createdb -p 5433 -O calu_owner calu_pw
-    # The answers, in the order of the prompts: the owner's password, the admin password
-    # twice, the session password twice.
-    printf 'calu-uitest\nadmin-pw\nadmin-pw\nsess-pw\nsess-pw\n' | "$STORE/calu" setup --database server \
+    # The answers, in the order of the prompts: the owner's password, then the new calu user
+    # password twice.
+    printf 'calu-uitest\nuser-pw\nuser-pw\n' | "$STORE/calu" setup --database server \
         --host 127.0.0.1 --port 5433 --dbname calu_pw --user calu_owner --sslmode disable
 fi
-(cd "$HOME/work/demo" && printf 'admin-pw\n' | "$STORE/calu" project add . --name demo >/dev/null 2>&1 || true)
+(cd "$HOME/work/demo" && printf 'user-pw\n' | "$STORE/calu" project add . --name demo >/dev/null 2>&1 || true)
 
 tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
 TOOL_PYTHON="$(uv tool dir)/calu/bin/python"
 tmux new-session -d -s "$TMUX_SESSION" -c "$COPY" \
-    "export XDG_CONFIG_HOME='$STORE/config' XDG_STATE_HOME='$STORE/state' XDG_DATA_HOME='$STORE/data'; printf 'sess-pw\n' | '$TOOL_PYTHON' uitest/fake_server.py 2>&1 | tee /tmp/calu-fake-pw-server.log"
+    "export XDG_CONFIG_HOME='$STORE/config' XDG_STATE_HOME='$STORE/state' XDG_DATA_HOME='$STORE/data'; printf 'user-pw\n' | '$TOOL_PYTHON' uitest/fake_server.py 2>&1 | tee /tmp/calu-fake-pw-server.log"
 sleep 4
 tail -3 /tmp/calu-fake-pw-server.log || true
 echo "calu command for the plugin: $STORE/calu"

@@ -28,7 +28,7 @@ from typing import Any
 
 import anyio
 
-from calu import herd
+from calu import herd, logins
 from calu.protocol.client import OnEvent, RequestFailed
 from calu.protocol.messages import (
     CLOSE_FELL_BEHIND,
@@ -177,7 +177,7 @@ class FakeAdmin:
 
         Args:
             session: The scripted session that shows the changes; None records them only.
-            credential: False behaves like a machine without the `admin` credential.
+            credential: False behaves like a machine without the `user` login.
             password: The credential's password; "" for a credential without one.
         """
         self.session = session
@@ -240,13 +240,14 @@ class FakeAdmin:
             password: The password the client passed.
 
         Raises:
-            PasswordNeeded: If the password is not the one of this access.
+            PasswordNeeded: If the password is not the one of this access, with the text
+                `StoreAdmin` gives (`calu.logins.refused`).
             AdminFailed: Without a credential, or with `fail` set.
         """
         if not self.credential:
             raise AdminFailed(NO_CREDENTIAL)
         if self.password and password != self.password:
-            raise PasswordNeeded("wrong password for the 'admin' credential")
+            raise PasswordNeeded(logins.refused(not password))
         if self.fail:
             raise AdminFailed(self.fail)
 

@@ -484,8 +484,8 @@ export class ChatHost implements Disposable {
    * After the bridge started or was unlocked: check the setup, attach again to the session
    * that was attached before the bridge went away (asking only for the events the chat has not
    * seen), else to the session of the workspace if one runs, and load the session list. If the
-   * bridge reports that it is locked and the chat is visible, the one password is asked for
-   * (once per bridge).
+   * bridge reports that it is locked and the chat is visible, the calu user password is asked
+   * for (once per bridge).
    *
    * @param mayAsk False to skip the password prompt (after the user dismissed it).
    * @returns A promise that resolves when all of it was tried (never rejects).
@@ -505,7 +505,7 @@ export class ChatHost implements Disposable {
   }
 
   /**
-   * Ask the one password now (the chat's "Unlock" button), then connect.
+   * Ask the calu user password now (the chat's "Unlock" button), then connect.
    *
    * @returns A promise that resolves when the prompt was answered and the result applied.
    */

@@ -33,7 +33,9 @@ on your computer.
 
 The extension starts `calu ide` and nothing else. Sessions run in `calu serve`, which you start
 in a terminal (**calu: Start calu Server**): with tmux or screen it keeps running after VSCode
-closes. Passwords (sudo, calu credentials for the server) are typed into that terminal.
+closes. Passwords the server needs (sudo, the calu user password) are typed into that terminal.
+The chat itself asks for the calu user password at most once per window, and never if it is
+empty.
 
 ## What the chat shows
 

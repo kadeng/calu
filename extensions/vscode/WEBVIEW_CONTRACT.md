@@ -78,7 +78,7 @@ Use `applyEvent` from `src/shared/viewState.ts` unchanged; never mutate the stat
 | `session {state, sessionId, claudeSessionId, workspace, project, model, effort, backgroundTasks}` | the attached session; `state` is the protocol's (`starting`, `idle`, `running`, `checking`, `tool_call`, `escalated`, `stopped`, `failed`); `sessionPhase()` in `activity.ts` maps it to busy/waiting/... |
 | `sessions {list: SessionEntry[], attachedId, loaded, error?}` | running sessions of the machine for the dropdown (`id, name, directory, state, openEscalations, here, stale`), workspace ones first; refreshed by the host on attach/detach, every 10 s while the view is visible, and on `refreshSessions`. `sessionTitle(entry)` gives the text |
 | `serverHelp {command, tool: tmux/screen/plain, detach, note}` or `null` | how to start `calu serve`; set while nothing is attached. Show it in the empty state with the buttons `startServer` and `copyServerCommand` |
-| `hints: SetupHint[]` | what is missing, most important first: `{id, level, message, action, actionLabel, href?}`. Render each as a line with a button that posts `{type: action}` (or `{type: "openLink", href}` for `openLink`). Ids: `calu-missing`, `claude-missing`, `locked` (calu's logins need the one password; action `unlock`), `database`, `server-stopped` (the link was lost because nothing answers and no server runs: action `startServer`, the card adds `retryServer`), `no-server`, `no-session`. `setupCards(state)` in `chatModel.ts` turns bridge status and hints into the cards of the empty state |
+| `hints: SetupHint[]` | what is missing, most important first: `{id, level, message, action, actionLabel, href?}`. Render each as a line with a button that posts `{type: action}` (or `{type: "openLink", href}` for `openLink`). Ids: `calu-missing`, `claude-missing`, `locked` (calu's user login needs the calu user password; action `unlock`), `database`, `server-stopped` (the link was lost because nothing answers and no server runs: action `startServer`, the card adds `retryServer`), `no-server`, `no-session`. `setupCards(state)` in `chatModel.ts` turns bridge status and hints into the cards of the empty state |
 | `autoEscalate {commands, edits, subagents}` | supervision switches; `levelOf` / `levelLabel` / `LEVELS` in `levels.ts` |
 | `honesty: HonestyInfo` or `null` | code honesty state; `honestyChip(honesty)` gives the header chip (`off` = show nothing) |
 | `honestyStored` | `honesty.mode` as calu's settings store it (`null` = unknown). `honestyStoredNote(honesty, honestyStored)` gives "stored: track" while it differs from the session's mode; the chip then shows both |
@@ -157,7 +157,7 @@ or why nobody can. `formatAnswer(questions, choices)` builds the answer text of 
 | `openDiff` | `toolUseId` | native diff editor for the edit, revealed at its first changed line; if the diff is no longer held (the newest 300 are), the file is opened at the edited line and the status bar says so |
 | `openLink` | `href` | http(s): browser; relative: file in the workspace (a trailing `:<line>` puts the cursor there); else ignored |
 | `showLog` | | shows the "calu" output channel |
-| `unlock` | | asks the one calu password (`ide.unlock`), then checks the setup and attaches to the workspace's session |
+| `unlock` | | asks the calu user password (`ide.unlock`), then checks the setup and attaches to the workspace's session |
 | `rewindBefore` | `turn` (`UserItem.turn`), `uuid?` (`UserItem.uuid`) | undo: asks for a confirmation (files are not reverted), then `ide.start {kind: "resume", claude_session_id, fork_before_turn}` → `reset`, then `restoreInput` with the message's text. The host takes the turn number from `session.history` (the turn whose `prompt_uuid` is `uuid`) and falls back to `turn`; turn 1 is refused with a message |
 | `forkBefore` | `turn`, `uuid?` | the same start without confirmation and without `restoreInput` |
 | `forkConversation` | | `ide.start {kind: "fork", claude_session_id}` of the attached conversation. A session cut from another one is named "fork of <name>" / "rewind of <name>" (`derivedSessionName`) |
@@ -198,12 +198,15 @@ over the view (`.lightbox`); a click or Escape closes it and returns the focus.
 
 ### Passwords and the `locked` state
 
-The host asks at most one password per window (spec sections 8 and 10): at the first request
-that the bridge refuses with -32010, or right after start if `ide.status.locked` and the chat is
-visible. It sends it with `ide.unlock`, keeps it in a variable of the extension host until the
-window closes, and unlocks a restarted bridge with it without asking. Requests carry no
-password. If the user dismisses the prompt, the hint `locked` (button "Unlock" → `unlock`) is
-shown; the command "calu: Unlock" does the same. The password never reaches the webview, the
+The host asks for the calu user password at most once per window (spec sections 8 and 10), and
+never if it is empty: at the first request that the bridge refuses with -32010, or right after
+start if `ide.status.locked` and the chat is visible. It sends it with `ide.unlock`, keeps it in
+a variable of the extension host until the window closes, and unlocks a restarted bridge with it
+without asking. Requests carry no password. If the user dismisses the prompt, the waiting
+requests fail with "Not done: no password was given. The next action that needs the database
+asks again.", and the hint `locked` (button "Unlock" → `unlock`) is shown; the command
+"calu: Unlock" does the same. After three refused passwords in a row they fail with "Not done:
+the password was refused 3 times. ..." instead. The password never reaches the webview, the
 state, a setting or the log. The decisions are in `src/shared/unlock.ts`.
 
 ### Notifications
@@ -264,5 +267,6 @@ form model: `src/shared/settingsModel.ts`.
   rows of the Setup card with their fix buttons. `rootInstallCommand` is shown with
   `copyRootInstall` (the extension never runs it); `serverHelp` as in the chat.
 
-A request that changes settings may make the host ask for a credential's password (input box of
-VSCode, not in the webview); the password is used for that request only.
+A request may make the host ask for the calu user password (input box of VSCode, not in the
+webview), as described in "Passwords and the `locked` state"; one login reads and changes
+settings.

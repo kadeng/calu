@@ -67,7 +67,7 @@ async def project_for_directory(db: Db, directory: Path, hostname: str) -> str |
     """Find the project registered for a directory or for the nearest directory above it.
 
     Args:
-        db: A connection that may read `projects` (the session role may).
+        db: A connection that may read `projects` (the user login may).
         directory: The session's working directory, resolved and absolute.
         hostname: This host's name; rows of other hosts are ignored.
 

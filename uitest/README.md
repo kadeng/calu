@@ -140,7 +140,7 @@ before both `uitest-code` calls.
 | Item | Value |
 | --- | --- |
 | Database | PostgreSQL of the container (apt), database `calu`, owner role `calu_owner` with a test password |
-| Credentials | `~/.config/calu/credentials.json` of user `cua`: `admin` and `calu_admin` without a password (so `calu ide` asks none), `session` with a blank password |
+| Credentials | `~/.config/calu/credentials.json` of user `cua`: the logins `user` (the role `calu_admin`) and `db-admin` (the owner `calu_owner`), stored without a password: the calu user password is empty (`calu setup --no-password`), so no calu command, `calu ide` included, asks for one. `setup-demo.sh` converts a store of a calu from before the one user login (`admin`, `session`, `operator`, `calu_admin`) |
 | calu | `uv tool install` from `~/work/calu` (a copy of `/workspace/calu` without `.git`, `.venv`, `.env`), command `~/.local/bin/calu` |
 | Demo project | `~/work/demo` (git repository; the scripted Edit changes `greeter.py`: `git -C ~/work/demo checkout greeter.py` resets it) |
 | Fake server | tmux session `calu-fake`, log `/tmp/calu-fake-server.log` |
@@ -266,7 +266,7 @@ $D open-pycharm /home/cua/work/demo
 
 | Script | What it adds |
 | --- | --- |
-| `setup-password-store.sh` | a second calu store with passwords, for the one-password flow: its own XDG directories below `~/pwstore`, its own PostgreSQL cluster on port 5433 (calu's roles are server-wide), a scripted server in the tmux session `calu-fake-pw`. Admin password `admin-pw`, session password `sess-pw`. The plugin reaches it with Settings, Tools, calu, "calu command" = `/home/cua/pwstore/calu`. `--stop` stops its server |
+| `setup-password-store.sh` | a second calu store with passwords, for the one-password flow: its own XDG directories below `~/pwstore`, its own PostgreSQL cluster on port 5433 (calu's roles are server-wide), a scripted server in the tmux session `calu-fake-pw`. Calu user password `user-pw`. The plugin reaches it with Settings, Tools, calu, "calu command" = `/home/cua/pwstore/calu`. `--stop` stops its server |
 | `pycharm-split.sh` | JetBrains remote development on the desktop: copies the plugin's sources to `~/work/jb` and runs `./gradlew runIdeSplitMode -PlocalIde=/opt/pycharm` in the tmux session `calu-split` (a JDK 25 in `/share/jdk` is needed once; close the ordinary PyCharm first: backend, client and Gradle need about 6 GB). `--stop` ends it. The thin client shows the "JetBrains Team Tools User Agreement" at its first start; a person decides |
 
 ## What is installed, and where
@@ -371,16 +371,20 @@ docker rm -f calu-rootbox                        # delete it with everything set
 | Databases | two PostgreSQL clusters on 127.0.0.1, the "existing server" variant: port 5432 for root's calu, port 5433 for a user's own. Owner login `calu_owner`, password `owner-pw`, databases `calu` and `calu_old` |
 
 ```bash
-# as root, or as ada with sudo in front: passwords on standard input, in the order the guide gives
-printf 'owner-pw\nadmin-pw\nadmin-pw\nsess-pw\nsess-pw\n' | \
+# as root, or as ada with sudo in front: passwords on standard input, in the order the guide
+# gives: the owner's password, then the new calu user password twice
+printf 'owner-pw\nuser-pw\nuser-pw\n' | \
     calu setup --database server --host 127.0.0.1 --port 5432 --dbname calu --user calu_owner
+# the same without a user password: calu asks for none afterwards
+printf 'owner-pw\n' | calu setup --database server --host 127.0.0.1 --port 5432 \
+    --dbname calu --user calu_owner --no-password
 ```
 
 What stands in for Claude Code and the checkers:
 
 - **`fakecalu ...`** is calu's own command line with the scripted runner and the fake checker
   models of `fake_server.py` (`rootbox/fakecalu.py`). Everything else is calu's code: the
-  options, the credential store, the session password, `calu.asuser`, the sockets, the log
+  options, the credential store, the calu user password, `calu.asuser`, the sockets, the log
   file. `fakecalu serve --user ada` as root, or `sudo fakecalu serve --user "$USER" --from-sudo`
   as ada or bob (the command line `calu serve --sudo` builds), runs sessions that play the
   scenarios above. `fakecalu-user` is the same with the interpreter of the caller's own
@@ -440,7 +444,7 @@ calu/uitest/sshbox/stop.sh --remove        # delete the container and the networ
 | User | `dev` (uid 1000, sudo without a password inside the container) |
 | The key | `~/.cache/calu-uitest/ssh/id_ed25519` on the host: made by `run.sh` for the tests, no passphrase. `run.sh` installs its public half for `dev` and copies the private half to the desktop's user `cua` (`~/.ssh/calu_sshbox`, mode 600, with a `Host sshbox` entry in `~/.ssh/config`). The owner's keys, agent and `~/.ssh` are never read or changed; the host's entry for the box is the separate file `~/.cache/calu-uitest/ssh/config` |
 | calu | `uv tool install` for `dev` from a copy of the checkout; `/usr/local/bin/calu` links to it, because an SSH command runs without a login shell and so without `~/.local/bin` on its `PATH` |
-| Stores | without passwords: the cluster on port 5432 (`calu ide` as `dev` asks nothing). With passwords: `/home/dev/pwstore/calu` (cluster on port 5433, admin password `admin-pw`, session password `sess-pw`), for the one-password rule over SSH: set the plugin's "calu command" to that path |
+| Stores | without passwords: the cluster on port 5432 (`calu ide` as `dev` asks nothing). With passwords: `/home/dev/pwstore/calu` (cluster on port 5433, calu user password `user-pw`), for the one-password rule over SSH: set the plugin's "calu command" to that path |
 | Project | `/home/dev/project`: a git repository with Python files, a `.gitignore` (and an ignored `build/`), `assets/blob.bin` (200 kB of random bytes), `many/` with 300 small files, `link-inside.py` (a link to a file of the tree) and `link-outside` (a link to `/etc/hostname`) |
 | Scripted servers | tmux sessions `calu-fake` and `calu-fake-pw` of `dev` (`uitest/fake_server.py`); logs `/tmp/calu-fake-server.log`, `/tmp/calu-fake-pw-server.log` |
 

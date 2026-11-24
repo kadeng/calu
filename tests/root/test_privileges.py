@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from calu import asuser, cli, launch, localsocket, logfile
+from calu import asuser, cli, launch, localsocket, logfile, logins
 from calu.credentials import CredentialStore
 from calu.db import place
 from calu.db.target import PasswordAuth, Target
@@ -302,7 +302,7 @@ def test_the_log_file_and_the_credential_store_are_roots_alone(
     assert log is not None and stat.S_IMODE(log.stat().st_mode) == 0o600
     assert stat.S_IMODE(log.parent.stat().st_mode) == 0o700
     store = CredentialStore(shared_dir / "etc" / "calu" / "credentials.json")
-    store.save("session", bytearray(b"postgresql://calu_session@db"), None)
+    store.save(logins.USER, bytearray(b"postgresql://calu_admin@db"), None)
     assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
     assert stat.S_IMODE(store.path.parent.stat().st_mode) == 0o700
     assert asuser.only_root_writes(store.path)

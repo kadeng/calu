@@ -66,7 +66,7 @@ The client (`src/calu/tui/`) is tested in the unit layer, without a terminal, a 
 | `test_tui_app.py` | the Textual app under `App.run_test()` with `Pilot` pressing keys: sending in each mode, `a a`/`d d`/note, questions, the detail view, agent switching, side questions, the scrolling rules (the scroll offset and every visible line stay while output arrives), 80x24 and 120x36, a session of 2,000 steps | the scripted session |
 | `test_tui_more.py` | the same app for what came second: the start card of a stopped session, the confirmed stop-and-resume with another model or effort, resuming a stored conversation, the stored history above the replayed events, the diff screen (side by side, unified, jumps between changes, a comment on selected lines), the side panel as a list (queue, held drafts, marks), held drafts sent when the session turns idle, search, copy, export, `@` path completion, large pastes, the settings file, other keys, `NO_COLOR` | the scripted session |
 | `test_tui_tools.py` | what needs neither Textual nor a session: `calu.tui.settings` (`tui.toml`, the history of sent texts), `calu.tui.difftools` (the rows of a diff, a selection as a line range), `calu.tui.completion`, `calu.tui.export`, and the stored history in the model | nothing |
-| `test_tui_admin.py` | the checkers screen (reading through the session, saving edited instructions with the `admin` credential, the password question, a machine without the credential), code honesty (today's `honesty.update` and the one with baseline and unreviewed files, the page, `/trust` with its yes/no question, `/trust-file`, `/honesty-review`, `/honesty off\|track\|enforce` with the confirmation of a weaker mode), and `f4` (which git program is chosen, the install command per package manager, that a command with `sudo` is only shown) | the scripted session; `FakeAdmin` for the credential; `CaluApp.run_program`, `which` and `environ` for the external program |
+| `test_tui_admin.py` | the checkers screen (reading through the session, saving edited instructions with the user login, the calu user password question and a wrong answer, a stored login the database refuses (called outdated), a machine without the user login), code honesty (today's `honesty.update` and the one with baseline and unreviewed files, the page, `/trust` with its yes/no question, `/trust-file`, `/honesty-review`, `/honesty off\|track\|enforce` with the confirmation of a weaker mode), and `f4` (which git program is chosen, the install command per package manager, that a command with `sudo` is only shown) | the scripted session; `FakeAdmin` for the credential; `CaluApp.run_program`, `which` and `environ` for the external program |
 | `test_tui_screens.py` | the whole screen as text for six scripted sessions at 120x36 and 80x24, compared with the files in `tests/unit/tui_screens/`; the same text without colours | the scripted session |
 | `test_tui_review.py` | what two reviews found, each as a test: a long command on the card (wrapped, the cut counted, allowed from the detail only), an edit's changed lines on the card, one resize in each direction, a reply that begins with a letter of the card (typed whole), a decision bound to its escalation (the second press, the note question and the detail never reach a step that took the place; a key right after the card changed; a held key), Enter on a question set, the list of slash commands, a message on a subagent's tab, hints that fit the width, repeated notices as one toast, the keys of the honesty page, the reconnect after a stay in the git program (close code 1011) and after a close during `state.get`, the interrupt handler around the git program (also on a real pty: `f4`, ctrl+c, still attached), a save the session does not show, a save over a change made meanwhile, the bound on the model's blocks, a refused held draft, the filtered help, an unsupported Textual | the scripted session; one test starts `python -m calu.tui` on a pty |
 | `test_startup_imports.py` | what `calu` imports before a command runs, each case in a process of its own: importing `calu.cli`, building the parser, `--version`, `--help`, a subcommand's help and the modules of the client commands (`attach`, the fleet commands, `ide`, `acp`, `doctor`, `start`) import neither Pydantic AI with its provider SDKs nor the Agent SDK, `mcp`, Starlette, uvicorn or Textual; the full-screen client and the web interface import only their own toolkit; the names `calu.checkers`, `calu.context` and `calu.evals` export lazily still resolve; `calu --version` answers faster than a process that only imports what it used to import (Pydantic AI with two provider modules, the Agent SDK; marked `slow`) |
@@ -161,11 +161,12 @@ for the disk (recreate it once: `docker compose up -d caludb --wait`).
 - The marker `slow` is on the tests that start a `calu` process or wait out a real timer.
   They belong to every full run and to CI; only a quick loop leaves them out.
 - **Do not run the database layer with `-n`**: the roles are server-wide and every test's
-  setup renews the login of `calu_session`, so parallel tests break each other (19 failures in
-  a trial). For the same reason two runs against the one test server at the same time fail
-  with `password authentication failed for user "calu_session"` or `tuple concurrently
-  updated`. One PostgreSQL server per worker would lift this (measured: the whole suite in
-  104 s with eight workers); not built.
+  setup gives the role `calu_admin` (the user login) a new generated password, so parallel
+  tests break each other. The trial with 19 failures was made before D265, when the setup
+  renewed the login of `calu_session`. For the same reason two runs against the one test
+  server at the same time fail with `password authentication failed for user "calu_admin"`
+  or `tuple concurrently updated`. One PostgreSQL server per worker would lift this
+  (measured: the whole suite in 104 s with eight workers); not built.
 - Not done yet, with what they would save: starting `calu` without importing the checker and
   Agent SDK packages for client commands (about 2.5 s per start, also for users); the
   `calu start` test that waits ten seconds for a server that does not come; the browser test
@@ -193,13 +194,16 @@ uv run pytest -m db
 
 `caludb` listens on 127.0.0.1:55432 (`calu_owner` / `calu-dev`, development only). Each test
 creates and drops its own database, so the tests do not interfere and a failed run leaves
-nothing behind. `tests/db/` covers the schema and the roles (what `calu_session` may *not* do),
-the stores, the admin commands, the herd queries, the web interface and the live relay.
+nothing behind. `tests/db/` covers the schema and the roles (what the user login `calu_admin`
+may and may not do, and that `calu_session` and `calu_operator` no longer log in after
+migration 0043), the stores, the admin commands, the herd queries, the web interface and the
+live relay.
 
-The databases are per test, but the roles `calu_session` and `calu_operator` belong to the whole
-server, and every `setup` gives `calu_session` a new password. Two test runs against the same
-server at the same time can therefore take each other's session login away, which shows as a
-failed login or as `tuple concurrently updated`. Give a second concurrent run a server of its
+The databases are per test, but calu's roles (`calu_admin`, `calu_operator`, `calu_session`)
+belong to the whole server, and every `setup` gives `calu_admin` a new generated password
+(`calu.setup.setup`). Two test runs against the same server at the same time can therefore
+take each other's user login away, which shows as a failed login or as `tuple concurrently
+updated`. Give a second concurrent run a server of its
 own and point `CALU_TEST_DSN` at it:
 
 ```bash
@@ -212,12 +216,12 @@ Lost connections are covered without restarting the server: `tests/db/test_conne
 `test_a_session_survives_the_loss_of_both_database_connections` end the session's server
 processes with `pg_terminate_backend`, which is what a restart does to them, and check that the
 session reconnects, is bound to its row again and loses no step. The same files cover the
-login that stops working for good: a test replaces the session credential (as `calu setup
---renew-session` does) or removes the database, and checks that the reconnecting ends after a few attempts with
-an error that names the cause, and that `calu run` then exits with 1. Session isolation
-(`tests/db/test_schema.py`) includes the attack of a second holder of the `calu_session` login
-who names another session's id, and checks with two real `calu_session` logins that the
-sessions of one conversation read each other's rows and write only their own.
+login that stops working for good: a test gives `calu_admin` a new password (as `calu setup
+--set-password` does) or removes the database, and checks that the reconnecting ends after a
+few attempts with an error that names the cause, and that `calu run` then exits with 1. The
+row isolation between the sessions of one person ended with D265: every session logs in as
+`calu_admin`, which passes every row-level policy (PLAN.md D265 (4)). `tests/db/test_schema.py`
+checks instead that the user login runs a session through every statement the store uses.
 
 The end of an unattended run (`tests/db/test_run.py`, `tests/unit/test_run.py`): a prompt with
 further messages piped to stdin, and a `--batch` run with a message a client queued, each with
@@ -234,7 +238,7 @@ certification, `honesty.trust`) and `tests/unit/test_honesty_review.py` (the hon
 its plan, the reviewer agent with fake models, the triggers, one review at a time, the cap, a
 failed review). The fake reviewer is `calu.testing.fake_reviewer`. `tests/db/test_trust.py` and
 `tests/db/test_honesty_session.py` check the grants and functions of the two trust tables and
-that a session's own writes pass them with the session login.
+that a session's own writes pass them with the user login.
 
 ## The browser layer
 
@@ -270,12 +274,14 @@ with a scripted runner): as root for uid 1000, whose files in the project then b
 the launcher's refusal of a uid, gid or group the system calls would leave unchanged;
 `calu setup` writing `/var/lib/calu/database.json` (the tests keep and restore a file
 that was there), with and without `--no-password`, and the sandbox-off advice that follows
-it in setup and in a `--user` session; `calu serve --user` starting Claude Code (a stand-in
-that answers the Agent SDK's start-up requests) as that uid behind a root socket; a client
-as root that asks the admin password once, keeps `calu_admin` (or the owner login after a
-blank admin password) in memory, switches to the user's file identity, and then lists
-sessions and saves settings without a password while root's store is closed to it and
-neither its environment nor a program it starts holds the password (D249).
+it in setup and in a `--user` session, and `calu setup --set-password` taking the password
+out of the file again; `calu serve --user` starting Claude Code (a stand-in that answers the
+Agent SDK's start-up requests) as that uid behind a root socket; a client as root that asks
+the calu user password once (it opens root's `user` entry, or the database accepts it for
+`calu_admin` where the place file says), keeps the user login in memory, switches to the
+user's file identity, and then lists sessions and saves settings without a password while
+root's store is closed to it and neither its environment nor a program it starts holds the
+password (D249, D265).
 
 The tests are skipped unless the process is root **and** `CALU_ROOT_TESTS=1` is set: they
 create directories below `/var/lib/calu` and `/run/calu` and start programs as other uids,
@@ -284,13 +290,14 @@ which a test run must not do to a developer's machine. They run in the root box,
 
 ```bash
 calu/uitest/rootbox/run.sh                    # once: build, start, install calu inside
-docker exec calu-rootbox rootbox-tests        # 24 tests, a PostgreSQL cluster of their own (port 5434)
+docker exec calu-rootbox rootbox-tests        # 25 tests, a PostgreSQL cluster of their own (port 5434)
 docker exec calu-rootbox rootbox-tests -k socket -x
 ```
 
 `rootbox-tests` syncs a virtual environment in `/opt/calu-venv` from the read-only checkout
 and runs `pytest -m root tests/root`. CI does not run this layer. Run on 2026-11-19: 24 passed
-(after the serve test was given its projects directory, D243).
+(after the serve test was given its projects directory, D243). Not yet run with the one user
+login (D265): the tests were rewritten for it without a root box.
 
 ## The live layer
 
@@ -425,10 +432,12 @@ escalation resolved from the database alone.
 6. A deny-list escalation resolved from the database alone: `calu escalations`,
    `calu escalation <id>`, `calu resolve <id> deny --note ...` — the session continues within a
    second.
-7. `calu web`: open the printed address (`http://calu.localhost:8800/?token=...`); the address
-   without the token must answer 401 in a private window, `http://127.0.0.1:8800/` must answer
-   403 and name the right address, and a `curl -X POST` must not decide anything -- neither
-   without a cookie nor with the `calu_web_session` cookie copied from the browser (D161).
+7. `calu web`: open the printed address (`http://calu.localhost:8800/?token=...`; a token is
+   printed only with an empty user password, otherwise the browser asks for the calu user
+   password, item 32); the address without the token must answer 401 in a private window,
+   `http://127.0.0.1:8800/` must answer 403 and name the right address, and a `curl -X
+   POST` must not decide anything -- neither without a cookie nor with the
+   `calu_web_session` cookie copied from the browser (D161).
    Restart the database while the triage page is open: the page says that its list may be out
    of date and recovers by itself, without a restart of `calu web`. Then the
    fleet, a session at all four levels of detail, the triage queue, Ctrl+K. On the settings
@@ -440,10 +449,9 @@ escalation resolved from the database alone.
    the settings page and watch an attached `calu attach` report it; then the session page must
    list the change with who asked for it (D43). With an ACP editor, the same through its own
    agent-mode picker.
-9. Session isolation (D49): `uv run pytest -m db tests/db/test_schema.py` covers it, and by
-   hand after any change to the schema or the store, `smoke_session.py --resolve deny` must
-   still record its step, its escalation and its turn -- a session that cannot write says so at
-   once (an `InsufficientPrivilege` on its first step), which is the failure mode to recognise.
+9. Removed with D265: session isolation (D49); every session logs in as `calu_admin`, which
+   passes every row-level policy, and `tests/db/test_schema.py` checks that this login runs a
+   session through every statement the store uses.
 10. In a container: `docker compose run --rm dev sh -c 'command -v bwrap socat'` and a real
    `bwrap --unshare-user ...` — the `dev` service needs `security_opt: [seccomp:unconfined]`,
    because Docker's default seccomp profile blocks user namespaces.
@@ -467,11 +475,13 @@ escalation resolved from the database alone.
    credential; what is left for a hand check is what an editor makes of it -- that it shows the
    refusal instead of hanging, and that its permission dialog, its agent-mode picker and its
    diff view behave.
-14. The password-free credential (D104): `calu credential set operator --no-password`, then
-   `calu sessions` and `calu escalations` must run without a prompt, `calu credential list`
-   must mark it "file mode only", and `calu doctor` must report it -- as a note for `operator`,
-   as a problem if `admin` or `session` is stored that way. Verified by hand on 2026-11-10.
-   `calu run` with a `session` entry stored that way must refuse to start.
+14. The empty user password (D104, D265): after `calu setup --no-password` (or `calu
+   credential set user --no-password` for a database another machine set up), `calu sessions`
+   and `calu escalations` must run without a prompt, `calu credential list` must mark `user`
+   and `db-admin` "file mode only", and `calu doctor` must report them on its "credential
+   protection" line as stored without a password, with `calu setup --set-password` as the way
+   back. `calu run` must start; with the sandbox off its start-up warnings must end with
+   `Found: stored without a password: db-admin, user`. Not yet run with the one user login.
 15. Revoking a token that is in use: attach with the address and the printed token
    (`calu attach ws://... --token=...`), then `calu token revoke <id>` for that row. Within
    about fifteen seconds, or at the next thing typed, the attached terminal must print
@@ -507,10 +517,11 @@ escalation resolved from the database alone.
    again without a start-up warning. `calu doctor` must show a `permission mode` line marked
    `ok` in both cases, naming the mode and where it comes from.
 21. Resetting the database: on a scratch database with a project and a rule, run
-   `calu db reset`. It must list what it would delete, ask for the admin password and for the
-   phrase `yes delete the db`. Paste the phrase (it arrives at once): nothing may be deleted.
-   Run it again and type the phrase: `calu project list` is empty afterwards and `calu run`
-   still starts with the stored session credential.
+   `calu db reset`. It must list what it would delete, ask for the calu user password (unless
+   it is empty) and for the phrase `yes delete the db`. Paste the phrase (it arrives at once):
+   nothing may be deleted. Run it again and type the phrase: `calu project list` is empty
+   afterwards and `calu run` still starts with the stored user login. Not yet run with the
+   one user login.
 22. The full-screen client in a real terminal (`calu attach` beside a `calu run`): in tmux and
    over ssh without `COLORTERM` (the verdict words and the state must stay readable in 256
    colours); at 80x24 (`f2` opens the side panel over the transcript); scroll up with PageUp
@@ -545,22 +556,22 @@ escalation resolved from the database alone.
    terminal reports focus changes).
 
 24. Checkers, honesty and the git program in the full-screen client, in a real terminal on the
-   session's machine: `/checkers`, `j`, `e`, change a line, `ctrl+s` (with an `admin` credential
-   that has a password the client asks for it; the message names the new version, and
-   `calu checker list` shows the same version); the same on a machine without the credential
-   (the screen says "read-only here" and names `calu checker edit`); `/honesty` (mode, marks;
+   session's machine: `/checkers`, `j`, `e`, change a line, `ctrl+s` (with a calu user
+   password the client asks for it; the message names the new version, and `calu checker
+   list` shows the same version); the same on a machine without the user login (the screen
+   says "read-only here" and names `calu checker edit`); `/honesty` (mode, marks;
    baseline and unreviewed files once the session reports them); `/honesty enforce`, then
    `/honesty track` (a question, Enter keeps `enforce`); `/trust` (the box names the short
    id and subject of HEAD; Enter certifies nothing); `t`, `r`, `x`, `m` on the honesty page;
-   with `calu attach ws://other-host ...` and a local `admin` credential for another database,
-   save a checker and `/honesty track` (both must say that the attached session does not show
-   the change); `f4` with gitui installed (gitui opens
+   with `calu attach ws://other-host ...` and a local user login for another database, save a
+   checker and `/honesty track` (both must say that the attached session does not show the
+   change); `f4` with gitui installed (gitui opens
    in the project directory, `q` returns to the client); stay in it for more than a minute (the
    status bar shows `reconnecting` and then `attached`, and what happened meanwhile is in the
    transcript); `CALU_GIT_TOOL='git log' calu attach`, `f4`, ctrl+c in the pager (the client
    is still there); `CALU_GIT_TOOL=tig calu attach`; `f4` without gitui (the
    client offers to install it, shows the command for this machine and runs nothing that
-   needs `sudo`).
+   needs `sudo`). Not yet run with the one user login.
 25. Code honesty: in a git repository, `calu config set honesty.mode enforce`, then `calu run`
    with a prompt that edits a source file and runs the project's tests. Without a trusted
    commit the test command must wait as an escalation that names `/trust`. In `calu attach`,
@@ -592,36 +603,46 @@ escalation resolved from the database alone.
    `XDG_CONFIG_HOME` pointing at an empty directory). **Docker:** `calu setup`, answer 1, a
    data directory of your choice: the directory must be private (0700) with the cluster below
    `pg/`; `calu db down`, then `calu run -p hi` must print `started the local database` after
-   the session password and run; `calu setup` again must say `session login kept`. Run on
-   2026-11-13 under a compose project of its own (setup 3.7 s, on-demand start 3.8 s); not
-   run: rootless Docker. **Existing server:** `calu setup --database server` with a user that
-   may not create roles must stop before any password is asked for storing, list what is
-   missing with the SQL, and store nothing; with a prepared user (the SQL of the guide) it
-   must end with `stored credential 'session'`. **RDS with IAM:** never run against a real
-   instance. With one: prepare the roles and the IAM policy as the guide says, `calu setup
-   --database rds-iam ...`, then `calu run`; let the session run longer than 15 minutes, end
-   its connections on the server (`pg_terminate_backend`) and check that it reconnects with a
-   new token; repeat with `--session-auth password`. **The existing-server variant was run
-   in the root box on 2026-11-18** (PostgreSQL 16; Docker is not available there), as a user
-   and as root: a first setup with passwords from standard input and on a terminal; a wrong
-   owner password (nothing stored); Ctrl-C at the session password (one line; the `admin`
-   entry is kept and the next `calu setup` goes on from there); a second run ("session login
-   kept"); `--renew-session` (a running server keeps its connections and is refused at the
-   next reconnect); blank passwords at every prompt (accepted; a blank admin password leaves
-   the role `calu_admin` without a login, and the report says so); a wrong admin password
-   (one sentence); a database that is down (the server's refusal in one message); an older
-   schema (migration 0036 taken out: `calu sessions` and `calu ide` list without names,
-   `calu doctor --db` says that one migration is not applied, `calu setup` applies it).
+   the calu user password and run; `calu setup` again must ask the user password once and
+   report `user login (calu_admin): its password is the calu user password`. The Docker
+   variant was run on 2026-11-13 with the logins of before D265, under a compose project of
+   its own (setup 3.7 s, on-demand start 3.8 s); not run: rootless Docker. **Existing
+   server:** `calu setup --database server` with a user that may not create roles must stop
+   before the user password is asked, list what is missing with the SQL, and store nothing;
+   with a prepared user (the SQL of the guide) it must ask the new user password twice after
+   a two-line explanation and end with `stored the logins 'user' and 'db-admin'`. **RDS with
+   IAM:** never run against a real instance. With one: prepare the roles and the IAM policy as
+   the guide says, `calu setup --database rds-iam ...` (the owner logs in with IAM, the user
+   login with the user password, D265), then `calu run`; let the session run longer than 15
+   minutes, end its connections on the server (`pg_terminate_backend`) and check that it
+   reconnects. **The
+   existing-server variant was run in the root box on 2026-11-18** with the logins of before
+   D265; not yet run with the one user login. To run there (PostgreSQL 16; Docker is not
+   available), as a user and as root: a first setup with the passwords from standard input
+   and on a terminal; a wrong owner password (nothing stored); Ctrl-D at the new user
+   password ("Not done: no password was entered", nothing stored); two different answers at
+   the new password ("Not changed: the two passwords differ"); a second run (the user
+   password asked once); a wrong user password at the second run (tries left, then the
+   pointer to "A forgotten user password"); `--set-password` (a running server keeps its
+   connections and is refused at the next reconnect, in a message that names the cause);
+   Enter at the new password (an empty user password: no command asks afterwards, and the
+   report and the warning say who can use the login); a database that is down (the
+   server's refusal in one message); an older schema (migration 0036 taken out: `calu
+   sessions` and `calu ide` list without names, `calu doctor --db` says that one migration is
+   not applied, `calu setup` applies it); a store of before D265 (`calu setup` asks the earlier admin password once,
+   offers to keep it as the user password, and removes `admin`, `session`, `operator` and
+   `calu_admin`; another command on that store names `calu setup`).
 27. `calu serve` (D208). In one terminal `calu serve` in the directory that holds your
-   projects: it asks the session password once and prints that it answers requests in that
-   directory. In two project directories below it `calu start -p hi`: each must
-   attach to a session of its own without a session password, and the server prints one
+   projects: it asks the calu user password once (nothing with an empty one) and prints that
+   it answers requests in that directory. In two project directories below it `calu start -p
+   hi`: each must attach to a session of its own without a password, and the server prints one
    "requested", "started" and (after `/shutdown` in the client) "ended" line per session,
    with the directory's name in front. `calu start --fork <id>` of one of them must know the
    original conversation. `/quit` in a client must leave the session running (`calu attach`
    finds it again). Ctrl-C in the server must stop every session; `calu sessions` then lists
    none as running. With the server stopped, `calu start` must say after about ten seconds
-   that no `calu serve` answered. Run on 2026-11-13 with `spikes/smoke_serve.py` (two
+   that no `calu serve` answered. Not yet run with the one user login; the runs below used the
+   logins of before D265. Run on 2026-11-13 with `spikes/smoke_serve.py` (two
    sessions at once and a fork, real Claude Code, fake checkers); not run by hand: the two
    commands on a real terminal, and Ctrl-C with sessions in the middle of a turn. A test runs
    `calu serve` as a process with the password on its standard input, a refused request and
@@ -653,52 +674,62 @@ escalation resolved from the database alone.
 30. `--sudo` (D212), on a machine where you have sudo. With calu installed in your own home:
    `calu run --sudo` must refuse and print the install command for root. After that
    install and `sudo calu setup`: `calu run --sudo -p "run: id > who.txt"` must ask the sudo
-   password, then the session password, and `who.txt` must name you and belong to you;
+   password, then the calu user password (nothing after `sudo calu setup --no-password`), and
+   `who.txt` must name you and belong to you;
    `sudo ls /etc/calu` must show the credential store, and your home must hold nothing new
-   of calu's. Run
-   in a container as root on 2026-11-13: the install command (calu and `calu-claude` land in
-   `/usr/local/lib/calu/calu/bin`, linked from `/usr/local/bin`), the installation check
-   on it (passes), and the refusal of `calu run` without `--user`. **Run through a real sudo
-   in the root box on 2026-11-18**, as a user whose sudo asks nothing and as one whose sudo
-   asks its password: the refusal from an installation in the home directory (the install
-   command was cut off the message; corrected), `calu serve --sudo` (sudo's prompt, then
-   "Session password:", then the server answers that user's requests; the process is root
-   with the user's file access), what sudo passes on (`HOME`, `LANG`, `PATH`, `TERM`, `USER`,
-   `SUDO_*`: none of the user's `XDG_*`, `PG*`, `PYTHONPATH` or provider keys), the note
+   of calu's. Not yet run with the one user login; the runs below used the logins of before
+   D265. Run in a container as root on 2026-11-13: the install command (calu and
+   `calu-claude` land in `/usr/local/lib/calu/calu/bin`, linked from `/usr/local/bin`), the
+   installation check on it (passes), and the refusal of `calu run` without `--user`. **Run
+   through a real sudo in the root box on 2026-11-18**, as a user whose sudo asks nothing
+   and as one whose sudo asks its password: the refusal from an installation in the home
+   directory (the install command was cut off the message; corrected), `calu serve --sudo`
+   (sudo's prompt, then the session password of that time, then the server answers that
+   user's requests; the process is root with the user's file access), what sudo passes on
+   (`HOME`, `LANG`, `PATH`, `TERM`, `USER`, `SUDO_*`: none of the user's `XDG_*`, `PG*`,
+   `PYTHONPATH` or provider keys), the note
    about provider keys, and that the user's home gets no file of calu's (the log file used to
    be created there before the elevation; corrected). `calu doctor --sudo` reports the same
    arrangement without starting anything.
 31. The client as root (D214), with a session started by `calu run --sudo`: `calu attach
-   --sudo` must ask the sudo password (unless sudo remembers it) and the admin password
-   once; editing and saving a checker's instructions (`/checkers`, `e`, ctrl+s) must then
-   ask nothing; `/running` must list the sessions, `/switch <id>` must attach to another
-   one without a password, and `f4` and the editor must run as you (a file they create
-   belongs to you). As yourself, without `--sudo`: saving must ask for the admin password
-   and accept it after `sudo calu setup` has run once (D213). `calu run --sudo` must print
+   --sudo` must ask the sudo password (unless sudo remembers it) and the calu user password
+   once ("calu user password (asked once, for /running, /switch, /new, /fork and saving
+   settings; Ctrl-D skips them)"); editing and saving a checker's instructions (`/checkers`,
+   `e`, ctrl+s) must then ask nothing; `/running` must list the sessions, `/switch <id>`
+   must attach to another one without a password, and `f4` and the editor must run as you (a
+   file they create belongs to you). As yourself, without `--sudo`: saving must ask for the
+   calu user password and accept it (the database checks it for `calu_admin` at the place
+   root's place file names; D213, D265). `calu run --sudo` must print
    a line `[clients] root clients, without a token: unix:/run/calu/sessions/<id>.sock`, and
    `sudo ls -l /run/calu/sessions` must show that socket as `srw------- root root`; `calu
-   token list` must show no new token for the `--sudo` client (D215). **Run in the root box
-   on 2026-11-18 with the line client** (`--plain`): the socket and its directory are as
-   stated and another user cannot enter the directory; `calu attach --sudo` in the project
+   token list` must show no new token for the `--sudo` client (D215). Not yet run with the
+   one user login; the run below used the logins of before D265 (its "admin password" is the
+   user password now). **Run in the root box on 2026-11-18 with the line client**
+   (`--plain`): the socket and its directory are as stated and another user cannot enter the
+   directory; `calu attach --sudo` in the project
    asks only sudo's password, mints no token, and its decisions are recorded as
    `client:root:calu attach`; `calu start --sudo` asks the admin password once; as yourself
    `calu config set` asks the admin password once and a wrong one is said in one sentence.
    Not run: the full-screen client's `/checkers`, `/running`, `/switch`, `f4` as root
-   (test plan, section C). Since D249 the client found through a root socket asks the admin
-   password once before it starts (Ctrl-D skips it and the client says the database
-   commands are not available); `/running`, `/switch`, `/new`, `/fork`, `/rename`, saving
-   instructions and `/honesty` must then show no password dialog in that run, also after
-   a `/switch`. With a blank admin password the same must hold (the owner login is kept).
+   (test plan, section C). Since D249 the client found through a root socket asks the calu
+   user password once before it starts (Ctrl-D skips it and the client says the database
+   commands are not available; three wrong answers say the same with the pointer to "A
+   forgotten user password"); `/running`, `/switch`, `/new`, `/fork`, `/rename`, saving
+   instructions and `/honesty` must then show no password dialog in that run, also after a
+   `/switch`. After `sudo calu setup --no-password` nothing is asked at all (the place file
+   publishes the user login).
    The root box test `tests/root/test_root_client.py` runs the part without the screen.
-32. The web interface's login (D216), after `sudo calu setup`: `calu web` must print the
-   address without a token; the browser must show a page asking for the admin password, say
-   "That is not the admin password" after a wrong one (and answer the next attempt later),
-   and show the fleet after the right one; saving a setting must then work. `calu web
-   --sudo` must do the same with the process running as root (`ps -o user= -C calu`). On a
-   database without a password for `calu_admin`, the address must carry `?token=`. Run on
-   2026-11-13 only as a test of the gate against the database; **not in a browser**. Run in
-   the root box on 2026-11-18 with curl (`webcheck`): `calu web` and `calu web --sudo` ask
-   the admin password once in the terminal and print the address without a token; the front
+32. The web interface's login (D216, D265), after `sudo calu setup` with a user password:
+   `calu web` must print the address without a token; the browser must show a page asking
+   for the calu user password, say "That is not the calu user password." with the pointer to
+   "A forgotten user password" after a wrong one (and answer the next attempt later), and
+   show the fleet after the right one; saving a setting must then work. `calu web --sudo`
+   must do the same with the process running as root (`ps -o user= -C calu`). After a setup
+   with an empty user password the address must carry `?token=`. Not yet run with the one
+   user login; the runs below used the logins of before D265. Run on 2026-11-13 only as a
+   test of the gate against the database; **not in a browser**. Run in the root box on
+   2026-11-18 with curl (`webcheck`): `calu web` and `calu web --sudo` ask the admin password
+   of that time once in the terminal and print the address without a token; the front
    page answers 401 with the sign-in form, a wrong password 401 after a second, the right
    one opens the fleet; the `--sudo` process is root. After `calu setup --no-password` both
    print the address with `?token=`. A setup that gives `calu_admin` a new password while
@@ -730,28 +761,28 @@ escalation resolved from the database alone.
    in on the loopback port, as the option says, and both are recorded as
    `client:local:calu attach`. A directory of that name planted by another user is refused
    ("no local socket"), and the clients use the address. With `--secure`, `calu attach
-   --sudo` asks the admin password once and uses a token.
-35. The place file and a setup without passwords (D228): after `sudo calu setup`,
-   `/var/lib/calu/database.json` must exist (`-rw-r--r-- root root`) and hold no password
-   (after `--no-password` it holds `admin_password`, and your plain `calu attach` must save
-   a checker's instructions without asking anything).
-   With a session from `calu run --sudo --insecure`, your own `calu attach` must save a
-   checker's instructions after asking the admin password once. After `sudo calu setup
-   --no-password` (it asks the old admin and session passwords one last time): `calu run
-   --sudo` and `calu attach --sudo` must ask for no calu password, saving a checker's
-   instructions in the `--sudo` client must ask nothing, and `calu web --sudo` must print an
-   address with `?token=`. **Run in the root box on 2026-11-18** (settings changed with
-   `calu config set` and `calu ide`, not in the full-screen client): the file is `-rw-r--r--
-   root root` in a directory only root writes; after a setup with passwords it holds host,
-   port and database name; the conversion asks the two old passwords once, the typed admin
-   password no longer logs in as `calu_admin` and is not in the file, the generated one is;
-   every user of the machine, one without any credential included, then lists sessions,
-   resolves escalations and changes settings without a prompt (by design); `sudo calu setup`
-   without the option writes the file without a secret, the published password stops
-   working and a user without a credential reaches nothing again. The logins in `/etc/calu`
-   stay stored without a password after that; `sudo calu setup --set-passwords` (added that
-   day, run there on a terminal) asks a new admin and a new session password, after which
-   `calu_admin` logs in with the admin password and the store holds no generated login.
+   --sudo` asked the admin password of that time once and used a token; with the one user
+   login it must ask the calu user password once. Not yet run with the one user login.
+35. The place file and an empty user password (D228, D265): after `sudo calu setup` with a
+   user password, `/var/lib/calu/database.json` must exist (`-rw-r--r-- root root`) and hold
+   no password (after `--no-password` it holds `admin_password`, the generated password of
+   `calu_admin`, and your plain `calu attach` must save a checker's instructions without
+   asking anything). With a session from `calu run --sudo --insecure`, your own `calu attach`
+   must save a checker's instructions after asking the calu user password once. After `sudo
+   calu setup --no-password` (it asks the user password once, to open the stored logins):
+   `calu run --sudo` and `calu attach --sudo` must ask for no calu password, saving a
+   checker's instructions in the `--sudo` client must ask nothing, and `calu web --sudo` must
+   print an address with `?token=`. Every user of the machine, one without any credential
+   included, then lists sessions, resolves escalations and changes settings without a prompt
+   (by design). `sudo calu setup --set-password` must ask a new user password twice; after
+   it the file holds no secret, the published password stops working, a user without a
+   credential reaches nothing again, `calu_admin` logs in with the new user password, and
+   the logins in `/etc/calu` are encrypted. Not yet run with the one user login. **Run in the
+   root box on 2026-11-18** with the logins of before D265 (settings changed with `calu
+   config set` and `calu ide`, not in the full-screen client): the file is `-rw-r--r-- root
+   root` in a directory only root writes; after a setup with passwords it holds host, port
+   and database name; with `--no-password` it held the generated password, every user
+   reached the database without a prompt, and a later setup with passwords took it out.
 28. A conversation started with `claude` itself (D209): in a project directory run `claude`,
    send a message, quit. `calu list-sessions` must list it with "outside calu" and that
    message; `calu run --resume <id>` must continue it and warn at the start that none of
@@ -997,8 +1028,37 @@ escalation resolved from the database alone.
    window. (e) In a Jupyter notebook on this machine, `IFrame("<pane address>", width="100%",
    height=700)`: the pane works inside the notebook. A page on another host that is not in
    `web.pane_frame_ancestors` cannot frame it (the browser shows a refusal). (f) With `calu web`
-   signing in by admin password: the pane in its own window works after signing in to `calu web`
-   in the same browser.
+   signing in by the calu user password: the pane in its own window works after signing in to
+   `calu web` in the same browser.
+53. The password experience (PLAN.md D265, REQUIREMENTS 48), on a store with a calu user
+   password. Go through each case in each front end: the CLI (`calu sessions`, `calu run`),
+   the full-screen client's save (`/checkers`, `e`, ctrl+s), the sign-in page of `calu web`,
+   the password dialogs of VSCode and PyCharm, and the chat pane of `calu web`. The texts are
+   those of `src/calu/logins.py`, the same in every front end.
+   (a) A wrong password: "That is not the calu user password" with the tries left ("2 tries
+   left", then "1 try left" on a terminal); after the last try "Not done: ..." with the
+   pointer to "A forgotten user password" in DOCUMENTATION.md. A front end that asks again by
+   itself (the web page, the dialogs) shows the pointer with every refusal.
+   (b) Enter on an empty prompt: "No password was typed, and this login has one", never
+   "wrong".
+   (c) Ctrl-D (CLI, full-screen client), Escape or closing the dialog (VSCode, PyCharm, chat
+   pane): one message that says what was not done ("Not done: no password was entered. Run
+   the command again to retry." on a terminal; in an IDE the action that needed the database
+   is not done and the next one asks again), and nothing changed meanwhile.
+   (d) No terminal: `calu acp` started by an editor in a project whose login has a password
+   must not hang; it says that it cannot ask for the password, why, and the two ways out
+   (give it where the front end asks, or remove it with `calu setup --set-password` and an
+   empty answer). `calu sessions </dev/null` must say "Not done: no password was entered".
+   (e) An outdated stored login: on machine A `calu setup --set-password`; on machine B, which
+   holds the `user` entry of that database under the old password, `calu sessions`, the
+   full-screen client's save, `calu web` and an IDE: each must open the entry with the old
+   password and then call the login outdated (the database refused it), naming how to renew
+   it; check that the named way works on a machine that holds only `user`.
+   (f) An empty user password (`calu setup --set-password` and Enter, or `--no-password`):
+   nothing is asked anywhere (CLI, full-screen client, IDE dialogs, chat pane); `calu web`
+   prints an address with `?token=` and the browser gets no sign-in page; `calu setup` and
+   `calu doctor` say that every program of the user can then use the login.
+   Not run yet.
 
 ## Measuring the checkers
 

@@ -68,9 +68,9 @@ export interface CaluApi {
 export function activate(context: vscode.ExtensionContext): CaluApi {
   const output = vscode.window.createOutputChannel('calu');
   const version = String((context.extension.packageJSON as { version?: unknown }).version ?? '0');
-  // The one password (spec sections 8 and 10): kept in this variable until the window closes,
-  // so that a restarted bridge is unlocked again without asking. Never logged or sent anywhere
-  // but to `ide.unlock`.
+  // The calu user password (spec sections 8 and 10): kept in this variable until the window
+  // closes, so that a restarted bridge is unlocked again without asking. Never logged or sent
+  // anywhere but to `ide.unlock`.
   let heldPassword: string | undefined;
   const bridge = new Bridge(output, version, {
     stored: async () => heldPassword,

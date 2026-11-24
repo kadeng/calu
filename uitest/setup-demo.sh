@@ -16,9 +16,12 @@
 #   3. Copies the checkout from /workspace/calu (the host's working tree, uncommitted
 #      changes included; without .git, .venv, node_modules and .env) to ~/work/calu and
 #      installs calu from the copy with `uv tool install` (command `calu` in ~/.local/bin).
-#   4. Runs `calu setup --database server --no-password` once: the `admin` and `calu_admin`
-#      logins are stored without a password, so `calu ide` asks for none. The session
-#      password is blank. Switches the sandbox off (the container has no sandbox tools).
+#   4. Runs `calu setup --database server --no-password` once: the calu user password is
+#      empty, so the logins `user` and `db-admin` are stored without encryption and no calu
+#      command, `calu ide` included, asks for a password (DOCUMENTATION.md, "The calu login
+#      and the user password"). A store of a calu from before the one user login (`admin`,
+#      `session`, ...) is converted by the same setup; a later run only migrates. Switches
+#      the sandbox off (the container has no sandbox tools).
 #   5. Creates the demo project ~/work/demo (a git repository with two Python files).
 #   6. Starts uitest/fake_server.py in the tmux session `calu-fake` (restarted on every run).
 #   7. Installs /share/calu.vsix into the `uitest-code` profile and opens ~/work/demo.
@@ -93,16 +96,21 @@ calu --version 2>/dev/null || true
 TOOL_PYTHON="$(uv tool dir)/calu/bin/python"
 
 say "4. calu setup"
-if ! calu credential list 2>/dev/null | grep -q '^admin\b'; then
-    # The answers, in the order of the prompts: the owner's password, then the new session
-    # password twice (blank).
-    printf '%s\n\n\n' "$OWNER_PASSWORD" | calu setup --database server --host 127.0.0.1 \
-        --port 5432 --dbname calu --user calu_owner --sslmode disable --no-password
-else
+STORED="$(calu credential list 2>/dev/null || true)"
+if grep -q '^db-admin ' <<<"$STORED"; then
     # `calu setup` refuses a second database; the migrations of a newer calu come from
-    # `calu db migrate` (the admin login has no password here, so the prompt takes a blank).
-    echo "credentials exist: setup skipped; migrations:"
-    printf '\n' | calu db migrate
+    # `calu db migrate` (the logins have no password here, so nothing is asked).
+    echo "logins exist: setup skipped; migrations:"
+    calu db migrate </dev/null
+elif grep -q '^admin ' <<<"$STORED"; then
+    # The logins of a calu from before the one user login, stored without a password: the
+    # setup converts them to `user` and `db-admin` and asks nothing.
+    echo "logins of an earlier calu: converting them"
+    calu setup --no-password </dev/null
+else
+    # The one answer: the owner's password (`--no-password`: no user password is asked).
+    printf '%s\n' "$OWNER_PASSWORD" | calu setup --database server --host 127.0.0.1 \
+        --port 5432 --dbname calu --user calu_owner --sslmode disable --no-password
 fi
 calu config set claude.sandbox.enabled false
 
@@ -146,7 +154,7 @@ fi
 
 say "6. Fake server (tmux session $TMUX_SESSION)"
 stop_server
-# stdin is /dev/null: the blank session password is read from it, nothing is asked.
+# The user login has no password, so nothing is asked; stdin is /dev/null all the same.
 tmux new-session -d -s "$TMUX_SESSION" -c "$COPY" \
     "'$TOOL_PYTHON' uitest/fake_server.py </dev/null 2>&1 | tee /tmp/calu-fake-server.log"
 sleep 3

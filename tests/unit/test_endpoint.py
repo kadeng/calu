@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from calu import cli
+from calu import cli, logins
 from calu.cli import CliError, _pick_session
 from calu.herd import STALE_AFTER_S, SessionRow
 from calu.protocol.client import RequestFailed
@@ -263,7 +263,7 @@ def test_the_acp_adapter_never_reads_a_password_from_the_editor_s_stream(
     from calu.credentials import CredentialStore
 
     store = CredentialStore(tmp_path / "credentials.json")
-    store.save("operator", "postgresql://op@localhost/calu", "a password")
+    store.save(logins.USER, "postgresql://calu_admin:pw@localhost/calu", "a password")
     monkeypatch.chdir(tmp_path)
     first_request = '{"jsonrpc":"2.0","id":1,"method":"initialize"}\n'
     stdin = io.StringIO(first_request)
@@ -272,8 +272,9 @@ def test_the_acp_adapter_never_reads_a_password_from_the_editor_s_stream(
     assert cli.main(["acp"], store_factory=lambda: store) == 1
     printed = capsys.readouterr()
     assert printed.out == "", "stdout carries the protocol and nothing else"
-    assert "no terminal" in printed.err
-    assert "--no-password" in printed.err and "--token=" in printed.err
+    before, after = logins.no_terminal("\0").split("\0")
+    assert before in printed.err and after in printed.err
+    assert "--token=" in printed.err, "the way without a database is named"
     assert stdin.read() == first_request, "the editor's request was read as a password"
 
 

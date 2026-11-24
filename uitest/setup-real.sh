@@ -143,7 +143,8 @@ calu doctor --keys || true
 
 say "6. calu serve (tmux session $TMUX_SESSION)"
 stop_server
-# stdin is /dev/null: the blank session password is read from it, nothing is asked.
+# The user login has no password (setup-demo.sh), so nothing is asked; stdin is /dev/null
+# all the same.
 tmux new-session -d -s "$TMUX_SESSION" -c "$HOME" \
     "calu serve --insecure </dev/null 2>&1 | tee $LOG"
 sleep 4

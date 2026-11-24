@@ -19,7 +19,10 @@ import pytest
 pytest.importorskip("starlette", reason="the web interface's packages are missing: uv sync")
 pytest.importorskip("jinja2", reason="the web interface's packages are missing: uv sync")
 
+from markupsafe import escape  # a package of jinja2, after the guard above
+
 import calu.web.app as web_app  # after the guard above
+from calu import logins
 from calu.web.app import (
     CONTENT_SECURITY_POLICY,
     HERE,
@@ -333,7 +336,7 @@ def test_the_policy_allows_exactly_the_inline_styles_of_the_templates() -> None:
 
 
 class Passwords:
-    """A fake admin password check: "right" is the password; it can be made to fail."""
+    """A fake check of the calu user password: "right" is it; it can be made to fail."""
 
     def __init__(self) -> None:
         """Start with a working database and nothing checked."""
@@ -380,7 +383,7 @@ async def test_each_wrong_password_waits_longer_and_a_quiet_minute_resets_the_co
         for _ in range(6):
             answer = await client.post(LOGIN_PATH, data={"password": "wrong", "onward": "/"})
             assert answer.status_code == 401
-            assert "not the admin password" in answer.text
+            assert str(escape(logins.refused(blank=False))) in answer.text
         assert slept == [1.0, 2.0, 4.0, 8.0, 8.0, 8.0]
         gate._clock = lambda: 1000.0 + LOGIN_FAILURES_FORGET_S + 1
         await client.post(LOGIN_PATH, data={"password": "wrong", "onward": "/"})
@@ -389,6 +392,22 @@ async def test_each_wrong_password_waits_longer_and_a_quiet_minute_resets_the_co
         assert right.status_code == 200 and "set-cookie" in right.headers
         await client.post(LOGIN_PATH, data={"password": "wrong", "onward": "/"})
         assert slept[-1] == pytest.approx(1.0), "a right password resets the count"
+
+
+async def test_the_sign_in_page_asks_for_the_calu_user_password_and_names_a_blank_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D265 (6): the page names the calu user password; a blank answer is called blank, not
+    wrong (`calu.logins.refused`), and is still checked by the database."""
+    _gate, passwords, _slept, client = password_gate(monkeypatch)
+    async with client:
+        asked = await client.get("/")
+        assert asked.status_code == 401 and "calu user password" in asked.text
+        blank = await client.post(LOGIN_PATH, data={"password": "", "onward": "/"})
+        assert blank.status_code == 401
+        assert str(escape(logins.refused(blank=True))) in blank.text
+        assert str(escape(logins.refused(blank=False))) not in blank.text
+    assert passwords.checked == [""]
 
 
 async def test_a_database_failure_is_not_counted_as_a_wrong_password(

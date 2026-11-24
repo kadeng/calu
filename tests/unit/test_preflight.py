@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from calu import preflight
+from calu import logins, preflight
 from calu.claude.sdk_runner import SdkRunner
 from calu.config import (
     ChangesConfig,
@@ -385,18 +385,31 @@ def test_a_password_free_credential_without_a_sandbox_is_named(tmp_path: Path) -
     store = CredentialStore(
         tmp_path / "credentials.json", KdfParams(time_cost=1, memory_cost=8, parallelism=1)
     )
-    store.save("operator", "postgresql://op@localhost/calu", None)
+    store.save(logins.USER, "postgresql://calu_admin@localhost/calu", None)
     off = Config.model_validate({"claude": {"sandbox": {"enabled": False}}})
     (said,) = preflight.self_approval_warnings(off, store)
-    assert "operator" in said and "calu credential set operator" in said
+    assert "the credential(s) user stored without a password" in said
+    assert "(`calu setup --set-password`)" in said
 
     enforced = Config.model_validate(
         {"claude": {"sandbox": {"enabled": True, "fail_if_unavailable": True}}}
     )
     assert preflight.self_approval_warnings(enforced, store) == [], "a working sandbox: fine"
 
-    store.save("operator", "postgresql://op@localhost/calu", "pw")
+    store.save(logins.USER, "postgresql://calu_admin@localhost/calu", "pw")
     assert preflight.self_approval_warnings(off, store) == [], "a password: fine"
+
+
+def test_the_password_commands_name_setup_for_calus_logins_and_credential_set_for_others() -> None:
+    """`calu setup --set-password` encrypts `user` and `db-admin` (D265); any other entry gets
+    its password from `calu credential set NAME`."""
+    setup = "`calu setup --set-password`"
+    assert preflight.password_commands([logins.USER, logins.DB_ADMIN]) == setup
+    assert preflight.password_commands([logins.USER, "mykey"]) == (
+        f"{setup}, `calu credential set mykey`"
+    )
+    assert preflight.password_commands(["mykey"]) == "`calu credential set mykey`"
+    assert preflight.password_commands([]) == ""
 
 
 # ---------------------------------------------------------------- cs1: calu's own directories
@@ -870,20 +883,21 @@ def test_the_sandbox_off_recommendation_is_shown_unless_it_is_known_to_be_met() 
     unknown = preflight.sandbox_off_warnings(off, None)
     assert unknown == [preflight.SANDBOX_OFF_ADVICE]
     advice = unknown[0]
-    assert "strongly recommended" in advice and "--sudo" in advice and "passwords" in advice
+    assert "strongly recommended" in advice and "--sudo" in advice
+    assert "a user password (`calu setup --set-password`)" in advice
     # The sandbox on: nothing to recommend, whatever the logins.
     assert preflight.sandbox_off_warnings(Config(), None) == []
     protected = preflight.LoginProtection(privileged=False, unprotected=(), published=False)
     assert preflight.sandbox_off_warnings(off, protected) == []
-    sudo = preflight.LoginProtection(privileged=True, unprotected=("admin",), published=False)
+    sudo = preflight.LoginProtection(privileged=True, unprotected=("user",), published=False)
     assert preflight.sandbox_off_warnings(off, sudo) == []
-    bare = preflight.LoginProtection(unprotected=("admin", "session"), published=False)
+    bare = preflight.LoginProtection(unprotected=("db-admin", "user"), published=False)
     (said,) = preflight.sandbox_off_warnings(off, bare)
-    assert said.startswith(advice) and "without a password: admin, session" in said
-    # A published admin password defeats --sudo as well.
+    assert said.startswith(advice) and "without a password: db-admin, user" in said
+    # A published user login (an empty user password as root) defeats --sudo as well.
     shared = preflight.LoginProtection(privileged=True, unprotected=(), published=True)
     (said,) = preflight.sandbox_off_warnings(off, shared)
-    assert "publishes the password of calu_admin" in said
+    assert "the place file publishes the user login (calu_admin)" in said
     # Facts that were not collected count as not met.
     assert preflight.sandbox_off_warnings(off, preflight.LoginProtection()) == [advice]
     assert preflight.sandbox_off_warnings(off, preflight.LoginProtection(True, (), None))
@@ -898,18 +912,24 @@ def test_login_protection_reads_the_store_and_the_place_file(tmp_path: Path) -> 
         tmp_path / "credentials.json", KdfParams(time_cost=1, memory_cost=8, parallelism=1)
     )
     place = tmp_path / "missing.json"
-    # No session entry: what a session would use is unknown.
+    # No `user` entry: what a session would use is unknown, also with entries of before D265.
+    assert preflight.login_protection(store, False, place).unprotected is None
+    store.save("session", "postgresql://s@db/calu", "pw")
     assert preflight.login_protection(store, False, place).unprotected is None
     assert preflight.login_protection(None, True, place) == preflight.LoginProtection(
         True, None, False
     )
-    store.save("session", "postgresql://s@db/calu", "pw")
-    store.save("admin", "postgresql://a@db/calu", "pw")
+    store.remove("session")
+    store.save(logins.USER, "postgresql://calu_admin@db/calu", "pw")
+    store.save(logins.DB_ADMIN, "postgresql://calu_owner@db/calu", "pw")
     found = preflight.login_protection(store, False, place)
     assert found == preflight.LoginProtection(False, (), False) and found.met()
-    store.save("calu_admin", "postgresql://calu_admin@db/calu", None)
+    # An empty user password: both entries are stored without one.
+    store.save(logins.USER, "postgresql://calu_admin@db/calu", None)
+    store.save(logins.DB_ADMIN, "postgresql://calu_owner@db/calu", None)
     found = preflight.login_protection(store, False, place)
-    assert found.unprotected == ("calu_admin",) and not found.met()
+    assert sorted(found.unprotected or ()) == [logins.DB_ADMIN, logins.USER]
+    assert not found.met()
     assert preflight.login_protection(store, True, place).met()
 
 

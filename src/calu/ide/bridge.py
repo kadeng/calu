@@ -488,10 +488,10 @@ class Bridge:
         return {}
 
     async def _unlock(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Answer `ide.unlock`: try one password on every login it may open, and hold them.
+        """Answer `ide.unlock`: try the user password on the user login, and hold it.
 
         Side effects: `calu.ide.access.Access.unlock`. From then on the requests use the
-        held logins and need no `password`; nothing is written to disk or to the log.
+        held login and need no `password`; nothing is written to disk or to the log.
 
         Args:
             params: `password` (required; a blank one is tried like any other).
@@ -501,8 +501,9 @@ class Bridge:
 
         Raises:
             RpcError: `INVALID_PARAMS` without `password`; `NEEDS_PASSWORD` if the password
-                opened nothing (`data.needs`, `data.unlocked`); `NO_DATABASE` if the store
-                cannot be read.
+                opened nothing (`data.needs`, `data.unlocked`); `NO_DATABASE` if there is no
+                login to open (`calu.logins.no_login`, `calu.logins.old_logins`), the store
+                cannot be read or the database cannot be reached.
         """
         password = _password(params)
         if password is None:
