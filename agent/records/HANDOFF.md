@@ -14,8 +14,10 @@ on a pluggable FIFO shared/exclusive lock (`RWLock.request` + `LockRequest.wait`
 the thread backend `ThreadLockSpace`, `NoLockingScheme` (the drop-in that never locks) and
 `LockTimeouts` (a default and a maximum for commands and for edits; no unbounded wait). The
 owner's rules of 2026-11-25 are built in: FIFO for every backend, one owner per tool call, the
-issue order of an agent's calls (`issue(agent)` gives a `Ticket`), and no reentrancy
-(`LockError` at once). Nothing else imports it.
+issue order of an agent's calls (`issue(agent)` gives a `Ticket`; withdrawing it cancels a
+pending call with `LockCancelledError`), and no reentrancy (`LockError` at once). An
+adversarial review on 2026-11-25 found the lock order and the backend sound; its five defects
+in the ticket layer are fixed (PLAN D274). Nothing else imports it.
 Deterministic tests are in `tests/unit/test_locking.py`. The fuzz layer is
 `uv run pytest -m fuzz -s tests/fuzz` (never in CI; docs/TESTING.md); it found no deadlock and
 no overlap in the real scheme and caught all four schemes that are wrong on purpose. Next, when
@@ -1211,7 +1213,7 @@ inside a container). No phase has unbuilt work in it.
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
 **2713 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. about 470 commits, ~83k lines of Python in `src` (~88k with the SQL, templates and
-default instructions), ~49k of tests, 1 migration file (the baseline of D266), 29 CLI commands (28 in `calu --help` and the hidden easter egg
+default instructions), ~66k of tests, 1 migration file (the baseline of D266), 29 CLI commands (28 in `calu --help` and the hidden easter egg
 `calu lightcycles`), 26 protocol requests,
 21 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs

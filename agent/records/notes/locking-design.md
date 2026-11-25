@@ -38,6 +38,31 @@ A1-A7, the hook, the release on the tool result, the path through a person, issu
 the order Claude issues its calls). Async callers wait in a worker thread; a lease that arrives
 after the caller was cancelled must be released.
 
+An adversarial review of the component (2026-11-25, PLAN.md D274) found the lock order and the
+thread backend sound, and defects in the ticket layer that are fixed now. What the wiring must
+keep in mind:
+
+- Every ticket must end ENTERED or WITHDRAWN on every path: a denied check, an error in the
+  check, a cancelled tool call. One ticket left ISSUED holds up its agent until each later call
+  times out. `with scheme.issue(agent) as ticket:` withdraws an unused ticket at the end of the
+  block; a lock call that fails withdraws its own ticket.
+- Tickets follow the order of the tool_use blocks in the stream, not the order in which the
+  hooks happen to run.
+- A cancelled tool call withdraws its ticket from any thread: a pending lock call then gives
+  back what it holds and raises `LockCancelledError`.
+- A lease has no finalizer: a lease that is lost keeps its locks for the life of the process.
+  Every end of a call (tool result, runner end, session stop) releases it; `release` may be
+  called more than once.
+- Lock calls run in worker threads (an asynchronous exception in a waiting thread can leave a
+  lock taken).
+- Open question: the global lock is taken first. A command that waits for its worktree then
+  holds the global lock shared, and an edit outside waits behind it; with FIFO, every new
+  command in every worktree then queues behind that edit. Taking the global lock last shortens
+  those waits (the reviewer measured about half), but a command that waits for the global lock
+  then holds its worktree, so edits there wait too. Either way, one long command plus one
+  waiting edit outside stops new commands in every worktree until the command ends or the edit
+  times out.
+
 Everything below is the design for the wiring.
 
 ## Goal

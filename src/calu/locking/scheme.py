@@ -23,17 +23,24 @@ Rules (the owner's decisions of 2026-11-25; the locks themselves are FIFO, `calu
   and returns a `Ticket`. A call with a ticket enters the lock queues only after every earlier
   call of its agent has entered them or was withdrawn (`Ticket.withdraw`: its check was denied,
   it failed, or it takes no lock). A call has entered when its request for its last lock is
-  queued. Across agents, the order in which requests reach a lock decides.
+  queued. Across agents, the order in which requests reach a lock decides. The order lives in
+  the scheme object, so all calls of one agent must go through one scheme (one process).
 
         agent A issues        #1 edit in W     #2 command in W    #3 edit in W
         checks finish         third            first              second
         enter the queue of W  #1 at once       #2 after #1        #3 after #2
         run                   #1               #2 after #1        #3 after #2
 
+- **Cancellation.** Withdrawing the ticket of a pending call (one that waits for its turn or a
+  lock) cancels it: it gives back what it holds and raises `LockCancelledError`, so it can
+  never run after the agent's later calls. Once the call returned its lease, withdrawing does
+  nothing.
 - **No deadlock.** Every operation takes its locks in one total order (`lock_order`: the global
   lock, the worktree locks sorted by id, the file lock), and every wait, also the wait for the
   issue order, ends at the operation's timeout. An operation that runs out of time releases
-  what it holds, gives up its turn, and raises `LockTimeoutError`.
+  what it holds, gives up its turn if it had not entered yet, and raises `LockTimeoutError`.
+  This holds for exceptions the calls themselves raise; asynchronous exceptions such as
+  KeyboardInterrupt are outside it (`calu.locking.rwlock`: call from worker threads).
 - **Timeouts.** `LockTimeouts` holds a default and a maximum for commands and for edits (both
   types of edit). A call may pass its own timeout; a value above the maximum is cut to it, and
   an infinite, NaN or negative value is refused. No wait is unbounded.
@@ -48,6 +55,7 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from types import TracebackType
 
@@ -64,6 +72,9 @@ from calu.locking.rwlock import (
 
 GLOBAL_KEY = "global"
 """The key of the lock that guards everything outside the worktrees."""
+
+GENERATED_OWNER_PREFIX = "generated:"
+"""The prefix of the owners the scheme generates; callers' owners must not start with it."""
 
 
 def worktree_key(worktree: str) -> str:
@@ -227,14 +238,15 @@ class TicketState(enum.Enum):
 
     ISSUED = "issued"  # numbered; has not entered the lock queues yet
     ENTERED = "entered"  # its request for its last lock is queued (or it takes no lock)
-    WITHDRAWN = "withdrawn"  # its check was denied, it failed, or it takes no lock
+    WITHDRAWN = "withdrawn"  # denied, failed, cancelled, or takes no lock
 
 
 class Ticket:
     """The place of one call in its agent's issue order; `LockingScheme.issue` makes it.
 
-    A ticket is used for one lock call, or withdrawn. Only ISSUED tickets hold up the later
-    calls of their agent.
+    A ticket serves one lock call, or is withdrawn. Only ISSUED tickets hold up the later calls
+    of their agent. Used as a context manager, it is withdrawn when the block ends, unless its
+    lock call returned a lease.
 
     Attributes:
         agent: The agent that issued the call.
@@ -253,6 +265,10 @@ class Ticket:
         self.number = number
         self._order = order
         self._state = TicketState.ISSUED
+        self._claimed = False  # a lock call uses it
+        self._finished = False  # that lock call returned a lease, or failed
+        self._cancelled = False  # withdrawn while that lock call was pending
+        self._pending: LockRequest | None = None  # the request that lock call waits for
 
     @property
     def state(self) -> TicketState:
@@ -261,29 +277,62 @@ class Ticket:
         Returns:
             ISSUED, ENTERED or WITHDRAWN.
         """
-        with self._order._mutex:
-            return self._state
+        return self._state
 
     def withdraw(self) -> None:
-        """Give up the call's turn without entering the lock queues.
+        """Give up the call's turn; cancel the call when its lock call is pending.
 
-        The agent's later calls then need not wait for it. Withdraw a ticket when its call's
-        check was denied, the call failed, or it takes no lock. Does nothing when the ticket
-        has entered or was withdrawn already.
+        Withdraw a ticket when its call's check was denied, the call failed before its lock
+        call, or it takes no lock: the agent's later calls then need not wait for it. When the
+        call's lock call is pending (it waits for its turn or for a lock), the lock call is
+        cancelled: it gives back what it holds and raises `LockCancelledError`. Does nothing
+        once the lock call returned its lease, or when the ticket was withdrawn already. Any
+        thread may call it.
         """
-        self._order.close(self, TicketState.WITHDRAWN)
+        self._order.withdraw(self)
+
+    def __enter__(self) -> Ticket:
+        """Return the ticket itself.
+
+        Returns:
+            The ticket.
+        """
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Withdraw the ticket when the block ends (nothing happens once its call has a lease).
+
+        Args:
+            exc_type: The type of the exception that ends the block, or None.
+            exc: That exception, or None.
+            traceback: Its traceback, or None.
+        """
+        self.withdraw()
 
     def __repr__(self) -> str:
-        """Describe the ticket for messages and tests.
+        """Describe the ticket for messages and tests; takes no lock.
 
         Returns:
             E.g. `Ticket('agent-1', 3, issued)`.
         """
-        return f"Ticket({self.agent!r}, {self.number}, {self.state.value})"
+        return f"Ticket({self.agent!r}, {self.number}, {self._state.value})"
+
+
+class _Cancelled(Exception):
+    """Raised inside the scheme when a pending lock call's ticket was withdrawn."""
 
 
 class _CallOrder:
-    """The issue order of every agent of one scheme (see the module docstring)."""
+    """The issue order of every agent of one scheme (see the module docstring).
+
+    All ticket fields change under `_mutex` only. No method builds a message that takes the
+    mutex again, so nothing here can block on itself.
+    """
 
     def __init__(self) -> None:
         """Start without agents."""
@@ -309,24 +358,55 @@ class _CallOrder:
                 self._turns[agent] = threading.Condition(self._mutex)
             return Ticket(self, agent, number)
 
+    def claim(self, ticket: Ticket) -> None:
+        """Let one lock call use `ticket`.
+
+        Args:
+            ticket: A ticket of this order.
+
+        Raises:
+            LockError: Another lock call uses the ticket, or it was used or withdrawn already.
+        """
+        with self._mutex:
+            if ticket._claimed:
+                raise LockError(
+                    f"Ticket({ticket.agent!r}, {ticket.number}) is used by another lock call"
+                )
+            if ticket._state is not TicketState.ISSUED:
+                raise LockError(
+                    f"Ticket({ticket.agent!r}, {ticket.number}) was "
+                    f"{ticket._state.value} already; a ticket serves one lock call"
+                )
+            ticket._claimed = True
+
+    def abandon(self, ticket: Ticket) -> None:
+        """Withdraw `ticket` if no lock call has claimed it: its call failed before it began.
+
+        Args:
+            ticket: A ticket of this order.
+        """
+        with self._mutex:
+            if not ticket._claimed and ticket._state is TicketState.ISSUED:
+                self._close(ticket, TicketState.WITHDRAWN)
+
     def wait_turn(self, ticket: Ticket, deadline: float) -> bool:
         """Wait until every earlier call of the ticket's agent entered or was withdrawn.
 
         Args:
-            ticket: An ISSUED ticket of this order.
+            ticket: A ticket that the waiting lock call claimed.
             deadline: The latest moment (`time.monotonic`) to wait for.
 
         Returns:
             True when it is the ticket's turn, False when the deadline passed first.
 
         Raises:
-            LockError: The ticket is not ISSUED (it was used or withdrawn).
+            _Cancelled: The ticket was withdrawn while the call waited.
         """
         with self._mutex:
             turn = self._turns[ticket.agent]
             while True:
-                if ticket._state is not TicketState.ISSUED:
-                    raise LockError(f"{ticket!r} was used or withdrawn already")
+                if ticket._cancelled:
+                    raise _Cancelled
                 if min(self._open[ticket.agent]) == ticket.number:
                     return True
                 left = deadline - time.monotonic()
@@ -334,27 +414,128 @@ class _CallOrder:
                     return False
                 turn.wait(left)
 
-    def close(self, ticket: Ticket, state: TicketState) -> None:
-        """Mark an ISSUED ticket as entered or withdrawn, and wake its agent's waiting calls.
+    def attach(self, ticket: Ticket, request: LockRequest, enter: bool) -> None:
+        """Note the request the ticket's call is about to wait for; enter if it is the last.
 
-        Does nothing when the ticket is not ISSUED any more.
+        Args:
+            ticket: A ticket that the lock call claimed.
+            request: The queued request.
+            enter: True for the request of the call's last lock: the ticket then enters.
+
+        Raises:
+            _Cancelled: The ticket was withdrawn meanwhile; the caller withdraws `request`.
+        """
+        with self._mutex:
+            if ticket._cancelled:
+                raise _Cancelled
+            ticket._pending = request
+            if enter:
+                self._close(ticket, TicketState.ENTERED)
+
+    def detach(self, ticket: Ticket) -> bool:
+        """Forget the request the call waited for, and tell whether it was cancelled meanwhile.
+
+        Args:
+            ticket: A ticket that the lock call claimed.
+
+        Returns:
+            True when the ticket was withdrawn while the call waited.
+        """
+        with self._mutex:
+            ticket._pending = None
+            return ticket._cancelled
+
+    def finish(self, ticket: Ticket, enter: bool) -> None:
+        """Record that the ticket's call got all its locks; from now on withdrawing does nothing.
+
+        Args:
+            ticket: A ticket that the lock call claimed.
+            enter: True when the call takes no lock: the ticket enters now.
+
+        Raises:
+            _Cancelled: The ticket was withdrawn before this moment; the call must give back
+                its locks.
+        """
+        with self._mutex:
+            ticket._pending = None
+            if ticket._cancelled:
+                raise _Cancelled
+            ticket._finished = True
+            if enter:
+                self._close(ticket, TicketState.ENTERED)
+
+    def fail(self, ticket: Ticket) -> None:
+        """Record that the ticket's lock call failed; its turn is given up if not entered.
+
+        Args:
+            ticket: A ticket that the lock call claimed.
+        """
+        with self._mutex:
+            ticket._finished = True
+            ticket._pending = None
+            if ticket._state is TicketState.ISSUED:
+                self._close(ticket, TicketState.WITHDRAWN)
+
+    def withdraw(self, ticket: Ticket) -> None:
+        """Withdraw `ticket` and cancel its pending lock call (see `Ticket.withdraw`).
 
         Args:
             ticket: A ticket of this order.
-            state: ENTERED or WITHDRAWN.
         """
         with self._mutex:
-            if ticket._state is not TicketState.ISSUED:
-                return
-            ticket._state = state
-            self._open[ticket.agent].discard(ticket.number)
-            self._turns[ticket.agent].notify_all()
+            if ticket._state is TicketState.ISSUED:
+                self._close(ticket, TicketState.WITHDRAWN)
+            pending = None
+            if ticket._claimed and not ticket._finished:
+                ticket._cancelled = True
+                pending = ticket._pending
+                self._turns[ticket.agent].notify_all()
+        if pending is not None:
+            # Wakes the waiting call. If its request was granted and returned meanwhile, the
+            # call sees the cancellation itself and gives the hold back.
+            with suppress(LockError):
+                pending.withdraw()
+
+    def open_tickets(self) -> dict[str, tuple[int, ...]]:
+        """Return the ISSUED tickets of every agent.
+
+        Returns:
+            Agent id -> numbers of its tickets that have neither entered nor been withdrawn;
+            agents without such tickets are left out.
+        """
+        with self._mutex:
+            return {agent: tuple(sorted(open_)) for agent, open_ in self._open.items() if open_}
+
+    def _close(self, ticket: Ticket, state: TicketState) -> None:
+        """Move an ISSUED ticket to `state` and wake its agent's waiting calls.
+
+        The caller holds `_mutex`.
+
+        Args:
+            ticket: An ISSUED ticket of this order.
+            state: ENTERED or WITHDRAWN.
+        """
+        ticket._state = state
+        self._open[ticket.agent].discard(ticket.number)
+        self._turns[ticket.agent].notify_all()
+
+
+def _abandon(ticket: object) -> None:
+    """Withdraw `ticket` if it is a ticket that no lock call has claimed: its call failed early.
+
+    Args:
+        ticket: What a lock call received as its ticket; anything but a `Ticket` is ignored.
+    """
+    if isinstance(ticket, Ticket):
+        ticket._order.abandon(ticket)
 
 
 class LockTimeoutError(TimeoutError):
     """An operation did not get all its locks within its timeout.
 
-    It holds none of them, and its ticket, if it had one, was withdrawn.
+    It holds none of them. If its ticket had not entered the queues yet, the ticket was
+    withdrawn; a call that timed out on its last lock had entered already, and the agent's
+    later calls went ahead of it.
 
     Attributes:
         operation: The operation that waited.
@@ -395,6 +576,32 @@ class LockTimeoutError(TimeoutError):
         self.key = key
         self.mode = mode
         self.timeout_s = timeout_s
+        self.waited_s = waited_s
+
+
+class LockCancelledError(Exception):
+    """A pending lock call was cancelled: its ticket was withdrawn while it waited.
+
+    It holds none of its locks. Unlike `LockError`, this is no bug of the caller: the caller
+    gave the call up, e.g. because the tool call was cancelled.
+
+    Attributes:
+        operation: The operation whose call was cancelled.
+        waited_s: How long it had waited.
+    """
+
+    def __init__(self, operation: Operation, waited_s: float) -> None:
+        """Describe the cancellation.
+
+        Args:
+            operation: The operation whose call was cancelled.
+            waited_s: How long it had waited.
+        """
+        super().__init__(
+            f"{operation.describe()} ({operation.owner}) was cancelled after {waited_s:.3g} s: "
+            "its ticket was withdrawn while it waited"
+        )
+        self.operation = operation
         self.waited_s = waited_s
 
 
@@ -552,18 +759,20 @@ class LockingScheme(ABC):
     """The calls a command or an edit makes before it runs; the module docstring has the rules.
 
     Each lock call blocks until the operation has its locks, then returns a `Lease`, or raises
-    `LockTimeoutError` when its timeout runs out. Worktree ids and paths are opaque: equal
-    strings mean the same worktree or file, so callers pass stable ids (e.g. the resolved
-    git admin directory of a worktree). A typical caller:
+    `LockTimeoutError` when its timeout runs out, or `LockCancelledError` when its ticket is
+    withdrawn meanwhile. Worktree ids and paths are opaque: equal strings mean the same worktree
+    or file, so callers pass stable ids (e.g. the resolved git admin directory of a worktree).
+    Whatever a lock call raises, its ticket ends ENTERED or WITHDRAWN. A typical caller:
 
-        ticket = scheme.issue(agent_id)          # when the agent issues the call
-        ...                                      # the call's check
-        if the check denied it or it takes no lock:
-            ticket.withdraw()
-        else:
-            lease = scheme.edit_in_worktree(worktree, ticket=ticket, owner=tool_use_id)
-            ...                                  # the call runs
-            lease.release()                      # on its tool result, from any thread
+        with scheme.issue(agent_id) as ticket:     # when the agent issues the call
+            ...                                    # the call's check
+            if the check allowed the call and it takes locks:
+                lease = scheme.edit_in_worktree(worktree, ticket=ticket, owner=tool_use_id)
+        # Leaving the block withdraws the ticket unless the call got its lease.
+        ...                                        # the call runs
+        lease.release()                            # on its tool result, from any thread
+
+    Another thread cancels a pending lock call with `ticket.withdraw()`.
 
     Attributes:
         timeouts: The default and maximum waits.
@@ -599,6 +808,23 @@ class LockingScheme(ABC):
         """
         return self._order.issue(_name("agent", agent))
 
+    def live_owners(self) -> frozenset[str]:
+        """Return the owners that have a lease or a pending lock call now, for diagnostics.
+
+        Returns:
+            The owners.
+        """
+        with self._owner_mutex:
+            return frozenset(self._live)
+
+    def open_tickets(self) -> dict[str, tuple[int, ...]]:
+        """Return the tickets that hold up their agents' later calls now, for diagnostics.
+
+        Returns:
+            Agent id -> numbers of its ISSUED tickets; agents without them are left out.
+        """
+        return self._order.open_tickets()
+
     def run_command_in_worktree(
         self,
         worktree: str | os.PathLike[str],
@@ -625,11 +851,12 @@ class LockingScheme(ABC):
 
         Raises:
             LockTimeoutError: The locks were not free within the timeout; none is held.
-            LockError: `owner` already has a lease or a pending call, or `ticket` was used
-                or withdrawn already.
-            TypeError: `worktree`, `owner` or `timeout` has the wrong type.
-            ValueError: `worktree` or `owner` is empty, `timeout` is negative, NaN or
-                infinite, or `ticket` belongs to another scheme.
+            LockCancelledError: `ticket` was withdrawn while the call waited; none is held.
+            LockError: `owner` already has a lease or a pending call, or `ticket` serves
+                another lock call or was used or withdrawn already.
+            TypeError: `worktree`, `owner`, `ticket` or `timeout` has the wrong type.
+            ValueError: `worktree` or `owner` is empty or reserved, `timeout` is negative, NaN
+                or infinite, or `ticket` belongs to another scheme.
         """
         return self.run_command_in_worktrees(
             [worktree], timeout=timeout, writes_outside=writes_outside, owner=owner, ticket=ticket
@@ -664,26 +891,31 @@ class LockingScheme(ABC):
 
         Raises:
             LockTimeoutError: The locks were not free within the timeout; none is held.
-            LockError: `owner` already has a lease or a pending call, or `ticket` was used
-                or withdrawn already.
+            LockCancelledError: `ticket` was withdrawn while the call waited; none is held.
+            LockError: `owner` already has a lease or a pending call, or `ticket` serves
+                another lock call or was used or withdrawn already.
             TypeError: `worktrees` is a single string or path instead of a collection, or an
-                id, `owner` or `timeout` has the wrong type.
-            ValueError: An id or `owner` is empty, `timeout` is negative, NaN or infinite, or
-                `ticket` belongs to another scheme.
+                id, `owner`, `ticket` or `timeout` has the wrong type.
+            ValueError: An id or `owner` is empty or reserved, `timeout` is negative, NaN or
+                infinite, or `ticket` belongs to another scheme.
         """
-        if isinstance(worktrees, str | os.PathLike):
-            raise TypeError(
-                "run_command_in_worktrees takes a collection of worktrees; "
-                "use run_command_in_worktree for one"
+        try:
+            if isinstance(worktrees, str | os.PathLike):
+                raise TypeError(
+                    "run_command_in_worktrees takes a collection of worktrees; "
+                    "use run_command_in_worktree for one"
+                )
+            ids = tuple(sorted({_name("worktree", worktree) for worktree in worktrees}))
+            timeout_s = self.timeouts.for_operation(OperationKind.COMMAND, timeout)
+            operation = Operation(
+                kind=OperationKind.COMMAND,
+                owner=self._owner(owner, OperationKind.COMMAND),
+                worktrees=ids,
+                writes_outside=bool(writes_outside),
             )
-        ids = tuple(sorted({_name("worktree", worktree) for worktree in worktrees}))
-        timeout_s = self.timeouts.for_operation(OperationKind.COMMAND, timeout)
-        operation = Operation(
-            kind=OperationKind.COMMAND,
-            owner=self._owner(owner, OperationKind.COMMAND),
-            worktrees=ids,
-            writes_outside=bool(writes_outside),
-        )
+        except BaseException:
+            _abandon(ticket)
+            raise
         return self._lease(operation, timeout_s, ticket)
 
     def edit_in_worktree(
@@ -712,21 +944,26 @@ class LockingScheme(ABC):
 
         Raises:
             LockTimeoutError: The locks were not free within the timeout; none is held.
-            LockError: `owner` already has a lease or a pending call, or `ticket` was used
-                or withdrawn already.
-            TypeError: `worktree`, `path`, `owner` or `timeout` has the wrong type.
-            ValueError: `worktree`, `path` or `owner` is empty, `timeout` is negative, NaN or
-                infinite, or `ticket` belongs to another scheme.
+            LockCancelledError: `ticket` was withdrawn while the call waited; none is held.
+            LockError: `owner` already has a lease or a pending call, or `ticket` serves
+                another lock call or was used or withdrawn already.
+            TypeError: `worktree`, `path`, `owner`, `ticket` or `timeout` has the wrong type.
+            ValueError: `worktree`, `path` or `owner` is empty, `owner` is reserved, `timeout`
+                is negative, NaN or infinite, or `ticket` belongs to another scheme.
         """
-        worktree_id = _name("worktree", worktree)
-        file = _name("path", path) if path is not None else None
-        timeout_s = self.timeouts.for_operation(OperationKind.EDIT, timeout)
-        operation = Operation(
-            kind=OperationKind.EDIT,
-            owner=self._owner(owner, OperationKind.EDIT),
-            worktrees=(worktree_id,),
-            path=file,
-        )
+        try:
+            worktree_id = _name("worktree", worktree)
+            file = _name("path", path) if path is not None else None
+            timeout_s = self.timeouts.for_operation(OperationKind.EDIT, timeout)
+            operation = Operation(
+                kind=OperationKind.EDIT,
+                owner=self._owner(owner, OperationKind.EDIT),
+                worktrees=(worktree_id,),
+                path=file,
+            )
+        except BaseException:
+            _abandon(ticket)
+            raise
         return self._lease(operation, timeout_s, ticket)
 
     def edit_outside_worktree(
@@ -750,44 +987,55 @@ class LockingScheme(ABC):
 
         Raises:
             LockTimeoutError: The lock was not free within the timeout.
-            LockError: `owner` already has a lease or a pending call, or `ticket` was used
-                or withdrawn already.
-            TypeError: `owner` or `timeout` has the wrong type.
-            ValueError: `owner` is empty, `timeout` is negative, NaN or infinite, or `ticket`
-                belongs to another scheme.
+            LockCancelledError: `ticket` was withdrawn while the call waited; none is held.
+            LockError: `owner` already has a lease or a pending call, or `ticket` serves
+                another lock call or was used or withdrawn already.
+            TypeError: `owner`, `ticket` or `timeout` has the wrong type.
+            ValueError: `owner` is empty or reserved, `timeout` is negative, NaN or infinite,
+                or `ticket` belongs to another scheme.
         """
-        timeout_s = self.timeouts.for_operation(OperationKind.EDIT_OUTSIDE, timeout)
-        operation = Operation(
-            kind=OperationKind.EDIT_OUTSIDE,
-            owner=self._owner(owner, OperationKind.EDIT_OUTSIDE),
-        )
+        try:
+            timeout_s = self.timeouts.for_operation(OperationKind.EDIT_OUTSIDE, timeout)
+            operation = Operation(
+                kind=OperationKind.EDIT_OUTSIDE,
+                owner=self._owner(owner, OperationKind.EDIT_OUTSIDE),
+            )
+        except BaseException:
+            _abandon(ticket)
+            raise
         return self._lease(operation, timeout_s, ticket)
 
     def _owner(self, owner: str | None, kind: OperationKind) -> str:
-        """Return `owner` checked, or a new label such as `command-7` when it is None.
+        """Return `owner` checked, or a new owner such as `generated:command-7` when it is None.
 
         Args:
             owner: The caller's id of the operation, or None.
-            kind: The operation's type, for the generated label.
+            kind: The operation's type, for the generated owner.
 
         Returns:
             The owner.
 
         Raises:
             TypeError: `owner` is not a string.
-            ValueError: `owner` is empty.
+            ValueError: `owner` is empty, or starts with `GENERATED_OWNER_PREFIX`.
         """
         if owner is not None:
-            return checked_owner(owner)
+            checked_owner(owner)
+            if owner.startswith(GENERATED_OWNER_PREFIX):
+                raise ValueError(
+                    f"owners that start with {GENERATED_OWNER_PREFIX!r} are reserved for the "
+                    f"ones the scheme generates, not {owner!r}"
+                )
+            return owner
         with self._owner_mutex:
             self._owner_count += 1
-            return f"{kind.name.lower()}-{self._owner_count}"
+            return f"{GENERATED_OWNER_PREFIX}{kind.name.lower()}-{self._owner_count}"
 
     def _lease(self, operation: Operation, timeout_s: float, ticket: Ticket | None) -> Lease:
-        """Check the ticket and the owner, take the locks (`_take`), and clean up on failure.
+        """Claim the ticket and the owner, take the locks (`_take`), and clean up on failure.
 
-        On any failure the owner is accepted again and the ticket withdrawn, so the agent's
-        later calls need not wait for this one.
+        On any failure the owner is accepted again and a ticket that had not entered is
+        withdrawn, so the agent's later calls need not wait for this one.
 
         Args:
             operation: The checked operation.
@@ -799,34 +1047,36 @@ class LockingScheme(ABC):
 
         Raises:
             LockTimeoutError: The locks were not free in time; none is held.
-            LockError: The owner already has a lease or a pending call, or the ticket was used
-                or withdrawn already.
+            LockCancelledError: The ticket was withdrawn while the call waited.
+            LockError: The owner already has a lease or a pending call, or the ticket serves
+                another lock call or was used or withdrawn already.
+            TypeError: The ticket is not a `Ticket`.
             ValueError: The ticket belongs to another scheme.
         """
         if ticket is not None:
+            if not isinstance(ticket, Ticket):
+                raise TypeError(f"a ticket must be a Ticket from issue(), not {ticket!r}")
             if ticket._order is not self._order:
+                _abandon(ticket)
                 raise ValueError(f"{ticket!r} was issued by another locking scheme")
-            if ticket.state is not TicketState.ISSUED:
-                raise LockError(f"{ticket!r} was used or withdrawn already")
+            self._order.claim(ticket)
         with self._owner_mutex:
-            if operation.owner in self._live:
-                refused = LockError(
-                    f"{operation.owner!r} already has a lease or a pending call; "
-                    "an owner never takes a lock twice"
-                )
-            else:
-                refused = None
+            refused = operation.owner in self._live
+            if not refused:
                 self._live.add(operation.owner)
-        if refused is not None:
+        if refused:
             if ticket is not None:
-                ticket.withdraw()
-            raise refused
+                self._order.fail(ticket)
+            raise LockError(
+                f"{operation.owner!r} already has a lease or a pending call; "
+                "an owner never takes a lock twice"
+            )
         try:
             return self._take(operation, timeout_s, ticket)
         except BaseException:
             self._unclaim(operation.owner)
             if ticket is not None:
-                ticket.withdraw()
+                self._order.fail(ticket)
             raise
 
     def _unclaim(self, owner: str) -> None:
@@ -842,18 +1092,20 @@ class LockingScheme(ABC):
     def _take(self, operation: Operation, timeout_s: float, ticket: Ticket | None) -> Lease:
         """Wait at most `timeout_s` for the turn and the locks of `operation`; return the lease.
 
-        The lease must call `_unclaim` when it is released.
+        The lease must call `_unclaim` when it is released; a claimed ticket must end ENTERED
+        (`_CallOrder.attach` or `finish`) when the call returns its lease.
 
         Args:
             operation: The checked operation, its owner claimed.
             timeout_s: The checked timeout.
-            ticket: The call's ISSUED ticket, or None.
+            ticket: The call's ticket, claimed for it, or None.
 
         Returns:
             The lease.
 
         Raises:
             LockTimeoutError: The turn or the locks did not come in time; none is held.
+            LockCancelledError: The ticket was withdrawn while the call waited; none is held.
         """
 
 
@@ -903,14 +1155,14 @@ class RWLockingScheme(LockingScheme):
         """Wait until the earlier calls of the ticket's agent entered or were withdrawn.
 
         Args:
-            ticket: The call's ISSUED ticket.
+            ticket: The call's claimed ticket.
             deadline: The latest moment (`time.monotonic`) to wait for.
 
         Returns:
             True when it is the call's turn, False when the deadline passed first.
 
         Raises:
-            LockError: The ticket was used or withdrawn meanwhile.
+            _Cancelled: The ticket was withdrawn while the call waited.
         """
         return self._order.wait_turn(ticket, deadline)
 
@@ -918,50 +1170,60 @@ class RWLockingScheme(LockingScheme):
         """Wait for the turn, then take the locks of `plan(operation)` within one deadline.
 
         Each lock is requested (its place in the queue is fixed) and then waited for, with the
-        time left until the deadline. The ticket enters when the last request is queued. When a
-        lock is not granted in time, the locks already held are released.
+        time left until the deadline. The ticket enters when the last request is queued. After
+        each wait the call checks whether its ticket was withdrawn meanwhile. When a lock does
+        not come in time, or the call is cancelled, the locks already held are released.
 
         Args:
             operation: The checked operation, its owner claimed.
             timeout_s: The checked timeout.
-            ticket: The call's ISSUED ticket, or None.
+            ticket: The call's ticket, claimed for it, or None.
 
         Returns:
             The lease of all its locks.
 
         Raises:
             LockTimeoutError: The turn or a lock did not come in time; none is held.
-            LockError: The ticket was used or withdrawn meanwhile.
+            LockCancelledError: The ticket was withdrawn while the call waited; none is held.
         """
         started = time.monotonic()
         deadline = started + timeout_s
-        if ticket is not None and not self._await_turn(ticket, deadline):
-            raise LockTimeoutError(
-                operation, f"order:{ticket.agent}", None, timeout_s, time.monotonic() - started
-            )
-        plan = self.plan(operation)
         holds: list[tuple[RWLock, Hold]] = []
         try:
+            if ticket is not None and not self._await_turn(ticket, deadline):
+                waited = time.monotonic() - started
+                raise LockTimeoutError(operation, f"order:{ticket.agent}", None, timeout_s, waited)
+            plan = self.plan(operation)
             for index, (key, mode) in enumerate(plan):
                 lock = self.space.lock(key)
-                request: LockRequest = lock.request(mode, operation.owner)
+                request = lock.request(mode, operation.owner)
                 try:
-                    if ticket is not None and index == len(plan) - 1:
-                        self._order.close(ticket, TicketState.ENTERED)
+                    if ticket is not None:
+                        self._order.attach(ticket, request, enter=index == len(plan) - 1)
                     hold = request.wait(max(0.0, deadline - time.monotonic()))
                 except BaseException:
                     request.withdraw()
                     raise
+                if hold is not None:
+                    holds.append((lock, hold))
+                if ticket is not None and self._order.detach(ticket):
+                    cancelled = LockCancelledError(operation, time.monotonic() - started)
+                    _release_all(holds, cancelled)
+                    holds.clear()
+                    raise cancelled
                 if hold is None:
                     waited = time.monotonic() - started
                     raise LockTimeoutError(operation, key, mode, timeout_s, waited)
-                holds.append((lock, hold))
-            if ticket is not None and not plan:
-                self._order.close(ticket, TicketState.ENTERED)
+            if ticket is not None:
+                self._order.finish(ticket, enter=not plan)
+            return Lease(operation, holds, timeout_s, time.monotonic() - started, self._unclaim)
+        except _Cancelled:
+            cancelled = LockCancelledError(operation, time.monotonic() - started)
+            _release_all(holds, cancelled)
+            raise cancelled from None
         except BaseException as exc:
             _release_all(holds, exc)
             raise
-        return Lease(operation, holds, timeout_s, time.monotonic() - started, self._unclaim)
 
 
 class NoLockingScheme(LockingScheme):
@@ -981,11 +1243,17 @@ class NoLockingScheme(LockingScheme):
         Args:
             operation: The checked operation, its owner claimed.
             timeout_s: The checked timeout, kept on the lease.
-            ticket: The call's ISSUED ticket, or None.
+            ticket: The call's ticket, claimed for it, or None.
 
         Returns:
             The empty lease.
+
+        Raises:
+            LockCancelledError: The ticket was withdrawn before the call finished.
         """
         if ticket is not None:
-            self._order.close(ticket, TicketState.ENTERED)
+            try:
+                self._order.finish(ticket, enter=True)
+            except _Cancelled:
+                raise LockCancelledError(operation, 0.0) from None
         return Lease(operation, (), timeout_s, 0.0, self._unclaim)

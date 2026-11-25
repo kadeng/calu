@@ -24,6 +24,7 @@ from tests.fuzz.locking_harness import (
     BENCH,
     DEADLOCK_PRONE,
     FUZZ,
+    KeepsOwnersScheme,
     LoadConfig,
     MixedOrderScheme,
     NoEditLocksScheme,
@@ -62,15 +63,20 @@ def load(base: LoadConfig) -> LoadConfig:
 
 def test_random_load_breaks_no_rule() -> None:
     """All operation types, batches of parallel calls whose checks finish out of order, the
-    owner's edit/command/edit batches, withdrawn calls, reentry probes, releases from another
-    thread, short timeouts: no cycle in the wait-for graph, no stall that only a timeout ended,
-    no overlap, no break of an agent's issue order, every reentry refused, no lock left."""
+    owner's edit/command/edit batches, withdrawn and cancelled calls, invalid arguments, probes
+    of owners and tickets, releases from another thread, short timeouts: no cycle in the
+    wait-for graph, no stall that only a timeout ended, no overlap, no break of an agent's issue
+    order, every probe refused, no lock, owner or ticket left after the run."""
     report = fuzz(RWLockingScheme, load(FUZZ), SEED, SECONDS, os.environ.get("CALU_FUZZ_TIMELINE"))
     print(f"\n{report.text()}")
     assert report.problems() == []
-    assert sum(report.ledger.done.values()) > 100
-    assert report.ledger.probes["refused"] > 0
-    assert sum(report.ledger.withdrawn.values()) > 0
+    ledger = report.ledger
+    assert sum(ledger.done.values()) > 100
+    for probe in ("scheme", "lock", "ticket"):
+        assert ledger.probes[f"{probe} refused"] > 0
+    assert sum(ledger.withdrawn.values()) > 0
+    assert sum(ledger.cancelled.values()) > 0
+    assert sum(ledger.bad_arguments.values()) > 0
 
 
 def test_a_load_of_commands_in_several_worktrees_never_deadlocks() -> None:
@@ -101,6 +107,13 @@ def test_the_fuzzer_finds_the_violations_of_a_wrong_scheme(wrong: type[RWLocking
     report = fuzz(wrong, load(FUZZ), SEED, min(SECONDS, 5))
     print(f"\n{report.text()}")
     assert sum(report.ledger.violations.values()) > 0
+
+
+def test_the_fuzzer_finds_owners_that_a_wrong_scheme_never_gives_back() -> None:
+    """A scheme that never accepts an owner again: the end-of-run check must list them."""
+    report = fuzz(KeepsOwnersScheme, load(FUZZ), SEED, min(SECONDS, 3))
+    print(f"\n{report.text()}")
+    assert report.live_owners
 
 
 def test_one_scenario_with_and_without_locking() -> None:

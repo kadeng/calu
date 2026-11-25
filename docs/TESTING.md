@@ -208,9 +208,13 @@ a batch of one to three calls, each with a ticket in issue order, and waits for 
 Each call runs in a thread of its own:
 
 1. Its check takes a random time, so the checks of a batch finish out of order.
-2. A denied call, or one that takes no lock, withdraws its ticket.
-3. The other calls ask for their locks and hold them for their run time.
-4. Some of them ask again with their own owner while they hold, which must be refused at
+2. A denied call, or one that takes no lock, withdraws its ticket. A call with an invalid
+   timeout must fail and withdraw its ticket as well.
+3. The other calls ask for their locks and hold them for their run time. For some of them
+   another thread withdraws the ticket 0-10 ms after they asked: a call that is still pending
+   then must be cancelled and hold nothing.
+4. Some of them probe while they hold: a request with their own owner, through the scheme or
+   at one of their locks, or a second lock call with their ticket. Each must be refused at
    once.
 5. They release the locks, some of them from another thread.
 
@@ -221,21 +225,28 @@ report counts:
 
 | Line | Meaning |
 |---|---|
-| `issued`, `done`, `timeouts` | Calls per type that were issued, ran, or gave up; the withdrawn calls (denied, no lock); the timeouts that came from a short timeout on purpose, and those that ended a deadlock, separately |
+| `issued`, `done`, `timeouts` | Calls per type that were issued, ran, or gave up; the withdrawn calls (denied, no lock), the calls cancelled while pending and the calls with invalid arguments; the timeouts that came from a short timeout on purpose, and those that ended a deadlock, separately |
 | `running`, `waiting` | How many calls held their locks and how many waited, on average and at the peak, per type (`--timeline FILE` writes them every 5 ms as CSV) |
 | `waits` | How long the calls that got their locks waited |
 | `deadlocks` | Cycles in the wait-for graph of the backend's atomic snapshots (exact). Stalls: nothing held and nothing was checked while something waited, for at least 0.25 s. A stall during which a timeout happened is a suspected deadlock; this test needs no snapshot, so it works with every backend |
-| `reentry probes` | Repeated requests of an owner, through the scheme or at a lock; `refused` is the only right outcome |
-| `violations` | Two calls held their locks at the same time although the scheme forbids it; a call got its locks while an earlier call of its agent had not entered the queues, or while an earlier, conflicting one still waited; a reentry that was not refused |
+| `probes` | Repeated requests of an owner (through the scheme or at a lock) and second lock calls with one ticket; `refused` is the only right outcome |
+| `violations` | Two calls held their locks at the same time although the scheme forbids it; a call got its locks while an earlier call of its agent had not entered the queues, or before an earlier, conflicting one that was still queued (judged when that one ends, so a timeout that took it out of the queue first does not count); a probe that was not refused; a call with an invalid timeout that kept its ticket |
+| `after the run` | Locks that an exclusive request with timeout 0 cannot get (works with every backend), owners the scheme still counts as live, tickets still ISSUED |
 
-A run of the real scheme must show no deadlock, no suspected deadlock, no violation and no
-lock left held. Five schemes that are wrong on purpose check that the fuzzer finds what it
-looks for: a mixed lock order and worktrees in reverse order (deadlocks), edits without locks
-and commands with shared locks (overlaps), and calls that ignore the issue order. The
-comparison runs one scenario of six agents in two worktrees with and without locks, on the
-scale 1 ms = 1 s, and prints both average times and the violations that locking prevents.
-Measured on 2026-11-25 (WSL2): 1.86 s with locks and 1.28 s without (x1.46); without locks,
-about 225 violations per run.
+A run of the real scheme must show no deadlock, no suspected deadlock, no violation, and no
+lock, owner or ticket left after the run. Six schemes that are wrong on purpose check that the
+fuzzer finds what it looks for: a mixed lock order and worktrees in reverse order (deadlocks),
+edits without locks and commands with shared locks (overlaps), calls that ignore the issue
+order, and a scheme that never gives owners back. The comparison runs one scenario of six
+agents in two worktrees with and without locks, on the scale 1 ms = 1 s, and prints both
+average times and the violations that locking prevents. Measured on 2026-11-25 (WSL2): with
+locks the scenario took 1.37 to 1.47 times as long; without locks, about 180 to 225 violations
+happened per run.
+
+The fuzzer does not judge FIFO between agents (the unit tests do, for the thread backend), and
+its overlap check sees only overlaps longer than the time between a grant and its recording.
+The unit tests construct the thread backend directly; a second backend needs them run against
+it.
 
 ## The database layer
 

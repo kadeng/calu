@@ -19,8 +19,10 @@ from calu.locking.rwlock import (
     checked_timeout,
 )
 from calu.locking.scheme import (
+    GENERATED_OWNER_PREFIX,
     GLOBAL_KEY,
     Lease,
+    LockCancelledError,
     LockingScheme,
     LockTimeoutError,
     LockTimeouts,
@@ -37,9 +39,11 @@ from calu.locking.scheme import (
 from calu.locking.threadlocks import ThreadLockRequest, ThreadLockSpace, ThreadRWLock
 
 __all__ = [
+    "GENERATED_OWNER_PREFIX",
     "GLOBAL_KEY",
     "Hold",
     "Lease",
+    "LockCancelledError",
     "LockError",
     "LockMode",
     "LockRequest",

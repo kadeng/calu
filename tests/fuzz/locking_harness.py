@@ -10,9 +10,12 @@ one is asked for. Reports go to stdout and hold counts and timings only.
     call (one thread per call of the batch):
         its check (random length, so checks finish out of order)
           ├─ denied, or a call that takes no lock ─► withdraw the ticket
-          └─ ask for the locks with the ticket ─► hold them (sometimes probe: ask again with the
-             same owner, which must be refused at once) ─► release (sometimes from the releaser
-             thread, as Calu's release would come with a tool result)
+          ├─ an invalid timeout ─► the call must fail and withdraw its ticket
+          └─ ask for the locks with the ticket (sometimes another thread withdraws the ticket
+             0-10 ms later: the call is cancelled if still pending) ─► hold them (sometimes
+             probe: ask again with the same owner or the same ticket, which must be refused at
+             once) ─► release (sometimes from the releaser thread, as Calu's release would come
+             with a tool result)
     ledger:  which calls check, wait and hold; checks each grant against the other holders and
              against the agent's earlier calls (issue order)
     monitor: samples the ledger for the timeline every few milliseconds and, when the backend
@@ -31,7 +34,9 @@ counts:
 - violations: two calls that held their locks at the same time although the scheme forbids it
   (`conflict`); a call granted while an earlier call of its agent had not entered the queues,
   or while an earlier, conflicting call of its agent still waited (issue order);
-- reentry probes that were not refused at once with `LockError`.
+- probes that were not refused at once with `LockError`;
+- after the run: locks that an exclusive request with timeout 0 cannot get (every backend),
+  owners the scheme still counts as live, and tickets still ISSUED.
 
 A comparison (`compare`) runs one fixed scenario with `RWLockingScheme` and with
 `NoLockingScheme` and reports both times and the overlaps that locking prevented.
@@ -52,6 +57,7 @@ from queue import SimpleQueue
 from calu.locking import (
     GLOBAL_KEY,
     Lease,
+    LockCancelledError,
     LockError,
     LockingScheme,
     LockMode,
@@ -66,6 +72,8 @@ from calu.locking import (
     ThreadLockSpace,
     Ticket,
     TicketState,
+    file_key,
+    worktree_key,
 )
 
 COMMAND = "command"
@@ -101,8 +109,12 @@ class OpSpec:
         outcome: LOCK, DENIED or NO_LOCK.
         timeout_s: The call's own timeout, or None for the configured default.
         release_elsewhere: The releaser thread releases it, not the call's thread.
-        probe: None, or "scheme" / "lock": while it holds its locks, ask again with the same
-            owner through the scheme or directly at one of its locks.
+        probe: None, or "scheme" / "lock" / "ticket": while it holds its locks, ask again with
+            the same owner through the scheme or directly at one of its locks, or ask with the
+            same ticket under another owner; each must be refused at once with `LockError`.
+        cancel_after_s: None, or seconds after the call asks for its locks when another thread
+            withdraws its ticket (the call is cancelled if it is still pending then).
+        bad_argument: The call passes an invalid timeout; it must fail and withdraw its ticket.
     """
 
     kind: str
@@ -115,6 +127,8 @@ class OpSpec:
     timeout_s: float | None = None
     release_elsewhere: bool = False
     probe: str | None = None
+    cancel_after_s: float | None = None
+    bad_argument: bool = False
 
 
 @dataclass(frozen=True)
@@ -159,7 +173,9 @@ class LoadConfig:
         random_timeout_share: Share of calls that pass a timeout of 50 to 500 ms.
         over_max_timeout_share: Share of calls that pass twice the maximum (cut to it).
         release_elsewhere_share: Share of leases the releaser thread releases.
-        probe_share: Share of calls that ask again with their own owner while they hold.
+        probe_share: Share of calls that probe a repeated request while they hold.
+        cancel_share: Share of calls that another thread cancels 0-10 ms after they ask.
+        bad_argument_share: Share of calls that pass an invalid timeout with their ticket.
         timeouts: The scheme's defaults and maxima.
         stall_min_s: The shortest stall that is reported.
         monitor_interval_s: How often the monitor samples.
@@ -189,6 +205,8 @@ class LoadConfig:
     over_max_timeout_share: float = 0.05
     release_elsewhere_share: float = 0.2
     probe_share: float = 0.03
+    cancel_share: float = 0.04
+    bad_argument_share: float = 0.02
     timeouts: LockTimeouts = field(default_factory=lambda: LockTimeouts(0.5, 1.0, 0.5, 1.0))
     stall_min_s: float = 0.25
     monitor_interval_s: float = 0.005
@@ -214,6 +232,8 @@ DEADLOCK_PRONE = replace(
     over_max_timeout_share=0,
     release_elsewhere_share=0,
     probe_share=0,
+    cancel_share=0,
+    bad_argument_share=0,
 )
 """Only commands, many in two worktrees or writing outside: a wrong lock order deadlocks here."""
 
@@ -241,6 +261,8 @@ BENCH = replace(
     random_timeout_share=0,
     over_max_timeout_share=0,
     probe_share=0,
+    cancel_share=0,
+    bad_argument_share=0,
     timeouts=LockTimeouts(30, 60, 30, 60),
 )
 """A scenario for timing, on the scale 1 ms = 1 s: an agent thinks 5-30 s, then issues one to
@@ -292,7 +314,8 @@ def _finish(rng: random.Random, cfg: LoadConfig, spec: OpSpec) -> OpSpec:
     )
     probe = None
     if rng.random() < cfg.probe_share:
-        probe = rng.choice(["scheme", "lock"])
+        probe = rng.choice(["scheme", "lock", "ticket"])
+    cancel_after = rng.uniform(0.0, 0.01) if rng.random() < cfg.cancel_share else None
     return replace(
         spec,
         check_s=rng.uniform(*cfg.check_s),
@@ -300,6 +323,8 @@ def _finish(rng: random.Random, cfg: LoadConfig, spec: OpSpec) -> OpSpec:
         timeout_s=draw_timeout(rng, cfg),
         release_elsewhere=rng.random() < cfg.release_elsewhere_share,
         probe=probe,
+        cancel_after_s=cancel_after,
+        bad_argument=rng.random() < cfg.bad_argument_share,
     )
 
 
@@ -568,6 +593,9 @@ class Ledger:
         self.violations: Counter[str] = Counter()
         self.violation_examples: list[str] = []
         self.probes: Counter[str] = Counter()
+        self.cancelled: Counter[str] = Counter()
+        self.bad_arguments: Counter[str] = Counter()
+        self._suspects: dict[str, list[Op]] = {}
         self.stalls: list[Stall] = []
         self._stall_since: float | None = None
         self._stall_timeout = False
@@ -636,13 +664,19 @@ class Ledger:
                 rule = conflict(op.spec, other.spec)
                 if rule is not None:
                     self._violation(rule, op, other)
+            for later in self._suspects.pop(op.id, ()):
+                # `op` still waited when `later`, a later conflicting call of its agent, got
+                # its locks; now `op` got its locks as well, so it had not left its queue.
+                rule = "a call got its locks before an earlier, conflicting call of its agent"
+                self._violation(rule, later, op)
             for earlier in op.batch[: op.position]:
                 if earlier.ticket.state is TicketState.ISSUED:
                     rule = "a call got its locks before an earlier call of its agent entered"
                     self._violation(rule, op, earlier)
                 elif earlier.id in self.waiting and conflict(op.spec, earlier.spec):
-                    rule = "a call got its locks before an earlier, conflicting call of its agent"
-                    self._violation(rule, op, earlier)
+                    # Judged when `earlier` ends: a timeout or a cancellation that took it out
+                    # of its queue first is no break of the order.
+                    self._suspects.setdefault(earlier.id, []).append(op)
             self.holding[op.id] = op
             self.holding_now[op.spec.kind] += 1
             self._changed(now)
@@ -656,6 +690,7 @@ class Ledger:
         with self._mutex:
             now = self._advance()
             self._stop_waiting(op)
+            self._suspects.pop(op.id, None)
             self.timeouts[op.spec.kind] += 1
             if op.spec.timeout_s is not None and op.spec.timeout_s < SHORT_TIMEOUT_S:
                 self.short_timeouts[op.spec.kind] += 1
@@ -678,15 +713,48 @@ class Ledger:
             self.done[op.spec.kind] += 1
             self._changed(now)
 
-    def probed(self, outcome: str, op: Op) -> None:
-        """Record the outcome of a reentry probe of `op`: "refused" is the only right one.
+    def cancelled_call(self, op: Op) -> None:
+        """Record that `op` was cancelled while it was pending; it holds nothing.
 
         Args:
-            outcome: "refused", "granted" or "waited".
-            op: The call that asked again with its own owner.
+            op: The call.
         """
         with self._mutex:
-            self.probes[outcome] += 1
+            now = self._advance()
+            self._stop_waiting(op)
+            self._suspects.pop(op.id, None)
+            self.cancelled[op.spec.kind] += 1
+            if self._stall_since is not None:
+                self._stall_timeout = True
+            self._changed(now)
+
+    def failed_on_argument(self, op: Op, refused: bool) -> None:
+        """Record the call of `op` with an invalid timeout; it must fail and withdraw its ticket.
+
+        Args:
+            op: The call.
+            refused: Whether the scheme refused the argument (TypeError or ValueError).
+        """
+        with self._mutex:
+            now = self._advance()
+            self.checking.discard(op.id)
+            self.bad_arguments[op.spec.kind] += 1
+            if not refused:
+                self._violation("a call with an invalid timeout was accepted", op, op)
+            elif op.ticket.state is not TicketState.WITHDRAWN:
+                self._violation("a call that failed on its arguments kept its ticket", op, op)
+            self._changed(now)
+
+    def probed(self, probe: str, outcome: str, op: Op) -> None:
+        """Record the outcome of a probe of `op`: "refused" is the only right one.
+
+        Args:
+            probe: "scheme", "lock" or "ticket".
+            outcome: "refused", "granted" or "waited".
+            op: The call that asked again with its own owner or ticket.
+        """
+        with self._mutex:
+            self.probes[f"{probe} {outcome}"] += 1
             if outcome != "refused":
                 rule = f"a repeated request of an owner was {outcome}, not refused"
                 self._violation(rule, op, op)
@@ -918,7 +986,11 @@ class Report:
         worktrees: Worktrees.
         timeouts: The scheme's timeouts.
         ledger: What the calls did.
-        leftover: Locks that still had holders or waiters after the run.
+        leftover: Locks that still had holders or waiters after the run (from a snapshot).
+        leaked: Locks that an exclusive request with timeout 0 could not get after the run;
+            works with every backend.
+        live_owners: Owners the scheme still counted as having a lease after the run.
+        open_tickets: Tickets that were still ISSUED after the run.
         hung: Agents or calls that had not finished when the run gave up on them.
         errors: Unexpected exceptions of the agents, the calls and the releaser.
     """
@@ -930,6 +1002,9 @@ class Report:
     timeouts: LockTimeouts
     ledger: Ledger
     leftover: list[str]
+    leaked: list[str]
+    live_owners: frozenset[str]
+    open_tickets: dict[str, tuple[int, ...]]
     hung: int
     errors: list[str]
 
@@ -965,6 +1040,13 @@ class Report:
             )
         if self.leftover:
             found.append(f"locks left after the run: {'; '.join(self.leftover)}")
+        if self.leaked:
+            found.append(f"locks no one could take after the run: {', '.join(self.leaked)}")
+        if self.live_owners:
+            some = ", ".join(sorted(self.live_owners)[:5])
+            found.append(f"{len(self.live_owners)} owners left with a lease, e.g. {some}")
+        if self.open_tickets:
+            found.append(f"tickets left ISSUED after the run: {self.open_tickets}")
         if self.hung:
             found.append(f"{self.hung} agents or calls did not finish")
         if self.errors:
@@ -999,7 +1081,9 @@ class Report:
             f"{t.command_max_s:g} s, edits {t.edit_default_s:g}/{t.edit_max_s:g} s "
             "(default/max)",
             f"  issued:    {per_kind(ledger.issued)}; withdrawn: denied "
-            f"{ledger.withdrawn[DENIED]}, no lock {ledger.withdrawn[NO_LOCK]}",
+            f"{ledger.withdrawn[DENIED]}, no lock {ledger.withdrawn[NO_LOCK]}; cancelled "
+            f"while pending: {sum(ledger.cancelled.values())}; invalid arguments: "
+            f"{sum(ledger.bad_arguments.values())}",
             f"  done:      {per_kind(ledger.done)}",
             f"  timeouts:  {per_kind(ledger.timeouts)}",
             f"    of them with a short timeout on purpose (< {SHORT_TIMEOUT_S * 1000:g} ms): "
@@ -1014,15 +1098,19 @@ class Report:
             f"  deadlocks: {len(ledger.cycles)} cycles in the wait-for graph; stalls of at least "
             f"{ledger.stall_min_s:g} s: {len(self.suspected_deadlocks)} ended by a timeout, "
             f"{len(ended_by_grant)} by a grant",
-            f"  reentry probes: {probes or 'none'}",
-            f"  violations (overlaps, issue order, reentry): {sum(ledger.violations.values())}",
+            f"  probes:    {probes or 'none'}",
+            f"  violations (overlaps, issue order, reentry, tickets): "
+            f"{sum(ledger.violations.values())}",
+            f"  after the run: {len(self.leaked)} locks leaked, {len(self.live_owners)} owners "
+            f"live, {sum(map(len, self.open_tickets.values()))} tickets open",
         ]
         lines += [f"  PROBLEM:   {problem}" for problem in self.problems()]
         return "\n".join(lines)
 
 
 def _probe(scheme: LockingScheme, op: Op, lease: Lease, ledger: Ledger) -> None:
-    """Ask again with the owner of `op`, which holds `lease`: it must be refused at once.
+    """Ask again while `op` holds `lease`: with its owner, or with its ticket; it must be
+    refused at once with `LockError`.
 
     Args:
         scheme: The scheme under test.
@@ -1030,26 +1118,28 @@ def _probe(scheme: LockingScheme, op: Op, lease: Lease, ledger: Ledger) -> None:
         lease: Its lease.
         ledger: The run's ledger.
     """
-    if op.spec.probe == "lock":
+    probe = op.spec.probe or "scheme"
+    if probe == "lock":
         if not isinstance(scheme, RWLockingScheme) or not lease.locks:
             return
         key, mode = lease.locks[0]
         try:
             request = scheme.space.lock(key).request(mode, op.id)
         except LockError:
-            ledger.probed("refused", op)
+            ledger.probed(probe, "refused", op)
             return
         request.withdraw()
-        ledger.probed("granted", op)
+        ledger.probed(probe, "granted", op)
         return
+    owner, ticket = (op.id, None) if probe == "scheme" else (f"{op.id}~reuse", op.ticket)
     try:
-        extra = take(scheme, replace(op.spec, timeout_s=0.2), op.id, None)
+        extra = take(scheme, replace(op.spec, timeout_s=0.2), owner, ticket)
     except LockError:
-        ledger.probed("refused", op)
+        ledger.probed(probe, "refused", op)
     except LockTimeoutError:
-        ledger.probed("waited", op)
+        ledger.probed(probe, "waited", op)
     else:
-        ledger.probed("granted", op)
+        ledger.probed(probe, "granted", op)
         extra.release()
 
 
@@ -1072,11 +1162,31 @@ def _call(
         op.ticket.withdraw()
         ledger.withdraws(op)
         return
+    if spec.bad_argument:
+        try:
+            take(scheme, replace(spec, timeout_s=-1.0), op.id, op.ticket).release()
+        except TypeError, ValueError:
+            ledger.failed_on_argument(op, refused=True)
+        else:
+            ledger.failed_on_argument(op, refused=False)
+        return
     ledger.asks(op)
+    if spec.cancel_after_s is not None:
+        canceller = threading.Timer(spec.cancel_after_s, op.ticket.withdraw)
+        canceller.daemon = True
+        canceller.start()
     try:
         lease = take(scheme, spec, op.id, op.ticket)
     except LockTimeoutError:
         ledger.timed_out(op)
+        return
+    except LockCancelledError:
+        ledger.cancelled_call(op)
+        return
+    except LockError:
+        if spec.cancel_after_s is None or op.ticket.state is not TicketState.WITHDRAWN:
+            raise
+        ledger.cancelled_call(op)  # withdrawn before the lock call claimed the ticket
         return
     ledger.holds(op)
     if spec.probe is not None:
@@ -1151,6 +1261,22 @@ def _release_handed_over(ledger: Ledger, handoff: SimpleQueue[tuple[Op, Lease] |
         lease.release()
 
 
+def all_keys(cfg: LoadConfig) -> list[str]:
+    """Return the key of every lock a load of `cfg` can use.
+
+    Args:
+        cfg: The load.
+
+    Returns:
+        The global key, the worktree keys and the file keys.
+    """
+    keys = [GLOBAL_KEY]
+    for n in range(cfg.worktrees):
+        keys.append(worktree_key(f"wt{n}"))
+        keys += [file_key(f"wt{n}", f"f{f}.py") for f in range(cfg.files_per_worktree)]
+    return keys
+
+
 def run_load(
     scheme: LockingScheme,
     workloads: Sequence[Iterable[Batch]],
@@ -1222,10 +1348,18 @@ def run_load(
     monitor.stop()
     ledger.close()
     leftover: list[str] = []
+    leaked: list[str] = []
     states = space.snapshot() if space is not None and not hung else None
     for state in states or ():
         if state.holders or state.waiters:
             leftover.append(f"{state.key}: holders {state.holders}, waiters {state.waiters}")
+    if space is not None and not hung:
+        for key in all_keys(cfg):
+            hold = space.lock(key).acquire(LockMode.EXCLUSIVE, 0, "leak check")
+            if hold is None:
+                leaked.append(key)
+            else:
+                space.lock(key).release(hold)
     if timeline_path is not None:
         with open(timeline_path, "w", newline="", encoding="utf-8") as out:
             writer = csv.writer(out)
@@ -1241,6 +1375,9 @@ def run_load(
         timeouts=scheme.timeouts,
         ledger=ledger,
         leftover=leftover,
+        leaked=leaked,
+        live_owners=scheme.live_owners(),
+        open_tickets=scheme.open_tickets(),
         hung=hung,
         errors=errors,
     )
@@ -1442,6 +1579,17 @@ class NoIssueOrderScheme(RWLockingScheme):
         return True
 
 
+class KeepsOwnersScheme(RWLockingScheme):
+    """WRONG on purpose: it never accepts an owner again, as if leases leaked their owners."""
+
+    def _unclaim(self, owner: str) -> None:
+        """Do nothing.
+
+        Args:
+            owner: Ignored.
+        """
+
+
 SCHEMES: dict[str, type[RWLockingScheme]] = {
     "rw": RWLockingScheme,
     "mixed-order": MixedOrderScheme,
@@ -1449,6 +1597,7 @@ SCHEMES: dict[str, type[RWLockingScheme]] = {
     "no-edit-locks": NoEditLocksScheme,
     "shared-commands": SharedCommandsScheme,
     "no-issue-order": NoIssueOrderScheme,
+    "keeps-owners": KeepsOwnersScheme,
 }
 """The schemes the command line can run; only `rw` is right."""
 

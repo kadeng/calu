@@ -17,11 +17,18 @@ PostgreSQL may follow. Every backend must keep this contract (the owner's decisi
   request is a bug and is refused at once with `LockError`.
 - **Bounded waits.** `LockRequest.wait` waits at most the timeout it is given and returns a
   `Hold`, or None when the time ran out; the request then no longer waits and nothing is held.
-  An exception that interrupts the wait leaves nothing held and nothing waiting either.
+  When the wait itself raises (an invalid timeout, an error of the backend), the request is
+  withdrawn first.
 - **Release from anywhere.** A hold is released by passing it to `RWLock.release`, from any
-  thread.
+  thread. `LockRequest.withdraw` wakes a `wait` blocked in another thread.
 
-Notes for the backends to come (the owner, 2026-11-25). The danger is reentrancy by accident:
+Limit: call the lock API from worker threads, never from the main thread of a program that
+takes Ctrl-C. An asynchronous exception (KeyboardInterrupt, a signal handler that raises) can
+strike between any two statements, also inside `with mutex:`, and can leave a lock held or a
+mutex taken. No try/except can rule that out in CPython.
+
+Notes for the backends to come. The owner's notes of 2026-11-25 (the danger is reentrancy by
+accident):
 
 - PostgreSQL advisory locks are reentrant per database session, so each lease needs a session
   of its own. They already queue in a FIFO-like way: a new request waits behind a conflicting
@@ -29,10 +36,27 @@ Notes for the backends to come (the owner, 2026-11-25). The danger is reentrancy
 - On files, use flock or OFD locks (F_OFD_SETLK), which belong to an open file description;
   never classic POSIX fcntl locks, which belong to the whole process. Linux flock does not
   queue fairly, so a file backend needs a turnstile lock to meet the FIFO rule.
+
+From the review of 2026-11-25:
+
+- `request` must have fixed the place in the queue when it returns: the scheme lets the
+  agent's next call go ahead at that moment. A PostgreSQL lock call that is merely sent does not
+  say when the server queued it, so that backend must confirm the queued request (e.g. its
+  waiting row in `pg_locks`) before `request` returns. flock has no queue at all; the turnstile
+  provides it and must survive a waiter that died.
+- `withdraw` must wake a `wait` blocked in another thread: on PostgreSQL a query cancel (and a
+  grant that arrives just before it must be handed back); on files no blocking `flock` call, but
+  `LOCK_NB` tries in the order the turnstile decides.
+- A PostgreSQL unlock must run on the session that holds the lock, so that backend keeps one
+  session per hold (per owner) and releases on it, whatever thread calls `release`.
+- Keys are strings, advisory lock ids 64-bit integers. The mapping must be free of collisions:
+  two keys of one plan on one id would break the lock order and re-enter a reentrant lock.
+- An error a backend raises in `withdraw` during a clean-up replaces the original exception.
 """
 
 import enum
 import math
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -107,13 +131,20 @@ def checked_timeout(timeout: float) -> float:
 
     Raises:
         TypeError: `timeout` is not an int or a float (a bool counts as neither).
-        ValueError: `timeout` is negative, NaN or infinite: no lock wait is unbounded.
+        ValueError: `timeout` is negative, NaN, infinite, or above `threading.TIMEOUT_MAX`
+            (about 292 years): no lock wait is unbounded.
     """
     if isinstance(timeout, bool) or not isinstance(timeout, int | float):
         raise TypeError(f"a lock timeout must be a number of seconds, not {timeout!r}")
-    seconds = float(timeout)
-    if not math.isfinite(seconds) or seconds < 0:
-        raise ValueError(f"a lock timeout must be finite and at least 0 seconds, not {timeout!r}")
+    try:
+        seconds = float(timeout)
+    except OverflowError:
+        seconds = math.inf
+    if not math.isfinite(seconds) or not 0 <= seconds <= threading.TIMEOUT_MAX:
+        raise ValueError(
+            f"a lock timeout must be finite and from 0 to {threading.TIMEOUT_MAX:g} seconds, "
+            f"not {timeout!r}"
+        )
     return seconds
 
 
@@ -155,8 +186,8 @@ class LockRequest(ABC):
         """Wait at most `timeout` seconds for the grant; block the calling thread meanwhile.
 
         Called at most once per request. A grant that comes at the moment the time runs out
-        counts. When the timeout is invalid, or an exception interrupts the wait, the request is
-        withdrawn (a grant given back) before the exception propagates.
+        counts. When the timeout is invalid, or the wait itself raises, the request is withdrawn
+        (a grant given back) before the exception propagates.
 
         Args:
             timeout: Seconds to wait, finite and >= 0 (`checked_timeout`).
@@ -176,11 +207,12 @@ class LockRequest(ABC):
         """Take the request back without waiting for it.
 
         The request leaves the queue, or, when it was granted but `wait` has not returned the
-        hold yet, the grant is given back. Does nothing when the request is already gone (timed
-        out or withdrawn); a thread blocked in `wait` then gets None.
+        hold yet, the grant is given back; a thread blocked in `wait` then gets None. Does
+        nothing when the request is already gone (timed out, withdrawn, or its hold released).
 
         Raises:
-            LockError: `wait` returned the hold already; `RWLock.release` gives it back.
+            LockError: `wait` returned the hold and it is still held; `RWLock.release` gives it
+                back.
         """
 
 

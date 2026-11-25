@@ -67,8 +67,8 @@ class ThreadLockRequest(LockRequest):
         """Wait at most `timeout` seconds for the grant; block the calling thread meanwhile.
 
         Called at most once per request. A grant that comes at the moment the time runs out
-        counts. When the timeout is invalid, or an exception interrupts the wait, the request is
-        withdrawn (a grant given back) before the exception propagates.
+        counts. When the timeout is invalid, or the wait itself raises, the request is withdrawn
+        (a grant given back) before the exception propagates.
 
         Args:
             timeout: Seconds to wait, finite and >= 0 (`checked_timeout`).
@@ -96,8 +96,9 @@ class ThreadLockRequest(LockRequest):
         with lock._mutex:
             match entry.phase:
                 case _Phase.GRANTED:
+                    hold = Hold(lock.key, entry.mode, entry.owner, entry.token)
                     entry.phase = _Phase.HELD
-                    return Hold(lock.key, entry.mode, entry.owner, entry.token)
+                    return hold
                 case _Phase.QUEUED:
                     lock._leave_queue(entry)
             return None
@@ -105,12 +106,13 @@ class ThreadLockRequest(LockRequest):
     def withdraw(self) -> None:
         """Take the request back without waiting for it.
 
-        The request leaves the queue, or its grant is given back if `wait` has not returned it.
-        Does nothing when the request is already gone; a thread blocked in `wait` then gets
-        None.
+        The request leaves the queue, or its grant is given back if `wait` has not returned it;
+        a thread blocked in `wait` then gets None. Does nothing when the request is already gone
+        (timed out, withdrawn, or its hold released).
 
         Raises:
-            LockError: `wait` returned the hold already; `ThreadRWLock.release` gives it back.
+            LockError: `wait` returned the hold and it is still held; `ThreadRWLock.release`
+                gives it back.
         """
         lock, entry = self._lock, self._entry
         with lock._mutex:

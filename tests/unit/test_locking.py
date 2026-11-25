@@ -13,9 +13,11 @@ from collections.abc import Callable
 import pytest
 
 from calu.locking import (
+    GENERATED_OWNER_PREFIX,
     GLOBAL_KEY,
     Hold,
     Lease,
+    LockCancelledError,
     LockError,
     LockingScheme,
     LockMode,
@@ -28,6 +30,7 @@ from calu.locking import (
     ThreadLockSpace,
     ThreadRWLock,
     TicketState,
+    checked_timeout,
     file_key,
     worktree_key,
 )
@@ -803,7 +806,7 @@ def test_the_fake_scheme_never_waits_and_keeps_the_owner_rule() -> None:
     held_back = fake.issue("agent")
     later = fake.issue("agent")
     leases = [
-        fake.edit_in_worktree("wt", ticket=later, timeout=0),  # does not wait for held_back
+        fake.edit_in_worktree("wt", ticket=later, timeout=0, owner="e"),  # no wait for held_back
         fake.run_command_in_worktree("wt"),
         fake.run_command_in_worktree("wt", writes_outside=True),
         fake.edit_in_worktree("wt", path="a.py"),
@@ -812,8 +815,155 @@ def test_the_fake_scheme_never_waits_and_keeps_the_owner_rule() -> None:
     ]
     assert later.state is TicketState.ENTERED and held_back.state is TicketState.ISSUED
     with pytest.raises(LockError):
-        fake.edit_in_worktree("wt", owner=leases[0].operation.owner)
+        fake.edit_in_worktree("wt", owner="e")
     for lease in leases:
         assert lease.locks == () and lease.waited_s == 0
         lease.release()
         lease.release()
+
+
+# The review of 2026-11-25: tickets on every failure path, cancellation, limits
+
+
+def test_withdrawing_a_ticket_while_its_call_waits_for_its_turn_cancels_the_call() -> None:
+    """Withdrawing the ticket of a call that waits for its turn ends that call at once with
+    LockCancelledError; nothing freezes, and the order goes on for every agent."""
+    locking = scheme()
+    first, second = locking.issue("agent"), locking.issue("agent")
+    waiting = Background(lambda: locking.edit_in_worktree("wt", ticket=second, owner="second"))
+    time.sleep(BLOCKED)
+    assert waiting.running
+    started = time.monotonic()
+    second.withdraw()
+    with pytest.raises(LockCancelledError):
+        waiting.finish(2)
+    assert time.monotonic() - started < 1
+    other = Background(lambda: locking.issue("other agent"))
+    other.finish(2)
+    first.withdraw()
+    assert locking.open_tickets() == {"other agent": (1,)}
+    assert locking.live_owners() == frozenset()
+
+
+@pytest.mark.parametrize(
+    "bad_call",
+    [
+        lambda s, t: s.edit_in_worktree("wt", ticket=t, timeout=-1),
+        lambda s, t: s.edit_in_worktree("wt", ticket=t, timeout=math.nan),
+        lambda s, t: s.edit_in_worktree("wt", ticket=t, path=""),
+        lambda s, t: s.edit_outside_worktree(ticket=t, owner=""),
+        lambda s, t: s.run_command_in_worktrees("wt", ticket=t),
+        lambda s, t: s.run_command_in_worktree("wt", ticket=t, owner=GENERATED_OWNER_PREFIX + "x"),
+    ],
+)
+def test_a_call_that_fails_on_its_arguments_withdraws_its_ticket(
+    bad_call: Callable[[RWLockingScheme, object], Lease],
+) -> None:
+    locking = scheme()
+    ticket, next_ticket = locking.issue("agent"), locking.issue("agent")
+    with pytest.raises((TypeError, ValueError)):
+        bad_call(locking, ticket)
+    assert ticket.state is TicketState.WITHDRAWN
+    locking.edit_in_worktree("wt-free", ticket=next_ticket, timeout=0).release()
+
+
+def test_one_ticket_serves_one_lock_call_at_a_time() -> None:
+    locking = scheme()
+    blocker = locking.edit_outside_worktree(owner="other agent's edit")
+    ticket = locking.issue("agent")
+    first_use = Background(
+        lambda: locking.run_command_in_worktree("wt", ticket=ticket, owner="first use")
+    )
+    wait_until(lambda: queue_of(locking, GLOBAL_KEY) == ["first use"])
+    started = time.monotonic()
+    with pytest.raises(LockError):
+        locking.edit_in_worktree("wt2", ticket=ticket, owner="second use")
+    assert time.monotonic() - started < 1
+    blocker.release()
+    lease_of(first_use).release()
+    assert locking.live_owners() == frozenset() and locking.open_tickets() == {}
+
+
+def test_withdrawing_the_ticket_of_a_call_that_waits_for_a_lock_cancels_it() -> None:
+    """The reviewer's case: the call waits for its first lock, its ticket is withdrawn, and
+    the agent's next call goes ahead; the cancelled call must never get its lease."""
+    locking = scheme()
+    blocker = locking.edit_outside_worktree(owner="other agent's edit")
+    first, second = locking.issue("A"), locking.issue("A")
+    command = Background(lambda: locking.run_command_in_worktree("wt", ticket=first, owner="A.1"))
+    wait_until(lambda: queue_of(locking, GLOBAL_KEY) == ["A.1"])
+    first.withdraw()
+    with pytest.raises(LockCancelledError):
+        command.finish(2)
+    edit = locking.edit_in_worktree("wt", ticket=second, timeout=0, owner="A.2")
+    assert queue_of(locking, GLOBAL_KEY) == []
+    edit.release()
+    blocker.release()
+    for state in space_of(locking).snapshot():
+        assert state.holders == () and state.waiters == ()
+    assert locking.live_owners() == frozenset()
+
+
+def test_withdrawing_the_ticket_of_an_entered_call_cancels_its_wait_for_the_last_lock() -> None:
+    locking = scheme()
+    blocker = locking.run_command_in_worktree("wt", owner="other agent's command")
+    ticket = locking.issue("agent")
+    edit = Background(lambda: locking.edit_in_worktree("wt", ticket=ticket, owner="edit"))
+    wait_until(lambda: queue_of(locking, worktree_key("wt")) == ["edit"])
+    assert ticket.state is TicketState.ENTERED
+    ticket.withdraw()
+    with pytest.raises(LockCancelledError):
+        edit.finish(2)
+    assert queue_of(locking, worktree_key("wt")) == []
+    blocker.release()
+    assert locking.live_owners() == frozenset()
+
+
+def test_withdrawing_a_ticket_after_its_call_got_the_lease_does_nothing() -> None:
+    locking = scheme()
+    ticket = locking.issue("agent")
+    lease = locking.run_command_in_worktree("wt", ticket=ticket, owner="command")
+    ticket.withdraw()
+    assert ticket.state is TicketState.ENTERED and not lease.released
+    assert holders(locking, worktree_key("wt")) == (("command", EXCLUSIVE),)
+    lease.release()
+
+
+def test_a_ticket_used_as_a_context_manager_is_withdrawn_unless_its_call_got_a_lease() -> None:
+    locking = scheme()
+    with locking.issue("agent") as unused:
+        pass  # e.g. the check denied the call
+    assert unused.state is TicketState.WITHDRAWN
+    with locking.issue("agent") as used:
+        lease = locking.edit_in_worktree("wt", ticket=used)
+    assert used.state is TicketState.ENTERED and not lease.released
+    lease.release()
+    assert locking.open_tickets() == {}
+
+
+def test_huge_timeouts_are_refused_not_overflowed() -> None:
+    for huge in (10**400, 1e300, threading.TIMEOUT_MAX * 2):
+        with pytest.raises(ValueError):
+            checked_timeout(huge)
+        with pytest.raises(ValueError):
+            LockTimeouts(command_default_s=1, command_max_s=huge)
+    assert checked_timeout(threading.TIMEOUT_MAX) == threading.TIMEOUT_MAX
+
+
+def test_generated_owners_never_collide_with_the_callers_owners() -> None:
+    locking = scheme()
+    with locking.run_command_in_worktree("wt1", owner="command-1"):
+        with locking.run_command_in_worktree("wt2") as generated:
+            assert generated.operation.owner.startswith(GENERATED_OWNER_PREFIX)
+    with pytest.raises(ValueError):
+        locking.edit_outside_worktree(owner=GENERATED_OWNER_PREFIX + "command-1")
+
+
+def test_the_scheme_reports_live_owners_and_open_tickets() -> None:
+    locking = scheme()
+    ticket = locking.issue("agent")
+    assert locking.open_tickets() == {"agent": (1,)}
+    with locking.edit_in_worktree("wt", ticket=ticket, owner="edit"):
+        assert locking.live_owners() == frozenset({"edit"})
+        assert locking.open_tickets() == {}
+    assert locking.live_owners() == frozenset()
