@@ -266,6 +266,25 @@ class Target(_Model):
             docker=self.docker,
         )
 
+    def with_server_auth(self) -> Self:
+        """Describe the same login without calu's own requirements of the login method.
+
+        For a server that exists already and whose configuration refuses them (md5 only, a
+        pooler without channel binding): `calu setup` uses this only after a person agreed
+        (`--keep-server-auth`, D279).
+
+        Returns:
+            The target without `require_auth` and `channel_binding`.
+        """
+        conninfo = {
+            key: value
+            for key, value in self.conninfo.items()
+            if key not in ("require_auth", "channel_binding")
+        }
+        return type(self)(
+            variant=self.variant, conninfo=conninfo, auth=self.auth, docker=self.docker
+        )
+
     def _password_variant(self) -> Variant:
         """Name the variant of a password login of this database.
 
@@ -385,8 +404,8 @@ def from_fields(
     A password login to a host other than this machine also gets `require_auth=scram-sha-256`
     and, where TLS is used, `channel_binding=require` (D279): without them a machine in the
     middle that presents any certificate could ask for the password in clear text and read
-    it, or relay a SCRAM login. A server that offers only md5 or a clear-text password, or a
-    pooler without channel binding, is therefore refused (the owner's decision: no opt-out).
+    it, or relay a SCRAM login. Where an existing server's configuration refuses them, `calu
+    setup` keeps the server's own method only after a person agreed (`Target.with_server_auth`).
 
     Args:
         host: Host name, address or socket directory of the server.

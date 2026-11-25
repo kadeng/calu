@@ -302,3 +302,57 @@ def test_a_remote_password_login_takes_only_scram_with_channel_binding() -> None
     ):
         assert "require_auth" not in unchanged.conninfo
         assert "channel_binding" not in unchanged.conninfo
+
+
+def test_an_existing_server_may_keep_its_own_login_method_when_a_person_says_so(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """D279: safe by default, but an existing server's configuration is not overruled; the
+    refusal is never followed silently, because a machine in the middle can cause it."""
+    import argparse
+    import sys
+
+    from calu import cli
+
+    refusals = [
+        'connection to server at "db", port 5432 failed: channel binding required, but SSL '
+        "not in use",
+        'failed: authentication method requirement "scram-sha-256" failed: server requested a '
+        "cleartext password",
+    ]
+    assert all(cli._auth_requirement_refused(message) for message in refusals)
+    assert not cli._auth_requirement_refused('password authentication failed for user "u"')
+
+    remote = from_fields("db.example.org", 5432, "calu", "u", PasswordAuth(password="pw"))
+    relaxed = remote.with_server_auth()
+    assert "require_auth" not in relaxed.conninfo and "channel_binding" not in relaxed.conninfo
+    assert relaxed.conninfo["sslmode"] == "require", "only the login method is relaxed"
+
+    attempts: list[dict[str, str]] = []
+
+    async def check(owner: Target) -> None:
+        conninfo = owner.conninfo
+        attempts.append(dict(conninfo))
+        if "channel_binding" in conninfo:
+            raise cli.CliError(f"cannot connect: {refusals[0]}")
+
+    monkeypatch.setattr(cli, "_check_owner_login", check)
+    monkeypatch.setattr(cli, "read_password", lambda prompt: bytearray(b"pw"))
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    args = argparse.Namespace(
+        host="db.example.org",
+        port=5432,
+        dbname="calu",
+        user="u",
+        sslmode=None,
+        sslrootcert=None,
+        keep_server_auth=None,
+    )
+    with pytest.raises(cli.CliError, match="channel binding"):
+        cli._setup_server(args, None)  # type: ignore[arg-type]  # no terminal: the answer is no
+    assert "can keep its own method" in capsys.readouterr().out
+    attempts.clear()
+    args.keep_server_auth = True
+    kept = cli._setup_server(args, None)  # type: ignore[arg-type]
+    assert "channel_binding" in attempts[0] and "channel_binding" not in attempts[1]
+    assert "require_auth" not in kept.conninfo

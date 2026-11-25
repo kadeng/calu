@@ -1219,8 +1219,66 @@ def _setup_server(args: argparse.Namespace, store: CredentialStore) -> Target:
         wipe(password)
     if owner.conninfo.get("sslmode") == "disable":
         print("warning: sslmode disable sends the password and all data unencrypted.")
-    asyncio.run(_check_owner_login(owner))
+    try:
+        asyncio.run(_check_owner_login(owner))
+    except CliError as exc:
+        if not _auth_requirement_refused(str(exc)) or not _keep_server_auth(args, owner, exc):
+            raise
+        owner = owner.with_server_auth()
+        asyncio.run(_check_owner_login(owner))
     return owner
+
+
+AUTH_REQUIREMENT_ERRORS = ("authentication method requirement", "channel binding")
+"""Parts of libpq's messages when a server does not offer the login method calu requires."""
+
+
+def _auth_requirement_refused(message: str) -> bool:
+    """Tell whether a failed connection failed on calu's login requirements alone.
+
+    Args:
+        message: The error of the connection attempt.
+
+    Returns:
+        True when libpq refused the server's login method: no SCRAM, or no channel binding.
+    """
+    return any(part in message for part in AUTH_REQUIREMENT_ERRORS)
+
+
+def _keep_server_auth(args: argparse.Namespace, owner: Target, refused: CliError) -> bool:
+    """Ask whether an existing server may keep its own login method (D279).
+
+    calu's default for a server on another host is SCRAM with channel binding. A server that
+    exists already is configured by its administrator; calu does not force its default on
+    it, but it does not weaken the login without a person's word either: a machine in the
+    middle could cause the same refusal on purpose.
+
+    Args:
+        args: Parsed arguments (`keep_server_auth`).
+        owner: The login that was refused.
+        refused: The refusal.
+
+    Returns:
+        True when the person agreed (or `--keep-server-auth` was given).
+
+    Raises:
+        CliError: If the answer is neither yes nor no.
+    """
+    if args.keep_server_auth:
+        return True
+    print(
+        f"{owner.place} does not offer the login method calu asks of a server on another "
+        f"host: SCRAM, and channel binding over TLS ({refused}). Without them a machine in "
+        "the middle can read the password or pass the login on. If this server is set up "
+        "that way on purpose (md5, or a connection pooler without channel binding), calu "
+        "can keep its own method for this database."
+    )
+    answer = ask("Keep the server's own login method? yes/no", "no", "--keep-server-auth")
+    if answer.lower() in ("yes", "y"):
+        return True
+    if answer.lower() in ("no", "n"):
+        return False
+    raise CliError(f"{answer!r} is neither yes nor no")
 
 
 def _setup_rds(args: argparse.Namespace, store: CredentialStore) -> Target:
@@ -1272,6 +1330,7 @@ _SETUP_OPTIONS = (
     ("dbname", "--dbname", ("server", "rds-iam")),
     ("user", "--user", ("server", "rds-iam")),
     ("sslmode", "--sslmode", ("server",)),
+    ("keep_server_auth", "--keep-server-auth", ("server",)),
     ("sslrootcert", "--sslrootcert", ("server", "rds-iam")),
     ("region", "--region", ("rds-iam",)),
     ("aws_profile", "--aws-profile", ("rds-iam",)),
@@ -6701,6 +6760,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--sslmode",
         choices=("disable", "allow", "prefer", "require", "verify-ca", "verify-full"),
         help="server: libpq sslmode; left out, a remote host gets `require`",
+    )
+    p.add_argument(
+        "--keep-server-auth",
+        action="store_true",
+        default=None,
+        help="server: if the server refuses calu's login requirements for a remote host "
+        "(SCRAM, channel binding over TLS), keep its own method (md5, a pooler) without asking",
     )
     p.add_argument(
         "--sslrootcert",

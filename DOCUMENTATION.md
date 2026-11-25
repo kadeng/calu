@@ -145,7 +145,7 @@ sudo calu setup              # as root (or `calu setup` for your own installatio
 | Which database | a local one in Docker, a PostgreSQL server you have, AWS RDS with IAM | `--database docker\|server\|rds-iam` |
 | For Docker: data directory and port | defaults: `<state>/calu/db` (`/var/lib/calu/db` as root), port 5433 | `--data-dir`, `--port` |
 | For Docker: stop with the server | keep it running (default), or stop it when `calu serve` ends and leave it stopped after a reboot. `calu run` and `calu serve` start it either way | `--stop-db-with-server`, `--no-stop-db-with-server` |
-| For a server: host, port, database, a database user and its password | that user creates Calu's tables and its login role; Calu keeps its login for migrations. On another host the logins take only SCRAM, with channel binding over TLS, so that a machine in the middle cannot read the password; a server that offers only md5, or a connection pooler without channel binding, cannot be used | `--host`, `--port`, `--dbname`, `--user`, `--sslmode`, `--sslrootcert` |
+| For a server: host, port, database, a database user and its password | that user creates Calu's tables and its login role; Calu keeps its login for migrations. On another host the logins take only SCRAM, with channel binding over TLS, so that a machine in the middle cannot read the password. If the server's own configuration refuses that (md5 only, a connection pooler without channel binding), the setup asks whether to keep the server's method | `--host`, `--port`, `--dbname`, `--user`, `--sslmode`, `--sslrootcert`, `--keep-server-auth` |
 | The calu user password | the one password Calu asks for: when a session or the server starts, when a browser or an IDE signs in, when you change a setting from a terminal. An empty one means Calu never asks ([what that costs](#the-calu-login-and-the-user-password)) | `--no-password` for an empty one |
 | Claude Code's sandbox | on when bubblewrap and socat are installed | `--sandbox`, `--no-sandbox` |
 
@@ -3876,8 +3876,13 @@ the missing ones together with the SQL for an administrator:
   neither read the password nor pass the login on. The passwords of Calu's own roles are
   stored as SCRAM. The database user you give the setup needs a password stored as SCRAM too;
   on AWS RDS set `password_encryption = scram-sha-256` in the parameter group and set that
-  user's password again. A server that offers only md5 cannot be used. Channel binding has not
-  been tried against RDS Proxy; the IAM variant (below) needs neither.
+  user's password again. Channel binding has not been tried against RDS Proxy; the IAM
+  variant (below) needs neither.
+- Calu does not force this on a server that is configured otherwise: when the server refuses
+  (md5 only, a connection pooler without channel binding), `calu setup` says so and asks
+  whether to keep the server's own method for this database; `--keep-server-auth` answers yes
+  in a script. It never does that by itself, because a machine in the middle could cause the
+  same refusal. A configuration stored before this rule keeps its connection settings.
 - Calu's roles belong to the whole server. A second Calu database on the same server shares
   them, and with them the user login's password: the last `calu setup` sets it.
 - A connection pooler in transaction mode is not supported: a session needs its own
