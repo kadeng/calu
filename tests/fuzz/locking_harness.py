@@ -1493,8 +1493,8 @@ def compare(seed: int, cfg: LoadConfig, batches_per_worker: int, repetitions: in
 
 
 class MixedOrderScheme(RWLockingScheme):
-    """WRONG on purpose: a command that writes outside takes its worktree locks before the
-    global lock, while every other operation takes the global lock first."""
+    """WRONG on purpose: a command that writes outside takes the global lock before its
+    worktree locks, while every other operation takes the global lock last."""
 
     def plan(self, operation: Operation) -> tuple[tuple[str, LockMode], ...]:
         """Return the locks in the wrong order for commands that write outside.
@@ -1507,7 +1507,7 @@ class MixedOrderScheme(RWLockingScheme):
         """
         steps = super().plan(operation)
         if operation.kind is OperationKind.COMMAND and operation.writes_outside:
-            return steps[1:] + steps[:1]
+            return steps[-1:] + steps[:-1]
         return steps
 
 
@@ -1525,7 +1525,7 @@ class ReversedWorktreesScheme(RWLockingScheme):
         """
         steps = super().plan(operation)
         if operation.kind is OperationKind.COMMAND and sum(map(ord, operation.owner)) % 2:
-            return steps[:1] + tuple(reversed(steps[1:]))
+            return tuple(reversed(steps[:-1])) + steps[-1:]
         return steps
 
 

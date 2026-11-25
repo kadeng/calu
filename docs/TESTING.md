@@ -240,8 +240,10 @@ edits without locks and commands with shared locks (overlaps), calls that ignore
 order, and a scheme that never gives owners back. The comparison runs one scenario of six
 agents in two worktrees with and without locks, on the scale 1 ms = 1 s, and prints both
 average times and the violations that locking prevents. Measured on 2026-11-25 (WSL2): with
-locks the scenario took 1.37 to 1.47 times as long; without locks, about 180 to 225 violations
-happened per run.
+locks the scenario took 1.34 to 1.47 times as long; without locks, about 180 to 225 violations
+happened per run. In the load of commands only, many of them writing outside, a few timeouts
+from waiting in line occur, because a command that writes outside holds its worktree while it
+waits for the global lock; none may end a deadlock.
 
 The fuzzer does not judge FIFO between agents (the unit tests do, for the thread backend), and
 its overlap check sees only overlaps longer than the time between a grant and its recording.

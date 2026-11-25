@@ -8,7 +8,8 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
 
 ### Newest: the locking component (D274, 2026-11-25), built in isolation
 
-The owner's locking scheme (agent/records/notes/locking-design.md) is in `src/calu/locking/`:
+The owner's locking scheme (design and decisions: agent/records/notes/locking.md) is in
+`src/calu/locking/`, with the global lock taken last (the owner's choice of 2026-11-25):
 `RWLockingScheme` (`run_command_in_worktree(s)`, `edit_in_worktree`, `edit_outside_worktree`)
 on a pluggable FIFO shared/exclusive lock (`RWLock.request` + `LockRequest.wait`, `LockSpace`),
 the thread backend `ThreadLockSpace`, `NoLockingScheme` (the drop-in that never locks) and

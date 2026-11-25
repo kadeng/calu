@@ -1,4 +1,7 @@
-# Locking edits against commands, per checkout (design, not built)
+# Locking edits against commands, per checkout: how the design came about
+
+**The current design is `locking.md`.** This note is the record of the exploration
+(2026-11-24/25): the first design, its adversarial review, and the plan for the wiring.
 
 The owner proposed this design on 2026-11-24. Inside a checkout, commands take a read/write
 lock exclusively and edits take it shared. Outside the checkouts it is the other way round. This
@@ -14,8 +17,9 @@ it; nothing in Calu imports it yet. It differs from the design below in three po
   locks of open decision 1 can follow by giving `edit_outside_worktree` a place.
 - **Deadlock freedom by lock order, not by all-or-nothing grants.** A pluggable lock per key (a
   file lock or a PostgreSQL advisory lock later) cannot be granted together with other keys by
-  one central table. So every operation takes its locks in one total order (global, worktrees
-  sorted, file), and every wait has a deadline. With one order, no cycle of waiting operations
+  one central table. So every operation takes its locks in one total order (worktrees sorted,
+  file, global; the global lock came first until the owner chose global last, see below), and
+  every wait has a deadline. With one order, no cycle of waiting operations
   can form; a wait that does last ends at the deadline (`LockTimeoutError`, nothing held).
 - **Per-file locks for edits** (review finding 22) and `writes_outside` for commands (finding 7)
   are options of the calls.
@@ -55,13 +59,12 @@ keep in mind:
   called more than once.
 - Lock calls run in worker threads (an asynchronous exception in a waiting thread can leave a
   lock taken).
-- Open question: the global lock is taken first. A command that waits for its worktree then
-  holds the global lock shared, and an edit outside waits behind it; with FIFO, every new
-  command in every worktree then queues behind that edit. Taking the global lock last shortens
-  those waits (the reviewer measured about half), but a command that waits for the global lock
-  then holds its worktree, so edits there wait too. Either way, one long command plus one
-  waiting edit outside stops new commands in every worktree until the command ends or the edit
-  times out.
+- Decided by the owner the same day: the global lock is taken last (worktrees, file, global).
+  A command that waits for a busy worktree then holds nothing, so an edit outside waits only for
+  the commands that run, not for those queued behind them; the cost is that a command waiting
+  for the global lock holds its worktree. The measurements are in PLAN.md D274. Either order:
+  one long command plus one waiting edit outside stops new commands in every worktree until the
+  command ends or the edit times out.
 
 Everything below is the design for the wiring.
 

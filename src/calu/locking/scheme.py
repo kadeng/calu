@@ -1,6 +1,6 @@
 """Which locks a command or an edit takes, and how long it may wait (agent/records/PLAN.md D274).
 
-The owner's scheme (agent/records/notes/locking-design.md): inside a worktree, a command takes
+The owner's scheme (agent/records/notes/locking.md): inside a worktree, a command takes
 the worktree's lock exclusively and an edit takes it shared. So no edit lands while a command
 runs there, and two commands of one worktree never run at once. A global lock guards
 everything outside the worktrees: an edit there takes it exclusively, every command shared.
@@ -35,10 +35,13 @@ Rules (the owner's decisions of 2026-11-25; the locks themselves are FIFO, `calu
   lock) cancels it: it gives back what it holds and raises `LockCancelledError`, so it can
   never run after the agent's later calls. Once the call returned its lease, withdrawing does
   nothing.
-- **No deadlock.** Every operation takes its locks in one total order (`lock_order`: the global
-  lock, the worktree locks sorted by id, the file lock), and every wait, also the wait for the
-  issue order, ends at the operation's timeout. An operation that runs out of time releases
-  what it holds, gives up its turn if it had not entered yet, and raises `LockTimeoutError`.
+- **No deadlock.** Every operation takes its locks in one total order (`lock_order`: the
+  worktree locks sorted by id, the file lock, the global lock), and every wait, also the wait
+  for the issue order, ends at the operation's timeout. An operation that runs out of time
+  releases what it holds, gives up its turn if it had not entered yet, and raises
+  `LockTimeoutError`. The global lock comes last (the owner's choice of 2026-11-25): a command
+  that waits for a busy worktree then holds nothing, so an edit outside waits only for the
+  commands that run, not for those queued behind them.
   This holds for exceptions the calls themselves raise; asynchronous exceptions such as
   KeyboardInterrupt are outside it (`calu.locking.rwlock`: call from worker threads).
 - **Timeouts.** `LockTimeouts` holds a default and a maximum for commands and for edits (both
@@ -108,8 +111,9 @@ def file_key(worktree: str, path: str) -> str:
 def lock_order(key: str) -> tuple[int, str]:
     """Return the sort key that defines the one order in which every operation takes its locks.
 
-    The global lock comes first, then the worktree locks, then the file locks; each group is
-    sorted by key.
+    The worktree locks come first (sorted by key), then the file locks, then the global lock.
+    A command therefore asks for the global lock only once it has its worktrees, and the call
+    enters its agent's issue order when that last request is queued.
 
     Args:
         key: A key made by `GLOBAL_KEY`, `worktree_key` or `file_key`.
@@ -118,8 +122,8 @@ def lock_order(key: str) -> tuple[int, str]:
         (group, key).
     """
     if key == GLOBAL_KEY:
-        return (0, key)
-    return (1 if key.startswith("worktree:") else 2, key)
+        return (2, key)
+    return (0 if key.startswith("worktree:") else 1, key)
 
 
 class OperationKind(enum.Enum):

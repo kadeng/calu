@@ -477,12 +477,12 @@ def test_each_operation_takes_its_locks_in_the_one_order() -> None:
     locking = scheme()
     command = Operation(OperationKind.COMMAND, "c", ("b", "a"))
     assert locking.plan(command) == (
-        (GLOBAL_KEY, SHARED),
         (worktree_key("a"), EXCLUSIVE),
         (worktree_key("b"), EXCLUSIVE),
+        (GLOBAL_KEY, SHARED),
     )
     writing = Operation(OperationKind.COMMAND, "c", ("a",), writes_outside=True)
-    assert locking.plan(writing) == ((GLOBAL_KEY, EXCLUSIVE), (worktree_key("a"), EXCLUSIVE))
+    assert locking.plan(writing) == ((worktree_key("a"), EXCLUSIVE), (GLOBAL_KEY, EXCLUSIVE))
     assert locking.plan(Operation(OperationKind.COMMAND, "c")) == ((GLOBAL_KEY, SHARED),)
     edit = Operation(OperationKind.EDIT, "e", ("a",), path="x.py")
     assert locking.plan(edit) == ((worktree_key("a"), SHARED), (file_key("a", "x.py"), EXCLUSIVE))
@@ -497,9 +497,9 @@ def test_a_command_names_each_worktree_once_and_in_order() -> None:
     with locking.run_command_in_worktrees(["b", "a", "b"], owner="cmd") as lease:
         assert lease.operation.worktrees == ("a", "b")
         assert lease.locks == (
-            (GLOBAL_KEY, SHARED),
             (worktree_key("a"), EXCLUSIVE),
             (worktree_key("b"), EXCLUSIVE),
+            (GLOBAL_KEY, SHARED),
         )
         assert lease.operation.owner == "cmd"
 
@@ -592,16 +592,16 @@ def test_a_command_that_writes_outside_excludes_every_other_command() -> None:
 
 def test_an_operation_that_timed_out_keeps_none_of_its_locks() -> None:
     locking = scheme()
-    first = locking.run_command_in_worktree("wt1", owner="first")
-    # The second command gets the global lock (shared) and then waits for the worktree.
+    outside = locking.edit_outside_worktree(owner="outside")
+    # The command gets its worktree and then waits for the global lock, held by the edit.
     with pytest.raises(LockTimeoutError) as raised:
-        locking.run_command_in_worktree("wt1", timeout=BLOCKED, owner="second")
-    assert raised.value.key == worktree_key("wt1")
+        locking.run_command_in_worktree("wt1", timeout=BLOCKED, owner="command")
+    assert raised.value.key == GLOBAL_KEY
     assert raised.value.waited_s >= BLOCKED
-    assert holders(locking, GLOBAL_KEY) == (("first", SHARED),)
-    first.release()
-    assert holders(locking, GLOBAL_KEY) == ()
-    locking.edit_outside_worktree(timeout=0, owner="second").release()
+    assert holders(locking, worktree_key("wt1")) == ()
+    locking.edit_in_worktree("wt1", timeout=0, owner="edit").release()
+    outside.release()
+    locking.run_command_in_worktree("wt1", timeout=0, owner="command").release()
 
 
 def test_a_lease_is_released_once_and_at_the_end_of_a_with_block() -> None:
@@ -681,7 +681,10 @@ def test_an_edit_a_command_and_an_edit_of_one_agent_run_in_issue_order() -> None
         lambda: call("edit 1", lambda: locking.edit_in_worktree("wt", ticket=first, owner="e1"))
     )
     wait_until(lambda: granted == ["edit 1"])
-    wait_until(lambda: queue_of(locking, worktree_key("wt")) == ["c", "e2"])
+    # The command waits for the worktree; it enters its agent's order only when it queues for
+    # its last lock (the global one), so the second edit waits for its turn meanwhile.
+    wait_until(lambda: queue_of(locking, worktree_key("wt")) == ["c"])
+    assert third.state is TicketState.ISSUED
     done["edit 1"].set()
     wait_until(lambda: granted == ["edit 1", "command"])
     time.sleep(BLOCKED)
@@ -888,15 +891,16 @@ def test_withdrawing_the_ticket_of_a_call_that_waits_for_a_lock_cancels_it() -> 
     """The reviewer's case: the call waits for its first lock, its ticket is withdrawn, and
     the agent's next call goes ahead; the cancelled call must never get its lease."""
     locking = scheme()
-    blocker = locking.edit_outside_worktree(owner="other agent's edit")
+    blocker = locking.run_command_in_worktree("wt", owner="other agent's command")
     first, second = locking.issue("A"), locking.issue("A")
     command = Background(lambda: locking.run_command_in_worktree("wt", ticket=first, owner="A.1"))
-    wait_until(lambda: queue_of(locking, GLOBAL_KEY) == ["A.1"])
+    wait_until(lambda: queue_of(locking, worktree_key("wt")) == ["A.1"])
+    assert first.state is TicketState.ISSUED  # its last lock, the global one, is not queued yet
     first.withdraw()
     with pytest.raises(LockCancelledError):
         command.finish(2)
-    edit = locking.edit_in_worktree("wt", ticket=second, timeout=0, owner="A.2")
-    assert queue_of(locking, GLOBAL_KEY) == []
+    edit = locking.edit_in_worktree("wt2", ticket=second, timeout=0, owner="A.2")
+    assert queue_of(locking, worktree_key("wt")) == []
     edit.release()
     blocker.release()
     for state in space_of(locking).snapshot():
@@ -967,3 +971,24 @@ def test_the_scheme_reports_live_owners_and_open_tickets() -> None:
         assert locking.live_owners() == frozenset({"edit"})
         assert locking.open_tickets() == {}
     assert locking.live_owners() == frozenset()
+
+
+def test_an_edit_outside_waits_only_for_the_commands_that_run() -> None:
+    """Why the global lock comes last (the owner's choice of 2026-11-25): a command that waits
+    for a busy worktree holds nothing, so an edit outside waits for the running command only,
+    not also for the command queued behind it."""
+    locking = scheme()
+    running = locking.run_command_in_worktree("wt1", owner="running")
+    queued = Background(lambda: locking.run_command_in_worktree("wt1", owner="queued"))
+    wait_until(lambda: queue_of(locking, worktree_key("wt1")) == ["queued"])
+    assert holders(locking, GLOBAL_KEY) == (("running", SHARED),)
+    outside = Background(lambda: locking.edit_outside_worktree(owner="outside"))
+    wait_until(lambda: queue_of(locking, GLOBAL_KEY) == ["outside"])
+    running.release()
+    # The edit gets the global lock before the queued command, which now holds its worktree
+    # and waits for the global lock behind the edit.
+    edit = lease_of(outside)
+    wait_until(lambda: queue_of(locking, GLOBAL_KEY) == ["queued"])
+    assert holders(locking, worktree_key("wt1")) == (("queued", EXCLUSIVE),)
+    edit.release()
+    lease_of(queued).release()

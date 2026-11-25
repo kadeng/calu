@@ -81,11 +81,14 @@ def test_random_load_breaks_no_rule() -> None:
 
 def test_a_load_of_commands_in_several_worktrees_never_deadlocks() -> None:
     """Commands only, many in two worktrees or writing outside: the load on which the wrong
-    lock orders below deadlock at once."""
+    lock orders below deadlock at once. A few timeouts from waiting in line can occur in this
+    extreme mix (a command that writes outside holds its worktree while it waits for every
+    running command); none of them may end a deadlock."""
     report = fuzz(RWLockingScheme, load(DEADLOCK_PRONE), SEED, SECONDS)
     print(f"\n{report.text()}")
     assert report.problems() == []
-    assert sum(report.ledger.timeouts.values()) == 0
+    assert not report.ledger.cycles
+    assert sum(report.ledger.deadlock_timeouts.values()) == 0
 
 
 @pytest.mark.parametrize("wrong", [MixedOrderScheme, ReversedWorktreesScheme])
