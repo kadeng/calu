@@ -10,7 +10,7 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
 
 Two adversarial reviews (an external attacker; the web interface) and the owner's decisions are
 in PLAN D279. Order of work: the quick wins Q1-Q7, then S1 (warnings), S2 (the place file
-split, 3,000,000 SCRAM iterations, `auth_delay`), S3 (the web password instead of the printed
+split, 300,000 SCRAM iterations (first 3,000,000), `auth_delay`), S3 (the web password instead of the printed
 token; the pane asks for it), S4 (the PyCharm approval). The proof scripts of the reviews are not
 in the repository; some describe ways around the checkers. Done and pushed: Q1-Q7, S1, S2, S3 (`calu web
 --set-password`, `src/calu/web/password.py`; the pane's password dialog in

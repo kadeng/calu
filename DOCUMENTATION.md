@@ -1045,7 +1045,7 @@ calu web --sudo   # the same, run as root on your behalf: Claude Code cannot rea
   without a wrong one.
 - With an empty user password (`calu setup --no-password`), `calu web` has a password of its
   own. Choose it once with `calu web --set-password` (with `sudo` for root's installation;
-  then only root can change it). Calu keeps only a slow hash of it (PBKDF2, 3,000,000 rounds,
+  then only root can change it). Calu keeps only a slow hash of it (PBKDF2, 300,000 rounds,
   in `web-password.json` next to calu's `.env`, mode 0600). An empty choice is allowed after a
   second question: `calu web` then asks for no password and warns at every start that every
   program of this machine, Claude Code's commands included, can use it. Without a choice
@@ -3863,9 +3863,10 @@ password (existing server only), then the new user password twice (none with `--
   server to prove that it knows the password (SCRAM), so Calu refuses a connection to another
   program that listens on the port.
 - Guessing a password at the port is slow: the local database answers a wrong password after
-  a second (`auth_delay`), and the password of `calu_admin` is stored with 3,000,000 SCRAM
+  a second (`auth_delay`), and the password of `calu_admin` is stored with 300,000 SCRAM
   rounds (on every PostgreSQL server from version 16 on), which a guesser must compute for
-  every guess. Calu's own logins pay those rounds once per connection, about 0.3 s. A
+  every guess. Calu's own logins pay those rounds once per connection: 0.03 s on a CPU with SHA
+  instructions, about 0.5 s on one without. A
   container made before this rule gets the delay at its next `calu db up`.
 - A database that an earlier `calu db up` created in the Docker volume `calu-db_data` keeps
   working unchanged, with its stored logins, which do not ask for that proof. To move it into

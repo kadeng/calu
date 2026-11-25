@@ -10,8 +10,8 @@ and logs, where Claude Code's commands could read it.
     where       `<config>/calu/web-password.json`, mode 0600 (as root: /etc/calu, root's alone)
 
 The password itself is never stored. Checking it costs `calu.setup.scram_iterations()` rounds,
-about 0.3 s, so that a guesser pays for every guess; changing it needs the right to write the
-file, which in root's installation only root has.
+0.03 to 0.5 s by CPU, so that a guesser pays for every guess; changing it needs the right to
+write the file, which in root's installation only root has.
 """
 
 import base64

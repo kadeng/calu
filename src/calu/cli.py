@@ -4505,7 +4505,7 @@ def _web_login(by_password: bool, place: Target, stored: tuple[Any, str]) -> tup
         return None, "no password"
 
     async def check(typed: str) -> bool:
-        """Compare a typed password with the stored hash, off the event loop (~0.3 s).
+        """Compare a typed password with the stored hash, off the event loop (up to 0.5 s).
 
         Args:
             typed: What a person typed.

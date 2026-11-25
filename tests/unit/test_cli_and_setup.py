@@ -494,10 +494,8 @@ def test_the_user_password_works_on_rds_after_leaving_rds_iam(
     alters = [i for i, s in enumerate(conn.statements) if "ALTER ROLE" in s]
     assert len(alters) == 1 and "calu_admin" in conn.statements[alters[0]]
     assert "'pw'" not in conn.statements[alters[0]], "only the verifier reaches the server"
-    # D279: the verifier is computed with 3,000,000 rounds (the connection's setting).
-    rounds = [
-        i for i, s in enumerate(conn.statements) if "scram_iterations" in s and "3000000" in s
-    ]
+    # D279: the verifier is computed with 300,000 rounds (the connection's setting).
+    rounds = [i for i, s in enumerate(conn.statements) if "scram_iterations" in s and "300000" in s]
     assert len(rounds) == 1 and rounds[0] < alters[0]
     if member:
         assert len(revokes) == 1 and revokes[0] < alters[0]

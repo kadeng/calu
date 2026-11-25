@@ -57,7 +57,7 @@ async def test_a_connection_asks_for_keepalives_and_a_connect_timeout(db_url: st
         assert params["keepalives_idle"] == "30"
         assert params["keepalives_interval"] == "10"
         assert params["keepalives_count"] == "3"
-        assert params["connect_timeout"] == "10"
+        assert params["connect_timeout"] == "30"
         assert params["tcp_user_timeout"] == "60000"
     finally:
         await conn.close()

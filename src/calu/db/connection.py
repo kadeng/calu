@@ -78,7 +78,7 @@ def migrations() -> list[Migration]:
 
 
 LIVENESS: dict[str, Any] = {
-    "connect_timeout": 10,
+    "connect_timeout": 30,
     "keepalives": 1,
     "keepalives_idle": 30,
     "keepalives_interval": 10,
@@ -89,8 +89,10 @@ LIVENESS: dict[str, Any] = {
 
 Without them an idle connection whose peer vanished without a TCP reset (NAT or firewall
 timeout, suspended machine, cut VPN) reports nothing for about two hours, and a connection
-attempt to an unreachable host can block for minutes. A parameter that the connection string
-sets itself wins over the value here. `tcp_user_timeout` is in milliseconds."""
+attempt to an unreachable host can block for minutes. `connect_timeout` is in seconds and
+covers the whole login, the client's SCRAM rounds included (D279: about 0.5 s on a CPU without
+SHA instructions; 10 s was too short when the rounds were 3,000,000). A parameter that the
+connection string sets itself wins over the value here. `tcp_user_timeout` is in milliseconds."""
 
 RECONNECT_FIRST_S = 0.5
 """Pause after the first failed attempt to reopen a lost connection; doubled per attempt."""

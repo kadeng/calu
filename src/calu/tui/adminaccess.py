@@ -55,8 +55,9 @@ NO_CREDENTIAL = (
 )
 """What `StoreAdmin.problem` says without the credential."""
 
-CONNECT_TIMEOUT_S = 10.0
-"""How long opening the database connection may take before the change is given up."""
+CONNECT_TIMEOUT_S = 30.0
+"""How long opening the database connection may take before the change is given up; as long
+as libpq's own `connect_timeout` (`calu.db.connection.LIVENESS`)."""
 
 MODES = ("off", "track", "enforce")
 """The values of `honesty.mode`, from the weakest to the strictest."""

@@ -400,8 +400,12 @@ async def is_user_password(place: Target, password: str) -> bool:
     return True
 
 
-SCRAM_ITERATIONS = 3_000_000
-"""Rounds of the SCRAM verifier of `calu_admin` (D279, the owner: "Use 3 million rehashes")."""
+SCRAM_ITERATIONS = 300_000
+"""Rounds of the SCRAM verifier of `calu_admin` and of the web password's hash (D279). First
+3,000,000; that took 4.9 s per login on a CPU without SHA instructions (a Xeon Silver 4116), more
+than libpq's 10 s connect timeout for two connections. The owner then: "Use 300k ... Enough to
+multiply by a lot the computational price for brute-forcing." About 0.5 s there, 0.03 s on a
+CPU with SHA instructions."""
 
 ITERATIONS_ENV = "CALU_SCRAM_ITERATIONS"
 """Replaces `SCRAM_ITERATIONS`, at least 4096 (PostgreSQL's default). Calu's tests set it low:
@@ -426,7 +430,7 @@ async def set_user_password(conn: psycopg.AsyncConnection, password: str) -> Non
     `rds_iam`, which would otherwise make the server ignore the password. From PostgreSQL 16
     on the verifier takes `SCRAM_ITERATIONS` rounds (D279): every guess at the password then
     costs the guesser that work, on the server's port as well as with a stolen verifier;
-    every login of calu pays it once (about 0.3 s).
+    every login of calu pays it once (0.03 to 0.5 s, by CPU).
 
     Args:
         conn: An open connection of the database owner, schema migrated (version 33).

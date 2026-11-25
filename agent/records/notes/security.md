@@ -31,7 +31,8 @@ Each entry: what is weaker than it could be, why the owner chose it, and what li
    included. Limits: `calu setup`, `calu doctor` and every start of `calu web` say so; the
    default asks for a password.
 2. **No minimum password length.** The same reasoning. Limits: every check of a password costs
-   3,000,000 rounds (SCRAM in PostgreSQL, PBKDF2 for the web password; about 0.3 s each), the
+   300,000 rounds (SCRAM in PostgreSQL, PBKDF2 for the web password; 0.03 to 0.5 s each,
+   by CPU), the
    local database answers a wrong password after a second (`auth_delay`), and the web sign-in
    waits longer after each wrong password.
 3. **`calu web` speaks plain HTTP by default.** It listens on the loopback interface only, so
