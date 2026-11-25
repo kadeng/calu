@@ -300,6 +300,14 @@ end of the run: give back every lock and ticket of the session
 - Giving back locks never raises (`CallLocks.release`, `call_ended`, `close` log a failure), so
   a failing backend cannot cut the end of a run short.
 - With locking off, the plan of a call (its checkouts) is made in the worker thread too.
+- Running sessions follow a changed `locking` setting (the owner, 2026-11-25):
+  `Session.apply_settings` calls `CallLocks.reconfigure`. A call keeps the setting in effect
+  when its check began (`issue` notes it), so its ticket and its scheme stay together: a call
+  issued with locking off takes no lock even if locking is on when it is approved, and one
+  issued with locking on still takes its locks after locking was switched off. A second take
+  (after `release`) and every later call use the new setting. During the switch the calls of
+  one agent under the old and the new setting are not ordered against each other (two schemes,
+  two issue orders).
 - A command that writes outside its worktrees takes the global lock exclusively (the owner,
   2026-11-25). The command checker answers `writes_outside_worktree`: true when the command
   plainly writes source code, configuration, a script or a program outside its checkout; logs,

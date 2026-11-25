@@ -714,8 +714,12 @@ calu config set locking.command_wait_s 300   # how long a command waits for its 
 | `locking.directory` | Where the `files` backend keeps its state; blank means `~/.local/state/calu/locks`. It must belong to you and must not be writable by the group or others |
 | `locking.command_wait_s`, `locking.edit_wait_s` | How long a command or an edit waits for its locks: 600 s by default, at most 3600 s. A wait never outlasts the time Claude Code gives the permission check (about 15 minutes) |
 
-A new setting applies to sessions that start afterwards. When the lock directory cannot be used,
-every command and edit is denied with the reason. The design and its decisions:
+A changed setting also applies to running sessions, from the next command or edit whose check
+begins after the change; a call that is already being checked or running keeps the setting it
+started with. To use locking for one project only, set it in the project's scope
+(`calu config set locking.enabled true --project NAME`, or the scope selector of the settings
+dialog). When the lock directory cannot be used, every command and edit is denied with the
+reason. The design and its decisions:
 `agent/records/notes/locking.md`.
 
 ---

@@ -29,7 +29,7 @@ from calu.locking import (
     worktree_key,
 )
 from calu.protocol.messages import ChatSendParams, ToolResult, TurnResult
-from tests.unit.helpers import make_session
+from tests.unit.helpers import default_settings, make_session
 
 pytestmark = pytest.mark.anyio
 
@@ -578,4 +578,65 @@ async def test_the_command_checkers_flag_reaches_the_locks(tmp_path: Path) -> No
     await session._on_runner_event(ToolResult(tool_use_id="t1", is_error=False, content="ok"))
     assert (await session.pre_tool_use(command("make", "t2"))).verdict
     assert session.locks.holding()["t2"][-1] == (GLOBAL_KEY, "shared")
+    session.locks.close()
+
+
+async def test_a_new_setting_applies_to_the_calls_issued_afterwards(tmp_path: Path) -> None:
+    tree = Tree(tmp_path / "repo")
+    locks = call_locks(tmp_path, tree, enabled=False)
+    before, after = bash("make", "c1"), bash("make test", "c2")
+    locks.issue(before)  # its check began while locking was off
+    locks.reconfigure(locking(tmp_path))
+    locks.issue(after)
+    assert await locks.take(before, None) == ""
+    assert locks.holding()["c1"] == ()  # it keeps the setting it was issued under
+    locks.call_ended("c1")
+    assert await locks.take(after, None) == ""
+    assert locks.holding()["c2"][0] == (worktree_key(str(tree.main.root)), "exclusive")
+
+    late = bash("make lint", "c3")
+    locks.issue(late)  # issued while locking is on, taken after it was switched off
+    locks.reconfigure(locking(tmp_path, enabled=False))
+    locks.call_ended("c2")
+    assert await locks.take(late, None) == ""
+    assert locks.holding()["c3"][0] == (worktree_key(str(tree.main.root)), "exclusive")
+    locks.release(late)  # a person decides; the second take uses the setting of now
+    assert await locks.take(late, None) == ""
+    assert locks.holding()["c3"] == ()
+    fresh = bash("make docs", "c4")
+    locks.issue(fresh)
+    assert await locks.take(fresh, None) == ""
+    assert locks.holding()["c4"] == ()
+    locks.close()
+
+
+async def test_a_running_session_follows_a_changed_locking_setting(tmp_path: Path) -> None:
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    session, _rec, _store = make_session(workspace, [], Config())
+
+    def command(text: str, call: str) -> Step:
+        """Return a Bash call of the main agent in the project.
+
+        Args:
+            text: The command.
+            call: The tool call's id.
+
+        Returns:
+            The step.
+        """
+        return Step(
+            tool_name="Bash", tool_input={"command": text}, tool_use_id=call, cwd=str(workspace)
+        )
+
+    assert (await session.pre_tool_use(command("make", "t1"))).verdict
+    assert session.locks.holding()["t1"] == ()
+    session.apply_settings(default_settings(workspace, Config(locking=locking(tmp_path))))
+    assert (await session.pre_tool_use(command("make test", "t2"))).verdict
+    root = str(session.checkouts.main.root)
+    assert session.locks.holding()["t2"][0] == (worktree_key(root), "exclusive")
+    session.apply_settings(default_settings(workspace, Config()))
+    await session._on_runner_event(ToolResult(tool_use_id="t2", is_error=False, content="ok"))
+    assert (await session.pre_tool_use(command("make lint", "t3"))).verdict
+    assert session.locks.holding()["t3"] == ()
     session.locks.close()

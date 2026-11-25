@@ -1285,4 +1285,7 @@ kept as `~/.config/calu/credentials.json.before-d266`.
 | Locking on, how a waiting call looks | open (UX): a call that waits for its locks shows as running; nothing says that it waits, or for what |
 | Settings dialog with the rebuilt extension (6174d43): the Locking section | ok: all five settings with their descriptions; the switch stores `locking.enabled` true and "Reset to default" removes it (read back with `calu config list`); a command wait of 5000 is refused with "Input should be less than or equal to 3600" and nothing is stored. Screenshot: `screenshots/vscode-settings-locking.png` |
 
+| Switched during a running session (CallLocks.reconfigure): a session started with locking off, the dialog's switch turned it on, then `scenario: swarm` in the same session | ok: the subagents' commands queued on the worktree (state file: one holder, nine waiting) |
+| The same run, switched off in the dialog while commands queued | ok: the queued calls (issued while on) kept their locks and ran, the queue was empty a few seconds later, and the rest of the run took no lock (the state file's sequence number stayed at 32 until the end, 2 min 24 s with both decisions) |
+
 Afterwards `locking.enabled` was unset again in the container.

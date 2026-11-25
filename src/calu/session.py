@@ -2545,11 +2545,12 @@ class Session:
         """Replace configuration, rules and checker instructions (after `config_changed`).
 
         Takes effect from the next tool call on: the checkers rebuild their agents when their
-        instructions change, and the rules object is replaced as a whole. The settings of the
-        running Claude session itself (model, effort, permission mode) are not changed, because
-        Claude Code reads them when the session starts; they apply to the next `start`. A
-        changed `traces` section ends the running trace file and, if tracing is on, starts a
-        new one (`_follow_traces`).
+        instructions change, and the rules object is replaced as a whole. Changed `locking`
+        settings apply to the calls whose check begins afterwards (`CallLocks.reconfigure`). The
+        settings of the running Claude session itself (model, effort, permission mode) are not
+        changed, because Claude Code reads them when the session starts; they apply to the next
+        `start`. A changed `traces` section ends the running trace file and, if tracing is on,
+        starts a new one (`_follow_traces`).
 
         Args:
             settings: The newly loaded settings.
@@ -2563,6 +2564,8 @@ class Session:
             overrides=self.config.tool_routes, default=self.config.default_route
         )
         self.context.config = self.config.context
+        # Locking follows a changed setting from the next call whose check begins (D276).
+        self.locks.reconfigure(self.config.locking)
         # Rebuilt rather than updated in place: a route carries a list now (D81), so a checker
         # row added, removed or disabled while the session runs takes effect at the next step,
         # as its instructions and its model already did. The code tools of the new checkers

@@ -140,6 +140,44 @@ class _Plan:
     writes_outside: bool = False
 
 
+@dataclass(frozen=True)
+class _Mode:
+    """One locking setting in effect: the scheme it gives, or why locking cannot work.
+
+    Attributes:
+        config: The locking settings.
+        scheme: `RWLockingScheme` on the shared space when locking is on, else
+            `NoLockingScheme`.
+        broken: Why the space cannot be used ("" when it can); every command and edit of the
+            mode is then denied with it.
+    """
+
+    config: LockingConfig
+    scheme: LockingScheme
+    broken: str = ""
+
+
+def _mode(config: LockingConfig) -> _Mode:
+    """Choose the scheme for `config`; with locking on, open the shared space.
+
+    Args:
+        config: The locking settings.
+
+    Returns:
+        The mode. A space that cannot be opened (e.g. the directory of the "files" backend
+        cannot be created) gives a mode with `broken` set, not an exception.
+    """
+    timeouts = LockTimeouts(config.command_wait_s, MAX_WAIT_S, config.edit_wait_s, MAX_WAIT_S)
+    if not config.enabled:
+        return _Mode(config, NoLockingScheme(timeouts))
+    try:
+        return _Mode(config, RWLockingScheme(shared_space(config), timeouts))
+    except OSError as exc:
+        broken = f"Calu's locking cannot use its directory: {exc}"
+        log.error("%s; every command and edit is denied", broken)
+        return _Mode(config, NoLockingScheme(timeouts), broken)
+
+
 class CallLocks:
     """Issues tickets, takes and gives back the locks of the tool calls of one session.
 
@@ -148,9 +186,16 @@ class CallLocks:
     lock. The owner of a call's locks is "<tool call id>@<token of this object>": the lock space
     is shared with other sessions and processes, and tool call ids are unique only per session.
 
+    The settings can change while the session runs (`reconfigure`). A call keeps the setting
+    that was in effect when its check began (`issue`): a call issued with locking off takes no
+    lock even if locking is on by the time it is approved, and a call issued with locking on
+    still takes its locks after locking was switched off. A second take of a call (`take` after
+    `release`) and every call issued later use the new setting.
+
     Attributes:
-        config: The locking settings the session started with.
-        scheme: `RWLockingScheme` on the shared space when locking is on, else `NoLockingScheme`.
+        config: The locking settings in effect for calls issued from now on.
+        scheme: Their scheme: `RWLockingScheme` on the shared space when locking is on, else
+            `NoLockingScheme`.
     """
 
     def __init__(
@@ -160,7 +205,7 @@ class CallLocks:
         checkout_of: Callable[[Path], Checkout | None],
         workspace: Path,
     ) -> None:
-        """Choose the scheme for `config`; with locking on, open the shared space.
+        """Choose the scheme for `config` (`_mode`); with locking on, open the shared space.
 
         A space that cannot be opened (the directory of the "files" backend cannot be created)
         does not fail the session: every call that needs locks is then denied with the reason.
@@ -172,35 +217,71 @@ class CallLocks:
                 every checkout.
             workspace: The session directory, for relative paths.
         """
-        self.config = config
         self._step_checkouts = step_checkouts
         self._checkout_of = checkout_of
         self._workspace = workspace
-        timeouts = LockTimeouts(config.command_wait_s, MAX_WAIT_S, config.edit_wait_s, MAX_WAIT_S)
-        self._broken = ""
-        self.scheme: LockingScheme = NoLockingScheme(timeouts)
-        if config.enabled:
-            try:
-                self.scheme = RWLockingScheme(shared_space(config), timeouts)
-            except OSError as exc:
-                self._broken = f"Calu's locking cannot use its directory: {exc}"
-                log.error("%s; every command and edit is denied", self._broken)
+        self._current = _mode(config)
         self._token = secrets.token_hex(4)
         self._mutex = threading.Lock()
+        self._modes: dict[str, _Mode] = {}  # the mode each issued call keeps
         self._tickets: dict[str, Ticket] = {}
         self._leases: dict[str, Lease] = {}
         self._outside: set[str] = set()
         self._limiter = anyio.CapacityLimiter(WAIT_THREADS)
 
+    @property
+    def config(self) -> LockingConfig:
+        """The locking settings in effect for calls issued from now on.
+
+        Returns:
+            The settings.
+        """
+        return self._current.config
+
+    @property
+    def scheme(self) -> LockingScheme:
+        """The scheme of calls issued from now on.
+
+        Returns:
+            `RWLockingScheme` when locking is on, else `NoLockingScheme`.
+        """
+        return self._current.scheme
+
+    def reconfigure(self, config: LockingConfig) -> None:
+        """Use new locking settings for the calls issued from now on.
+
+        Calls issued before keep their setting until they end (see the class docstring);
+        their tickets and leases stay valid. Equal settings change nothing.
+
+        Args:
+            config: The new settings.
+        """
+        if config == self._current.config:
+            return
+        mode = _mode(config)
+        with self._mutex:
+            self._current = mode
+        log.info(
+            "locking %s for the calls issued from now on",
+            "on" if config.enabled and not mode.broken else "off",
+        )
+
     def issue(self, step: Step) -> None:
         """Give the call its place in its agent's issue order, when its check begins.
+
+        The call keeps the setting in effect now (`reconfigure`) until it ends.
 
         Args:
             step: The tool call; nothing happens for one that takes no lock or has no id.
         """
-        if not needs_locks(step) or not step.tool_use_id or self._broken:
+        if not needs_locks(step) or not step.tool_use_id:
             return
-        ticket = self.scheme.issue(step.agent_id or "main")
+        with self._mutex:
+            mode = self._current
+            self._modes[step.tool_use_id] = mode
+        if mode.broken:
+            return
+        ticket = mode.scheme.issue(step.agent_id or "main")
         with self._mutex:
             self._tickets[step.tool_use_id] = ticket
 
@@ -230,14 +311,16 @@ class CallLocks:
         key = step.tool_use_id or ""
         with self._mutex:
             ticket = self._tickets.pop(key, None)
+            self._modes.pop(key, None)
         if ticket is not None:
             _give_back(ticket, key)
 
     async def take(self, step: Step, budget_s: float | None) -> str:
         """Take the locks of an approved call; wait at most the configured wait and `budget_s`.
 
-        The first `take` of a call uses its ticket. A later one (after `release`, e.g. when a
-        person decided) enters the queues at once, with a ticket of its own (agent
+        The first `take` of a call uses its ticket and the setting in effect when it was issued.
+        A later one (after `release`, e.g. when a person decided) uses the setting in effect
+        now and enters the queues at once, with a ticket of its own (agent
         "retake:<tool call id>"), so that a cancellation ends its wait, too. The wait runs in a
         worker thread; when this coroutine is cancelled, the ticket is withdrawn and a lease
         that arrives anyway is given back.
@@ -254,19 +337,25 @@ class CallLocks:
         key = step.tool_use_id or ""
         if not needs_locks(step) or not key:
             return ""
-        if self._broken:
-            self.withdraw(step)
-            return f"Not run: {self._broken}. Nothing was changed."
         with self._mutex:
             ticket = self._tickets.pop(key, None)
+            # The setting noted at `issue` for the first take; the current one for a re-take.
+            mode = self._modes.pop(key, None) or self._current
             old = self._leases.pop(key, None)
         if old is not None:
             _give_back(old, key)
+        if mode.broken:
+            if ticket is not None:
+                _give_back(ticket, key)
+            return f"Not run: {mode.broken}. Nothing was changed."
         if ticket is None:
-            ticket = self.scheme.issue(f"retake:{key}")
+            ticket = mode.scheme.issue(f"retake:{key}")
+        scheme = mode.scheme
         try:
             # Also with locking off: the plan resolves paths and may run git (`_plan`).
-            lease = await self._in_thread(lambda: self._lock_call(step, ticket, budget_s), ticket)
+            lease = await self._in_thread(
+                lambda: self._lock_call(step, scheme, ticket, budget_s), ticket
+            )
         except LockTimeoutError as exc:
             return _busy(exc, self._plan(step).labels)
         except LockCancelledError:
@@ -303,6 +392,7 @@ class CallLocks:
         with self._mutex:
             lease = self._leases.pop(tool_use_id, None)
             ticket = self._tickets.pop(tool_use_id, None)
+            self._modes.pop(tool_use_id, None)
             self._outside.discard(tool_use_id)
         if lease is not None:
             _give_back(lease, tool_use_id)
@@ -318,6 +408,7 @@ class CallLocks:
         with self._mutex:
             leases, self._leases = dict(self._leases), {}
             tickets, self._tickets = dict(self._tickets), {}
+            self._modes.clear()
             self._outside.clear()
         for key, lease in leases.items():
             _give_back(lease, key)
@@ -373,12 +464,15 @@ class CallLocks:
         }
         return _Plan("edit", (root,), path, labels)
 
-    def _lock_call(self, step: Step, ticket: Ticket | None, budget_s: float | None) -> Lease:
+    def _lock_call(
+        self, step: Step, scheme: LockingScheme, ticket: Ticket | None, budget_s: float | None
+    ) -> Lease:
         """Make the scheme's lock call for `step`; blocks until it has its locks.
 
         Args:
             step: A tool call that needs locks.
-            ticket: Its ticket, or None.
+            scheme: The scheme of the setting the call uses (`take`).
+            ticket: Its ticket (of that scheme), or None.
             budget_s: The longest the caller can wait, or None.
 
         Returns:
@@ -391,7 +485,7 @@ class CallLocks:
         """
         plan = self._plan(step)
         owner = f"{step.tool_use_id}@{self._token}"
-        limits = self.scheme.timeouts
+        limits = scheme.timeouts
         if plan.kind == "command":
             wait = limits.command_default_s
         else:
@@ -399,7 +493,7 @@ class CallLocks:
         if budget_s is not None:
             wait = max(0.0, min(wait, budget_s))
         if plan.kind == "command":
-            return self.scheme.run_command_in_worktrees(
+            return scheme.run_command_in_worktrees(
                 plan.worktrees,
                 timeout=wait,
                 writes_outside=plan.writes_outside,
@@ -407,10 +501,10 @@ class CallLocks:
                 ticket=ticket,
             )
         if plan.kind == "edit":
-            return self.scheme.edit_in_worktree(
+            return scheme.edit_in_worktree(
                 plan.worktrees[0], path=plan.path, timeout=wait, owner=owner, ticket=ticket
             )
-        return self.scheme.edit_outside_worktree(timeout=wait, owner=owner, ticket=ticket)
+        return scheme.edit_outside_worktree(timeout=wait, owner=owner, ticket=ticket)
 
     async def _in_thread(self, call: Callable[[], Lease], ticket: Ticket | None) -> Lease:
         """Run a blocking lock call in a worker thread; never leave a lease behind.
