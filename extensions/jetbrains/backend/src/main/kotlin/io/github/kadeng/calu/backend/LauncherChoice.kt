@@ -55,7 +55,7 @@ fun hostFacts(): HostFacts = HostFacts(
 )
 
 /** A launcher that cannot start anything and says why. */
-private class RefusingLauncher(private val why: String) : BridgeLauncher {
+internal class RefusingLauncher(private val why: String) : BridgeLauncher {
     override val kind: String = "none"
     override val reconnects: Boolean = false
     override fun describe(): String = why

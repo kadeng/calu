@@ -9,6 +9,15 @@
  * The password the user types travels frontend → backend → `ide.unlock` and is kept in a
  * `PasswordMemory` of the application (`CaluPasswords`), keyed by the calu that is reached, so
  * that one entry serves every project and every restart of a bridge until the IDE closes.
+ *
+ * Nothing runs before a person approved the project's settings (`.idea/calu.xml` can come with a
+ * repository; D279, S4). Until then the wiring has a launcher that refuses, and an approval
+ * request goes to the frontend like a password request:
+ *
+ *     build ── not approved ──► approvalRequests ──► dialog ──► answerApproval ── yes ──► rebuild
+ *
+ * The wiring keeps the settings that were approved (`Wiring.settings`); the server command and
+ * the terminal command are built from them, not from a file that changed since.
  */
 package io.github.kadeng.calu.backend
 
@@ -24,9 +33,12 @@ import io.github.kadeng.calu.bridge.PasswordPrompt
 import io.github.kadeng.calu.chat.ChatController
 import io.github.kadeng.calu.chat.ServerSettings
 import io.github.kadeng.calu.logic.ResolveResult
+import io.github.kadeng.calu.logic.approvalText
+import io.github.kadeng.calu.logic.launchContent
 import io.github.kadeng.calu.logic.promptText
 import io.github.kadeng.calu.logic.resolveCaluCommand
 import io.github.kadeng.calu.logic.splitArgs
+import io.github.kadeng.calu.remote.ApprovalRequestDto
 import io.github.kadeng.calu.remote.PasswordRequestDto
 import io.github.kadeng.calu.remote.PluginSettingsDto
 import kotlinx.coroutines.CompletableDeferred
@@ -61,13 +73,21 @@ class CaluPasswords {
  */
 @Service(Service.Level.PROJECT)
 class CaluProjectService(private val project: Project, private val scope: CoroutineScope) : Disposable {
-    /** The parts that are rebuilt when the settings change how calu is reached. */
+    /**
+     * The parts that are rebuilt when the settings change how calu is reached.
+     *
+     * @property settings The settings the wiring runs with: approved ones, kept up to date by
+     *   the settings page (`applySettings`), never re-read from the file.
+     * @property approved False while the settings wait for approval: the launcher refuses then.
+     */
     class Wiring(
         val choice: LauncherChoice,
         val supervisor: BridgeSupervisor,
         val controller: ChatController,
         val sync: CaluSync? = null,
         val interpreter: CaluInterpreter? = null,
+        @Volatile var settings: PluginSettingsDto = PluginSettingsDto(),
+        val approved: Boolean = true,
     )
 
     private val log = Logger.getInstance(CaluProjectService::class.java)
@@ -76,6 +96,12 @@ class CaluProjectService(private val project: Project, private val scope: Corout
     private var nextPasswordId = 1
     private var pendingPassword: Pair<Int, CompletableDeferred<String?>>? = null
     private val passwordFlow = MutableStateFlow<PasswordRequestDto?>(null)
+    private var nextApprovalId = 1
+    private var pendingApproval: Pair<Int, String>? = null
+    private val approvalFlow = MutableStateFlow<ApprovalRequestDto?>(null)
+
+    /** The open approval request (`null` if none); the frontend shows a dialog for it. */
+    val approvalRequests: StateFlow<ApprovalRequestDto?> get() = approvalFlow
 
     /** The open password request (`null` if none); the frontend shows a dialog for it. */
     val passwordRequests: StateFlow<PasswordRequestDto?> get() = passwordFlow
@@ -123,18 +149,44 @@ class CaluProjectService(private val project: Project, private val scope: Corout
         val before = settings.toDto()
         settings.update(dto)
         val after = settings.toDto()
+        // The person saw and saved these settings: that approves them.
+        CaluApprovals.get().approve(launchContent(after))
         val same = before.mode == after.mode && before.caluCommand == after.caluCommand && before.sshHost == after.sshHost &&
             before.sshDirectory == after.sshDirectory && before.sshOptions == after.sshOptions && before.syncMode == after.syncMode
-        val old = synchronized(lock) { if (same) null else wiring.also { wiring = null } }
+        val current = synchronized(lock) { wiring }
+        if (!same || current?.approved == false) {
+            rebuild()
+        } else if (current != null) {
+            current.settings = after
+            current.controller.updateHints()
+        }
+    }
+
+    /** Stop the bridge of the current wiring (if any) and build and start a new one. */
+    private fun rebuild() {
+        val old = synchronized(lock) { wiring.also { wiring = null } }
         if (old != null) {
             old.sync?.dispose()
             old.interpreter?.dispose()
             old.supervisor.dispose()
-            wiring()
-            restarted.value += 1
-        } else {
-            synchronized(lock) { wiring }?.controller?.updateHints()
         }
+        wiring()
+        restarted.value += 1
+    }
+
+    /**
+     * Answer the open approval request.
+     *
+     * @param id The request's number; another number is ignored.
+     * @param approved True to approve the settings it showed and start calu with them.
+     */
+    fun answerApproval(id: Int, approved: Boolean) {
+        val content = synchronized(lock) { pendingApproval?.takeIf { it.first == id }?.also { pendingApproval = null } }?.second ?: return
+        approvalFlow.value = null
+        if (!approved) return
+        CaluApprovals.get().approve(content)
+        // Start only if the file still holds what was shown; else build() asks again.
+        rebuild()
     }
 
     /** Counts the rebuilds of the wiring; subscribers of the chat start again when it changes. */
@@ -159,7 +211,18 @@ class CaluProjectService(private val project: Project, private val scope: Corout
      */
     private fun build(): Wiring {
         val settings = CaluSettings.of(project).toDto()
-        val choice = chooseLauncher(settings, project.guessProjectDir()?.path ?: project.basePath)
+        val found = chooseLauncher(settings, project.guessProjectDir()?.path ?: project.basePath)
+        val content = launchContent(settings)
+        val approved = CaluApprovals.get().isApproved(content)
+        val choice = if (approved) {
+            found
+        } else {
+            val id = synchronized(lock) { (nextApprovalId++).also { pendingApproval = it to content } }
+            approvalFlow.value = ApprovalRequestDto(id, approvalText(project.name, found.launcher.describe(), settings))
+            val why = "calu was not started: its settings for this project (.idea/calu.xml) wait for your approval. " +
+                "Answer the dialog, or check them in Settings | Tools | calu and press OK."
+            LauncherChoice(RefusingLauncher(why), found.mode, found.wslDistro, found.target)
+        }
         val prompt = PasswordPrompt { problem, left ->
             val answer = CompletableDeferred<String?>()
             val id = synchronized(lock) { (nextPasswordId++).also { pendingPassword = it to answer } }
@@ -173,19 +236,24 @@ class CaluProjectService(private val project: Project, private val scope: Corout
         }
         val supervisor = BridgeSupervisor(choice.launcher, scope, CLIENT_VERSION, prompt, service<CaluPasswords>().memory(choice.target), log = { log.info(it) })
         val controller = ChatController(supervisor, scope, {
-            val s = CaluSettings.of(project).toDto()
+            // The approved settings of the wiring; unapproved ones give the plain command.
+            val s = synchronized(lock) { wiring }?.takeIf { it.approved }?.settings ?: PluginSettingsDto()
             ServerSettings(serverCalu(choice.mode, splitArgs(s.caluCommand)), s.serverSudo, s.serverInsecure, splitArgs(s.serverExtraArgs))
         }, log = { log.info(it) })
         // SSH mode with "Sync: through calu": the local copy is kept equal to the server's
         // directory through the same bridge. With "none" no ide.fs.* request is ever sent.
-        val sync = if (choice.mode == "ssh" && settings.syncMode == "calu" && project.basePath != null) {
+        val sync = if (approved && choice.mode == "ssh" && settings.syncMode == "calu" && project.basePath != null) {
             CaluSync(project, supervisor, controller, settings.sshHost.trim(), settings.sshDirectory.trim(), scope) { log.info(it) }
         } else {
             null
         }
         // SSH mode (with either sync mode): offer PyCharm's SSH interpreter for the server.
-        val interpreter = if (choice.mode == "ssh" && project.basePath != null) CaluInterpreter(project, controller, settings, scope) { log.info(it) } else null
-        return Wiring(choice, supervisor, controller, sync, interpreter)
+        val interpreter = if (approved && choice.mode == "ssh" && project.basePath != null) {
+            CaluInterpreter(project, controller, settings, scope) { log.info(it) }
+        } else {
+            null
+        }
+        return Wiring(choice, supervisor, controller, sync, interpreter, settings, approved)
     }
 
     /**

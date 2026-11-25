@@ -14,7 +14,9 @@ split, 3,000,000 SCRAM iterations, `auth_delay`), S3 (the web password instead o
 token; the pane asks for it), S4 (the PyCharm approval). The proof scripts of the reviews are not
 in the repository; some describe ways around the checkers. Done and pushed: Q1-Q7, S1, S2, S3 (`calu web
 --set-password`, `src/calu/web/password.py`; the pane's password dialog in
-`extensions/vscode/pane/webHost.ts`). Next: S4, then `agent/records/notes/security.md` (the
+`extensions/vscode/pane/webHost.ts`), S4 (`CaluApprovals`, `logic/Approval.kt`; not yet tried
+by hand in PyCharm, TESTING item 61). The PyCharm build needs `JAVA_HOME` and
+`-Porg.gradle.java.installations.paths` set to `~/.cache/calu-jdk/jdk-25.0.5.1+2`. Next: `agent/records/notes/security.md` (the
 security notes with the accepted security/convenience trade-offs, asked for by the owner), then
 the README screenshots: one per front end (web, VSCode, PyCharm, TUI), each with a small caption
 naming it, each showing something Claude Code cannot do (e.g. editable honesty checker

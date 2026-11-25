@@ -2,7 +2,7 @@
  * What the frontend asks the backend, over the platform's RPC.
  *
  *     frontend (tool window, thin client in remote development)
- *        │  CaluRemoteApi: updates(), act(), call(), passwordRequests(), settings
+ *        │  CaluRemoteApi: updates(), act(), call(), passwordRequests(), approvalRequests(), settings
  *        ▼
  *     backend (next to the project: starts `calu ide`, owns the ChatController)
  *
@@ -65,6 +65,16 @@ data class CallResultDto(
  */
 @Serializable
 data class PasswordRequestDto(val id: Int, val text: String)
+
+/**
+ * The approval of a project's calu settings, which the backend needs before it runs anything
+ * they name (D279, S4).
+ *
+ * @property id Number of the request; the answer names it.
+ * @property text What the dialog shows (`approvalText`): the command and the settings.
+ */
+@Serializable
+data class ApprovalRequestDto(val id: Int, val text: String)
 
 /**
  * The editor-side settings of the plugin for one project (stored by the backend, because the
@@ -174,6 +184,25 @@ interface CaluRemoteApi : RemoteApi<Unit> {
      *   It is passed to the bridge and kept in the backend's memory; never stored or logged.
      */
     suspend fun answerPassword(projectId: ProjectId, id: Int, password: String?)
+
+    /**
+     * The approval requests of a project: the backend starts nothing for the project's
+     * settings until one is answered with yes.
+     *
+     * @param projectId The project.
+     * @return A flow that yields the open request (if any) at once and each later one; `null`
+     *   when none is open.
+     */
+    suspend fun approvalRequests(projectId: ProjectId): Flow<ApprovalRequestDto?>
+
+    /**
+     * Answer an approval request.
+     *
+     * @param projectId The project.
+     * @param id The request's number; an answer to another number is ignored.
+     * @param approved True to approve the shown settings (kept for this IDE) and start calu.
+     */
+    suspend fun answerApproval(projectId: ProjectId, id: Int, approved: Boolean)
 
     /**
      * Read the editor-side settings.

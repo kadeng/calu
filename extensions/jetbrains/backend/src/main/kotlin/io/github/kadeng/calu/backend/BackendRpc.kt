@@ -22,6 +22,7 @@ import io.github.kadeng.calu.json.str
 import io.github.kadeng.calu.remote.CallResultDto
 import io.github.kadeng.calu.remote.CaluRemoteApi
 import io.github.kadeng.calu.remote.ChatUpdateDto
+import io.github.kadeng.calu.remote.ApprovalRequestDto
 import io.github.kadeng.calu.remote.PasswordRequestDto
 import io.github.kadeng.calu.remote.PluginSettingsDto
 import io.github.kadeng.calu.rpc.RpcRequestException
@@ -130,6 +131,15 @@ class BackendCaluRemoteApi : CaluRemoteApi {
 
     override suspend fun answerPassword(projectId: ProjectId, id: Int, password: String?) {
         projectId.findProjectOrNull()?.let { CaluProjectService.of(it).answerPassword(id, password) }
+    }
+
+    override suspend fun approvalRequests(projectId: ProjectId): Flow<ApprovalRequestDto?> {
+        val project = projectId.findProjectOrNull() ?: return flowOf(null)
+        return CaluProjectService.of(project).approvalRequests
+    }
+
+    override suspend fun answerApproval(projectId: ProjectId, id: Int, approved: Boolean) {
+        projectId.findProjectOrNull()?.let { CaluProjectService.of(it).answerApproval(id, approved) }
     }
 
     override suspend fun getSettings(projectId: ProjectId): PluginSettingsDto =

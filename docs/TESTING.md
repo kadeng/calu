@@ -1182,6 +1182,13 @@ escalation resolved from the database alone.
    wrong, connects after the right one and asks again after a reload. An empty choice (a
    second "yes") lets every page through and `calu web` warns at each start. Not yet run by
    hand; covered by `tests/unit/test_web_password.py` and `tests/browser/test_web_pane.py`.
+61. The approval of a PyCharm project's settings (PLAN.md D279, S4): open a project whose
+   `.idea/calu.xml` sets a calu command or SSH options. The dialog names the command and those
+   settings; "Don't Start" leaves the chat saying that calu waits for approval, and no `calu
+   ide` and no `ssh` process runs (`ps`). Reopen and "Start calu": the bridge starts. Close and
+   reopen: no dialog. Change `sshOptions` in the file and reopen: the dialog again. Save the
+   settings page: no dialog for what was saved. Not yet run by hand; the decision logic is in
+   `extensions/jetbrains/shared/src/test/.../ApprovalTest.kt`.
 
 ## Measuring the checkers
 

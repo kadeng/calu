@@ -4,6 +4,7 @@
  *     backend ──CaluRemoteApi.updates()──► snapshot, then events ──applyEvent──► state (StateFlow)
  *     UI ──act(name, args)──► CaluRemoteApi.act          (from a coroutine, never from the EDT)
  *     backend ──passwordRequests()──► password dialog (EDT) ──answerPassword──► backend
+ *     backend ──approvalRequests()──► approval dialog (EDT) ──answerApproval──► backend
  *     "The calu server stopped" shown ──every 10 s (tool window visible) / 30 s (hidden)──►
  *                                       act("lookForServer")
  *
@@ -124,7 +125,8 @@ class CaluFrontendService(private val project: Project, private val scope: Corou
     override val state: StateFlow<ViewState> get() = stateFlow
 
     /**
-     * Start collecting the chat's updates and the password requests. Later calls do nothing.
+     * Start collecting the chat's updates, the password and the approval requests. Later calls
+     * do nothing.
      * Side effect in the backend: the bridge of the project is started.
      */
     @Synchronized
@@ -157,6 +159,20 @@ class CaluFrontendService(private val project: Project, private val scope: Corou
                     if (request == null) return@collect
                     val password = withContext(Dispatchers.EDT) { Messages.showPasswordDialog(project, request.text, PROMPT_TITLE, null) }
                     CaluRemoteApi.getInstance().answerPassword(project.projectId(), request.id, password)
+                }
+            }
+        }
+        scope.launch {
+            durable {
+                // D279, S4: nothing the project's settings name runs before this answer.
+                CaluRemoteApi.getInstance().approvalRequests(project.projectId()).collect { request ->
+                    if (request == null) return@collect
+                    val approved = withContext(Dispatchers.EDT) {
+                        Messages.showOkCancelDialog(
+                            project, request.text, "calu: Start for This Project?", "Start calu", "Don't Start", Messages.getWarningIcon(),
+                        ) == Messages.OK
+                    }
+                    CaluRemoteApi.getInstance().answerApproval(project.projectId(), request.id, approved)
                 }
             }
         }

@@ -334,7 +334,8 @@ class EditorActions(private val project: Project) {
      */
     fun serverTerminalCommand(): String {
         val wiring = service.wiring()
-        val settings = CaluSettings.of(project).toDto()
+        // The approved settings of the wiring (D279, S4), not the file as it is now.
+        val settings = if (wiring.approved) wiring.settings else io.github.kadeng.calu.remote.PluginSettingsDto()
         return terminalCommand(wiring.controller.serverHelp().command, wiring.choice.mode, wiring.choice.wslDistro, settings.sshHost, splitArgs(settings.sshOptions))
     }
 

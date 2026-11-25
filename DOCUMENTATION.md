@@ -899,6 +899,16 @@ arrangements:
 | 2. Remote development | JetBrains Client here, IDE backend on the server | on the server | File, Remote Development, SSH: `user@host`, the project directory. Install the plugin in the client (`~/.local/share/JetBrains/<IDE>/frontend/`) and on the server (`~/.local/share/JetBrains/<IDE>/`) |
 | 3. Local copy over SSH | on this machine, on a local copy | on the server; Calu keeps the local copy identical to the server's files through `calu ide` | Settings, Tools, calu: "On a server, over SSH", host, remote directory, Sync "through Calu" |
 
+**Approval of a project's settings.** The plugin's settings of a project are stored in
+`.idea/calu.xml`, which a repository can bring along. They name programs and arguments: the
+calu command, the SSH host and options, the arguments of the server command. Before the plugin
+starts anything for a project, a dialog shows the command it would start and every setting that
+differs from the defaults; it starts only after "Start calu". PyCharm remembers the approval for
+exactly these settings (in its own configuration, `calu-approvals.xml`, not in the project), for
+every project that has them, and asks again when they change. "Don't Start" starts nothing; the
+chat says how to approve later. Settings that you save in Settings, Tools, calu count as
+approved.
+
 **Mode 2.** Everything the plugin opens (diffs, files, checker instructions, the terminal with
 `calu serve`) is located on the server. The client only displays it.
 
