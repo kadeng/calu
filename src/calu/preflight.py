@@ -586,14 +586,18 @@ class LoginProtection:
 
 
 def published_admin_login(path: Path | None = None) -> bool:
-    """Tell whether the place file publishes the password of `calu_admin` (D228).
+    """Tell whether a user other than root can read the password of `calu_admin` (D228, D279).
+
+    It is in the login file next to the place file (`calu.db.place.login_path`, the user who
+    ran `sudo calu setup`), or in a place file of before D279 (every user).
 
     Args:
         path: The place file; None is `calu.db.place.default_path()`.
 
     Returns:
-        True if the file is root's alone (so clients use it) and holds a password; False if
-        it is missing, cannot be trusted (no client reads it then) or holds no password.
+        True if the place file is root's alone (so clients use it) and a password goes with
+        it; False if it is missing, cannot be trusted (no client reads it then) or no
+        password goes with it.
     """
     from calu.db import place  # imported here: `calu.db` loads psycopg
 
@@ -660,7 +664,7 @@ def sandbox_off_warnings(config: Config, protection: LoginProtection | None) -> 
     if protection is not None and protection.unprotected and not protection.privileged:
         found.append(f"stored without a password: {', '.join(protection.unprotected)}")
     if protection is not None and protection.published:
-        found.append("the place file publishes the user login (calu_admin)")
+        found.append("a user other than root can read the user login (calu_admin)")
     return [SANDBOX_OFF_ADVICE + (f" Found: {'; '.join(found)}." if found else "")]
 
 

@@ -28,6 +28,11 @@ _textual_wait.SLEEP_GRANULARITY = 0.004
 # login for it (D228).
 os.environ["CALU_PLACE_FILE"] = "/nonexistent/calu-tests/database.json"
 
+# The SCRAM rounds of `calu_admin` (D279: 3,000,000 in use, about 0.3 s per login) would make
+# the database layer twenty times slower: every test sets the role up again and logs in as it
+# many times. Tests use PostgreSQL's default; the one test of the rounds removes this.
+os.environ["CALU_SCRAM_ITERATIONS"] = "4096"
+
 load_secrets()
 """Checker API keys from `~/.config/calu/.env`, for the live tests."""
 

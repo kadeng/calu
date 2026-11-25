@@ -484,10 +484,17 @@ def test_the_place_file_is_reported_with_what_it_gives_away(
     (plain,) = doctor.place_findings(own)
     assert plain.ok and "holds no secret" in plain.detail and "5433" in plain.detail
     db_place.write(owner, path, admin_password="generated")
+    (mine,) = doctor.place_findings(own)
+    assert not mine.ok and mine.name == "settings login"
+    assert "generated" not in mine.detail + mine.advice
+    assert "user-login.json" in mine.detail and "other users cannot" in mine.advice
+    # D279: a place file of before, with the password in it, is readable by everyone.
+    import json
+
+    old = json.loads(path.read_text()) | {"admin_password": "generated"}
+    path.write_text(json.dumps(old))
     (published,) = doctor.place_findings(own)
-    assert not published.ok and published.name == "settings login"
-    assert "generated" not in published.detail + published.advice
-    assert "every user and every program" in published.detail
+    assert not published.ok and "every user and every program" in published.detail
     # A file that is not root's is not trusted, and the report says that clients skip it.
     (distrusted,) = doctor.place_findings(own + 1)
     assert not distrusted.ok and "clients do not use it" in distrusted.detail

@@ -423,9 +423,10 @@ def place_findings(owner: int = 0) -> list[Finding]:
 
     Returns:
         [] if there is no place file. One finding otherwise: a note when the file cannot be
-        trusted (clients then ignore it), a note when it holds the password of the role
-        `calu_admin` (`calu setup --no-password`: every user and every program of the
-        machine can change calu's settings), else a line that says where root's database is.
+        trusted (clients then ignore it); a note when the password of the role `calu_admin`
+        can be read (`calu setup --no-password`): by every user of the machine from a place
+        file of before D279, else by this user from `calu.db.place.login_path`; else a line
+        that says where root's database is.
     """
     path = db_place.default_path()
     if not path.exists() and not path.is_symlink():
@@ -441,17 +442,29 @@ def place_findings(owner: int = 0) -> list[Finding]:
                 "`sudo calu setup` writes it again.",
             )
         ]
-    if isinstance(shared.auth, PasswordAuth) and shared.auth.password:
+    if db_place.holds_password(path):
         return [
             Finding(
                 "settings login",
                 False,
                 f"{path} holds the password of the role that changes calu's settings, and "
                 "every user and every program of this machine can read it (`calu setup "
-                "--no-password`)",
-                "Nothing but the checkers then keeps a program, Claude Code's commands "
-                "included, from changing the checkers. `sudo calu setup` without "
-                "--no-password gives the role a new password and takes it out of the file.",
+                "--no-password` of before D279)",
+                "`sudo calu setup` moves it into a file only your user can read; without "
+                "--no-password it gives the role a new password and keeps it in no file.",
+            )
+        ]
+    if isinstance(shared.auth, PasswordAuth) and shared.auth.password:
+        return [
+            Finding(
+                "settings login",
+                False,
+                f"{db_place.login_path(path)} holds the password of the role that changes "
+                "calu's settings, and your programs can read it (`calu setup --no-password`)",
+                "Nothing but the checkers then keeps a program of yours, Claude Code's "
+                "commands included, from changing the checkers; other users cannot. `sudo "
+                "calu setup` without --no-password gives the role a new password and removes "
+                "the file.",
             )
         ]
     return [Finding("place file", True, f"{path} names {shared.place} and holds no secret")]

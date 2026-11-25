@@ -1,5 +1,6 @@
 import io
 import json
+import types
 from pathlib import Path
 from typing import Any
 
@@ -439,6 +440,7 @@ class _AdminConn:
         self.member = member
         self.statements: list[str] = []
         self.pgconn = self
+        self.info = types.SimpleNamespace(server_version=180000)
 
     def encrypt_password(self, password: bytes, user: bytes, algorithm: bytes) -> bytes:
         """Stand in for libpq's verifier computation.
@@ -476,9 +478,13 @@ class _AdminConn:
 
 
 @pytest.mark.parametrize("member", [True, False])
-def test_the_user_password_works_on_rds_after_leaving_rds_iam(member: bool) -> None:
+def test_the_user_password_works_on_rds_after_leaving_rds_iam(
+    member: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """On RDS a member of rds_iam is asked for a token and its password is ignored."""
     import asyncio
+
+    monkeypatch.delenv("CALU_SCRAM_ITERATIONS")  # the rounds of a real setup (D279)
 
     from calu.setup import set_user_password
 
@@ -488,6 +494,11 @@ def test_the_user_password_works_on_rds_after_leaving_rds_iam(member: bool) -> N
     alters = [i for i, s in enumerate(conn.statements) if "ALTER ROLE" in s]
     assert len(alters) == 1 and "calu_admin" in conn.statements[alters[0]]
     assert "'pw'" not in conn.statements[alters[0]], "only the verifier reaches the server"
+    # D279: the verifier is computed with 3,000,000 rounds (the connection's setting).
+    rounds = [
+        i for i, s in enumerate(conn.statements) if "scram_iterations" in s and "3000000" in s
+    ]
+    assert len(rounds) == 1 and rounds[0] < alters[0]
     if member:
         assert len(revokes) == 1 and revokes[0] < alters[0]
         assert "calu_admin" in conn.statements[revokes[0]]

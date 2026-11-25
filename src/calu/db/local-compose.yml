@@ -7,6 +7,18 @@ services:
   postgres:
     image: postgres:18
     restart: unless-stopped
+    # D279: a wrong password is answered after a second (`auth_delay`), and a password set on
+    # the server gets 3,000,000 SCRAM rounds, so that guessing at this port is slow. The
+    # owner's password is generated (long and random); calu_admin's verifier is computed by
+    # `calu setup` with the same rounds.
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=auth_delay
+      - -c
+      - auth_delay.milliseconds=1000
+      - -c
+      - scram_iterations=3000000
     environment:
       POSTGRES_USER: calu_owner
       POSTGRES_DB: calu

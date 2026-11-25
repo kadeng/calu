@@ -68,6 +68,11 @@ def test_a_setup_without_a_user_password_shares_the_user_login(tmp_path: Path, m
     place.write(OWNER, path, admin_password="generated")
     login = place.read(path, ME)
     assert getattr(login.auth, "password", None) == "generated"
+    # D279: not in the place file, which every user reads, but in a file of mode 600.
+    assert "generated" not in path.read_text()
+    secret = place.login_path(path)
+    assert secret.stat().st_mode & 0o777 == 0o600 and "generated" in secret.read_text()
+    assert not place.holds_password(path)
 
     # A client that knows the database without a password takes the shared one ...
     monkeypatch.setattr(cli.db_place, "read", lambda: login)
@@ -79,9 +84,17 @@ def test_a_setup_without_a_user_password_shares_the_user_login(tmp_path: Path, m
     assert cli._with_shared_password(other) is other
     typed = user_login(OWNER, "typed")
     assert cli._with_shared_password(typed) is typed
-    # After a setup with passwords the file holds no secret again.
+    # After a setup with passwords no file holds the secret.
     place.write(OWNER, path)
-    assert "generated" not in path.read_text()
+    assert "generated" not in path.read_text() and not secret.exists()
+    # A place file of before D279 is still read, and reported as one that holds it.
+    import json
+
+    monkeypatch.undo()
+
+    path.write_text(json.dumps(json.loads(path.read_text()) | {"admin_password": "old"}))
+    assert getattr(place.read(path, ME).auth, "password", None) == "old"
+    assert place.holds_password(path)
 
 
 def test_commands_use_the_shared_login_and_ask_nothing(tmp_path: Path, monkeypatch):

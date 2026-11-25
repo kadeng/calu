@@ -897,7 +897,7 @@ def test_the_sandbox_off_recommendation_is_shown_unless_it_is_known_to_be_met() 
     # A published user login (an empty user password as root) defeats --sudo as well.
     shared = preflight.LoginProtection(privileged=True, unprotected=(), published=True)
     (said,) = preflight.sandbox_off_warnings(off, shared)
-    assert "the place file publishes the user login (calu_admin)" in said
+    assert "a user other than root can read the user login (calu_admin)" in said
     # Facts that were not collected count as not met.
     assert preflight.sandbox_off_warnings(off, preflight.LoginProtection()) == [advice]
     assert preflight.sandbox_off_warnings(off, preflight.LoginProtection(True, (), None))

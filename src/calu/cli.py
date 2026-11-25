@@ -1177,6 +1177,19 @@ async def _check_owner_login(owner: Target) -> None:
         raise CliError(f"calu cannot be set up in {owner.place} as it is:\n{lines}")
 
 
+def _setup_reader() -> tuple[int, int] | None:
+    """Name the user who may read the password-free user login of a root setup (D279).
+
+    Returns:
+        (uid, gid) of the user who ran `sudo calu setup` (`SUDO_UID`, `SUDO_GID`), or None
+        when root ran it without sudo: the file is then root's alone.
+    """
+    uid, gid = os.environ.get("SUDO_UID", ""), os.environ.get("SUDO_GID", "")
+    if not uid.isdigit() or not gid.isdigit() or int(uid) == 0:
+        return None
+    return int(uid), int(gid)
+
+
 def _setup_server(args: argparse.Namespace, store: CredentialStore) -> Target:
     """Ask for a PostgreSQL server that exists already and check the login.
 
@@ -2044,9 +2057,10 @@ def _store_logins(
 
     Side effects: saves both entries under the user password (without encryption for an
     empty one); removes the entries of before D265 that the setup started with; as root,
-    writes where the database is to `calu.db.place.PATH`, with the generated password of
-    `calu_admin` when the user password is empty (readable by every user of the machine,
-    the owner's ruling of 2026-11-18), else without a secret. A failure of the place file is
+    writes where the database is to `calu.db.place.PATH`, and, when the user password is
+    empty, the generated password of `calu_admin` to `calu.db.place.login_path()`, readable
+    only by the user who ran `sudo calu setup` (D279; an empty password is the owner's ruling
+    of 2026-11-18). A failure of the place file is
     reported and does not fail the setup. Prints what was stored and, for an empty
     password, who can use the login.
 
@@ -2079,19 +2093,28 @@ def _store_logins(
                 "so `calu run --sudo`, `calu serve --sudo`, `calu attach --sudo` and `calu "
                 "web --sudo` ask for none"
             )
+            who = _setup_reader()
+            readers = (
+                f"uid {who[0]} can read: nothing but the checkers keeps that user's programs, "
+                "Claude Code's commands included, from deciding escalations or changing the "
+                "checkers"
+                if who
+                else "only root can read: commands without sudo find no login there"
+            )
             print(
-                f"WARNING: the user login is also in {db_place.PATH}, which every user and "
-                "every program of this machine can read (Claude Code's commands included): "
-                "nothing but the checkers keeps a program from deciding escalations or "
-                "changing the checkers. `sudo calu setup --set-password` sets a password "
-                "and removes it from that file.",
+                f"WARNING: the user login is also in {db_place.login_path()}, which {readers}. "
+                "`sudo calu setup --set-password` sets a password and removes that file.",
                 file=sys.stderr,
             )
         else:
             print(f"WARNING: {logins.EMPTY_MEANS}", file=sys.stderr)
     if root:
         try:
-            db_place.write(owner, admin_password=None if password else role_password)
+            db_place.write(
+                owner,
+                admin_password=None if password else role_password,
+                reader=_setup_reader(),
+            )
         except (OSError, ValueError) as exc:
             print(f"note: {db_place.PATH} was not written ({exc})", file=sys.stderr)
 

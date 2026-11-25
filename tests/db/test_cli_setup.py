@@ -364,10 +364,10 @@ async def test_as_root_an_empty_user_password_publishes_only_a_generated_one(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """D228 with D265, as root (the tests' uid stands for it): `--no-password` publishes the
-    generated password of `calu_admin` in the place file, never a typed one; a later
-    `--set-password` takes it back: the file holds no secret and the published one stops
-    working.
+    """D228 with D265 and D279, as root (the tests' uid stands for it): `--no-password` writes
+    the generated password of `calu_admin` into the login file next to the place file, never
+    a typed one and never into the place file itself; a later `--set-password` takes it back:
+    the login file is gone and the published one stops working.
 
     Writes the place file below `tmp_path` (`CALU_PLACE_FILE`)."""
     place_file = tmp_path / "state" / "database.json"
@@ -387,9 +387,12 @@ async def test_as_root_an_empty_user_password_publishes_only_a_generated_one(
     code = await anyio.to_thread.run_sync(lambda: setup(["--no-password"], "typed-pw\n"))
     said = capsys.readouterr()
     assert code == 0, said.out + said.err
-    assert "every user and every program of this machine can read" in said.err
-    published = json.loads(place_file.read_text())["admin_password"]
-    assert published != "typed-pw" and "typed-pw" not in place_file.read_text()
+    assert "user-login.json, which only root can read" in said.err  # no sudo user here
+    login_file = db_place.login_path(place_file)
+    assert "admin_password" not in json.loads(place_file.read_text())
+    assert login_file.stat().st_mode & 0o777 == 0o600
+    published = json.loads(login_file.read_text())["admin_password"]
+    assert published != "typed-pw" and "typed-pw" not in login_file.read_text()
     assert published == stored_password(store)
     assert await is_user_password(owner, published)
     assert not await is_user_password(owner, "typed-pw")
@@ -397,12 +400,13 @@ async def test_as_root_an_empty_user_password_publishes_only_a_generated_one(
     # A setup without options keeps it published: nothing is asked.
     assert await anyio.to_thread.run_sync(lambda: setup([], "")) == 0
     capsys.readouterr()
-    assert json.loads(place_file.read_text())["admin_password"] == published
+    assert json.loads(login_file.read_text())["admin_password"] == published
 
     code = await anyio.to_thread.run_sync(lambda: setup(["--set-password"], "new-pw\nnew-pw\n"))
     said = capsys.readouterr()
     assert code == 0, said.out + said.err
     assert "admin_password" not in json.loads(place_file.read_text())
+    assert not login_file.exists()
     assert not await is_user_password(owner, published), "the published login was revoked"
     assert await is_user_password(owner, "new-pw")
     assert store.needs_password(logins.USER) and store.needs_password(logins.DB_ADMIN)

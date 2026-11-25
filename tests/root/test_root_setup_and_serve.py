@@ -61,6 +61,7 @@ def real_place_file(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     try:
         yield place.PATH
     finally:
+        place.login_path().unlink(missing_ok=True)
         if before is None:
             place.PATH.unlink(missing_ok=True)
         else:
@@ -81,15 +82,19 @@ def project() -> Iterator[Path]:
 
 
 def test_storing_the_logins_as_root_publishes_the_user_login_only_without_a_user_password(
-    real_place_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    real_place_file: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """D228 (2), (4b), D265 (2): `cli._store_logins` as root writes `/var/lib/calu/database.json`.
 
     Root's file, 0644, in a directory only root writes, read and trusted by another user;
     never the owner's password. With a user password both entries are encrypted and the file
     holds no secret. With an empty one (`--no-password`) both are stored without encryption
-    and the file publishes the generated password of `calu_admin`; a later setup with a user
-    password takes it out again and removes the entries of before D265 it was given.
+    the generated password of `calu_admin` goes into `user-login.json`, which only the user who
+    ran `sudo calu setup` can read (D279); a later setup with a user password removes it again
+    and removes the entries of before D265 it was given.
 
     Side effects (root box only): the place file (kept and restored by `real_place_file`);
     a store below `tmp_path`.
@@ -120,12 +125,19 @@ def test_storing_the_logins_as_root_publishes_the_user_login_only_without_a_user
     assert store.needs_password(logins.USER) and store.needs_password(logins.DB_ADMIN)
     assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
 
+    # D279: the password goes into a file of its own, for the user who ran `sudo calu setup`.
+    monkeypatch.setenv("SUDO_UID", str(THIRD_UID))
+    monkeypatch.setenv("SUDO_GID", str(THIRD_UID))
     cli._store_logins(store, owner, bytearray(), "generated-2", [])
-    assert published()["admin_password"] == "generated-2"
+    assert "admin_password" not in published()
+    login = place.login_path().stat()
+    assert (login.st_uid, stat.S_IMODE(login.st_mode)) == (THIRD_UID, 0o600)
     warned = capsys.readouterr().err
-    assert f"also in {place.PATH}, which every user" in warned
+    assert f"also in {place.login_path()}, which uid {THIRD_UID} can read" in warned
     seen = as_user(THIRD_UID, reader)
     assert seen.stdout.split() == ["calu_admin", "5434", "generated-2"], seen.stderr
+    other = as_user(OTHER_UID, reader)
+    assert other.stdout.split() == ["calu_admin", "5434", "-"], "another user reads no password"
     assert not store.needs_password(logins.USER) and not store.needs_password(logins.DB_ADMIN)
 
     # A store of before D265 converted with a user password: the old entry goes.
@@ -148,7 +160,8 @@ def _run_fakecalu(
         state: `XDG_STATE_HOME` for the log file.
         script: The runner's script, readable by the user.
         password: The calu user password, given as the one line of standard input; None
-            gives no input (a login without a password, or one the place file publishes).
+            gives no input (a login without a password, or one of the login file next to the
+            place file).
 
     Returns:
         stdout and stderr together.
@@ -198,10 +211,11 @@ async def test_the_sandbox_off_advice_follows_what_protects_the_logins_of_a_root
 ) -> None:
     """D239 (2), D265 (2) with real root: `sudo calu setup --no-password`, `--user` sessions.
 
-    After the setup with an empty user password the place file publishes the user login
-    (`calu_admin`), so the setup itself and a `--user` session both show the recommendation
-    and say why. `calu setup --set-password` with a user password takes the password out of
-    the file; then neither shows it: calu runs as root and Claude Code as another user.
+    After the setup with an empty user password a user other than root can read the user
+    login (`calu_admin`, D279: in `user-login.json`), so the setup itself and a `--user`
+    session both show the recommendation and say why. `calu setup --set-password` with a user
+    password removes that file; then neither shows it: calu runs as root and Claude Code as
+    another user.
 
     Side effects (root box only): the place file (kept and restored by `real_place_file`);
     the test database's roles; `/var/lib/calu/{state,claude}/<uid>`.
@@ -211,7 +225,7 @@ async def test_the_sandbox_off_advice_follows_what_protects_the_logins_of_a_root
     store.save(logins.DB_ADMIN, db_url, None)
     script = project.parent / "script.json"
     script.write_text(json.dumps(QUIET_SCRIPT))
-    published = "the place file publishes the user login (calu_admin)"
+    published = "a user other than root can read the user login (calu_admin)"
 
     def setup(*options: str, answers: str = "") -> str:
         """Run `calu setup` in this process with `answers` as its standard input (no
@@ -223,7 +237,8 @@ async def test_the_sandbox_off_advice_follows_what_protects_the_logins_of_a_root
         return said.err
 
     warned = await anyio.to_thread.run_sync(lambda: setup("--no-password", "--no-sandbox"))
-    assert json.loads(real_place_file.read_text()).get("admin_password")
+    assert not json.loads(real_place_file.read_text()).get("admin_password")
+    assert place.login_path().is_file(), "D279: the password is in a file of its own"
     assert f"WARNING: {ADVICE_START}" in warned
     assert published in warned
     shown = _run_fakecalu(project, config, state, script)
@@ -236,6 +251,7 @@ async def test_the_sandbox_off_advice_follows_what_protects_the_logins_of_a_root
         lambda: setup("--set-password", answers="user-pw\nuser-pw\n")
     )
     assert "admin_password" not in json.loads(real_place_file.read_text())
+    assert not place.login_path().exists()
     assert store.needs_password(logins.USER)
     assert ADVICE_START not in warned
     assert ADVICE_START not in _run_fakecalu(project, config, state, script, "user-pw")

@@ -21,6 +21,11 @@ Each section starts with what it is for and can be read on its own. Every settin
 type and default is in [docs/CONFIGURATION.md](docs/CONFIGURATION.md), which is generated from
 the code; this file names settings and links there.
 
+The decisions behind Calu are in [agent/records/PLAN.md](agent/records/PLAN.md); how it is
+tested, including the tests driven by screenshot in a container, in
+[docs/TESTING.md](docs/TESTING.md) and [agent/records/notes/test-plan.md](agent/records/notes/test-plan.md).
+Contributing starts at [AGENTS.md](AGENTS.md).
+
 **Experimental or not yet tested for real**
 
 | Feature | State |
@@ -2995,7 +3000,8 @@ calu serve --user 1000:1000         # the same for a server and all its sessions
 |---|---|
 | credentials and checker keys | `/etc/calu` |
 | state, and a local database's files by default | `/var/lib/calu` |
-| the database's location for clients (no secret unless `--no-password`) | `/var/lib/calu/database.json` |
+| the database's location for clients (no secret) | `/var/lib/calu/database.json` |
+| with `--no-password`: the user login, for the user who ran `sudo calu setup` (mode 0600) | `/var/lib/calu/user-login.json` |
 | a root session's socket | `/run/calu/sessions/<session id>.sock` (mode 0600, directory 0700) |
 | logs | `/var/lib/calu/log/` |
 
@@ -3077,7 +3083,7 @@ database role `calu_admin` that password, so a command in your own account logs 
 Calu chooses the database in this order:
 
 ```
-1. the login in /var/lib/calu/database.json        (an empty user password, sudo calu setup)
+1. the login in /var/lib/calu/user-login.json      (an empty user password, sudo calu setup)
 2. the user entry of your own store
 3. /var/lib/calu/database.json without a password  (the user password is asked)
 ```
@@ -3089,13 +3095,12 @@ Calu chooses the database in this order:
 | Aspect | Effect |
 |---|---|
 | Logins in `/etc/calu` | stored without encryption; only the file mode protects them (only root can read the directory) |
-| The user login | `calu_admin` gets a generated password, stored the same way **and** written to `/var/lib/calu/database.json`, which every user and program of the machine can read |
+| The user login | `calu_admin` gets a generated password, stored the same way **and** written to `/var/lib/calu/user-login.json`, which only the user who ran `sudo calu setup` (and root) can read |
 | Prompts | `calu run --sudo`, `calu serve --sudo`, `calu attach --sudo` and `calu web --sudo` ask for no password; `calu web --sudo` prints its address with a token; your plain `calu attach` saves settings without a password |
-| **Security** | **deliberately weak: every program on the machine, including a command of Claude Code, can read the login that changes the checkers. Only the checkers' judgement of a command then keeps Claude Code from changing the checkers** |
+| **Security** | **deliberately weak: every program of that user, including a command of Claude Code when it runs as that user, can read the login that changes the checkers. Only the checkers' judgement of a command then keeps Claude Code from changing the checkers. Other users of the machine cannot read it** |
 
 - `sudo calu setup --set-password` puts a password back: it encrypts the stored logins with
-  it, gives `calu_admin` that password and removes the login from
-  `/var/lib/calu/database.json`. A running `calu serve --sudo` keeps its connection until it
+  it, gives `calu_admin` that password and removes `/var/lib/calu/user-login.json`. A running `calu serve --sudo` keeps its connection until it
   drops; restart it.
 - Do not use an empty user password in your own account unless you accept that every program
   running as you, Claude Code's commands included, can use the login.
@@ -3567,8 +3572,8 @@ the option the stored value stays.
 root](#calu-as-root-claude-code-as-another-user)), or both. While the sandbox is off, `calu
 setup`, every session start and `calu doctor --db` print a warning. They print none when two
 conditions hold. First, Calu runs as root and Claude Code as another user, or every entry of
-the credential store has a password. Second, `/var/lib/calu/database.json` publishes no user
-login. Calu also warns when it cannot determine one of these facts.
+the credential store has a password. Second, no user other than root can read the user login
+(`/var/lib/calu/user-login.json`). Calu also warns when it cannot determine one of these facts.
 
 ### File access
 
@@ -3841,6 +3846,11 @@ password (existing server only), then the new user password twice (none with `--
   container. For a database set up with this version, Calu's connections also require the
   server to prove that it knows the password (SCRAM), so Calu refuses a connection to another
   program that listens on the port.
+- Guessing a password at the port is slow: the local database answers a wrong password after
+  a second (`auth_delay`), and the password of `calu_admin` is stored with 3,000,000 SCRAM
+  rounds (on every PostgreSQL server from version 16 on), which a guesser must compute for
+  every guess. Calu's own logins pay those rounds once per connection, about 0.3 s. A
+  container made before this rule gets the delay at its next `calu db up`.
 - A database that an earlier `calu db up` created in the Docker volume `calu-db_data` keeps
   working unchanged, with its stored logins, which do not ask for that proof. To move it into
   a directory, dump it and restore it into a new setup.

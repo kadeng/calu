@@ -9,6 +9,7 @@ Steps, all idempotent:
    stores the login as the `user` entry, agent/records/PLAN.md D265).
 """
 
+import os
 import secrets
 from dataclasses import dataclass
 from importlib import resources
@@ -399,12 +400,33 @@ async def is_user_password(place: Target, password: str) -> bool:
     return True
 
 
+SCRAM_ITERATIONS = 3_000_000
+"""Rounds of the SCRAM verifier of `calu_admin` (D279, the owner: "Use 3 million rehashes")."""
+
+ITERATIONS_ENV = "CALU_SCRAM_ITERATIONS"
+"""Replaces `SCRAM_ITERATIONS`, at least 4096 (PostgreSQL's default). Calu's tests set it low:
+they create the role hundreds of times and log in as it thousands of times."""
+
+
+def scram_iterations() -> int:
+    """Return the rounds of a new SCRAM verifier: `ITERATIONS_ENV`, else `SCRAM_ITERATIONS`.
+
+    Returns:
+        The rounds; a value under 4096 or that is no number gives `SCRAM_ITERATIONS`.
+    """
+    value = os.environ.get(ITERATIONS_ENV, "")
+    return int(value) if value.isdigit() and int(value) >= 4096 else SCRAM_ITERATIONS
+
+
 async def set_user_password(conn: psycopg.AsyncConnection, password: str) -> None:
     """Let `calu_admin` log in with `password`; an earlier password stops working.
 
     The server gets the SCRAM verifier, computed here, and never the password itself, so the
     password is in no statement the server could log. On RDS the role is first taken out of
-    `rds_iam`, which would otherwise make the server ignore the password.
+    `rds_iam`, which would otherwise make the server ignore the password. From PostgreSQL 16
+    on the verifier takes `SCRAM_ITERATIONS` rounds (D279): every guess at the password then
+    costs the guesser that work, on the server's port as well as with a stolen verifier;
+    every login of calu pays it once (about 0.3 s).
 
     Args:
         conn: An open connection of the database owner, schema migrated (version 33).
@@ -416,6 +438,11 @@ async def set_user_password(conn: psycopg.AsyncConnection, password: str) -> Non
     """
     if not password:
         raise ValueError("the password of calu_admin must not be empty")
+    if conn.info.server_version >= 160000:
+        # libpq computes the verifier with the connection's `scram_iterations`.
+        await conn.execute(
+            sql.SQL("SET scram_iterations = {}").format(sql.Literal(scram_iterations()))
+        )
     verifier = conn.pgconn.encrypt_password(
         password.encode(), USER_ROLE.encode(), b"scram-sha-256"
     ).decode()

@@ -14,7 +14,7 @@
 >
 > — *Tron* (1982), [quotes on IMDb](https://www.imdb.com/title/tt0084827/quotes/)
 
-## Stay in control of your coding agent, even in auto mode
+## Keep your coding agents in check
 
 **The problem.** A coding agent produces steps faster than a person can read them. Left
 unwatched it drifts from the task, and a wrong step costs more the later it is caught.
@@ -165,6 +165,9 @@ checkers.
 curl -fsSL https://raw.githubusercontent.com/kadeng/calu/main/install.sh | sudo bash -s -- --with-sandbox
 ```
 
+When the script asks at its end whether to run `calu setup`, say yes (the answers are in step
+2).
+
 - **Read it first:** [install.sh](install.sh) is one short script with a numbered list of its
   steps at the top. It installs curl and git if missing, downloads uv at a pinned version
   and checks it against the SHA-256 written in the script, and installs Calu with uv into
@@ -174,14 +177,10 @@ curl -fsSL https://raw.githubusercontent.com/kadeng/calu/main/install.sh | sudo 
 - **Remove Calu again:** `sudo calu uninstall`. It removes Calu, its logins and its local
   database, and keeps the programs the script installed (curl, git, uv, bubblewrap, socat).
 
-**2. Set up the database and your password.** At its end the install script offers to run
-`calu setup` with its own rights (as root). Say yes and answer: database `1` (Docker), Enter
-at the data directory and the port, `yes` to stopping the database with the server, then the
-password twice, and the sandbox `on`. Or say no and run it with every answer given:
-
-```bash
-sudo calu setup --database docker --stop-db-with-server --sandbox
-```
+**2. Answer the setup.** Database `1` (Docker), Enter at the data directory and the port,
+`yes` to stopping the database with the server, then the password twice, and the sandbox `on`.
+Only if you said no to the script: `sudo calu setup --database docker --stop-db-with-server
+--sandbox`.
 
 Choose the **calu user password**: the one password Calu asks for, when the server starts,
 when a browser or an IDE signs in, and when you change a setting. The local database starts
@@ -211,21 +210,10 @@ It asks for your sudo password, then for the calu user password. Sessions start 
   a project folder does the same, in the full-screen client.
 - Ctrl-C stops the server, the web interface and the database.
 
-> **Security note: the web interface.** `calu web` (and `calu serve --web`) serves its
-> password-protected interface on the loopback interface of this machine (`calu.localhost`).
-> Every user and every program on this machine can connect to that port, on WSL2 also the
-> programs on Windows; the calu user password is what keeps them out. Whoever is signed in can
-> allow what Claude asks for and change the rules the checkers apply. For now the interface is
-> meant for a machine and a network you trust, such as your own computer: reach it from
-> elsewhere only through an SSH tunnel, and do not publish it through a proxy. It accepts
-> changes only from its own pages, so another web site open in the same browser cannot act
-> through it. It speaks plain HTTP by default, which does not leave the machine on the
-> loopback interface; HTTPS with your own certificate is optional (`--tls-cert`,
-> `--tls-key`; see [Calu web](DOCUMENTATION.md#in-a-browser-calu-web)).
-
-> **Security note: project folders.** Claude Code trusts every folder a session starts in: its
-> `.claude/` settings (hooks, MCP servers, environment variables) run as you at once, outside
-> Calu's checkers and the sandbox. Clone and open only repositories you trust.
+> **Security notes.** `calu web` listens on localhost without encryption, protected by the
+> calu user password; to secure it further, read [Calu
+> web](DOCUMENTATION.md#in-a-browser-calu-web). Claude Code trusts every folder a session
+> starts in. Clone and open only repositories and folders you trust.
 
 **5. The IDE extensions** (optional; not on a marketplace yet, so you build them once):
 
@@ -248,13 +236,7 @@ installation for your user only, no password, remote machines, every option) is 
 
 ## Full Documentation
 
-[DOCUMENTATION.md](DOCUMENTATION.md) is the documentation: every command, credentials, the sandbox
-and network policy, remote access, the front ends, checkers and rules. Every setting with its
-type and default is in [docs/CONFIGURATION.md](docs/CONFIGURATION.md). The decisions behind it
-all are in [agent/records/PLAN.md](agent/records/PLAN.md); how it is tested, including the tests driven by screenshot
-in a container, in [docs/TESTING.md](docs/TESTING.md) and
-[agent/records/notes/test-plan.md](agent/records/notes/test-plan.md). Contributing starts at
-[AGENTS.md](AGENTS.md).
+[DOCUMENTATION.md](DOCUMENTATION.md).
 
 ## Free software under the GPL licence, usable in any project, including commercial or closed source
 

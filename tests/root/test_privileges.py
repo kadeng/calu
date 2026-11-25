@@ -279,8 +279,10 @@ def test_the_place_file_is_read_by_every_user_and_trusted_only_from_root(
     """
     seen = as_user(THIRD_UID, reader)
     assert seen.stdout.split() == ["calu_admin", "5432", "False"], seen.stderr
-    place.write(owner, path, admin_password="generated")
+    place.write(owner, path, admin_password="generated", reader=(THIRD_UID, THIRD_UID))
     assert as_user(THIRD_UID, reader).stdout.split() == ["calu_admin", "5432", "True"]
+    # D279: only the user it was written for reads the password.
+    assert as_user(OTHER_UID, reader).stdout.split() == ["calu_admin", "5432", "False"]
     shared = place.read(path)
     assert isinstance(shared.auth, PasswordAuth) and shared.auth.password == "generated"
     # The same content in a file of another user: no client may believe it.
