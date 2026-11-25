@@ -36,9 +36,16 @@ LIVE_CHECKER_MODEL = "fireworks:accounts/fireworks/models/nemotron-lightning-3p5
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Block real model requests unless the run selects live tests (`-m live`)."""
+    """Block real model requests unless the run selects live tests (`-m live`), and skip the
+    fuzz tests unless it selects them (`-m fuzz`), also when a `-m` given on the command line
+    replaces the default one (as in CI)."""
     markexpr = config.getoption("markexpr") or ""
     models.ALLOW_MODEL_REQUESTS = "live" in markexpr and "not live" not in markexpr
+    if "fuzz" not in markexpr or "not fuzz" in markexpr:
+        skip = pytest.mark.skip(reason="randomized load; run with `-m fuzz`")
+        for item in items:
+            if item.get_closest_marker("fuzz") is not None:
+                item.add_marker(skip)
 
 
 @pytest.fixture(autouse=True)

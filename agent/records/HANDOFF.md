@@ -6,6 +6,22 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
 
 ## Pick up here
 
+### Newest: the locking component (D274, 2026-11-25), built in isolation
+
+The owner's locking scheme (agent/records/notes/locking-design.md) is in `src/calu/locking/`:
+`RWLockingScheme` (`run_command_in_worktree(s)`, `edit_in_worktree`, `edit_outside_worktree`)
+on a pluggable FIFO shared/exclusive lock (`RWLock.request` + `LockRequest.wait`, `LockSpace`),
+the thread backend `ThreadLockSpace`, `NoLockingScheme` (the drop-in that never locks) and
+`LockTimeouts` (a default and a maximum for commands and for edits; no unbounded wait). The
+owner's rules of 2026-11-25 are built in: FIFO for every backend, one owner per tool call, the
+issue order of an agent's calls (`issue(agent)` gives a `Ticket`), and no reentrancy
+(`LockError` at once). Nothing else imports it.
+Deterministic tests are in `tests/unit/test_locking.py`. The fuzz layer is
+`uv run pytest -m fuzz -s tests/fuzz` (never in CI; docs/TESTING.md); it found no deadlock and
+no overlap in the real scheme and caught all four schemes that are wrong on purpose. Next, when
+the owner says so: a backend on file locks (flock) or on PostgreSQL (advisory locks), run under
+the same fuzz harness; then the wiring into the session as the note describes.
+
 ### First: one calu login (D265, 2026-11-24) and the migration squash
 
 Built on 2026-11-24 (PLAN D265, REQUIREMENTS 48): the logins `admin`, `session`, `operator`

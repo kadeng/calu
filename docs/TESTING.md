@@ -10,6 +10,7 @@ does. The default run needs nothing but the repository.
 | Browser | `browser` (most also `db`) | a headless Chromium (`scripts/get-browser.sh`) | ~8 s |
 | Live | `live` | a real `claude` and/or model API keys | minutes, costs money |
 | Root | `root` (five also `db`) | real root, in the root box (`uitest/rootbox`) | ~15 s |
+| Fuzz | `fuzz` | nothing (threads of one process); run by hand, never in CI | about 1 min |
 | Spikes | — | run by hand, against the real CLI | minutes each |
 | VSCode extension | — | Node 22+ (unit); Docker (integration: a real VSCode under xvfb) | ~1 s unit; ~1 min integration (+ a 400 MB VSCode download once) |
 
@@ -178,12 +179,63 @@ for the disk (recreate it once: `docker compose up -d caludb --wait`).
 
 | Job | What it runs |
 |---|---|
-| `checks` | `ruff format --check`, `ruff check`, `pyright`, then `pytest -m 'not live and not browser'` against a `postgres:18` service -- the unit and database layers |
+| `checks` | `ruff format --check`, `ruff check`, `pyright`, then `pytest -m 'not live and not browser and not fuzz'` against a `postgres:18` service -- the unit and database layers |
 | `browser` | `playwright install --with-deps chromium` (a runner has root, so it needs no `scripts/get-browser.sh`), then `pytest -m browser` |
 | `package` | `uv build`, then installs the wheel into a throwaway environment and runs `calu --version`, `calu protocol` and an import of the package data out of `site-packages` -- the check that D41 traded the single binary for |
 
 The live layer does not run in CI: it needs a logged-in `claude` and real model API keys, and it
 costs money, so it stays a local and manual check (see below).
+
+## The fuzz layer: random load on the locking component
+
+`calu.locking` (PLAN.md D274; not wired into Calu yet) decides which locks a command or an edit
+takes, so that no edit lands in a worktree while a command runs there, and in which order the
+calls of one agent get them. Its deterministic tests are part of the unit layer
+(`tests/unit/test_locking.py`). The randomized ones are marked `fuzz`: they run only when asked
+for, and never in CI (`tests/conftest.py` skips them unless the `-m` expression selects
+`fuzz`).
+
+```bash
+uv run pytest -m fuzz -s tests/fuzz                                   # about a minute
+CALU_FUZZ_SECONDS=120 CALU_FUZZ_SEED=7 uv run pytest -m fuzz -s tests/fuzz
+uv run python -m tests.fuzz.locking_harness fuzz --seconds 60 --workers 24 --worktrees 4
+uv run python -m tests.fuzz.locking_harness fuzz --scheme mixed-order --deadlock-prone
+uv run python -m tests.fuzz.locking_harness bench --repetitions 5
+```
+
+`tests/fuzz/locking_harness.py` runs simulated agents as threads. An agent thinks, then issues
+a batch of one to three calls, each with a ticket in issue order, and waits for all of them.
+Each call runs in a thread of its own:
+
+1. Its check takes a random time, so the checks of a batch finish out of order.
+2. A denied call, or one that takes no lock, withdraws its ticket.
+3. The other calls ask for their locks and hold them for their run time.
+4. Some of them ask again with their own owner while they hold, which must be refused at
+   once.
+5. They release the locks, some of them from another thread.
+
+Some batches are the owner's example: an edit, a command and an edit in one worktree. The
+timeouts are short (0.5 s instead of 600 s), so that waits that only a timeout ends happen
+often enough to be seen in seconds; 15 % of the calls pass a timeout below 50 ms on purpose. A
+report counts:
+
+| Line | Meaning |
+|---|---|
+| `issued`, `done`, `timeouts` | Calls per type that were issued, ran, or gave up; the withdrawn calls (denied, no lock); the timeouts that came from a short timeout on purpose, and those that ended a deadlock, separately |
+| `running`, `waiting` | How many calls held their locks and how many waited, on average and at the peak, per type (`--timeline FILE` writes them every 5 ms as CSV) |
+| `waits` | How long the calls that got their locks waited |
+| `deadlocks` | Cycles in the wait-for graph of the backend's atomic snapshots (exact). Stalls: nothing held and nothing was checked while something waited, for at least 0.25 s. A stall during which a timeout happened is a suspected deadlock; this test needs no snapshot, so it works with every backend |
+| `reentry probes` | Repeated requests of an owner, through the scheme or at a lock; `refused` is the only right outcome |
+| `violations` | Two calls held their locks at the same time although the scheme forbids it; a call got its locks while an earlier call of its agent had not entered the queues, or while an earlier, conflicting one still waited; a reentry that was not refused |
+
+A run of the real scheme must show no deadlock, no suspected deadlock, no violation and no
+lock left held. Five schemes that are wrong on purpose check that the fuzzer finds what it
+looks for: a mixed lock order and worktrees in reverse order (deadlocks), edits without locks
+and commands with shared locks (overlaps), and calls that ignore the issue order. The
+comparison runs one scenario of six agents in two worktrees with and without locks, on the
+scale 1 ms = 1 s, and prints both average times and the violations that locking prevents.
+Measured on 2026-11-25 (WSL2): 1.86 s with locks and 1.28 s without (x1.46); without locks,
+about 225 violations per run.
 
 ## The database layer
 

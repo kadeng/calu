@@ -66,6 +66,7 @@ READMEs). This file stays at the top level, where every agent looks first.
 | `src/calu/write_sets.py` | What a command wrote (`WriteSets`, D31): the snapshots before and after it, the measured write set, its review by the changeset checkers and the undo of a refused change |
 | `src/calu/recorder.py` | The session's writes to the store (`Recorder`): a failed write is reported and counted, and too many in a row stop the session (D59); the `steps` and `checker_runs` rows; the step times (D32) |
 | `src/calu/checkouts.py` | The checkouts of the project's repository (D251): the main checkout and every git worktree `git worktree list` names, inside the project or outside it; which checkout a path and a step belong to (the step's working directory and its `cd` targets); the lines that name them for a checker |
+| `src/calu/locking/` | Locks that keep edits away from running commands, per worktree (D274); **not wired into Calu yet**, nothing else imports it. `scheme.py` says which locks a command or an edit takes, in which order the calls of one agent get them (`issue` gives a `Ticket`), and how long they may wait (`RWLockingScheme`; `NoLockingScheme` takes the same calls and never waits, for when the feature is off; `LockTimeouts`: a default and a maximum for commands and for edits, no unbounded wait); `rwlock.py` is the FIFO shared/exclusive lock every backend implements (owner = one tool call, no reentrancy) with notes for the file and PostgreSQL backends; `threadlocks.py` the backend for the threads of one process |
 | `src/calu/steps.py` | Stateless helpers about one tool call: its paths relative to the project directory, the file an edit targets, the summary of its result |
 | `src/calu/run_state.py` | What the session knows about one run (`RunState`) and about one tool call (`PerCall`); a start replaces it, so each run begins from the defaults |
 | `src/calu/store/` | The database as the session sees it: configuration in (`config.py`), history and escalations out (`session.py`), in-memory twin for tests (`memory.py`), trusted commits and trusted file contents (`trust.py`) |
@@ -109,6 +110,7 @@ READMEs). This file stays at the top level, where every agent looks first.
 | `tests/db/` | Tests against the test database (marker `db`) |
 | `tests/browser/` | Tests in a headless browser (marker `browser`; those of the web interface also `db`, the easter egg's not: `-m browser` runs all of them; `scripts/get-browser.sh` installs it without root) |
 | `tests/root/` | Tests that need real root (marker `root`; skipped unless root and `CALU_ROOT_TESTS=1`); they run in the root box: `docker exec calu-rootbox rootbox-tests` |
+| `tests/fuzz/` | Random load on `calu.locking` (marker `fuzz`; skipped unless `-m fuzz` selects it, never in CI): `locking_harness.py` runs simulated agents as threads, counts timeouts, running and waiting operations, deadlocks and overlaps, and compares a scenario with and without locks (`uv run python -m tests.fuzz.locking_harness --help`) |
 | `uitest/rootbox/` | The root box: a container with root, sudo and three users for running the privileged arrangements for real; `fakecalu.py` is calu's command line with a scripted runner (`uitest/README.md`) |
 
 ## Commands
@@ -119,8 +121,9 @@ outside the Windows checkout: `UV_PROJECT_ENVIRONMENT=$HOME/.cache/calu-venv`).
 - `uv run pytest` (unit tests), `uv run pytest -m 'not live'` (also database tests; start the
   database first with `docker compose up -d caludb --wait`), `uv run pytest -m browser`
   (a headless browser; `scripts/get-browser.sh` installs it without root), `uv run pytest -m live`
-  (a real `claude` or API keys). `docs/TESTING.md` explains the layers, the spikes and the
-  manual checklist.
+  (a real `claude` or API keys), `uv run pytest -m fuzz -s tests/fuzz` (random load on the
+  locking component, about a minute; never in CI). `docs/TESTING.md` explains the layers, the
+  spikes and the manual checklist.
 - In a Calu session with Claude Code's sandbox on, run the database tests exactly as
   `scripts/db-tests.sh [pytest args]` (one command, no `./`, no `cd` or chain): only that form
   can reach the test server there.

@@ -52,7 +52,7 @@ jobs:
       - run: uv run ruff check .
       - run: uv run pyright
       - name: unit and database tests
-        run: uv run pytest -m 'not live and not browser' -q
+        run: uv run pytest -m 'not live and not browser and not fuzz' -q
 
   browser:
     name: browser tests

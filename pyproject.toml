@@ -94,13 +94,14 @@ convention = "google"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers -m 'not live and not db and not browser and not root'"
+addopts = "-ra --strict-markers -m 'not live and not db and not browser and not root and not fuzz'"
 markers = [
     "live: needs a real `claude` CLI and/or real model API keys (run with `-m live`)",
     "db: needs the PostgreSQL test database (`docker compose up -d caludb`, run with `-m db`)",
     "browser: needs a headless browser (`scripts/get-browser.sh`, run with `-m browser`)",
     "root: needs real root and CALU_ROOT_TESTS=1; runs in the root box (`uitest/rootbox`, run with `-m root`)",
     "slow: starts a `calu` process or waits out a real timer (deselect with `-m 'not slow'` for a quick loop; part of every full run)",
+    "fuzz: randomized load on calu.locking, about a minute (run with `-m fuzz -s`); never in CI",
 ]
 
 [tool.pyright]
