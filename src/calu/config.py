@@ -549,8 +549,6 @@ class ClaudeConfig(ConfigModel):
     effort: Effort | None = None
     """Reasoning effort of the Claude session ("low" to "max"); None uses Claude Code's
     default. `calu run --effort` overrides it for one session."""
-    cli_path: str | None = None
-    """Path to the `claude` executable; None looks it up on PATH."""
     setting_sources: list[str] = Field(default_factory=lambda: ["user", "project", "local"])
     """Which of Claude Code's own settings files it reads ("user", "project", "local"). All of
     them by default, as a plain `claude` does: calu wraps Claude Code and leaves how it loads
@@ -1335,6 +1333,24 @@ def _provider_source(prefix: str) -> str:
         return Path(path).read_text(encoding="utf-8")
     except OSError:
         return ""
+
+
+CLAUDE_PATH_ENV = "CALU_CLAUDE_PATH"
+"""The environment variable that names the `claude` executable a session starts, for this
+machine: set in the environment of calu or in calu's env file (`user_env_file`, e.g.
+`/etc/calu/.env` as root). It is no database setting (D279): whoever can change calu's settings
+in the database would otherwise choose the program every session runs, as its user."""
+
+
+def claude_cli_path() -> str | None:
+    """Return the `claude` executable of this machine, if `CALU_CLAUDE_PATH` names one.
+
+    Returns:
+        The path, or None to use the one bundled with the Agent SDK, else the one on `PATH`
+        (`calu.launch.claude_path`).
+    """
+    value = os.environ.get(CLAUDE_PATH_ENV, "").strip()
+    return value or None
 
 
 def load_secrets(env_file: Path | None = None) -> set[str]:

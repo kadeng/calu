@@ -47,7 +47,16 @@ TOKEN_TIMEOUT_S = 15.0
 """How long making one IAM token may take (`Target.conninfo_now`); resolving an AWS profile can
 wait for the network."""
 
-INHERITED = ("host", "hostaddr", "port", "dbname", "sslmode", "sslrootcert", "require_auth")
+INHERITED = (
+    "host",
+    "hostaddr",
+    "port",
+    "dbname",
+    "sslmode",
+    "sslrootcert",
+    "require_auth",
+    "channel_binding",
+)
 """The connection parameters a login for another role takes over (`Target.for_role`), and the
 only ones besides `user` that a form 2 secret may hold."""
 
@@ -373,6 +382,12 @@ def from_fields(
     server's certificate not verified) and a loopback host or socket path gets libpq's default.
     IAM authentication always gets `verify-full`, because the token is sent as a password.
 
+    A password login to a host other than this machine also gets `require_auth=scram-sha-256`
+    and, where TLS is used, `channel_binding=require` (D279): without them a machine in the
+    middle that presents any certificate could ask for the password in clear text and read
+    it, or relay a SCRAM login. A server that offers only md5 or a clear-text password, or a
+    pooler without channel binding, is therefore refused (the owner's decision: no opt-out).
+
     Args:
         host: Host name, address or socket directory of the server.
         port: Its port.
@@ -409,4 +424,9 @@ def from_fields(
         conninfo["sslmode"] = sslmode
     if sslrootcert:
         conninfo["sslrootcert"] = sslrootcert
+    remote = host not in LOOPBACK and not host.startswith("/")
+    if remote and not iam:
+        conninfo["require_auth"] = "scram-sha-256"
+        if sslmode not in ("disable", "allow", "prefer"):
+            conninfo["channel_binding"] = "require"
     return Target(variant="rds-iam" if iam else "server", conninfo=conninfo, auth=auth)

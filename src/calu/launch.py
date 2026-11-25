@@ -252,7 +252,8 @@ def claude_path(configured: str | None) -> str:
     """Return the Claude Code executable calu starts.
 
     Args:
-        configured: `claude.cli_path` of the configuration, or None.
+        configured: `CALU_CLAUDE_PATH` of this machine (`calu.config.claude_cli_path`), or
+            None.
 
     Returns:
         `configured` if set; else the executable bundled with the Agent SDK; else the `claude`
@@ -272,7 +273,9 @@ def claude_path(configured: str | None) -> str:
             return str(bundled)
     found = shutil.which("claude")
     if found is None:
-        raise LaunchError("no Claude Code executable was found (set claude.cli_path)")
+        raise LaunchError(
+            "no Claude Code executable was found (set CALU_CLAUDE_PATH in calu's env file)"
+        )
     return found
 
 

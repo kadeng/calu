@@ -1207,7 +1207,13 @@ def _setup_server(args: argparse.Namespace, store: CredentialStore) -> Target:
     try:
         ca = _keep_ca_file(store, args.sslrootcert) if args.sslrootcert else None
         owner = from_fields(
-            host, port, dbname, user, PasswordAuth(password=password.decode()), args.sslmode, ca
+            host,
+            port,
+            dbname,
+            user,
+            PasswordAuth(password=password.decode()),
+            args.sslmode,
+            ca,
         )
     finally:
         wipe(password)

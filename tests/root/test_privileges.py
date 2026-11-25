@@ -98,7 +98,9 @@ def test_the_launcher_starts_the_program_as_the_user_with_an_environment_built_f
     }
 
 
-def test_pass_env_reaches_claude_code_as_another_user(shared_dir: Path) -> None:
+def test_pass_env_reaches_claude_code_as_another_user(
+    shared_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """`claude.pass_env`: the runner's record keeps the named variable through the switch."""
     from calu.claude.sdk_runner import SdkRunner
     from calu.config import ClaudeConfig
@@ -109,7 +111,8 @@ def test_pass_env_reaches_claude_code_as_another_user(shared_dir: Path) -> None:
     )
     recorder.chmod(0o755)
     run_as = launch.RunAs(uid=OTHER_UID, gid=OTHER_UID, home="/var/empty/home")
-    config = ClaudeConfig(cli_path=str(recorder), pass_env=["CALU_TEST_DSN"])
+    monkeypatch.setenv("CALU_CLAUDE_PATH", str(recorder))  # D279: no database setting
+    config = ClaudeConfig(pass_env=["CALU_TEST_DSN"])
     overrides = SdkRunner(shared_dir, config, {"MISTRAL_API_KEY"}, run_as=run_as)._claude_env()
     # What the Agent SDK hands the launcher: calu's environment with the overrides on top.
     environment = {

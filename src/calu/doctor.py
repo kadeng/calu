@@ -65,7 +65,7 @@ class Finding:
 
 
 def claude_executable() -> str | None:
-    """Return the Claude Code executable a session starts when `claude.cli_path` is not set.
+    """Return the Claude Code executable a session starts when `CALU_CLAUDE_PATH` is not set.
 
     The same lookup as the session's (`calu.launch.claude_path`): the executable bundled with
     the Agent SDK, else the `claude` on `PATH`. A check that looked at `PATH` alone called

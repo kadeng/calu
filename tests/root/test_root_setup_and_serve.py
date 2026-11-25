@@ -296,7 +296,7 @@ async def test_calu_serve_as_root_runs_claude_code_as_the_user_behind_a_root_soc
         await owner.execute(
             "UPDATE config SET value = %s WHERE scope = 'global' AND key = %s",
             (
-                json.dumps({"claude": {"sandbox": {"enabled": False}, "cli_path": str(standin)}}),
+                json.dumps({"claude": {"sandbox": {"enabled": False}}}),
                 SETTINGS_KEY,
             ),
         )
@@ -308,6 +308,8 @@ async def test_calu_serve_as_root_runs_claude_code_as_the_user_behind_a_root_soc
         "PYTHONUNBUFFERED": "1",
         "XDG_CONFIG_HOME": str(config),
         "XDG_STATE_HOME": str(state),
+        # This machine's Claude Code, never a database setting (D279).
+        "CALU_CLAUDE_PATH": str(standin),
     }
     environment.pop("SUDO_UID", None)
     # The projects directory is the one that holds the project (D243); the default, the

@@ -225,10 +225,11 @@ async def no_sink(event: Event) -> None:
 
 
 async def test_the_runner_does_not_start_on_a_sandbox_entry_calu_did_not_configure(
-    tmp_path: Path, no_user_settings: Path
+    tmp_path: Path, no_user_settings: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    monkeypatch.setenv("CALU_CLAUDE_PATH", "/nonexistent/claude")
     widened(tmp_path)
-    runner = SdkRunner(tmp_path, ClaudeConfig(cli_path="/nonexistent/claude"))
+    runner = SdkRunner(tmp_path, ClaudeConfig())
     with pytest.raises(StartRefused) as refused:
         await runner.run(AllowAll(), no_sink)
     assert ".claude/settings.json" in str(refused.value)
@@ -242,14 +243,17 @@ async def test_the_runner_does_not_start_on_a_sandbox_entry_calu_did_not_configu
     (no_user_settings / ".claude" / "settings.json").write_text(
         json.dumps({"sandbox": {"network": {"allowedDomains": ["example.net"]}}})
     )
-    runner = SdkRunner(clean, ClaudeConfig(cli_path="/nonexistent/claude"))
+    runner = SdkRunner(clean, ClaudeConfig())
     with pytest.raises(StartRefused, match="~/\\.claude/settings\\.json"):
         await runner.run(AllowAll(), no_sink)
 
 
-async def test_the_runner_does_not_pass_a_hidden_variable_on(tmp_path: Path):
+async def test_the_runner_does_not_pass_a_hidden_variable_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     """`claude.pass_env` with a name calu hides (env file, `hidden_env`): the start is refused."""
-    config = ClaudeConfig(cli_path="/nonexistent/claude", pass_env=["CALU_TEST_DSN", "XAI_API_KEY"])
+    monkeypatch.setenv("CALU_CLAUDE_PATH", "/nonexistent/claude")
+    config = ClaudeConfig(pass_env=["CALU_TEST_DSN", "XAI_API_KEY"])
     runner = SdkRunner(tmp_path, config, {"MISTRAL_API_KEY", "XAI_API_KEY"})
     with pytest.raises(StartRefused, match=r"claude\.pass_env names XAI_API_KEY") as refused:
         await runner.run(AllowAll(), no_sink)

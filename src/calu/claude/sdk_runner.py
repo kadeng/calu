@@ -74,7 +74,7 @@ from calu.claude.runner import (
     hook_decision,
     runs_in_background,
 )
-from calu.config import ClaudeConfig, PermissionMode
+from calu.config import ClaudeConfig, PermissionMode, claude_cli_path
 from calu.context.foreign import (
     SkillContentFilter,
     skill_directory,
@@ -1642,7 +1642,7 @@ class SdkRunner:
         if self.config.use_bedrock:
             env["CLAUDE_CODE_USE_BEDROCK"] = "1"
         if self.run_as is not None:
-            spec = self.run_as.spec(claude_path(self.config.cli_path))
+            spec = self.run_as.spec(claude_path(claude_cli_path()))
             if self.config.pass_env:
                 spec = spec.model_copy(update={"keep": (*spec.keep, *self.config.pass_env)})
             env[LAUNCH_ENV] = spec.dump()
@@ -1653,14 +1653,15 @@ class SdkRunner:
 
         Returns:
             calu's launcher when Claude Code runs as another user (`run_as`); otherwise
-            `claude.cli_path`, where None lets the SDK find Claude Code.
+            `CALU_CLAUDE_PATH` (`calu.config.claude_cli_path`), where None lets the SDK find
+            Claude Code.
 
         Raises:
             LaunchError: With `run_as`, if this installation has no launcher.
         """
         if self.run_as is not None:
             return str(launcher_path())
-        return self.config.cli_path
+        return claude_cli_path()
 
     def _agent_id(self, sdk_agent_id: str | None) -> str | None:
         """Map an SDK agent id (hook/permission context) to the protocol agent id.

@@ -272,3 +272,33 @@ def test_a_refused_iam_token_never_ends_a_session_for_good(
         anyio.run(ConnectionSource(iam).open)
     assert not isinstance(raised.value, LoginRefused)
     assert "an-expired-token" not in str(raised.value)
+
+
+def test_a_remote_password_login_takes_only_scram_with_channel_binding() -> None:
+    """D279: a machine in the middle with any certificate could ask for a clear-text password."""
+    password = PasswordAuth(password="pw")
+    remote = from_fields("db.example.org", 5432, "calu", "u", password)
+    assert remote.conninfo["require_auth"] == "scram-sha-256"
+    assert remote.conninfo["channel_binding"] == "require"
+    login = remote.for_role("calu_admin", PasswordAuth(password="x"))
+    assert login.conninfo["require_auth"] == "scram-sha-256", "the user login inherits it"
+    assert login.conninfo["channel_binding"] == "require"
+    assert Target.parse(remote.dump()) == remote
+    plain = from_fields("db.example.org", 5432, "calu", "u", password, "disable")
+    assert plain.conninfo["require_auth"] == "scram-sha-256"
+    assert "channel_binding" not in plain.conninfo, "no channel binding without TLS"
+    for unchanged in (
+        from_fields("127.0.0.1", 5432, "calu", "u", password),
+        from_fields("/var/run/postgresql", 5432, "calu", "u", password),
+        from_fields(
+            "x.rds.amazonaws.com",
+            5432,
+            "c",
+            "u",
+            RdsIamAuth(region="eu-central-1", profile="calu"),
+            None,
+            "/ca.pem",
+        ),
+    ):
+        assert "require_auth" not in unchanged.conninfo
+        assert "channel_binding" not in unchanged.conninfo

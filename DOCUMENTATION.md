@@ -145,7 +145,7 @@ sudo calu setup              # as root (or `calu setup` for your own installatio
 | Which database | a local one in Docker, a PostgreSQL server you have, AWS RDS with IAM | `--database docker\|server\|rds-iam` |
 | For Docker: data directory and port | defaults: `<state>/calu/db` (`/var/lib/calu/db` as root), port 5433 | `--data-dir`, `--port` |
 | For Docker: stop with the server | keep it running (default), or stop it when `calu serve` ends and leave it stopped after a reboot. `calu run` and `calu serve` start it either way | `--stop-db-with-server`, `--no-stop-db-with-server` |
-| For a server: host, port, database, a database user and its password | that user creates Calu's tables and its login role; Calu keeps its login for migrations | `--host`, `--port`, `--dbname`, `--user`, `--sslmode`, `--sslrootcert` |
+| For a server: host, port, database, a database user and its password | that user creates Calu's tables and its login role; Calu keeps its login for migrations. On another host the logins take only SCRAM, with channel binding over TLS, so that a machine in the middle cannot read the password; a server that offers only md5, or a connection pooler without channel binding, cannot be used | `--host`, `--port`, `--dbname`, `--user`, `--sslmode`, `--sslrootcert` |
 | The calu user password | the one password Calu asks for: when a session or the server starts, when a browser or an IDE signs in, when you change a setting from a terminal. An empty one means Calu never asks ([what that costs](#the-calu-login-and-the-user-password)) | `--no-password` for an empty one |
 | Claude Code's sandbox | on when bubblewrap and socat are installed | `--sandbox`, `--no-sandbox` |
 
@@ -3512,6 +3512,10 @@ start. `calu config models auto` replaces it with an API model.
 - Keys belong in `~/.config/calu/.env` (as root: `/etc/calu`).
 - **Claude Code never sees them.** Calu blanks every provider key it knows, and every variable
   of that file, in the environment it hands to Claude Code.
+- **Which `claude` a session starts** is set per machine, in the same file or in Calu's
+  environment: `CALU_CLAUDE_PATH=/path/to/claude`. Without it, Calu starts the Claude Code that
+  comes with the Agent SDK, else the `claude` on `PATH`. It is no database setting: whoever can
+  change Calu's settings would otherwise choose the program every session runs.
 - If a key is set elsewhere under a name that Calu does not know, add that name to `hidden_env`
   (`calu config add hidden_env XAI_API_KEY`). Calu blanks the variable from the next session
   start. The start-up warnings say when a checker provider needs such an entry.
