@@ -20,6 +20,7 @@ share ("files"). A worktree is named by the resolved path of its root.
 
 import logging
 import os
+import secrets
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -138,7 +139,8 @@ class CallLocks:
 
     Every method may be called for every tool call; a call that takes no lock (`needs_locks`)
     is ignored. Tickets and leases are kept by the tool call's id; a call without one takes no
-    lock.
+    lock. The owner of a call's locks is "<tool call id>@<token of this object>": the lock space
+    is shared with other sessions and processes, and tool call ids are unique only per session.
 
     Attributes:
         config: The locking settings the session started with.
@@ -177,6 +179,7 @@ class CallLocks:
             except OSError as exc:
                 self._broken = f"Calu's locking cannot use its directory: {exc}"
                 log.error("%s; every command and edit is denied", self._broken)
+        self._token = secrets.token_hex(4)
         self._mutex = threading.Lock()
         self._tickets: dict[str, Ticket] = {}
         self._leases: dict[str, Lease] = {}
@@ -359,7 +362,7 @@ class CallLocks:
             LockError: The scheme refused the call (a second lease of its owner, a used ticket).
         """
         plan = self._plan(step)
-        owner = step.tool_use_id
+        owner = f"{step.tool_use_id}@{self._token}"
         limits = self.scheme.timeouts
         if plan.kind == "command":
             wait = limits.command_default_s

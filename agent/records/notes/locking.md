@@ -300,6 +300,17 @@ end of the run: give back every lock and ticket of the session
 - Giving back locks never raises (`CallLocks.release`, `call_ended`, `close` log a failure), so
   a failing backend cannot cut the end of a run short.
 - With locking off, the plan of a call (its checkouts) is made in the worker thread too.
+- The owner of a call's locks is "<tool call id>@<token of the session's CallLocks>". The lock
+  space is shared by every session of the user, and tool call ids are unique only per session;
+  with bare ids, two sessions that used the same id collided (`LockError`, the call denied).
+- Locking on by default, tried on 2026-11-25 (the owner asked what the unit tests would say):
+  with the session-scoped owners and a lock directory per test (`tests/conftest.py`), 23 of
+  2801 tests fail, all because of what locking is for. One is the generated settings reference.
+  Twenty-one gate tests approve the commands of up to ten agents in one worktree at once and
+  never send a tool result, so the first command keeps the worktree and the others wait until
+  the test gives up. One worktree test expects two parallel commands in one worktree to overlap
+  (and go unreviewed); with locking they run one after the other and both are reviewed. Before
+  the two fixes, six more tests failed on reused tool call ids.
 
 Not built:
 - A second check of a command whose worktree changed between its check and its locks

@@ -134,6 +134,23 @@ async def db_url() -> AsyncIterator[str]:
 
 
 @pytest.fixture(autouse=True)
+def _locks_below_the_test(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Give every test its own default lock directory, below its `tmp_path`.
+
+    With `locking.enabled` and a blank `locking.directory`, the "files" backend would use
+    `~/.local/state/calu/locks` and share its locks with every other test and with the
+    developer's own Calu (`calu.call_locks.default_directory`).
+
+    Args:
+        monkeypatch: Replaces `default_directory` for the test.
+        tmp_path: The test's directory.
+    """
+    from calu import call_locks
+
+    monkeypatch.setattr(call_locks, "default_directory", lambda: tmp_path / "default-locks")
+
+
+@pytest.fixture(autouse=True)
 def _no_change_to_the_machines_containers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Refuse every `docker update`, `docker compose ... down` and `docker volume rm` a test
     would send to the machine's own Docker.

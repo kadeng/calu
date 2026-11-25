@@ -411,7 +411,10 @@ async def test_giving_back_never_raises_and_the_next_change_removes_what_failed(
     assert locks.holding() == {}
     monkeypatch.undo()
     assert await locks.take(bash("make", "c3"), None) == ""
-    holders = {state.key: state.holders for state in space.snapshot()}
+    holders = {
+        state.key: tuple((owner.split("@")[0], mode) for owner, mode in state.holders)
+        for state in space.snapshot()
+    }
     assert holders == {
         worktree_key(str(tree.main.root)): (("c3", LockMode.EXCLUSIVE),),
         GLOBAL_KEY: (("c3", LockMode.SHARED),),
