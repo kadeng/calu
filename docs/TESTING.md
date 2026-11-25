@@ -188,12 +188,15 @@ costs money, so it stays a local and manual check (see below).
 
 ## The fuzz layer: random load on the locking component
 
-`calu.locking` (PLAN.md D274; not wired into Calu yet) decides which locks a command or an edit
-takes, so that no edit lands in a worktree while a command runs there, and in which order the
-calls of one agent get them. Its deterministic tests are part of the unit layer
-(`tests/unit/test_locking.py`). The randomized ones are marked `fuzz`: they run only when asked
-for, and never in CI (`tests/conftest.py` skips them unless the `-m` expression selects
-`fuzz`).
+`calu.locking` (PLAN.md D274/D275, agent/records/notes/locking.md) decides which locks a
+command or an edit takes, so that no edit lands in a worktree while a command runs there, and
+in which order the calls of one agent get them. Its deterministic tests are part of the unit
+layer: `tests/unit/test_locking.py` runs the lock contract against both backends (threads, and
+the state file) and tests the scheme; `tests/unit/test_locking_files.py` starts real processes
+that share a lock directory (marked `slow`): exclusion, FIFO across processes, a holder killed
+with SIGKILL, owners across processes. The randomized tests are marked `fuzz`: they run only
+when asked for, and never in CI (`tests/conftest.py` skips them unless the `-m` expression
+selects `fuzz`).
 
 ```bash
 uv run pytest -m fuzz -s tests/fuzz                                   # about a minute
@@ -201,6 +204,7 @@ CALU_FUZZ_SECONDS=120 CALU_FUZZ_SEED=7 uv run pytest -m fuzz -s tests/fuzz
 uv run python -m tests.fuzz.locking_harness fuzz --seconds 60 --workers 24 --worktrees 4
 uv run python -m tests.fuzz.locking_harness fuzz --scheme mixed-order --deadlock-prone
 uv run python -m tests.fuzz.locking_harness bench --repetitions 5
+uv run python -m tests.fuzz.locking_harness fuzz --files "$(mktemp -d)/locks"   # the file backend
 ```
 
 `tests/fuzz/locking_harness.py` runs simulated agents as threads. An agent thinks, then issues
@@ -240,7 +244,7 @@ edits without locks and commands with shared locks (overlaps), calls that ignore
 order, and a scheme that never gives owners back. The comparison runs one scenario of six
 agents in two worktrees with and without locks, on the scale 1 ms = 1 s, and prints both
 average times and the violations that locking prevents. Measured on 2026-11-25 (WSL2): with
-locks the scenario took 1.34 to 1.47 times as long; without locks, about 180 to 225 violations
+locks the scenario took 1.34 to 1.52 times as long; without locks, about 180 to 225 violations
 happened per run. In the load of commands only, many of them writing outside, a few timeouts
 from waiting in line occur, because a command that writes outside holds its worktree while it
 waits for the global lock; none may end a deadlock.

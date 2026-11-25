@@ -56,6 +56,7 @@ from queue import SimpleQueue
 
 from calu.locking import (
     GLOBAL_KEY,
+    FileLockSpace,
     Lease,
     LockCancelledError,
     LockError,
@@ -1389,8 +1390,9 @@ def fuzz(
     seed: int,
     seconds: float,
     timeline_path: str | None = None,
+    space: LockSpace | None = None,
 ) -> Report:
-    """Put random load on a scheme of `scheme_class` on a fresh thread backend for `seconds`.
+    """Put random load on a scheme of `scheme_class` for `seconds`.
 
     Args:
         scheme_class: `RWLockingScheme` or one of the wrong schemes below.
@@ -1398,17 +1400,19 @@ def fuzz(
         seed: The seed of the calls.
         seconds: How long batches start.
         timeline_path: Where to write the timeline CSV, or None.
+        space: The backend, fresh and unused; None for a new `ThreadLockSpace`.
 
     Returns:
         The report.
     """
-    scheme = scheme_class(ThreadLockSpace(), cfg.timeouts)
+    backend = space if space is not None else ThreadLockSpace()
+    scheme = scheme_class(backend, cfg.timeouts)
     workloads = [endless(seed, cfg, worker) for worker in range(cfg.workers)]
     return run_load(
         scheme,
         workloads,
         cfg,
-        title=f"{scheme_class.__name__}, random load",
+        title=f"{scheme_class.__name__} on {type(backend).__name__}, random load",
         seed=seed,
         seconds=seconds,
         patience_s=30 + 4 * max(cfg.timeouts.command_max_s, cfg.timeouts.edit_max_s),
@@ -1667,6 +1671,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     run.add_argument(
         "--timeline", metavar="CSV", help="write the numbers of holding and waiting calls"
     )
+    run.add_argument(
+        "--files",
+        metavar="DIR",
+        help="use the file backend with its state in DIR (a new, empty directory)",
+    )
     bench = modes.add_parser("bench", help="one scenario with and without locking")
     bench.add_argument("--seed", type=int)
     bench.add_argument("--workers", type=int)
@@ -1681,7 +1690,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     base = DEADLOCK_PRONE if args.deadlock_prone else FUZZ
     cfg = configured(base, workers=args.workers, worktrees=args.worktrees, timeout_s=args.timeout)
-    report = fuzz(SCHEMES[args.scheme], cfg, seed, args.seconds, args.timeline)
+    space = FileLockSpace(args.files) if args.files else None
+    report = fuzz(SCHEMES[args.scheme], cfg, seed, args.seconds, args.timeline, space)
     print(report.text())
     return 1 if args.scheme == "rw" and report.problems() else 0
 

@@ -4,9 +4,9 @@ This is the reference for Calu's locking (PLAN.md D274). It states what locking 
 how it works, and why each decision was made. The exploration that led here, with the first
 adversarial review of the design, is in `locking-design.md`.
 
-Status (2026-11-25): the component `src/calu/locking/` is built and tested with a backend for
-the threads of one process. The interprocess backend (section 8) and the wiring into Calu
-(section 9) come next.
+Status (2026-11-25): the component `src/calu/locking/` is built and tested, with a backend for
+the threads of one process and one for the processes of one user on one machine (section 8).
+The wiring into Calu (section 9) comes next.
 
 ## 1. What locking guarantees
 
@@ -168,19 +168,34 @@ running command.
 
 - **Threads of one process** (`ThreadLockSpace`): one `calu serve` runs all its sessions in one
   process, so this backend covers them.
-- **Processes of one user on one machine** (next): two `calu run`, or `calu serve` and
-  `calu run`, on the same checkout. Files, not PostgreSQL, for these reasons:
+- **Processes of one user on one machine** (`FileLockSpace`, PLAN.md D275): two `calu run`, or
+  `calu serve` and `calu run`, on the same checkout. Files, not PostgreSQL, for these reasons:
   - A process that dies is recognised by its process id (with its start time and the boot id),
     and its holds and requests are removed; no server has to notice a closed connection.
   - No database round trip per lock call, and locking works while the database is away.
   - It is tested across real processes in the unit layer, without a database.
   - The checkouts it protects are local to the machine anyway.
 
-  The design: one state file holds the FIFO queue of every lock; a short `flock` on a separate
-  file guards each change (flock belongs to an open file description, so threads open their
-  own); the state is written to a temporary file and renamed. FIFO, owners and grants follow the
-  same rules as the thread backend. A waiting request polls its entry (and is woken at once by a
-  change in its own process).
+  How it works: one state file (`locks.json`) holds the FIFO queue of every lock. A short
+  `flock` on a separate file guards each change; flock belongs to an open file description, and
+  every change opens the file anew, so threads exclude each other as well as processes. The new
+  state is written to a temporary file and renamed, so a reader always sees a whole state.
+  Grants follow the same rules as the thread backend (the same algorithm). A waiting request
+  polls its entry, from every millisecond up to every 20 ms, and a change of its own lock in its
+  own process wakes it at once. Every change removes the entries of processes that no longer run;
+  a waiting request looks for them on its lock every 0.2 s, so a killed holder is gone within a
+  fraction of a second. The holds of a process belong to it: its threads release them, other
+  processes cannot. The directory is private to the user (mode 0o700).
+
+  Costs: a change takes about 0.2 ms, a read 25 us. Under the fuzzer's load (twelve agents, very
+  short holds) the file backend handles about 200 calls per second, the thread backend about
+  1000; real tool calls take seconds, so the difference does not show. Waking only the waiters of
+  the changed lock, not all of them, doubled the file backend's throughput.
+
+  Tested: the lock contract runs against both backends; across real processes, four processes
+  that count in turns lose no update, requests of several processes are granted in FIFO order,
+  the hold of a process killed with SIGKILL is given up within seconds, and an owner is refused
+  across processes. The fuzzer runs on the file backend as well.
 - **PostgreSQL** (not planned): its advisory locks are reentrant per session, so each lease
   would need a session of its own; a sent lock call does not say when the server queued it, so
   `request` would have to confirm the queued row in `pg_locks`; an unlock must run on the

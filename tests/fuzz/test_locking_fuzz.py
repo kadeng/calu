@@ -10,16 +10,17 @@ is twice that; default 0.5), CALU_FUZZ_REPETITIONS (runs per scheme in the compa
 default 3), CALU_FUZZ_TIMELINE (a CSV path for the timeline of the first test).
 
 The tests run threads of this process only and print their reports (counts and timings) to
-stdout; `tests/fuzz/locking_harness.py` explains the numbers. The timeline CSV is the only file
-they write, and only when CALU_FUZZ_TIMELINE names one.
+stdout; `tests/fuzz/locking_harness.py` explains the numbers. They write the timeline CSV when
+CALU_FUZZ_TIMELINE names one, and the file backend's state below pytest's `tmp_path`.
 """
 
 import os
 import random
+from pathlib import Path
 
 import pytest
 
-from calu.locking import RWLockingScheme
+from calu.locking import FileLockSpace, RWLockingScheme
 from tests.fuzz.locking_harness import (
     BENCH,
     DEADLOCK_PRONE,
@@ -77,6 +78,17 @@ def test_random_load_breaks_no_rule() -> None:
     assert sum(ledger.withdrawn.values()) > 0
     assert sum(ledger.cancelled.values()) > 0
     assert sum(ledger.bad_arguments.values()) > 0
+
+
+def test_random_load_on_the_file_backend_breaks_no_rule(tmp_path: Path) -> None:
+    """The same random load, with the state of the locks in a file below `tmp_path` (threads of
+    this process share it; tests/unit/test_locking_files.py covers several processes)."""
+    report = fuzz(
+        RWLockingScheme, load(FUZZ), SEED, SECONDS, space=FileLockSpace(tmp_path / "locks")
+    )
+    print(f"\n{report.text()}")
+    assert report.problems() == []
+    assert sum(report.ledger.done.values()) > 100
 
 
 def test_a_load_of_commands_in_several_worktrees_never_deadlocks() -> None:

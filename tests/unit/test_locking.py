@@ -1,26 +1,32 @@
-"""The locking component `calu.locking` on its thread backend (agent/records/PLAN.md D274).
+"""The locking component `calu.locking` (agent/records/notes/locking.md).
 
-Deterministic tests: threads of this process only, no files, no output. A call that must be
-refused waits `BLOCKED` seconds; a call that must get in waits up to 5 s. The randomized load
-tests are in `tests/fuzz/` (marker `fuzz`).
+Deterministic tests. The lock contract runs against both backends (the threads of one process,
+and the state file in a temporary directory, `tmp_path`); the scheme's tests use the thread
+backend. Threads of this process only, no output. A call that must be refused waits `BLOCKED`
+seconds; a call that must get in waits up to 5 s. The tests across processes are in
+`test_locking_files.py`, the randomized load tests in `tests/fuzz/` (marker `fuzz`).
 """
 
 import math
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
 from calu.locking import (
     GENERATED_OWNER_PREFIX,
     GLOBAL_KEY,
+    FileLockSpace,
     Hold,
     Lease,
     LockCancelledError,
     LockError,
     LockingScheme,
     LockMode,
+    LockSpace,
+    LockState,
     LockTimeoutError,
     LockTimeouts,
     NoLockingScheme,
@@ -214,43 +220,77 @@ def queue_of(locking: RWLockingScheme, key: str) -> list[str]:
     return []
 
 
-# The thread backend's lock: FIFO, owners, no reentrancy, bounded waits
+# The lock contract, for every backend: FIFO, owners, no reentrancy, bounded waits
 
 
-def test_shared_holds_coexist() -> None:
-    lock = ThreadRWLock("k")
+@pytest.fixture(params=["thread", "file"])
+def space(request: pytest.FixtureRequest, tmp_path: Path) -> LockSpace:
+    """A fresh lock space of each backend: the threads of one process, or a state file.
+
+    Args:
+        request: Gives the backend's name.
+        tmp_path: The directory of the file backend's state.
+
+    Returns:
+        The space.
+    """
+    if request.param == "file":
+        return FileLockSpace(tmp_path / "locks")
+    return ThreadLockSpace()
+
+
+def state(space: LockSpace, key: str) -> LockState:
+    """Return the state of one lock of `space`; an unused lock has no holders and no waiters.
+
+    Args:
+        space: The space.
+        key: The lock's key.
+
+    Returns:
+        The state.
+    """
+    for lock_state in space.snapshot() or ():
+        if lock_state.key == key:
+            return lock_state
+    return LockState(key, (), ())
+
+
+def test_shared_holds_coexist(space: LockSpace) -> None:
+    lock = space.lock("k")
     first = lock.acquire(SHARED, 0, "a")
     second = lock.acquire(SHARED, 0, "b")
     assert first is not None and second is not None
     assert first.token != second.token
 
 
-def test_an_exclusive_hold_excludes_every_other_hold() -> None:
-    lock = ThreadRWLock("k")
+def test_an_exclusive_hold_excludes_every_other_hold(space: LockSpace) -> None:
+    lock = space.lock("k")
     assert lock.acquire(EXCLUSIVE, 0, "a") is not None
     assert lock.acquire(SHARED, BLOCKED, "b") is None
     assert lock.acquire(EXCLUSIVE, BLOCKED, "c") is None
 
 
-def test_a_shared_hold_excludes_an_exclusive_request() -> None:
-    lock = ThreadRWLock("k")
+def test_a_shared_hold_excludes_an_exclusive_request(space: LockSpace) -> None:
+    lock = space.lock("k")
     assert lock.acquire(SHARED, 0, "a") is not None
     assert lock.acquire(EXCLUSIVE, BLOCKED, "b") is None
 
 
-def test_a_waiting_request_gets_the_lock_when_it_is_released() -> None:
-    lock = ThreadRWLock("k")
+def test_a_waiting_request_gets_the_lock_when_it_is_released(space: LockSpace) -> None:
+    lock = space.lock("k")
     hold = lock.acquire(EXCLUSIVE, 0, "a")
     assert hold is not None
     waiting = Background(lambda: lock.acquire(SHARED, 5, "reader"))
-    wait_until(lambda: waiters(lock) == 1)
+    wait_until(lambda: len(state(space, "k").waiters) == 1)
     lock.release(hold)
     assert waiting.finish() is not None
-    assert lock.state().holders == (("reader", SHARED),)
+    assert state(space, "k").holders == (("reader", SHARED),)
 
 
-def test_requests_are_granted_in_the_order_they_were_made_not_waited_for() -> None:
-    lock = ThreadRWLock("k")
+def test_requests_are_granted_in_the_order_they_were_made_not_waited_for(
+    space: LockSpace,
+) -> None:
+    lock = space.lock("k")
     first = lock.acquire(EXCLUSIVE, 0, "a")
     assert first is not None
     shared = lock.request(SHARED, "b")
@@ -261,62 +301,62 @@ def test_requests_are_granted_in_the_order_they_were_made_not_waited_for() -> No
     exclusive_wait = Background(lambda: exclusive.wait(5))
     shared_wait = Background(lambda: shared.wait(5))
     lock.release(first)
-    wait_until(lambda: lock.state().holders == (("b", SHARED),))
-    assert lock.state().waiters == (("c", EXCLUSIVE), ("d", SHARED))
+    wait_until(lambda: state(space, "k").holders == (("b", SHARED),))
+    assert state(space, "k").waiters == (("c", EXCLUSIVE), ("d", SHARED))
     lock.release(hold_of(shared_wait))
     exclusive_hold = hold_of(exclusive_wait)
-    assert lock.state().holders == (("c", EXCLUSIVE),)
+    assert state(space, "k").holders == (("c", EXCLUSIVE),)
     lock.release(exclusive_hold)
     hold_of(late_wait)
-    assert lock.state().holders == (("d", SHARED),)
+    assert state(space, "k").holders == (("d", SHARED),)
 
 
-def test_a_waiting_exclusive_request_keeps_later_shared_requests_out() -> None:
-    lock = ThreadRWLock("k")
+def test_a_waiting_exclusive_request_keeps_later_shared_requests_out(space: LockSpace) -> None:
+    lock = space.lock("k")
     reader = lock.acquire(SHARED, 0, "reader")
     assert reader is not None
     writer = Background(lambda: lock.acquire(EXCLUSIVE, 5, "writer"))
-    wait_until(lambda: waiters(lock) == 1)
+    wait_until(lambda: len(state(space, "k").waiters) == 1)
     # Compatible with the current shared hold, but behind the waiting exclusive request.
     assert lock.acquire(SHARED, BLOCKED, "late reader") is None
     lock.release(reader)
     assert writer.finish() is not None
-    assert lock.state().holders == (("writer", EXCLUSIVE),)
+    assert state(space, "k").holders == (("writer", EXCLUSIVE),)
 
 
-def test_a_request_that_timed_out_leaves_the_queue() -> None:
-    lock = ThreadRWLock("k")
+def test_a_request_that_timed_out_leaves_the_queue(space: LockSpace) -> None:
+    lock = space.lock("k")
     assert lock.acquire(SHARED, 0, "reader") is not None
     assert lock.acquire(EXCLUSIVE, BLOCKED, "writer") is None
-    assert lock.state().waiters == ()
+    assert state(space, "k").waiters == ()
     assert lock.acquire(SHARED, 0, "second reader") is not None
 
 
-def test_a_timed_out_head_of_the_queue_lets_the_requests_behind_it_in() -> None:
-    lock = ThreadRWLock("k")
+def test_a_timed_out_head_of_the_queue_lets_the_requests_behind_it_in(space: LockSpace) -> None:
+    lock = space.lock("k")
     assert lock.acquire(SHARED, 0, "reader") is not None
     writer = Background(lambda: lock.acquire(EXCLUSIVE, 0.3, "writer"))
-    wait_until(lambda: waiters(lock) == 1)
+    wait_until(lambda: len(state(space, "k").waiters) == 1)
     second_reader = Background(lambda: lock.acquire(SHARED, 5, "second reader"))
-    wait_until(lambda: waiters(lock) == 2)
+    wait_until(lambda: len(state(space, "k").waiters) == 2)
     assert writer.finish() is None
     assert second_reader.finish() is not None
 
 
-def test_a_withdrawn_request_leaves_the_queue_or_gives_its_grant_back() -> None:
-    lock = ThreadRWLock("k")
+def test_a_withdrawn_request_leaves_the_queue_or_gives_its_grant_back(space: LockSpace) -> None:
+    lock = space.lock("k")
     first = lock.acquire(EXCLUSIVE, 0, "a")
     assert first is not None
     queued = lock.request(SHARED, "b")
     queued.withdraw()
     queued.withdraw()
-    assert lock.state().waiters == ()
+    assert state(space, "k").waiters == ()
     assert queued.wait(5) is None
     lock.release(first)
     granted = lock.request(EXCLUSIVE, "c")  # granted at once, not yet returned by `wait`
-    assert lock.state().holders == (("c", EXCLUSIVE),)
+    assert state(space, "k").holders == (("c", EXCLUSIVE),)
     granted.withdraw()
-    assert lock.state().holders == ()
+    assert state(space, "k").holders == ()
     returned = lock.request(SHARED, "d")
     hold = returned.wait(0)
     assert hold is not None
@@ -327,8 +367,20 @@ def test_a_withdrawn_request_leaves_the_queue_or_gives_its_grant_back() -> None:
     lock.release(hold)
 
 
-def test_an_owner_that_asks_again_for_a_lock_is_refused_at_once() -> None:
-    lock = ThreadRWLock("k")
+def test_a_withdrawal_wakes_a_wait_blocked_in_another_thread(space: LockSpace) -> None:
+    lock = space.lock("k")
+    assert lock.acquire(EXCLUSIVE, 0, "a") is not None
+    request = lock.request(SHARED, "b")
+    waiting = Background(lambda: request.wait(5))
+    time.sleep(BLOCKED)
+    started = time.monotonic()
+    request.withdraw()
+    assert waiting.finish() is None
+    assert time.monotonic() - started < 1
+
+
+def test_an_owner_that_asks_again_for_a_lock_is_refused_at_once(space: LockSpace) -> None:
+    lock = space.lock("k")
     hold = lock.acquire(SHARED, 0, "call-1")
     assert hold is not None
     started = time.monotonic()
@@ -348,32 +400,32 @@ def test_an_owner_that_asks_again_for_a_lock_is_refused_at_once() -> None:
     assert lock.acquire(SHARED, 0, "call-1") is not None  # after the release it may again
 
 
-def test_owners_must_be_non_empty_strings() -> None:
-    lock = ThreadRWLock("k")
+def test_owners_must_be_non_empty_strings(space: LockSpace) -> None:
+    lock = space.lock("k")
     with pytest.raises(ValueError):
         lock.request(SHARED, "")
     with pytest.raises(TypeError):
         lock.request(SHARED, 3)  # type: ignore[arg-type]
-    assert lock.state().waiters == ()
+    assert state(space, "k").waiters == ()
 
 
-def test_timeouts_must_be_finite_numbers_of_at_least_zero() -> None:
-    lock = ThreadRWLock("k")
+def test_timeouts_must_be_finite_numbers_of_at_least_zero(space: LockSpace) -> None:
+    lock = space.lock("k")
     for bad in (math.inf, -math.inf, math.nan, -1):
         with pytest.raises(ValueError, match="finite"):
             lock.acquire(SHARED, bad, "a")
     for wrong_type in ("1", True, None):
         with pytest.raises(TypeError):
             lock.acquire(SHARED, wrong_type, "a")  # type: ignore[arg-type]
-    assert lock.state().holders == () and lock.state().waiters == ()
+    assert state(space, "k").holders == () and state(space, "k").waiters == ()
     request = lock.request(SHARED, "b")
     with pytest.raises(ValueError):
         request.wait(math.inf)
-    assert lock.state().holders == () and lock.state().waiters == ()
+    assert state(space, "k").holders == () and state(space, "k").waiters == ()
 
 
-def test_a_hold_is_released_once_and_only_on_its_own_lock() -> None:
-    lock, other = ThreadRWLock("k"), ThreadRWLock("other")
+def test_a_hold_is_released_once_and_only_on_its_own_lock(space: LockSpace) -> None:
+    lock, other = space.lock("k"), space.lock("other")
     hold = lock.acquire(EXCLUSIVE, 0, "a")
     assert hold is not None
     with pytest.raises(LockError):
@@ -383,25 +435,23 @@ def test_a_hold_is_released_once_and_only_on_its_own_lock() -> None:
         lock.release(hold)
 
 
-def test_any_thread_may_release_a_hold() -> None:
-    lock = ThreadRWLock("k")
+def test_any_thread_may_release_a_hold(space: LockSpace) -> None:
+    lock = space.lock("k")
     hold = lock.acquire(EXCLUSIVE, 0, "a")
     assert hold is not None
     Background(lambda: lock.release(hold)).finish()
     assert lock.acquire(EXCLUSIVE, 0, "b") is not None
 
 
-def test_the_snapshot_shows_holders_and_waiters_with_their_owners() -> None:
-    space = ThreadLockSpace()
+def test_the_snapshot_shows_holders_and_waiters_with_their_owners(space: LockSpace) -> None:
     held = space.lock("a").acquire(EXCLUSIVE, 0, "first")
     assert held is not None
     waiting = Background(lambda: space.lock("a").acquire(SHARED, 5, "second"))
-    wait_until(lambda: waiters(space.lock("a")) == 1)
+    wait_until(lambda: len(state(space, "a").waiters) == 1)
     assert space.lock("b") is space.lock("b")
-    states = {state.key: state for state in space.snapshot()}
-    assert states["a"].holders == (("first", EXCLUSIVE),)
-    assert states["a"].waiters == (("second", SHARED),)
-    assert states["b"].holders == () and states["b"].waiters == ()
+    assert state(space, "a").holders == (("first", EXCLUSIVE),)
+    assert state(space, "a").waiters == (("second", SHARED),)
+    assert state(space, "b").holders == () and state(space, "b").waiters == ()
     space.lock("a").release(held)
     waiting.finish()
     with pytest.raises(ValueError):

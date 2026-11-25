@@ -3,10 +3,12 @@
 Not wired into Calu yet: nothing outside this package and its tests imports it.
 `calu.locking.scheme` defines which locks commands and edits take and in which order the calls
 of an agent get them (`RWLockingScheme`, and `NoLockingScheme` for when locking is off).
-`calu.locking.rwlock` defines the FIFO shared/exclusive lock a backend implements, and
-`calu.locking.threadlocks` is the backend for the threads of one process.
+`calu.locking.rwlock` defines the FIFO shared/exclusive lock a backend implements;
+`calu.locking.threadlocks` is the backend for the threads of one process, and
+`calu.locking.filelocks` the one for the processes of one user on one machine.
 """
 
+from calu.locking.filelocks import FileLockRequest, FileLockSpace, FileRWLock
 from calu.locking.rwlock import (
     Hold,
     LockError,
@@ -41,6 +43,9 @@ from calu.locking.threadlocks import ThreadLockRequest, ThreadLockSpace, ThreadR
 __all__ = [
     "GENERATED_OWNER_PREFIX",
     "GLOBAL_KEY",
+    "FileLockRequest",
+    "FileLockSpace",
+    "FileRWLock",
     "Hold",
     "Lease",
     "LockCancelledError",
