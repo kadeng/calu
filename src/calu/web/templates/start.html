@@ -37,6 +37,13 @@
     <label><input type="checkbox" name="start" value="on"{% if form.start %} checked{% endif %}> start a session now</label>
   </p>
   <p class="row">
+    <label>Continue a conversation <input type="text" name="resume" list="conversations" value="{{ form.resume }}" class="wide" placeholder="a Claude session id, or pick one (optional)" autocomplete="off" spellcheck="false"></label>
+  </p>
+  <datalist id="conversations">
+    {% for c in conversations %}<option value="{{ c.id }}" label="{{ c.label }}">{{ c.label }}</option>{% endfor %}
+  </datalist>
+  <p class="muted">{% if conversations %}{{ conversations | length }} conversation{% if conversations | length != 1 %}s{% endif %} of this folder can be continued: those of Calu and those started with <code>claude</code> itself. {% else %}No conversation of this folder can be continued. {% endif %}A conversation continues in the folder it was started in, and always starts a session; leave the field empty for a new conversation.</p>
+  <p class="row">
     <textarea name="prompt" rows="3" placeholder="first message for Claude (optional)">{{ form.prompt }}</textarea>
   </p>
   <p class="row">

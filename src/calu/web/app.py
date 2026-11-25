@@ -1506,10 +1506,16 @@ async def start_page(request: Request, state: _State) -> Response:
     """Show the "new session" dialog, or carry it out (agent/records/PLAN.md D270).
 
     GET lists the folders at `?at=` below the projects directory of the `calu serve` of this
-    machine and of the user the interface works for (`calu.web.start`). POST takes the form
-    `at` (the folder), `name` (a new folder in it), `url` (a git address to clone into it),
-    `prompt` (the first message), and the checkboxes `start` (start a session) and `pane`
-    (open the chat pane in this window).
+    machine and of the user the interface works for (`calu.web.start`), and the conversations
+    of that folder that can be continued (`herd.stored_conversations`: calu's, and those of
+    `claude` itself). POST takes the form `at` (the folder), `name` (a new folder in it),
+    `url` (a git address to clone into it), `resume` (a Claude session id to continue, typed
+    or chosen from the list), `prompt` (the first message), and the checkboxes `start`
+    (start a session) and `pane` (open the chat pane in this window).
+
+    A conversation is continued only in the folder it belongs to: `resume` with a new folder
+    or a repository is refused, and so is an id that is no UUID or that Claude Code keeps no
+    transcript of for the folder. With `resume` a session is always started.
 
     Side effects of a POST: may create a folder or clone a repository (as that user), and
     may file a session request that the server answers by starting a session.
@@ -1540,7 +1546,8 @@ async def start_page(request: Request, state: _State) -> Response:
         "crumbs": [],
         "problem": "",
         "done": "",
-        "form": {"name": "", "url": "", "prompt": "", "start": True, "pane": True},
+        "form": {"name": "", "url": "", "resume": "", "prompt": "", "start": True, "pane": True},
+        "conversations": [],
     }
     if server is None:
         values["problem"] = (
@@ -1556,12 +1563,22 @@ async def start_page(request: Request, state: _State) -> Response:
         values["form"] = {
             "name": str(form.get("name") or ""),
             "url": str(form.get("url") or ""),
+            "resume": str(form.get("resume") or "").strip(),
             "prompt": str(form.get("prompt") or ""),
             "start": bool(form.get("start")),
             "pane": bool(form.get("pane")),
         }
         chosen = values["form"]
         try:
+            if chosen["resume"]:
+                chosen["resume"] = await anyio.to_thread.run_sync(
+                    start.check_resume,
+                    projects,
+                    at,
+                    chosen["name"],
+                    chosen["url"],
+                    chosen["resume"],
+                )
             target = await anyio.to_thread.run_sync(
                 start.prepare, projects, at, chosen["name"], chosen["url"]
             )
@@ -1569,11 +1586,13 @@ async def start_page(request: Request, state: _State) -> Response:
             values["problem"] = str(exc)
         else:
             started: str | None = None
-            if chosen["start"]:
+            if chosen["start"] or chosen["resume"]:
                 wanted = session_requests.SessionRequest(
                     hostname=server.hostname,
                     os_user=server.os_user,
                     directory=str(target),
+                    kind="resume" if chosen["resume"] else "new",
+                    claude_session_id=chosen["resume"] or None,
                     prompt=chosen["prompt"].strip() or None,
                     label="calu web",
                 )
@@ -1590,8 +1609,10 @@ async def start_page(request: Request, state: _State) -> Response:
                     started = done.session_id
             if not values["problem"]:
                 if chosen["pane"]:
-                    pane = str(request.url_for("pane"))
-                    return RedirectResponse(f"{pane}#dir={quote(str(target))}", status_code=303)
+                    pane = f"{request.url_for('pane')}#dir={quote(str(target))}"
+                    if started:
+                        pane += f"&session={quote(started)}"  # the started one, not another
+                    return RedirectResponse(pane, status_code=303)
                 if started:
                     return RedirectResponse(
                         request.url_for("live", session_id=started), status_code=303
@@ -1605,6 +1626,13 @@ async def start_page(request: Request, state: _State) -> Response:
             for name in await anyio.to_thread.run_sync(start.listing, projects, at)
         ]
         values["at"] = at.strip("/")
+        here = await anyio.to_thread.run_sync(start.folder, projects, values["at"])
+        values["conversations"] = [
+            {"id": row.claude_session_id, "label": _conversation_label(row)}
+            for row in await herd.stored_conversations(
+                state.db, here, server.hostname, server.os_user, RESUME_LISTED, resumable=True
+            )
+        ]
     except start.StartRefused as exc:
         values["problem"] = values["problem"] or str(exc)
         values["at"] = ""
@@ -1612,6 +1640,27 @@ async def start_page(request: Request, state: _State) -> Response:
     values["crumbs"] = [(part, "/".join(parts[: i + 1])) for i, part in enumerate(parts)]
     values["projects"] = str(projects)
     return _render(request, "start.html", values)
+
+
+RESUME_LISTED = 30
+"""How many conversations of a folder the "new session" dialog offers to continue."""
+
+
+def _conversation_label(row: herd.ConversationRow) -> str:
+    """Describe a conversation in one line for the list of the "new session" dialog.
+
+    Args:
+        row: The conversation.
+
+    Returns:
+        Its age, "running" or "started with claude" where that holds, and the user's last
+        message, shortened to 80 characters (the id is the option's value).
+    """
+    marks = ["running"] if row.running else ["started with claude"] if row.outside else []
+    text = " ".join(row.last_input.split()) or "(no message)"
+    if len(text) > 80:
+        text = text[:79] + "…"
+    return " · ".join([f"{herd.age_text(row.age_s)} ago", *marks, text])
 
 
 async def summary_page(request: Request, state: _State) -> Response:

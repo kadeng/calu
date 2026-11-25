@@ -1496,6 +1496,131 @@ async def test_the_new_session_dialog_makes_a_folder_and_starts_a_session_there(
         await conn.close()
 
 
+async def test_the_new_session_dialog_continues_a_conversation_of_the_folder(
+    db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dialog offers the conversations of the chosen folder to continue (calu's and those
+    of `claude` itself), takes an id typed or picked, files a "resume" request for it and
+    opens the chat pane on the session that started; an id of another folder, or one with a
+    new folder, is refused before anything is filed.
+
+    Makes folders below `tmp_path`; records a `servers` row for this host and user; Claude
+    Code's transcripts are stood in for."""
+    import socket
+    from datetime import UTC, datetime
+    from pathlib import Path
+
+    from calu import herd, servers, session_requests
+    from calu.claude.transcripts import Transcript
+    from calu.context.turns import TurnRecord
+    from calu.web import start
+
+    projects = (tmp_path / "projects").resolve()
+    (projects / "shop").mkdir(parents=True)
+    (projects / "api").mkdir()
+    known = "0b2a6a8e-3c1d-4f5e-9a7b-1c2d3e4f5a6b"
+    continued = "4d5e6f70-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
+
+    def kept(directory: Path, limit: int | None = None) -> list[Transcript]:
+        """Stand in for Claude Code's transcripts: one conversation, in `shop` only.
+
+        Args:
+            directory: The folder asked about.
+            limit: Ignored.
+
+        Returns:
+            Its conversations.
+        """
+        if directory != projects / "shop":
+            return []
+        return [
+            Transcript(known, datetime.now(UTC), "fix the cart"),
+            Transcript(continued, datetime.now(UTC), "the first request"),
+        ]
+
+    monkeypatch.setattr(herd, "transcripts", kept)
+    monkeypatch.setattr(herd, "user_inputs", lambda session_id, directory: ["and the tax"])
+    monkeypatch.setattr(start, "transcripts", kept)
+    filed: list[tuple[str, str, str | None]] = []
+
+    async def answered(db_: Db, request_id: int, *_a: object) -> session_requests.SessionRequest:
+        row = await db_.one(
+            "SELECT directory, kind, claude_session_id FROM session_requests WHERE id = %s",
+            (request_id,),
+        )
+        assert row is not None
+        filed.append((row[0], row[1], row[2]))
+        return session_requests.SessionRequest(
+            hostname="",
+            os_user="",
+            directory=row[0],
+            state="started",
+            session_id="00000000-0000-0000-0000-000000000002",
+        )
+
+    monkeypatch.setattr(session_requests, "wait_for", answered)
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        # A conversation calu ran in `shop` whose transcript Claude Code no longer keeps.
+        gone = DatabaseSessionStore(db)
+        await gone.start(
+            SessionIdentity(
+                hostname=socket.gethostname(),
+                os_user=start.web_user(),
+                directory=str(projects / "shop"),
+                pid=7,
+                os="Linux",
+            )
+        )
+        await gone.set_claude_session("9c8b7a65-4321-4fed-8cba-0123456789ab")
+        await gone.save_turn(TurnRecord(index=1, user_inputs=["the old request"]))
+        # A conversation calu continued without a message: its transcript has one.
+        quiet = DatabaseSessionStore(db)
+        await quiet.start(
+            SessionIdentity(
+                hostname=socket.gethostname(),
+                os_user=start.web_user(),
+                directory=str(projects / "shop"),
+                pid=8,
+                os="Linux",
+            )
+        )
+        await quiet.set_claude_session(continued)
+        await quiet.save_turn(TurnRecord(index=1, user_inputs=[]))
+        await servers.record_start(db, socket.gethostname(), start.web_user(), "", str(projects))
+        app = create_app(db, git_url_template="")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+            offered = (await client.get("/start?at=shop")).text
+            assert f'<option value="{known}"' in offered
+            assert "started with claude · and the tax" in offered
+            assert "2 conversations of this folder can be continued" in offered
+            assert f'<option value="{continued}"' in offered
+            assert offered.count('· and the tax">') == 2  # calu's own shows its transcript's
+            assert "9c8b7a65-4321-4fed-8cba-0123456789ab" not in offered  # no transcript
+            elsewhere = (await client.get("/start?at=api")).text
+            assert "No conversation of this folder can be continued" in elsewhere
+
+            wrong = await client.post("/start", data={"at": "api", "resume": known})
+            assert wrong.status_code == 200 and "keeps no conversation" in wrong.text
+            mixed = await client.post("/start", data={"at": "shop", "name": "x", "resume": known})
+            assert mixed.status_code == 200 and "leave the new folder" in mixed.text
+            assert filed == [] and not (projects / "shop" / "x").exists()
+
+            resumed = await client.post(
+                "/start", data={"at": "shop", "resume": known.upper(), "pane": "on"}
+            )
+            assert resumed.status_code == 303
+            assert resumed.headers["location"].endswith(
+                f"/pane#dir={projects}/shop&session=00000000-0000-0000-0000-000000000002"
+            )
+            assert filed == [(str(projects / "shop"), "resume", known)]
+    finally:
+        await conn.close()
+
+
 async def test_a_local_running_session_gets_a_chat_link_and_a_remote_one_none(db_url: str) -> None:
     """D271: the sessions list links a running session of this machine and of the user the
     interface works for to the chat pane, attached to it (`#dir=...&session=...`, a window

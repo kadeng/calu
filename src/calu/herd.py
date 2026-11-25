@@ -24,12 +24,13 @@ import socket
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import psycopg
 
 from calu import machine
-from calu.claude.transcripts import Transcript
+from calu.claude.transcripts import Transcript, transcripts, user_inputs
 from calu.context.foreign import own_words
 from calu.context.turns import TurnRecord
 from calu.db import Db
@@ -716,6 +717,77 @@ def with_transcripts(
         else row
         for row in merged
     ]
+
+
+async def stored_conversations(
+    db: Db, directory: Path, hostname: str, os_user: str, limit: int, resumable: bool = False
+) -> list[ConversationRow]:
+    """List the conversations of a directory that can be resumed: calu's and Claude Code's own.
+
+    The conversations calu has stored turns of (`conversations`), and those that only Claude
+    Code's transcripts know (`with_transcripts`, D209): a conversation started with `claude`
+    itself. A conversation of calu's whose stored turns hold no message of the user (e.g. one
+    continued without a first message) shows the last message of its transcript. The
+    transcripts are read below the Claude configuration directory of the user this process
+    runs as, or works for (`CLAUDE_CONFIG_DIR`, `calu.asuser.enter`).
+
+    Side effects: reads the transcripts (in a worker thread).
+
+    Args:
+        db: A connection with read access to `sessions`, `hosts` and `turns`.
+        directory: The directory, resolved.
+        hostname: The host whose runs count (`socket.gethostname()` of the runs).
+        os_user: The OS user whose runs count.
+        limit: How many conversations to return at most; at least 1.
+        resumable: Leave out calu's conversations whose transcript Claude Code no longer
+            keeps (deleted, or cleaned up after `cleanupPeriodDays`): Claude Code cannot
+            continue them.
+
+    Returns:
+        At most `limit` conversations of both kinds, the freshest first.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    import anyio.to_thread
+
+    here = str(directory)
+    rows = await conversations(db, here, hostname, os_user, limit)
+    known = await known_conversations(db, here, hostname, os_user)
+    found = await anyio.to_thread.run_sync(transcripts, directory)
+    if resumable:
+        kept = {transcript.session_id for transcript in found}
+        rows = [row for row in rows if row.claude_session_id in kept]
+
+    def last_input(session_id: str) -> str:
+        """Return the last message the user typed in a transcript.
+
+        Args:
+            session_id: The Claude session id.
+
+        Returns:
+            The message, or "" if the transcript holds none.
+        """
+        inputs = user_inputs(session_id, directory)
+        return inputs[-1] if inputs else ""
+
+    merged = await anyio.to_thread.run_sync(with_transcripts, rows, known, found, last_input, limit)
+    kept = {transcript.session_id for transcript in found}
+
+    def filled(row: ConversationRow) -> ConversationRow:
+        """Give a conversation of calu's without a stored message its transcript's last one.
+
+        Args:
+            row: A listed conversation.
+
+        Returns:
+            The row, with `last_input` from the transcript where calu stored none.
+        """
+        if row.outside or row.last_input or row.claude_session_id not in kept:
+            return row
+        return dataclasses.replace(row, last_input=own_words(last_input(row.claude_session_id)))
+
+    return await anyio.to_thread.run_sync(lambda: [filled(row) for row in merged])
 
 
 async def escalations(db: Db, session_id: str | None = None) -> list[EscalationRow]:

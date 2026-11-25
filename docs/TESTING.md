@@ -1154,6 +1154,14 @@ escalation resolved from the database alone.
    for the two local ones only; each opens a window with the chat pane attached to its own
    session (its transcript, its escalations), also when both run in one folder. Not yet run
    by hand.
+57. Continuing a conversation from the "New session…" dialog (PLAN.md D277): in a folder with
+   conversations of Calu and of plain `claude`, the field "Continue a conversation" lists
+   them (age, "running" or "started with claude", the last message); picking one, or typing
+   its id (also in capitals), and "Go" opens the chat pane on a session that continues it
+   (`calu list-sessions` there shows the id running). An id of another folder, a malformed
+   id, or the field together with a new folder are refused with a reason and file nothing.
+   Run on 2026-11-25 in the Cua desktop against the scripted server (Firefox); not yet with
+   a real Claude Code.
 
 ## Measuring the checkers
 

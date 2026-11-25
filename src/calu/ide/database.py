@@ -21,12 +21,10 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-import anyio
 from pydantic import BaseModel, ValidationError
 
 from calu import admin, herd
 from calu.acp.peer import RpcError
-from calu.claude.transcripts import transcripts, user_inputs
 from calu.config import Config, default_model, merge_settings
 from calu.configdoc import setting_rows
 from calu.db.connection import Db
@@ -438,26 +436,7 @@ async def sessions_view(db: Db, workspace: Path, every_host: bool = False) -> di
     ]
     running = [session_json(row, workspace) for row in rows]
     running.sort(key=lambda entry: not entry["here"])  # stable: the newest stay first
-    here = str(workspace)
-    conversations = await herd.conversations(db, here, host, user, STORED_LIMIT)
-    known = await herd.known_conversations(db, here, host, user)
-    found = await anyio.to_thread.run_sync(transcripts, workspace)
-
-    def last_input(session_id: str) -> str:
-        """Return the last message the user typed in a transcript.
-
-        Args:
-            session_id: The Claude session id.
-
-        Returns:
-            The message, or "" if the transcript holds none.
-        """
-        inputs = user_inputs(session_id, workspace)
-        return inputs[-1] if inputs else ""
-
-    merged = await anyio.to_thread.run_sync(
-        herd.with_transcripts, conversations, known, found, last_input, STORED_LIMIT
-    )
+    merged = await herd.stored_conversations(db, workspace, host, user, STORED_LIMIT)
     return {"running": running, "stored": [asdict(row) for row in merged]}
 
 

@@ -108,3 +108,62 @@ def test_a_clone_runs_git_with_only_safe_transports_and_no_prompt(tmp_path: Path
         start.prepare(root, "", "other", "https://example.org/missing.git", failing)
     with pytest.raises(start.StartRefused, match="https://, ssh://"):
         start.prepare(root, "", "", "file:///srv/x.git", git)
+
+
+def test_a_conversation_is_continued_only_in_its_own_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import UTC, datetime
+
+    from calu.claude.transcripts import Transcript
+
+    root = projects_dir(tmp_path)
+    known = "0b2a6a8e-3c1d-4f5e-9a7b-1c2d3e4f5a6b"
+    seen: list[Path] = []
+
+    def kept(directory: Path) -> list[Transcript]:
+        """Stand in for Claude Code's transcripts: one conversation, in `shop` only.
+
+        Args:
+            directory: The folder asked about.
+
+        Returns:
+            Its conversations.
+        """
+        seen.append(directory)
+        if directory != root / "shop":
+            return []
+        return [Transcript(known, datetime.now(UTC), "fix the cart")]
+
+    monkeypatch.setattr(start, "transcripts", kept)
+    assert start.check_resume(root, "shop", "", "", known.upper()) == known
+    with pytest.raises(start.StartRefused, match="keeps no conversation"):
+        start.check_resume(root, "api", "", "", known)
+    with pytest.raises(start.StartRefused, match="no Claude session id"):
+        start.check_resume(root, "shop", "", "", "not-an-id")
+    with pytest.raises(start.StartRefused, match="leave the new folder"):
+        start.check_resume(root, "shop", "new", "", known)
+    with pytest.raises(start.StartRefused, match="leave the new folder"):
+        start.check_resume(root, "shop", "", "https://example.org/x.git", known)
+    with pytest.raises(start.StartRefused):
+        start.check_resume(root, ".cache", "", "", known)  # a hidden folder is never served
+    assert seen == [root / "shop", root / "api"]
+
+
+def test_a_conversation_is_described_in_one_line() -> None:
+    from calu import herd
+    from calu.web.app import _conversation_label
+
+    row = herd.ConversationRow(
+        claude_session_id="0b2a6a8e-3c1d-4f5e-9a7b-1c2d3e4f5a6b",
+        age_s=7200,
+        last_input="fix the\ncart " + "x" * 100,
+        turns=3,
+        running=False,
+        outside=True,
+    )
+    label = _conversation_label(row)
+    assert label.startswith(f"{herd.age_text(7200)} ago · started with claude · fix the cart ")
+    assert len(label.split(" · ")[-1]) == 80 and label.endswith("…")
+    running = herd.ConversationRow("id", 5, "", 1, True)
+    assert _conversation_label(running) == f"{herd.age_text(5)} ago · running · (no message)"

@@ -1115,6 +1115,14 @@ where the browser blocks popups):
   you give one). Folders are made and repositories cloned as you, and only inside the
   projects directory, never in a hidden folder.
 - **Start a session now** (with an optional first message): the server starts it there.
+- **Continue a conversation:** type a Claude session id, or pick one from the list of the
+  chosen folder's conversations: those Calu ran and those started with `claude` itself, each
+  with its age and the last message. The session then continues that conversation instead of
+  starting a new one. A conversation continues only in the folder it was started in, because
+  Claude Code keeps its transcript per folder, so the dialog refuses an id that the folder has
+  no transcript of, and refuses the field together with a new folder or a repository. The list
+  leaves out conversations whose transcript Claude Code has deleted (by default after 30
+  days). A conversation that is still running is marked "running": attach to it instead.
 - **Open the chat pane in this window:** the window becomes the chat pane (below) of that
   folder, attached to the session. Without it, a started session opens its live view.
 - Without a running `calu serve` for you on this machine, the dialog says how to start one.
@@ -2569,7 +2577,7 @@ consistent and is not. Use git to restore files.
 |---|---|---|---|
 | Full-screen client | `/new [first message]` | `/fork [first message]` | `/rewind <turn> [first message]`; the line that ends each turn shows the turn's number |
 | VSCode | **calu: New Session...** | **calu: Fork Conversation**, "Fork from here" on a message | "Rewind" on a message |
-| Web interface | "New session in this directory" | "Fork this conversation"; one button per fork point | the fork-point buttons; "Continue this conversation" for an ended session |
+| Web interface | "New session in this directory"; the **New session…** dialog, which can also continue a conversation of a folder by its Claude session id | "Fork this conversation"; one button per fork point | the fork-point buttons; "Continue this conversation" for an ended session |
 
 These controls ask the running `calu serve` for the new session, and the client switches to it.
 The session you left keeps running.

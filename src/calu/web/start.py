@@ -6,7 +6,8 @@ See agent/records/PLAN.md D270 (the owner's request of 2026-11-24).
                                 projects directory of the `calu serve` of this host and user
     POST /start                 makes the folder (a new name, or a `git clone`), files a
                                 session request there if asked (`calu.session_requests`), and
-                                turns the window into the chat pane of that folder if asked
+                                turns the window into the chat pane of that folder if asked;
+                                or continues a conversation of the folder (`check_resume`)
 
 What may happen on disk is bounded twice. Every folder is checked against the server's projects
 directory with the server's own rule (`calu.projects_dir.served_path`: below it, no hidden
@@ -24,10 +25,12 @@ import os
 import pwd
 import re
 import subprocess
+import uuid
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from calu import asuser
+from calu.claude.transcripts import transcripts
 from calu.projects_dir import NotServed, served_path
 
 CLONE_TIMEOUT_S = 300.0
@@ -141,6 +144,46 @@ def repository_name(url: str) -> str:
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 """`subprocess.run`, or a fake of it in tests."""
+
+
+def check_resume(projects: Path, at: str, name: str, url: str, session_id: str) -> str:
+    """Check a conversation the dialog is asked to continue, before anything is filed.
+
+    Claude Code continues a conversation only in the folder it was started in: it keeps the
+    transcript per folder. Reads the transcripts of the folder (`calu.claude.transcripts`) of
+    the user the web interface works for; writes nothing.
+
+    Args:
+        projects: The server's projects directory (resolved).
+        at: The chosen folder below it.
+        name: The dialog's new folder name; must be "".
+        url: The dialog's git address; must be "".
+        session_id: The Claude session id, typed or chosen from the list.
+
+    Returns:
+        The id in its usual form (lower case, with dashes).
+
+    Raises:
+        StartRefused: With a new folder or a repository; for an id that is no UUID; or when
+            Claude Code keeps no conversation with that id for the folder.
+    """
+    if name.strip() or url.strip():
+        raise StartRefused(
+            "A conversation is continued in the folder it belongs to: leave the new folder "
+            "and the repository empty to continue one."
+        )
+    try:
+        wanted = str(uuid.UUID(session_id.strip()))
+    except ValueError:
+        raise StartRefused(f"{session_id!r} is no Claude session id (a UUID)") from None
+    target = folder(projects, at)
+    if wanted not in {found.session_id for found in transcripts(target)}:
+        raise StartRefused(
+            f"Claude Code keeps no conversation {wanted} for {target}. A conversation is "
+            "continued in the folder it was started in; the list offers the conversations "
+            "of this folder."
+        )
+    return wanted
 
 
 def prepare(projects: Path, at: str, name: str, url: str, run: Runner = subprocess.run) -> Path:
