@@ -1503,14 +1503,17 @@ async def _listen(
                 return
             say(f"[clients] {server.address}")
             # The short form first, because it is the one a user here will use (D105); the
-            # explicit one is for a client on another machine and needs no database. Written
-            # `--token=` and not `--token `, so that a token from before D102, which may start
-            # with a dash, is not read as an option.
+            # explicit one is for a client on another machine and needs no database. The token
+            # goes into the environment, not onto the command line, where every user of that
+            # machine could read it in the process list (D279).
             say("[clients] attach from this directory with: calu attach")
             if not options.quiet:
                 # Not in a server's shared output: a token there would be readable long after
                 # its session, and a client of a served session mints its own (D105).
-                say(f"[clients] from another machine: calu attach {server.address} --token={token}")
+                say(
+                    "[clients] from another machine: "
+                    f"CALU_TOKEN={token} calu attach {server.address}"
+                )
             if store.session_id is not None:
                 try:
                     await store.set_address(server.address)

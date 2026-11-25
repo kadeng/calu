@@ -2422,6 +2422,9 @@ def _stop_db_after_serve() -> None:
     print("stopped the local database (the next calu run or calu serve starts it)", flush=True)
 
 
+WEB_CHILD_READY_S = 60.0
+"""How long `calu serve --web` waits for its `calu web` to take its port and print its address."""
+
 WEB_CHILD_STOP_S = 10.0
 """How long `calu serve --web` waits for its `calu web` to end after SIGTERM before SIGKILL."""
 
@@ -2456,13 +2459,34 @@ def _start_web_child(
             for HTTP; the child checks them.
 
     Returns:
-        The child process.
+        The child process, once it has taken its port and printed its address (it writes one
+        byte into a second pipe, `--ready-fd`).
 
     Raises:
         OSError: If the process cannot be started.
+        CliError: If it ends before it is ready (its reason is on stderr, which it shares
+            with this process), or is not ready within `WEB_CHILD_READY_S`.
     """
+    import select
+
     read_end, write_end = os.pipe()
-    argv = [sys.executable, "-m", "calu", "web", "--port", str(port), "--login-fd", str(read_end)]
+    ready_read, ready_write = os.pipe()
+    # `-I` and the working directory `/`: `python -m` would otherwise import a `calu` package or
+    # any other module from the working directory first -- the projects directory, which the
+    # user Claude Code runs as can write -- and this child starts as root (D279).
+    argv = [
+        sys.executable,
+        "-I",
+        "-m",
+        "calu",
+        "web",
+        "--port",
+        str(port),
+        "--login-fd",
+        str(read_end),
+        "--ready-fd",
+        str(ready_write),
+    ]
     if typed:
         argv.append("--login-typed")
     if run_as is not None:
@@ -2470,15 +2494,33 @@ def _start_web_child(
     if tls is not None:
         argv += ["--tls-cert", tls[0], "--tls-key", tls[1]]
     try:
-        child = subprocess.Popen(argv, pass_fds=(read_end,), preexec_fn=_die_with_parent)
+        child = subprocess.Popen(
+            argv, pass_fds=(read_end, ready_write), preexec_fn=_die_with_parent, cwd="/"
+        )
+    except BaseException:
+        os.close(ready_read)
+        raise
     finally:
         os.close(read_end)
-    with os.fdopen(write_end, "wb") as pipe:
-        pipe.write(bytes(login))
+        os.close(ready_write)
+    try:
+        with os.fdopen(write_end, "wb") as pipe:
+            pipe.write(bytes(login))
+        waiting, _, _ = select.select([ready_read], [], [], WEB_CHILD_READY_S)
+        ready = bool(waiting) and os.read(ready_read, 1) == b"1"
+    except BrokenPipeError:  # the child ended before it read the login
+        ready = False
+    finally:
+        os.close(ready_read)
+    if not ready:
+        _stop_web_child(child)
+        raise CliError(
+            "calu web did not start (its reason is above); the server does not start "
+            "without the web interface it was asked for"
+        )
     print(
         f"started calu web (pid {child.pid}) on port {port}; it ends with this server", flush=True
     )
-
     return child
 
 
@@ -2538,6 +2580,7 @@ def cmd_start(args: argparse.Namespace, store: CredentialStore) -> None:
         KeyboardInterrupt: On Ctrl-C while waiting for the server; the request was withdrawn
             first where no server had claimed it yet.
     """
+    _token_from_file(args)
     if args.token and not args.relay:
         raise CliError("--token goes with --relay, the address of a `calu serve` relay")
     if args.relay:
@@ -2930,8 +2973,8 @@ def _pick_session(rows: list[herd.SessionRow], hint: str | None) -> herd.Session
             f"no running session of {here} on this host\n"
             "`calu start` asks a running `calu serve` for one and attaches, and `calu run` "
             "starts one in this terminal. `calu sessions` lists the sessions of every host; "
-            "a session elsewhere is reached with its address and `--token=<token>` through "
-            "an SSH tunnel"
+            "a session elsewhere is reached with its address and its token in CALU_TOKEN "
+            "through an SSH tunnel"
         )
     # The nearest project directory wins: a session of a subproject is meant before the
     # session of the directory above it. Every candidate contains `here`, so of two candidate
@@ -3419,7 +3462,7 @@ def _herd_value[T](
     """
     why = (
         "its standard input carries the editor's protocol; a client can also be given the "
-        "session's address and `--token=<token>`, which needs no database"
+        "session's address and its token (CALU_TOKEN or --token-file), which needs no database"
     )
     login = _user_target(store, may_ask, why)
     return asyncio.run(_with_admin_value(login, work))
@@ -3655,11 +3698,11 @@ def _again(endpoint: Endpoint, given: bool) -> str:
     """
     if endpoint.relay is not None:
         again = f"calu attach {endpoint.relay.address} --session {endpoint.session_id}"
-        return again + (" --token=<the same token>" if endpoint.token else "")
+        return ("CALU_TOKEN=<the same token> " if endpoint.token else "") + again
     if not given:
         return "calu attach"
-    return f"calu attach {endpoint.address}" + (
-        " --token=<the same token>" if endpoint.token else ""
+    return ("CALU_TOKEN=<the same token> " if endpoint.token else "") + (
+        f"calu attach {endpoint.address}"
     )
 
 
@@ -3715,8 +3758,8 @@ def _attach_failure(endpoint: Endpoint, exc: BaseException) -> str:
             return (
                 f"cannot attach to {address}: this session wants a client token. On the "
                 "session's machine `calu token mint <session id>` prints one (`calu sessions` "
-                f"shows the id); then `calu attach {address} --token=<token>`, or set "
-                "CALU_TOKEN. A session started with --insecure lets local clients in "
+                f"shows the id); then `CALU_TOKEN=<token> calu attach {address}` (or "
+                "--token-file). A session started with --insecure lets local clients in "
                 "without one"
             )
         # The peer's sentence without the JSON-RPC code (which `str(exc)` appends).
@@ -3977,6 +4020,7 @@ def _endpoint_of(
         CliError: If a token was given without an address, or if no single session of this
             directory is running. An address without a token is tried without one (D227).
     """
+    _token_from_file(args)
     if args.token and not args.address:
         raise CliError("--token names the session's address too, e.g. ws://127.0.0.1:8765")
     if args.address:
@@ -3985,6 +4029,34 @@ def _endpoint_of(
         # the token is asked for (`_reach`).
         return _reach(Endpoint(args.address, args.token or ""), getattr(args, "session", None))
     return _find_endpoint(store, args.session, label, may_ask)
+
+
+def _token_from_file(args: argparse.Namespace) -> None:
+    """Read the token of `--token-file` into `args.token` (D279).
+
+    A token on the command line (`--token`) can be read by every user of the machine in the
+    process list; a file of mode 600, or `CALU_TOKEN` (the environment is the process owner's
+    alone), cannot.
+
+    Args:
+        args: Parsed arguments with `token` and `token_file`; changed in place.
+
+    Raises:
+        CliError: If both `--token` and `--token-file` are given, or the file cannot be read
+            or holds no token.
+    """
+    path = getattr(args, "token_file", None)
+    if not path:
+        return
+    if args.token:
+        raise CliError("give the token with --token-file or --token, not both")
+    try:
+        token = Path(path).expanduser().read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise CliError(f"--token-file {path} cannot be read: {exc}") from None
+    if not token:
+        raise CliError(f"--token-file {path} holds no token")
+    args.token = token
 
 
 def claude_login_command(
@@ -4169,6 +4241,57 @@ def _web_token_line(
     if has_admin_password:
         line += " `calu setup` makes the calu user password the login instead."
     return line
+
+
+def _web_sockets(port: int) -> list[socket.socket]:
+    """Take the port of `calu web` on both loopback addresses, `127.0.0.1` and `::1` (D279).
+
+    Browsers open `calu.localhost` on either address, Chrome on `::1` first. A program that
+    listened on the address this server left free would be served under the same origin, with
+    the login cookie, the browser's key and the password field. So both are taken, or the
+    server does not start. A machine without IPv6 has no `::1` for anyone to take.
+
+    Args:
+        port: The port.
+
+    Returns:
+        The bound sockets (not listening yet: uvicorn starts that).
+
+    Raises:
+        CliError: If the port is taken on either address.
+    """
+    import errno
+
+    bound: list[socket.socket] = []
+    try:
+        for family, address in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
+            try:
+                sock = socket.socket(family, socket.SOCK_STREAM)
+            except OSError:  # no IPv6 in this kernel
+                continue
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if family == socket.AF_INET6:
+                    sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                sock.bind((address, port))
+            except OSError as exc:
+                sock.close()
+                if family == socket.AF_INET6 and exc.errno in (
+                    errno.EADDRNOTAVAIL,
+                    errno.EAFNOSUPPORT,
+                ):
+                    continue  # no IPv6 loopback address
+                raise CliError(
+                    f"port {port} on {address} cannot be used ({exc.strerror}): another "
+                    "program listens there, and a browser could reach it instead of calu web; "
+                    "choose another port with --port"
+                ) from None
+            bound.append(sock)
+    except BaseException:
+        for sock in bound:
+            sock.close()
+        raise
+    return bound
 
 
 def _tls_files(cert: str | None, key: str | None) -> tuple[str, str] | None:
@@ -4364,9 +4487,11 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
     scheme = "https" if tls else "http"
 
     async def serve() -> None:
-        """Open the connection, build the app and serve until interrupted."""
+        """Take the port, open the connection, build the app and serve until interrupted."""
         import uvicorn
 
+        # The port first, on both loopback addresses, and only then the address is printed.
+        sockets = _web_sockets(args.port)
         # A connection the database closed (a restart, a failover, an idle timeout) is opened
         # again, so the server outlives the database's restarts.
         db = ReopeningDb(await open_stored(url.decode()), lambda: open_stored(url.decode()))
@@ -4425,7 +4550,11 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
                 ssl_certfile=tls[0] if tls else None,
                 ssl_keyfile=tls[1] if tls else None,
             )
-            await uvicorn.Server(config).serve()
+            if args.ready_fd is not None:
+                # `calu serve --web` waits for this byte (`_start_web_child`).
+                os.write(args.ready_fd, b"1")
+                os.close(args.ready_fd)
+            await uvicorn.Server(config).serve(sockets=sockets)
         finally:
             await db.close()
 
@@ -4866,7 +4995,7 @@ def _attach_recipe(row: herd.SessionRow) -> str:
         "forward it and attach there (the token can also come from the environment variable "
         "CALU_TOKEN, or `calu attach` asks for it):\n\n"
         f"    ssh -N -L {forward} {row.hostname}\n"
-        f"    calu attach {local} --token=<the token above>"
+        f"    CALU_TOKEN=<the token above> calu attach {local}"
     )
 
 
@@ -5024,7 +5153,7 @@ async def _server_token(db: Db, args: argparse.Namespace) -> str:
             "machine, forward it once and attach there (the token can also come from the "
             "environment variable CALU_TOKEN, or `calu attach` asks for it):\n\n"
             f"    ssh -N -L {port}:127.0.0.1:{port} {row.hostname}\n"
-            f"    calu attach ws://127.0.0.1:{port} --token=<the token above>"
+            f"    CALU_TOKEN=<the token above> calu attach ws://127.0.0.1:{port}"
         )
     else:
         report += "\n\nThat server has no relay (it was started with --no-relay)."
@@ -6826,7 +6955,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--token",
         help="with --relay: the server token (`calu token mint --server`); else CALU_TOKEN, or "
-        "the client asks for it",
+        "the client asks for it. On the command line every user of the machine can read it: "
+        "prefer CALU_TOKEN or --token-file",
+    )
+    p.add_argument(
+        "--token-file",
+        metavar="FILE",
+        help="read the token from this file instead (mode 600); unlike --token it does not "
+        "appear in the process list, where every user of the machine can read it",
     )
     p.set_defaults(handler=cmd_start)
 
@@ -6840,7 +6976,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--token",
         help="client token that `calu run` printed, for an address; without it the client "
-        "tries without one, which a session started with --insecure accepts",
+        "tries CALU_TOKEN, then none, which a session started with --insecure accepts. On the "
+        "command line every user of the machine can read it: prefer CALU_TOKEN or --token-file",
+    )
+    p.add_argument(
+        "--token-file",
+        metavar="FILE",
+        help="read the token from this file instead (mode 600); unlike --token it does not "
+        "appear in the process list, where every user of the machine can read it",
     )
     p.add_argument("--session", help="session id, when several run in this directory")
     p.add_argument(
@@ -6901,7 +7044,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--token",
         help="client token that `calu run` printed, for an address; without it the client "
-        "tries without one, which a session started with --insecure accepts",
+        "tries CALU_TOKEN, then none, which a session started with --insecure accepts. On the "
+        "command line every user of the machine can read it: prefer CALU_TOKEN or --token-file",
+    )
+    p.add_argument(
+        "--token-file",
+        metavar="FILE",
+        help="read the token from this file instead (mode 600); unlike --token it does not "
+        "appear in the process list, where every user of the machine can read it",
     )
     p.add_argument("--session", help="session id, when several run in this directory")
     p.set_defaults(handler=cmd_acp)
@@ -6918,7 +7068,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(handler=cmd_ide, log_name="ide")
 
     p = sub.add_parser("web", help="the herd overview in a browser (127.0.0.1 only)")
-    p.add_argument("--host", default="127.0.0.1", help="address to bind (loopback only)")
+    p.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="a loopback address (checked; the port is always taken on both 127.0.0.1 and ::1)",
+    )
     p.add_argument("--port", type=int, default=8800)
     p.add_argument(
         "--sudo",
@@ -6943,6 +7097,7 @@ def build_parser() -> argparse.ArgumentParser:
     # `calu serve --web` hands its child the login through an inherited pipe (D268).
     p.add_argument("--login-fd", type=int, default=None, help=argparse.SUPPRESS)
     p.add_argument("--login-typed", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--ready-fd", type=int, default=None, help=argparse.SUPPRESS)
     p.set_defaults(handler=cmd_web)
 
     p = sub.add_parser("protocol", help="JSON Schema of the client protocol")

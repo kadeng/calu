@@ -399,7 +399,7 @@ def test_calu_attach_on_a_relay_picks_the_session(monkeypatch: pytest.MonkeyPatc
     assert "calu start <directory in /srv/p>" in str(none.value)
     # After the client: the command that attaches to the same session again.
     assert cli._again(chosen, True) == (
-        "calu attach ws://127.0.0.1:8811 --session bbbb2222 --token=<the same token>"
+        "CALU_TOKEN=<the same token> calu attach ws://127.0.0.1:8811 --session bbbb2222"
     )
     following = cli._following(None, chosen, "aaaa1111")  # type: ignore[arg-type]
     assert following.address == "ws://127.0.0.1:8811/session/aaaa1111"
@@ -449,3 +449,19 @@ async def test_the_line_client_says_the_relay_closed_it_for_a_revoked_server_tok
         "revoked, or its server ended"
     ) in out
     assert "the session closed" not in out
+
+
+async def test_a_browser_cannot_open_the_relay_or_a_session(tmp_path: Path) -> None:
+    """D279: a web page's WebSocket carries an `Origin`; with `--insecure` it would otherwise
+    act as a loopback client of every session. Calu's own clients send no `Origin`."""
+    from websockets.asyncio.client import connect as ws_connect
+    from websockets.exceptions import InvalidStatus
+
+    async with relayed(tmp_path, insecure=True) as it:
+        for address in (it.relay.address, it.run.address):
+            with pytest.raises(InvalidStatus) as refused:
+                async with ws_connect(address, origin="https://evil.example"):  # type: ignore[arg-type]
+                    pass
+            assert refused.value.response.status_code == 403
+            async with ws_connect(address):
+                pass  # no Origin: accepted

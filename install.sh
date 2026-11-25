@@ -20,7 +20,9 @@
 #                       its GitHub release and checks the archive's SHA-256 against the value
 #                       written below before anything of it runs
 #   4. install_calu     `uv tool install --reinstall git+<source>@<ref>`: uv downloads calu's
-#                       source from that repository, its Python packages from PyPI and, if
+#                       source from that repository, its Python packages from PyPI (only
+#                       files uploaded at least MIN_AGE ago, against a compromised fresh
+#                       release; `uv tool install` does not read calu's uv.lock) and, if
 #                       needed, a Python build. As root everything goes into /usr/local/lib/calu
 #                       (the command into /usr/local/bin), owned by root and writable by root
 #                       only, which `calu ... --sudo` checks before it runs calu as root.
@@ -49,6 +51,10 @@ set -euo pipefail
 CALU_SOURCE_DEFAULT="https://github.com/kadeng/calu"
 ROOT_HOME="/usr/local/lib/calu"      # the root installation (agent/records/PLAN.md D211)
 ROOT_BIN="/usr/local/bin"
+
+# Python packages are taken only when uploaded at least this long ago (D279): a release that
+# an attacker publishes is usually found and withdrawn within days.
+MIN_AGE="3 days"
 
 # uv, pinned: the version and the SHA-256 of its release archives, as published with the
 # release (https://github.com/astral-sh/uv/releases/tag/0.12.23, files *.tar.gz.sha256).
@@ -168,14 +174,14 @@ install_calu() {
             umask 022
             env UV_TOOL_DIR="$ROOT_HOME" UV_TOOL_BIN_DIR="$ROOT_BIN" \
                 UV_PYTHON_INSTALL_DIR="$ROOT_HOME/python" UV_CACHE_DIR="$ROOT_HOME/cache" \
-                "$UV" tool install --reinstall --quiet "$spec"
+                "$UV" tool install --reinstall --quiet --exclude-newer "$MIN_AGE" "$spec"
         )
         rm -rf "$ROOT_HOME/cache"
         # uv leaves lock files that everybody may write; nobody but root may change anything here.
         find "$ROOT_HOME" -perm -o+w -not -type l -exec chmod o-w {} +
     else
         say "installing calu ($spec) for $(id -un)"
-        "$UV" tool install --reinstall --quiet "$spec"
+        "$UV" tool install --reinstall --quiet --exclude-newer "$MIN_AGE" "$spec"
     fi
 }
 

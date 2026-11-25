@@ -73,6 +73,7 @@ from calu.protocol.messages import (
     CLOSE_TOKEN_REVOKED,
     ENDED_WITH_SESSION,
     MAX_FRAME_BYTES,
+    NO_BROWSER_ORIGINS,
     REQUESTS,
     AutoEscalate,
     AutoEscalateSetParams,
@@ -395,7 +396,9 @@ class SessionServer:
         if socket_path is not None:
             await self._listen_unix(socket_path)
             return
-        async with await serve(self._handle_tcp, host, port, max_size=MAX_FRAME_BYTES) as server:
+        async with await serve(
+            self._handle_tcp, host, port, max_size=MAX_FRAME_BYTES, origins=NO_BROWSER_ORIGINS
+        ) as server:
             bound = server.sockets[0].getsockname()
             self.address = f"ws://{bound[0]}:{bound[1]}"
             self.ready.set()

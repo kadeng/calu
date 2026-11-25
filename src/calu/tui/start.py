@@ -126,9 +126,8 @@ def exit_lines(ended: TuiExit, again: str = "calu attach") -> list[str]:
 
     Args:
         ended: What the client knew when it ended.
-        again: The command that attaches to this session again, e.g. `calu attach
-            ws://127.0.0.1:8765 --token=<the same token>` for a client that was given an
-            address.
+        again: The command that attaches to this session again, e.g. `CALU_TOKEN=<the same
+            token> calu attach ws://127.0.0.1:8765` for a client that was given an address.
 
     Returns:
         The lines: why the connection ended (if the session closed it or it broke), the

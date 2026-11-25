@@ -190,7 +190,7 @@ def test_cmd_attach_starts_the_chosen_client_and_prints_what_is_left(
         "detached; the session keeps running",
         "session abc: escalated",
         "2 steps wait for a decision",
-        "attach again with: calu attach ws://127.0.0.1:1 --token=<the same token>   "
+        "attach again with: CALU_TOKEN=<the same token> calu attach ws://127.0.0.1:1   "
         "(the line client: add --plain)",
     ]
     args = build_parser().parse_args([*arguments, "--plain"])
@@ -221,17 +221,17 @@ def test_the_lines_after_the_client_name_the_relay_that_closed_the_connection() 
 
 def test_the_lines_after_a_refused_server_token_do_not_offer_the_same_token_again() -> None:
     # The relay refuses that token for good (revoked, or its server ended): "attach again
-    # with ... --token=<the same token>" would only be refused again.
+    # with CALU_TOKEN=<the same token> ..." would only be refused again.
     from calu.attach import closer
     from calu.protocol.messages import CLOSE_SERVER_TOKEN_REVOKED
 
     by = closer(CLOSE_SERVER_TOKEN_REVOKED)
     ended = TuiExit(1, "idle", None, 0, "the server token was revoked", closed_by=by)
-    again = "calu attach ws://127.0.0.1:8826 --session 83f3 --token=<the same token>"
+    again = "CALU_TOKEN=<the same token> calu attach ws://127.0.0.1:8826 --session 83f3"
     lines = exit_lines(ended, again)
     assert "<the same token>" not in "\n".join(lines)
     assert lines[-1].startswith(
-        "attach again with: calu attach ws://127.0.0.1:8826 --session 83f3 --token=<a new token>"
+        "attach again with: CALU_TOKEN=<a new token> calu attach ws://127.0.0.1:8826 --session 83f3"
     )
     assert any("calu token mint --server" in line for line in lines)
 

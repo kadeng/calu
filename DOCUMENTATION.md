@@ -1036,6 +1036,9 @@ calu web --sudo   # the same, run as root on your behalf: Claude Code cannot rea
 
 **Who can reach it, and HTTPS**
 
+- `calu web` takes its port on both loopback addresses (`127.0.0.1` and `::1`) and refuses to
+  start when another program has it on either: a browser could reach that program instead,
+  under the same address. `calu serve --web` does not start without its web interface.
 - `calu web` listens on the loopback interface only. Every user and every program of this
   machine can connect to that port (on WSL2 also the programs on Windows); the calu user
   password or the token keeps them out. Use it on a machine and network you trust; from
@@ -1255,13 +1258,12 @@ An editor on Windows with the project inside WSL starts the adapter inside WSL:
 A session on another machine, reached through a tunnel, is named by address and token:
 
 ```bash
-calu acp ws://127.0.0.1:8765 --token=<the token it printed>
+CALU_TOKEN=<the token it printed> calu acp ws://127.0.0.1:8765
 ```
 
-Write `--token=<token>` with the equals sign, in an editor's `args` list too. The argument
-parser reads a value after `--token` that begins with `-` as an option and refuses it ("expected
-one argument"). The tokens that Calu mints never begin with `-`, but the form with `=` passes
-every value unchanged.
+In an editor, put the token into the agent's environment (`CALU_TOKEN`), or into a file of mode
+600 named with `--token-file FILE`. `--token=<token>` works too, but every user of the machine
+can read a command line in the process list.
 
 ### Usage, cost and limits
 
@@ -2868,7 +2870,8 @@ line to use.
 ```bash
 calu token mint --server --label laptop           # on the server; prints the token once
 ssh -N -L 8811:127.0.0.1:8811 the-host            # on your machine; leave it open
-calu attach ws://127.0.0.1:8811 --token=<the token it printed>
+export CALU_TOKEN=<the token it printed>          # not on a command line: others can read those
+calu attach ws://127.0.0.1:8811
 calu attach ws://127.0.0.1:8811 --session 4031fde1    # one session by the beginning of its id
 calu start /home/me/src/other --relay ws://127.0.0.1:8811 -p "run the tests"
 ```
@@ -2896,7 +2899,7 @@ contain the server's real relay port (the examples use 8811).
 calu sessions                                     # on the server: "clients ws://127.0.0.1:41235"
 calu token mint <session id> --label laptop       # on the server; prints the token once
 ssh -N -L 41235:127.0.0.1:41235 the-host          # on your machine; leave it open
-calu attach ws://127.0.0.1:41235 --token=<the token it printed>
+CALU_TOKEN=<the token it printed> calu attach ws://127.0.0.1:41235
 ```
 
 - The token can come from the environment variable `CALU_TOKEN`, which keeps it off the

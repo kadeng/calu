@@ -554,7 +554,7 @@ escalation resolved from the database alone.
    back. `calu run` must start; with the sandbox off its start-up warnings must end with
    `Found: stored without a password: db-admin, user`. Not yet run with the one user login.
 15. Revoking a token that is in use: attach with the address and the printed token
-   (`calu attach ws://... --token=...`), then `calu token revoke <id>` for that row. Within
+   (`CALU_TOKEN=... calu attach ws://...`), then `calu token revoke <id>` for that row. Within
    about fifteen seconds, or at the next thing typed, the attached terminal must print
    `[detached] the session closed the connection: the client token was revoked`, and attaching
    again with that token must be refused. `tests/db/test_protocol_tokens.py` covers the same
@@ -899,7 +899,7 @@ escalation resolved from the database alone.
    line, two sessions from `calu start --no-attach`, then `calu token mint --server`. On the
    laptop: the printed `ssh -N -L <port>:127.0.0.1:<port> <host>` (the port derived from the
    projects directory, the same after a restart of the server), then `calu attach
-   ws://127.0.0.1:<port> --token=<token>` must list both sessions and ask which; in the
+   ws://127.0.0.1:<port>` with `CALU_TOKEN=<token>` must list both sessions and ask which; in the
    full-screen client `/running` must list the server's sessions, `/switch`, `/new` and `/fork`
    must change to the named or new session; killing the forward and opening it again must
    reattach; `calu token revoke --server <id>` on the server must detach the client within 15

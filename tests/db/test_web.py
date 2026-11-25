@@ -193,7 +193,7 @@ async def test_a_session_page_offers_the_commands_to_connect_with(db_url: str) -
             shown = [
                 line
                 for line in after.text.splitlines()
-                if "calu attach ws://127.0.0.1:8765 --token" in line
+                if "calu attach ws://127.0.0.1:8765" in line and "CALU_TOKEN=" in line
             ]
             assert shown and "mint a token above" not in shown[0]
             # The token is gone from the page after a reload: it is shown exactly once.

@@ -2622,12 +2622,15 @@ def _connect(row: herd.SessionRow, token: str) -> list[tuple[str, str]]:
     shown = token or "<mint a token above>"
     commands = [
         # On that machine neither the address nor a token is needed (D105); the explicit forms
-        # below are for a client elsewhere, through a tunnel. `--token=` and not `--token `,
-        # so that a token from before D102, which may start with a dash, works too.
+        # below are for a client elsewhere, through a tunnel. The token goes into the
+        # environment: on a command line every user of the machine could read it (D279).
         (f"Terminal client, in {row.directory} on {row.hostname}", "calu attach"),
         ("ACP editor there (Zed, JetBrains Air, Neovim, Goose)", "calu acp"),
-        ("Terminal client from elsewhere", f"calu attach {address} --token={shown}"),
-        ("ACP editor from elsewhere", f"calu acp {address} --token={shown}"),
+        ("Terminal client from elsewhere", f"CALU_TOKEN={shown} calu attach {address}"),
+        (
+            "ACP editor from elsewhere (CALU_TOKEN in the editor's env for the agent)",
+            f"CALU_TOKEN={shown} calu acp {address}",
+        ),
         ("Escalations of this session", f"calu escalations {row.id}"),
     ]
     if row.claude_session_id:

@@ -222,7 +222,13 @@ async def test_calu_serve_with_web_runs_the_web_interface_as_its_child(
         try:
             with anyio.fail_after(START_TIMEOUT_S):
                 printed = b""
-                while b"sign in with" not in printed or not printed.endswith(b"\n"):
+                # "started calu web" comes after the child's own lines: the server waits until
+                # the child has taken its port (D279).
+                while (
+                    b"sign in with" not in printed
+                    or b"started calu web" not in printed
+                    or not printed.endswith(b"\n")
+                ):
                     printed += await server.stdout.receive(4096)
             text = printed.decode()
             started = next(x for x in text.splitlines() if x.startswith("started calu web"))

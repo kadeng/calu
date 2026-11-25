@@ -536,9 +536,12 @@ def test_serve_with_web_hands_its_child_the_login_through_a_pipe(
         def wait(self, timeout: float | None = None) -> int:
             return 0
 
-    def popen(argv: list[str], pass_fds: tuple[int, ...], preexec_fn: object) -> FakeChild:
-        seen.update(argv=argv, fds=pass_fds, preexec=preexec_fn)
+    def popen(
+        argv: list[str], pass_fds: tuple[int, ...], preexec_fn: object, cwd: str
+    ) -> FakeChild:
+        seen.update(argv=argv, fds=pass_fds, preexec=preexec_fn, cwd=cwd)
         seen["copy"] = os.dup(pass_fds[0])  # the parent closes its end right after this
+        os.write(pass_fds[1], b"1")  # the child took its port (`--ready-fd`)
         return FakeChild()
 
     monkeypatch.setattr(subprocess, "Popen", popen)
@@ -557,12 +560,49 @@ def test_serve_with_web_hands_its_child_the_login_through_a_pipe(
     assert threading.active_count() == threads
     argv = seen["argv"]
     assert isinstance(argv, list)
-    assert argv[2:6] == ["calu", "web", "--port", "8811"]
+    # D279: isolated (`-I`) and in `/`, so that no module of the projects directory -- the
+    # working directory of `calu serve`, which Claude's user can write -- is imported as root.
+    assert argv[1:7] == ["-I", "-m", "calu", "web", "--port", "8811"]
+    assert seen["cwd"] == "/"
     assert "--login-typed" in argv and argv[-2:] == ["--user", "ada"]
     assert "secret" not in " ".join(argv), "the login is not on the command line"
     assert seen["preexec"] is cli._die_with_parent
     read = cli._read_login_fd(int(str(seen["copy"])))
     assert bytes(read) == bytes(login)
+
+
+def test_serve_with_web_refuses_to_start_when_its_child_ends_early(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D279: a child that could not take its port printed its address before and went
+    unnoticed until the server stopped; now the server waits for it and refuses."""
+    import subprocess
+
+    stopped: list[bool] = []
+
+    class EndedChild:
+        pid = 4343
+
+        def poll(self) -> int:
+            return 1
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 1
+
+        def terminate(self) -> None:
+            stopped.append(True)
+
+        def kill(self) -> None:
+            stopped.append(True)
+
+    def popen(
+        argv: list[str], pass_fds: tuple[int, ...], preexec_fn: object, cwd: str
+    ) -> EndedChild:
+        return EndedChild()  # writes nothing into the ready pipe and is gone
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    with pytest.raises(cli.CliError, match="calu web did not start"):
+        cli._start_web_child(8811, bytearray(b"postgresql://x"), False, None)
 
 
 def test_the_database_stops_with_the_server_only_when_no_other_calu_uses_it(

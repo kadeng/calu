@@ -6,6 +6,7 @@ the certificate against the name `calu.localhost`; it stops the server at its en
 """
 
 import datetime
+import re
 import socket
 import ssl
 import threading
@@ -238,3 +239,39 @@ def test_uvicorn_serves_https_that_checks_out_for_calu_localhost(tmp_path: Path)
     finally:
         server.should_exit = True
         thread.join(10)
+
+
+def _free_port() -> int:
+    """Return a port that is free on both loopback addresses at the moment.
+
+    Returns:
+        The port.
+    """
+    for _ in range(50):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        try:
+            with socket.socket(socket.AF_INET6) as six:
+                six.bind(("::1", port))
+        except OSError:
+            continue
+        return port
+    raise AssertionError("no free port on both addresses")
+
+
+def test_calu_web_takes_its_port_on_both_loopback_addresses_or_refuses() -> None:
+    """D279: a program on the other loopback address would be served under the same origin."""
+    port = _free_port()
+    sockets = cli._web_sockets(port)
+    try:
+        assert sorted(sock.getsockname()[0] for sock in sockets) == ["127.0.0.1", "::1"]
+    finally:
+        for sock in sockets:
+            sock.close()
+    for family, address in ((socket.AF_INET6, "::1"), (socket.AF_INET, "127.0.0.1")):
+        with socket.socket(family) as squatter:
+            squatter.bind((address, port))
+            squatter.listen()
+            with pytest.raises(CliError, match=f"port {port} on {re.escape(address)}"):
+                cli._web_sockets(port)

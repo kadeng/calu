@@ -572,7 +572,7 @@ async def test_calu_token_mint_server_names_the_forward_and_lists_and_revokes(
         args = argparse.Namespace(action="mint", session=None, label="laptop", server=True)
         report = await cli._server_token(db, args)
         assert f"ssh -N -L {port}:127.0.0.1:{port} {here}" in report
-        assert f"calu attach ws://127.0.0.1:{port} --token=<the token above>" in report
+        assert f"CALU_TOKEN=<the token above> calu attach ws://127.0.0.1:{port}" in report
         assert f"projects directory {server.projects}" in report
         listed = await cli._server_token(db, argparse.Namespace(action="list", server=True))
         assert "valid" in listed and "laptop" in listed and server.relay.address in listed

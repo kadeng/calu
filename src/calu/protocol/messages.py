@@ -116,6 +116,12 @@ MAX_FRAME_BYTES = 32 * 1024 * 1024
 """Largest protocol message a session or a client accepts: room for `MAX_IMAGES` images of
 `MAX_IMAGE_BYTES` in base64 with the rest of the message."""
 
+NO_BROWSER_ORIGINS: tuple[None] = (None,)
+"""The `origins` of every TCP WebSocket server of a session and of the relay: only a handshake
+without an `Origin` header is accepted. Browsers send one, on behalf of whatever page asks;
+Calu's own clients (`calu attach`, `calu ide`, `calu web`'s relay) send none, so a web page
+cannot reach a session even where `--insecure` trusts the loopback interface (D279)."""
+
 
 class ChatImage(BaseModel):
     """An image a user attached to a chat message (agent/records/PLAN.md D220).

@@ -108,3 +108,8 @@ markers = [
 include = ["src", "tests"]
 pythonVersion = "3.14"
 typeCheckingMode = "standard"
+
+[tool.uv]
+# Only packages uploaded at least three days ago (D279): a compromised release is usually found
+# and withdrawn within days. Applies when the lock file is made (`uv lock`, `uv add`).
+exclude-newer = "3 days"

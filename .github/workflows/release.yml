@@ -35,10 +35,12 @@ jobs:
     name: build and check the wheel
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
         with:
-          enable-cache: true
+          version: "0.12.23"  # as install.sh
+          # No cache in a release build: a cache another workflow wrote could slip a package in.
+          enable-cache: false
       - name: the tag must be the version in pyproject.toml
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -58,7 +60,7 @@ jobs:
           uv pip install --python /tmp/installed/bin/python "$(echo dist/*.whl)"
           /tmp/installed/bin/calu --version
           /tmp/installed/bin/calu protocol --out /tmp/protocol.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: dist
           path: dist/
@@ -75,17 +77,19 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
         with:
-          enable-cache: true
+          version: "0.12.23"  # as install.sh
+          # No cache in a release build: a cache another workflow wrote could slip a package in.
+          enable-cache: false
       # The script builds the binary **and runs it**: a dependency that reads its own package
       # metadata at import time breaks a frozen build with nothing to show at build time
       # (measured: `spikes/RESULTS.md`, "A single-file binary"), so building alone proves
       # nothing. A binary can only be run on its own architecture, which is why each one is
       # built on a runner of that architecture rather than cross-built.
       - run: scripts/build-binary.sh dist-binary
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: calu-linux-${{ matrix.arch }}
           path: dist-binary/calu
@@ -101,7 +105,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           pattern: calu-linux-*
           path: binaries
@@ -114,7 +118,7 @@ jobs:
             install -m 0755 "$directory/calu" "upload/calu-linux-$architecture"
           done
           ls -l upload
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           files: upload/*
           fail_on_unmatched_files: true
@@ -136,8 +140,8 @@ jobs:
       # Trusted publishing: the job mints an OIDC token instead of using a stored API token.
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # release/v1

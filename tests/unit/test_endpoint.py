@@ -78,7 +78,7 @@ def test_sessions_that_cannot_be_reached_are_left_out(
             _pick_session([unusable], None)
         assert "no running session of" in str(raised.value)
         # The message has to say what to do instead, in both directions.
-        assert "calu sessions" in str(raised.value) and "--token=" in str(raised.value)
+        assert "calu sessions" in str(raised.value) and "CALU_TOKEN" in str(raised.value)
         assert "`calu start`" in str(raised.value), "the way to get one from a running server"
     assert _pick_session([elsewhere, silent, clientless, row(str(tmp_path))], None).address
 
@@ -156,7 +156,8 @@ def test_a_token_needs_an_address_and_an_address_is_tried_without_a_token(
     refused = cli._attach_failure(
         endpoint, RequestFailed({"code": -32001, "message": "invalid client token"})
     )
-    assert "--token=<token>" in refused and "--insecure" in refused
+    assert "CALU_TOKEN=<token> calu attach" in refused and "--insecure" in refused
+    assert "--token=" not in refused, "D279: no token on a command line"
     assert "calu token mint" in refused and "CALU_TOKEN" in refused
 
     only_token = parser.parse_args(["attach", "--token", "x"])
@@ -274,7 +275,7 @@ def test_the_acp_adapter_never_reads_a_password_from_the_editor_s_stream(
     assert printed.out == "", "stdout carries the protocol and nothing else"
     before, after = logins.no_terminal("\0").split("\0")
     assert before in printed.err and after in printed.err
-    assert "--token=" in printed.err, "the way without a database is named"
+    assert "CALU_TOKEN" in printed.err, "the way without a database is named"
     assert stdin.read() == first_request, "the editor's request was read as a password"
 
 
@@ -287,6 +288,26 @@ def test_the_session_list_and_a_minted_token_say_where_a_client_connects() -> No
     assert "clients" not in ended.line() and cli._attach_recipe(ended) == ""
     recipe = cli._attach_recipe(listening)
     assert "    ssh -N -L 41235:127.0.0.1:41235 buildbox\n" in recipe
-    assert recipe.endswith("    calu attach ws://127.0.0.1:41235 --token=<the token above>")
+    assert recipe.endswith("    CALU_TOKEN=<the token above> calu attach ws://127.0.0.1:41235")
     socket_row = dataclasses.replace(listening, address="unix:/run/user/1000/calu/s.sock")
     assert "ssh -N -L 8765:/run/user/1000/calu/s.sock buildbox" in cli._attach_recipe(socket_row)
+
+
+def test_a_token_can_come_from_a_file_instead_of_the_command_line(tmp_path: Path) -> None:
+    """D279: `--token` stands in the process list, which every user of the machine reads."""
+    parser = cli.build_parser()
+    kept = tmp_path / "token"
+    kept.write_text("secret-token\n")
+    args = parser.parse_args(["attach", "ws://127.0.0.1:8765", "--token-file", str(kept)])
+    cli._token_from_file(args)
+    assert args.token == "secret-token"
+    both = parser.parse_args(
+        ["attach", "ws://127.0.0.1:8765", "--token=x", "--token-file", str(kept)]
+    )
+    with pytest.raises(CliError, match="not both"):
+        cli._token_from_file(both)
+    (tmp_path / "empty").write_text("\n")
+    for missing in (tmp_path / "empty", tmp_path / "none"):
+        args = parser.parse_args(["acp", "ws://127.0.0.1:8765", "--token-file", str(missing)])
+        with pytest.raises(CliError, match="token-file"):
+            cli._token_from_file(args)

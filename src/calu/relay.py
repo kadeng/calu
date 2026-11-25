@@ -42,6 +42,7 @@ from calu.protocol.client import RequestFailed, snapshot
 from calu.protocol.messages import (
     CLOSE_SERVER_TOKEN_REVOKED,
     MAX_FRAME_BYTES,
+    NO_BROWSER_ORIGINS,
     RELAY_SESSION_PATH,
     InitializeParams,
     RelayInitializeResult,
@@ -197,7 +198,9 @@ class Relay:
         Raises:
             OSError: If the port cannot be bound (taken, or not allowed).
         """
-        self._ws = await serve(self._handle, host, port, max_size=MAX_FRAME_BYTES)
+        self._ws = await serve(
+            self._handle, host, port, max_size=MAX_FRAME_BYTES, origins=NO_BROWSER_ORIGINS
+        )
         bound = self._ws.sockets[0].getsockname()
         self.address = f"ws://{bound[0]}:{bound[1]}"
         log.info("the relay listens on %s", self.address)

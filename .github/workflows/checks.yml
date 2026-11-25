@@ -42,9 +42,10 @@ jobs:
           --health-timeout 3s
           --health-retries 30
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
         with:
+          version: "0.12.23"  # as install.sh
           enable-cache: true
       # The web interface is an optional extra, and the database tests exercise it.
       - run: uv sync --locked
@@ -72,9 +73,10 @@ jobs:
           --health-timeout 3s
           --health-retries 30
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
         with:
+          version: "0.12.23"  # as install.sh
           enable-cache: true
       - run: uv sync --locked
       # A runner has root, so Playwright's own installer does what scripts/get-browser.sh does
@@ -87,9 +89,10 @@ jobs:
     name: the wheel ships what calu reads at runtime
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
         with:
+          version: "0.12.23"  # as install.sh
           enable-cache: true
       - run: uv build --out-dir dist
       # D41: no single binary, so the installed wheel is the shipping format and has to be

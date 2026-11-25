@@ -55,8 +55,8 @@ async def test_an_operator_can_work_through_a_session_in_the_browser(db_url: str
             assert "shown once" in shown
             token = shown.split("shown once:")[1].split()[0]
             shown_main = await page.inner_text("main")
-            # `--token=`, not `--token `: a token may start with a dash (D102).
-            assert f"calu attach ws://127.0.0.1:8765 --token={token}" in shown_main
+            # In the environment, not on the command line, where every user could read it (D279).
+            assert f"CALU_TOKEN={token} calu attach ws://127.0.0.1:8765" in shown_main
             # And the row for a client on that machine, which needs neither (D105). The exact
             # cell is asserted in the database layer, which runs without a browser.
             assert "Terminal client, in" in shown_main
