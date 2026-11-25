@@ -24,6 +24,8 @@ the code; this file names settings and links there.
 The decisions behind Calu are in [agent/records/PLAN.md](agent/records/PLAN.md); how it is
 tested, including the tests driven by screenshot in a container, in
 [docs/TESTING.md](docs/TESTING.md) and [agent/records/notes/test-plan.md](agent/records/notes/test-plan.md).
+What Calu protects against, and the weaker choices that are deliberate, are in
+[agent/records/notes/security.md](agent/records/notes/security.md).
 Contributing starts at [AGENTS.md](AGENTS.md).
 
 **Experimental or not yet tested for real**

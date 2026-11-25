@@ -6,7 +6,7 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
 
 ## Pick up here
 
-### Newest: the security pass (D279, 2026-11-25), in progress
+### Newest: the security pass (D279, 2026-11-25), done
 
 Two adversarial reviews (an external attacker; the web interface) and the owner's decisions are
 in PLAN D279. Order of work: the quick wins Q1-Q7, then S1 (warnings), S2 (the place file
@@ -16,9 +16,9 @@ in the repository; some describe ways around the checkers. Done and pushed: Q1-Q
 --set-password`, `src/calu/web/password.py`; the pane's password dialog in
 `extensions/vscode/pane/webHost.ts`), S4 (`CaluApprovals`, `logic/Approval.kt`; not yet tried
 by hand in PyCharm, TESTING item 61). The PyCharm build needs `JAVA_HOME` and
-`-Porg.gradle.java.installations.paths` set to `~/.cache/calu-jdk/jdk-25.0.5.1+2`. Next: `agent/records/notes/security.md` (the
-security notes with the accepted security/convenience trade-offs, asked for by the owner), then
-the README screenshots: one per front end (web, VSCode, PyCharm, TUI), each with a small caption
+`-Porg.gradle.java.installations.paths` set to `~/.cache/calu-jdk/jdk-25.0.5.1+2`. The security notes with the accepted
+security/convenience trade-offs, asked for by the owner, are in `agent/records/notes/security.md`.
+Next: the README screenshots: one per front end (web, VSCode, PyCharm, TUI), each with a small caption
 naming it, each showing something Claude Code cannot do (e.g. editable honesty checker
 instructions; an escalation of a subagent doing what the user disallowed in the main session).
 
