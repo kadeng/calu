@@ -306,6 +306,14 @@ class FileLockRequest(LockRequest):
         key, seq = self.key, self._seq
 
         def take_back(state: dict[str, Any]) -> None:
+            """Remove the entry, unless `wait` returned its hold.
+
+            Args:
+                state: The state; changed in place.
+
+            Raises:
+                LockError: `wait` returned the hold and it is still held.
+            """
             if (key, seq) in self._space._held:
                 raise LockError(
                     f"the request of {self.owner!r} for {key!r} was granted; "
@@ -339,6 +347,14 @@ class FileLockRequest(LockRequest):
         key, seq = self.key, self._seq
 
         def leave(state: dict[str, Any]) -> bool:
+            """Remove the queued entry, or keep a grant that came just now as a hold.
+
+            Args:
+                state: The state; changed in place.
+
+            Returns:
+                True when the entry was granted (now a hold of this process), else False.
+            """
             entry = _find(state, key, seq)
             if entry is None:
                 return False
@@ -388,6 +404,17 @@ class FileRWLock(RWLock):
         key = self.key
 
         def enqueue(state: dict[str, Any]) -> int:
+            """Append the request to the lock's queue and grant what fits.
+
+            Args:
+                state: The state; changed in place.
+
+            Returns:
+                The new entry's sequence number.
+
+            Raises:
+                LockError: `owner` already has an entry on this lock.
+            """
             entries = state["locks"].setdefault(key, [])
             if any(entry["owner"] == owner for entry in entries):
                 if not entries:
@@ -427,6 +454,14 @@ class FileRWLock(RWLock):
         space, key = self._space, self.key
 
         def give_back(state: dict[str, Any]) -> None:
+            """Remove the held entry and grant what fits.
+
+            Args:
+                state: The state; changed in place.
+
+            Raises:
+                LockError: `hold` is not a current hold of this lock in this process.
+            """
             entry = _find(state, key, hold.token) if hold.key == key else None
             if (
                 entry is None
