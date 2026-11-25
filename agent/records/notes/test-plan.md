@@ -1283,5 +1283,6 @@ kept as `~/.config/calu/credentials.json.before-d266`.
 | Locking on, an escalation while the others run | ok: nine steps held, the lock state empty while the person decides |
 | Locking on, the second escalation denied | ok: the denied call gave up its turn, the agent's later commands ran; the state file was empty at the end |
 | Locking on, how a waiting call looks | open (UX): a call that waits for its locks shows as running; nothing says that it waits, or for what |
+| Settings dialog with the rebuilt extension (6174d43): the Locking section | ok: all five settings with their descriptions; the switch stores `locking.enabled` true and "Reset to default" removes it (read back with `calu config list`); a command wait of 5000 is refused with "Input should be less than or equal to 3600" and nothing is stored. Screenshot: `screenshots/vscode-settings-locking.png` |
 
 Afterwards `locking.enabled` was unset again in the container.
