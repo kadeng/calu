@@ -3,6 +3,7 @@ may ask its bridge, and one bridge over the pane's WebSocket. No database: the b
 `ide.initialize` and refuses what the pane may not ask without one.
 """
 
+import base64
 import functools
 import json
 from pathlib import Path
@@ -34,7 +35,17 @@ from calu.web.pane import (
 
 pytestmark = pytest.mark.anyio
 
-TOKEN = "pane-test-token"
+PASSWORD = "pane-test-pässword"
+
+
+async def is_password(typed: str) -> bool:
+    """The password check of the gate: `PASSWORD` is the password."""
+    return typed == PASSWORD
+
+
+def encoded(password: str) -> str:
+    """The password as the pane sends it: base64url of UTF-8, without padding."""
+    return base64.urlsafe_b64encode(password.encode("utf-8")).decode().rstrip("=")
 
 
 class Recorder:
@@ -51,7 +62,7 @@ class Recorder:
 
 async def test_the_pane_page_and_its_files_need_no_login_but_nothing_else_does() -> None:
     """The page and its static files hold no data; every other page still needs the login."""
-    gate = TokenGate(Recorder(), TOKEN)
+    gate = TokenGate(Recorder(), is_password)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=gate), base_url=f"http://{WEB_HOST_NAME}:8800"
     ) as client:
@@ -63,9 +74,22 @@ async def test_the_pane_page_and_its_files_need_no_login_but_nothing_else_does()
         assert (await client.post("/pane")).status_code == 401, "only reading is free"
 
 
-async def test_the_token_opens_the_pane_websocket_and_no_other() -> None:
-    """A frame of another site has neither cookie nor key: it sends the token as subprotocol."""
-    gate = TokenGate(Recorder(), TOKEN)
+async def test_the_password_opens_the_pane_websocket_and_no_other(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D279: a frame of another site has neither cookie nor key; the pane sends the password a
+    person typed into it as subprotocol, and a wrong one waits as on the sign-in page."""
+    import calu.web.app as web_app
+
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        """Record the wait instead of waiting."""
+        slept.append(seconds)
+
+    monkeypatch.setattr(web_app.anyio, "sleep", fake_sleep)
+    gate = TokenGate(Recorder(), is_password)
+    gate._clock = lambda: 1000.0
 
     async def outcome(path: str, subprotocols: list[str]) -> str:
         """Open a WebSocket; return the first ASGI message the gate or the app sent."""
@@ -84,10 +108,19 @@ async def test_the_token_opens_the_pane_websocket_and_no_other() -> None:
         await gate(scope, None, send)
         return sent[0]["type"]
 
-    assert await outcome(PANE_RPC_PATH, ["calu", f"calu.token.{TOKEN}"]) == "websocket.accept"
-    assert await outcome(PANE_RPC_PATH, ["calu", "calu.token.guessed"]) == "websocket.close"
+    right = f"calu.password.{encoded(PASSWORD)}"
+    assert "=" not in right
+    assert await outcome(PANE_RPC_PATH, ["calu", right]) == "websocket.accept"
+    assert slept == []
+    assert await outcome(PANE_RPC_PATH, ["calu", f"calu.password.{encoded('guess')}"]) == (
+        "websocket.close"
+    )
+    assert await outcome(PANE_RPC_PATH, ["calu", "calu.password.%%%"]) == "websocket.close"
     assert await outcome(PANE_RPC_PATH, ["calu"]) == "websocket.close"
-    assert await outcome("/ws/sessions/x", ["calu", f"calu.token.{TOKEN}"]) == "websocket.close"
+    assert slept == [1.0], "a wrong password waits; text that is no password does not"
+    assert await outcome("/ws/sessions/x", ["calu", right]) == "websocket.close", "pane only"
+    # A key of a forgotten login does not stop the password from working.
+    assert await outcome(PANE_RPC_PATH, ["calu", "calu.key.stale", right]) == "websocket.accept"
 
 
 async def test_only_the_pane_may_be_framed_and_only_by_the_configured_origins() -> None:

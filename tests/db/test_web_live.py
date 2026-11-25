@@ -43,13 +43,13 @@ async def running(
     db_url: str,
     workspace: Path,
     turns: list[list[dict[str, Any]]],
-    token: str | None = None,
+    password: str | None = None,
     host_name: str = "",
 ) -> AsyncGenerator[tuple[str, str, Session]]:
     """A real session with its protocol server, its row in the database, and the web server.
 
-    `token` and `host_name` are passed to `create_app`: with them the web server is guarded
-    as `calu web` guards it (the login and the host name), without them it is open.
+    With `password` and `host_name` the web server is guarded as `calu web` guards it (the
+    sign-in with that password, and the host name); without them it is open.
 
     Yields (the web server's base URL, the session id, the session).
     """
@@ -77,7 +77,15 @@ async def running(
             await store.set_address(server.address)
             session_id = store.session_id or ""
             try:
-                async with serve(create_app(db, token=token, host_name=host_name)) as base:
+
+                async def check(typed: str) -> bool:
+                    """Say whether `typed` is `password`."""
+                    return typed == password
+
+                app = create_app(
+                    db, check_password=check if password else None, host_name=host_name
+                )
+                async with serve(app) as base:
                     yield base, session_id, session
             finally:
                 await session.stop()

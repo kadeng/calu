@@ -1029,34 +1029,42 @@ def test_the_guard_closes_a_websocket_from_another_site() -> None:
     assert guard.refusal(scope("http", host="192.168.1.5:8800")), "not this machine's loopback"
 
 
-async def test_without_the_token_nothing_is_served_and_nothing_decided(db_url: str) -> None:
+async def is_s3cret(typed: str) -> bool:
+    """The password check of these tests: "s3cret" is the password."""
+    return typed == "s3cret"
+
+
+async def test_without_a_login_nothing_is_served_and_nothing_decided(db_url: str) -> None:
     """D161: `LocalOnly` stops other websites, not other local processes -- Claude's own
-    `curl -X POST .../resolve` included. `calu web` therefore prints a token, and only a
-    browser that logged in with it (`?token=` once) gets through."""
+    `curl -X POST .../resolve` included. Only a browser that signed in with the password
+    (the calu user password, or the password of calu web, D279) gets through."""
     conn = await connect(db_url)
     try:
         await setup(conn, db_url, "test:model")
         db = Db(conn)
         await populate(db)
-        app = create_app(db, git_url_template="", token="s3cret")
+        app = create_app(db, git_url_template="", check_password=is_s3cret, web_password=True)
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as plain:
             refused = await plain.get("/")
             assert refused.status_code == 401
-            assert "printed" in refused.text, "says how to get in"
+            assert "calu web --set-password" in refused.text, "says which password"
             assert (
                 await plain.post("/escalations/1/resolve", data={"decision": "allow"})
             ).status_code == 401
-            assert (await plain.get("/?token=wrong")).status_code == 401
+            wrong = await plain.post("/_login", data={"password": "wrong", "onward": "/"})
+            assert wrong.status_code == 401 and "set-cookie" not in wrong.headers
             async with plain.stream("GET", "/static/calu.css") as css:
                 assert css.status_code == 401
 
-            entered = await plain.get("/?token=s3cret&project=x")
+            entered = await plain.post(
+                "/_login", data={"password": "s3cret", "onward": "/?project=x"}
+            )
             assert entered.status_code == 200
-            assert 'content="/?project=x"' in entered.text, "the token leaves the URL"
+            assert 'content="/?project=x"' in entered.text, "goes on where it was asked"
             cookie = entered.headers["set-cookie"]
             assert "HttpOnly" in cookie and "SameSite=Strict" in cookie
-            assert "s3cret" not in cookie, "the cookie is not the token"
+            assert "s3cret" not in cookie, "the cookie is not the password"
             # The client now holds the cookie, as the browser does.
             assert (await plain.get("/")).status_code == 200
             async with plain.stream("GET", "/static/login.js") as script:
@@ -1082,11 +1090,11 @@ async def test_a_captured_cookie_cannot_decide_an_escalation(db_url: str) -> Non
         await setup(conn, db_url, "test:model")
         db = Db(conn)
         session_id, escalation = await populate(db)
-        app = create_app(db, token="s3cret", host_name="calu.localhost")
+        app = create_app(db, check_password=is_s3cret, host_name="calu.localhost")
         transport = httpx.ASGITransport(app=app)
         base = "http://calu.localhost:8800"
         async with httpx.AsyncClient(transport=transport, base_url=base) as browser:
-            page = await browser.get("/?token=s3cret")
+            page = await browser.post("/_login", data={"password": "s3cret", "onward": "/"})
             cookie = page.headers["set-cookie"].split(";")[0].split("=", 1)[1]
             key = page.text.split('name="calu-key" content="')[1].split('"')[0]
 
@@ -1303,15 +1311,20 @@ async def test_a_database_that_is_gone_is_said_so_and_found_again(db_url: str) -
         await killer.close()
 
 
-async def test_a_non_ascii_token_is_refused_not_a_server_error(db_url: str) -> None:
+async def test_a_non_ascii_password_is_refused_not_a_server_error(db_url: str) -> None:
     """D168: `secrets.compare_digest` raised on non-ASCII text, which gave 500, not 401."""
     conn = await connect(db_url)
     try:
         await setup(conn, db_url, "test:model")
-        app = create_app(Db(conn), git_url_template="", token="s3cret")
+        app = create_app(Db(conn), git_url_template="", check_password=is_s3cret)
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
-            assert (await client.get("/?token=%C3%A4bc")).status_code == 401
+            typed = await client.post("/_login", data={"password": "äbc", "onward": "/"})
+            assert typed.status_code == 401
+            odd = await client.get(
+                "/", headers=[(b"Cookie", "calu_web_session=\xe4bc".encode("latin-1"))]
+            )
+            assert odd.status_code == 401
     finally:
         await conn.close()
 

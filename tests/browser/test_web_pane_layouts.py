@@ -66,7 +66,31 @@ from calu.web.pane import (  # ruff: ignore[module-import-not-at-top-of-file]
 
 pytestmark = [pytest.mark.browser, pytest.mark.anyio]
 
-TOKEN = "pane-layout-token"
+PASSWORD = "pane-layout-password"
+
+
+async def is_password(typed: str) -> bool:
+    """The password check of the gate: `PASSWORD` is the password.
+
+    Args:
+        typed: What the pane or the sign-in page sent.
+
+    Returns:
+        Whether it is `PASSWORD`.
+    """
+    return typed == PASSWORD
+
+
+async def sign_in(frame: Any) -> None:
+    """Type `PASSWORD` into the pane's password dialog (D279).
+
+    Args:
+        frame: The page or the frame that shows the pane.
+    """
+    await frame.wait_for_selector(".pane-input", timeout=20_000)
+    await frame.fill(".pane-input", PASSWORD)
+    await frame.press(".pane-input", "Enter")
+
 
 GREETER = "def greet(name):\n    return 'Hello, ' + name\n\n\nprint(greet('world'))\n"
 
@@ -211,7 +235,7 @@ def pane_app(store: CredentialStore) -> Starlette:
         ],
         middleware=[
             Middleware(SecurityHeaders, pane_ancestors=frame_ancestors(None)),
-            Middleware(TokenGate, token=TOKEN),
+            Middleware(TokenGate, check_password=is_password),
         ],
     )
 
@@ -330,7 +354,7 @@ async def test_the_pane_works_in_each_layout(
         AsyncExitStack() as stack,
     ):
         port = base.rsplit(":", 1)[1]
-        src = f"http://127.0.0.1:{port}/pane#token={TOKEN}&dir={world}"
+        src = f"http://127.0.0.1:{port}/pane#dir={world}"
         if where == "window":
             await page.goto(src)
             frame: Any = page
@@ -355,6 +379,7 @@ async def test_the_pane_works_in_each_layout(
             await page.goto(outer_base.replace("127.0.0.1", "localhost") + "/")
             await page.locator("#chat").wait_for()
             frame = next(f for f in page.frames if "/pane" in f.url)
+        await sign_in(frame)
         await frame.wait_for_selector('[data-testid="input-text"]', timeout=20_000)
         # The bridge finds the session of the project folder by its local socket.
         await frame.wait_for_function(
@@ -411,10 +436,12 @@ async def test_the_pane_works_in_each_layout(
         async with context.expect_page() as opened:
             await frame.click('[data-testid="header-settings"]')
         settings_page = await opened.value
-        # The pane passes its token on: the window logs in and goes on to /settings.
+        # The window asks for the password itself (the pane's stays in the pane) and goes on
+        # to /settings.
+        await settings_page.fill("#password", PASSWORD)
+        await settings_page.press("#password", "Enter")
         await settings_page.wait_for_url("**/settings", timeout=10_000)
         await settings_page.wait_for_load_state()
-        assert TOKEN not in settings_page.url
         assert "full web interface" in await settings_page.inner_text("body")
         assert "/pane" in frame.url, "the pane stays where it is"
     assert errors == [], errors
@@ -436,7 +463,8 @@ async def test_a_sessions_list_link_attaches_the_pane_to_its_session(
         scripted_session(world) as session_id,
         serve(pane_app(CredentialStore(world.parent / "c.json"))) as base,
     ):
-        await page.goto(f"{base}/pane#token={TOKEN}&dir={elsewhere}&session={session_id}")
+        await page.goto(f"{base}/pane#dir={elsewhere}&session={session_id}")
+        await sign_in(page)
         await page.wait_for_selector('[data-testid="input-text"]', timeout=20_000)
         await page.wait_for_function(
             "() => document.body.innerText.includes('project')", timeout=20_000

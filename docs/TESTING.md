@@ -503,9 +503,9 @@ escalation resolved from the database alone.
 6. A deny-list escalation resolved from the database alone: `calu escalations`,
    `calu escalation <id>`, `calu resolve <id> deny --note ...` — the session continues within a
    second.
-7. `calu web`: open the printed address (`http://calu.localhost:8800/?token=...`; a token is
-   printed only with an empty user password, otherwise the browser asks for the calu user
-   password, item 32); the address without the token must answer 401 in a private window,
+7. `calu web`: open the printed address (`http://calu.localhost:8800/`; the browser asks for
+   the calu user password, item 32, or with an empty one for the password of calu web, item
+   60); the address must answer 401 with the sign-in page in a private window,
    `http://127.0.0.1:8800/` must answer 403 and name the right address, and a `curl -X
    POST` must not decide anything -- neither without a cookie nor with the
    `calu_web_session` cookie copied from the browser (D161).
@@ -796,7 +796,7 @@ escalation resolved from the database alone.
    "A forgotten user password" after a wrong one (and answer the next attempt later), and
    show the fleet after the right one; saving a setting must then work. `calu web --sudo`
    must do the same with the process running as root (`ps -o user= -C calu`). After a setup
-   with an empty user password the address must carry `?token=`. Not yet run with the one
+   with an empty user password `calu web` must ask for the password of calu web (item 60). Not yet run with the one
    user login; the runs below used the logins of before D265. Run on 2026-11-13 only as a
    test of the gate against the database; **not in a browser**. Run in the root box on
    2026-11-18 with curl (`webcheck`): `calu web` and `calu web --sudo` ask the admin password
@@ -843,7 +843,7 @@ escalation resolved from the database alone.
    calu setup --no-password` (it asks the user password once, to open the stored logins):
    `calu run --sudo` and `calu attach --sudo` must ask for no calu password, saving a
    checker's instructions in the `--sudo` client must ask nothing, and `calu web --sudo` must
-   print an address with `?token=`. Every user of the machine, one without any credential
+   start only after `sudo calu web --set-password` (item 60). Every user of the machine, one without any credential
    included, then lists sessions, resolves escalations and changes settings without a prompt
    (by design). `sudo calu setup --set-password` must ask a new user password twice; after
    it the file holds no secret, the published password stops working, a user without a
@@ -1126,8 +1126,8 @@ escalation resolved from the database alone.
    password and then call the login outdated (the database refused it), naming how to renew
    it; check that the named way works on a machine that holds only `user`.
    (f) An empty user password (`calu setup --set-password` and Enter, or `--no-password`):
-   nothing is asked anywhere (CLI, full-screen client, IDE dialogs, chat pane); `calu web`
-   prints an address with `?token=` and the browser gets no sign-in page; `calu setup` and
+   nothing is asked anywhere (CLI, full-screen client, IDE dialogs); `calu web` asks for the
+   password of calu web (item 60), or for none after an empty choice; `calu setup` and
    `calu doctor` say that every program of the user can then use the login.
    Not run yet.
 54. `calu uninstall` (PLAN.md D267), in a throwaway machine or container only (it removes the
@@ -1171,8 +1171,17 @@ escalation resolved from the database alone.
 59. The chat pane opened by another site (PLAN.md D278): a page on another port with a link to
    `http://calu.localhost:8800/pane#dir=...` opens "Open the calu chat?" with the folder named
    and nothing connected; "Open the chat" connects the pane there (signed in: "No session is
-   attached" with "New session"). The printed `#token=` address and a frame in Jupyter connect
-   at once. Run on 2026-11-25 in the Cua desktop (Firefox, link from another port).
+   attached" with "New session"). The printed address and a frame in Jupyter connect at once
+   (a frame asks for the password first, item 60). Run on 2026-11-25 in the Cua desktop
+   (Firefox, link from another port), before D279.
+60. The password of calu web (PLAN.md D279), after `calu setup --no-password`: `calu web`
+   refuses to start and names `calu web --set-password`; that command asks twice and stores
+   only a hash (`web-password.json`, mode 0600; as root in `/etc/calu`, which a user cannot
+   change). The browser's sign-in page names "password of calu web"; a wrong one waits. The
+   chat pane in a frame of Jupyter asks for the password in a dialog, says when one was
+   wrong, connects after the right one and asks again after a reload. An empty choice (a
+   second "yes") lets every page through and `calu web` warns at each start. Not yet run by
+   hand; covered by `tests/unit/test_web_password.py` and `tests/browser/test_web_pane.py`.
 
 ## Measuring the checkers
 

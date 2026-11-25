@@ -1,9 +1,9 @@
-// The browser pane of `calu web`: its login from the address, the diff of an edit, and that the
+// The browser pane of `calu web`: its login subprotocols, the diff of an edit, and that the
 // committed bundle matches the sources (PLAN.md D261).
 import { existsSync, readFileSync } from 'node:fs';
 import * as esbuild from 'esbuild';
 import { describe, expect, it } from 'vitest';
-import { addressWithoutToken, loginProtocols, readPaneConfig } from '../../pane/config';
+import { base64url, keptFragment, loginProtocols, readPaneConfig } from '../../pane/config';
 import { unifiedDiff } from '../../pane/diff';
 import { PANE_OPTIONS, PANE_OUT } from '../../scripts/pane-options.mjs';
 
@@ -23,33 +23,37 @@ function memory(): Storage {
 }
 
 describe('the pane login', () => {
-  it('takes the token from the fragment, keeps it for a reload and drops it from the address', () => {
-    const session = memory();
-    const config = readPaneConfig('#token=abc&dir=%2Fhome%2Fme%2Fp', session, memory());
-    expect(config).toEqual({ token: 'abc', key: '', dir: '/home/me/p', session: '' });
-    expect(addressWithoutToken(config)).toBe('#dir=%2Fhome%2Fme%2Fp');
-    // After the reload the address has no token any more; the tab's storage still has it.
-    expect(readPaneConfig(addressWithoutToken(config), session, undefined).token).toBe('abc');
-    expect(addressWithoutToken({ token: 'abc', key: '', dir: '', session: '' })).toBe('');
+  it('reads dir and session from the fragment and drops anything else from the address', () => {
+    const config = readPaneConfig('#token=abc&dir=%2Fhome%2Fme%2Fp', memory());
+    expect(config).toEqual({ key: '', dir: '/home/me/p', session: '' });
+    expect(keptFragment(config)).toBe('#dir=%2Fhome%2Fme%2Fp');
+    expect(keptFragment({ key: '', dir: '', session: '' })).toBe('');
   });
 
-  it('keeps the session a sessions-list link names, and only the token leaves the address', () => {
-    const config = readPaneConfig('#token=abc&dir=%2Fw&session=4f1c-77', memory(), memory());
+  it('keeps the session a sessions-list link names', () => {
+    const config = readPaneConfig('#dir=%2Fw&session=4f1c-77', memory());
     expect(config.session).toBe('4f1c-77');
-    expect(addressWithoutToken(config)).toBe('#dir=%2Fw&session=4f1c-77');
+    expect(keptFragment(config)).toBe('#dir=%2Fw&session=4f1c-77');
   });
 
-  it('offers the token or the key of a calu web login as WebSocket subprotocols', () => {
+  it('offers the key of a calu web login and a typed password as WebSocket subprotocols', () => {
     const local = memory();
     local.setItem('calu-key', 'k1');
-    const config = readPaneConfig('', undefined, local);
+    const config = readPaneConfig('', local);
     expect(loginProtocols(config)).toEqual(['calu', 'calu.key.k1']);
-    expect(loginProtocols({ token: 't', key: '', dir: '', session: '' })).toEqual(['calu', 'calu.token.t']);
+    expect(loginProtocols(config, 'pässwort/+')).toEqual(['calu', 'calu.key.k1', `calu.password.${base64url('pässwort/+')}`]);
+    expect(loginProtocols({ key: '', dir: '', session: '' }, '')).toEqual(['calu', 'calu.password.']);
+  });
+
+  it('encodes the password in base64url without padding (subprotocol characters only)', () => {
+    expect(base64url('p&ss')).toBe('cCZzcw');
+    expect(base64url('ä?>')).toBe(Buffer.from('ä?>', 'utf-8').toString('base64url'));
+    expect(base64url('ä?>')).toMatch(/^[A-Za-z0-9_-]*$/);
   });
 
   it('works without storage (a frame whose storage the browser blocks)', () => {
-    const blocked = { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } } as unknown as Storage;
-    expect(readPaneConfig('#token=x', blocked, blocked)).toEqual({ token: 'x', key: '', dir: '', session: '' });
+    const blocked = { getItem: () => { throw new Error('blocked'); } } as unknown as Storage;
+    expect(readPaneConfig('#dir=%2Fw', blocked)).toEqual({ key: '', dir: '/w', session: '' });
   });
 });
 

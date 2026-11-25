@@ -17,9 +17,9 @@
  *     settings, checkers   the full web interface in another window (`/settings`)
  *     the server terminal  the command to copy (a browser has no terminal)
  *
- * The login: the token from the address's fragment (`#token=...`, kept in the tab's session
- * storage and removed from the address), else the key that a login to `calu web` left in this
- * origin's local storage (with the cookie the browser sends itself).
+ * The login: the key that a login to `calu web` left in this origin's local storage (with the
+ * cookie the browser sends itself). A pane in a frame of another site has neither; it asks for
+ * the password of `calu web` and keeps it in memory only (`SocketLauncher`, PLAN.md D279).
  */
 
 import { BridgeCore, LaunchError, type Launched, type Launcher } from '../src/host/bridgeCore';
@@ -54,29 +54,80 @@ const MAX_LOG = 500;
 /** Where the pane's state for the webview is kept in the tab (`getState` / `setState`). */
 const UI_STATE_KEY = 'calu-pane-ui';
 
-/** Opens the WebSocket to the pane's bridge in `calu web`. */
+/** The connection a `SocketLauncher` tried to open: open, or closed with or without a reason. */
+type Attempt = { link: Launched } | { reason: string };
+
+/**
+ * Opens the WebSocket to the pane's bridge in `calu web`, and asks for the password when
+ * `calu web` refuses the login.
+ *
+ *     launch ─► open with loginProtocols(config, password) ─► open: done
+ *                 │ refused before it opened (no reason; the browser hides the server's 1008)
+ *                 ▼
+ *               serverUp()? ─ no ─► LaunchError "not running"
+ *                 │ yes
+ *                 ▼
+ *               askPassword(wrong) ─ cancelled ─► LaunchError "did not accept this pane"
+ *                 └─ typed: kept in memory, open again
+ */
 export class SocketLauncher implements Launcher {
+  /** The password a person typed, kept for reconnects until the page closes; never stored. */
+  private password: string | undefined;
+
   /**
    * @param url The WebSocket address, e.g. "ws://calu.localhost:8800/pane/rpc?dir=...".
-   * @param protocols The subprotocols that carry the login (`loginProtocols`).
+   * @param config The pane's config (its key goes into the subprotocols).
+   * @param askPassword Asks a person for the password of `calu web`; `wrong` is true when the
+   *   last one was refused. Resolves to undefined when they cancel.
+   * @param serverUp Resolves to whether `calu web` answers at all (a refused login and a
+   *   stopped server look the same to a WebSocket).
    */
   constructor(
     private readonly url: string,
-    private readonly protocols: string[],
+    private readonly config: PaneConfig,
+    private readonly askPassword: (wrong: boolean) => Promise<string | undefined>,
+    private readonly serverUp: () => Promise<boolean>,
   ) {}
 
   /**
-   * Open the WebSocket.
+   * Open the WebSocket, asking for the password as often as `calu web` refuses it.
    *
    * @param onData Called with each message, followed by a newline.
    * @param onEnd Called once when an open connection closes.
    * @returns The connection, once it is open.
-   * @throws (rejects) LaunchError if the connection closes before it opened (no login, calu
-   *   web stopped, too many panes, a wrong `dir`).
+   * @throws (rejects) LaunchError if calu web is not running, closes the connection with a
+   *   reason before it opened, or the person cancels the password dialog.
    */
-  launch(onData: (chunk: string) => void, onEnd: (description: string) => void): Promise<Launched> {
-    return new Promise((resolve, reject) => {
-      const socket = new WebSocket(this.url, this.protocols);
+  async launch(onData: (chunk: string) => void, onEnd: (description: string) => void): Promise<Launched> {
+    for (;;) {
+      const attempt = await this.open(loginProtocols(this.config, this.password), onData, onEnd);
+      if ('link' in attempt) return attempt.link;
+      if (attempt.reason) throw new LaunchError('error', `calu web closed the connection: ${attempt.reason}.`);
+      if (!(await this.serverUp())) {
+        throw new LaunchError('error', 'calu web does not answer: is it running?');
+      }
+      const typed = await this.askPassword(this.password !== undefined);
+      if (typed === undefined) {
+        throw new LaunchError(
+          'error',
+          'calu web did not accept this pane: sign in to calu web in this browser, or type its password into the pane.',
+        );
+      }
+      this.password = typed;
+    }
+  }
+
+  /**
+   * Open the WebSocket once.
+   *
+   * @param protocols The subprotocols that carry the login.
+   * @param onData Called with each message, followed by a newline.
+   * @param onEnd Called once when the connection closes after it opened.
+   * @returns The open connection, or the reason ("" if none) it closed before it opened.
+   */
+  private open(protocols: string[], onData: (chunk: string) => void, onEnd: (description: string) => void): Promise<Attempt> {
+    return new Promise((resolve) => {
+      const socket = new WebSocket(this.url, protocols);
       let opened = false;
       let closed: () => void = () => {};
       const gone = new Promise<void>((r) => {
@@ -85,12 +136,14 @@ export class SocketLauncher implements Launcher {
       socket.onopen = () => {
         opened = true;
         resolve({
-          write: (line) => socket.send(line.replace(/\n$/, '')),
-          end: async () => {
-            socket.close();
-            await Promise.race([gone, new Promise((r) => setTimeout(r, 3000))]);
+          link: {
+            write: (line) => socket.send(line.replace(/\n$/, '')),
+            end: async () => {
+              socket.close();
+              await Promise.race([gone, new Promise((r) => setTimeout(r, 3000))]);
+            },
+            kill: () => socket.close(),
           },
-          kill: () => socket.close(),
         });
       };
       socket.onmessage = (event: MessageEvent) => {
@@ -98,22 +151,24 @@ export class SocketLauncher implements Launcher {
       };
       socket.onclose = (event: CloseEvent) => {
         closed();
-        const why = event.reason ? `: ${event.reason}` : '';
-        if (!opened) {
-          // A refused handshake reaches the page as code 1006 without a reason (the browser does
-          // not pass the server's 1008 on): that is a missing login, or calu web is not running.
-          reject(
-            new LaunchError(
-              'error',
-              why
-                ? `calu web closed the connection${why}.`
-                : 'calu web did not accept this pane: open the address with #token=... that `calu web` printed, ' +
-                    'or sign in to calu web in this browser first. Is calu web running?',
-            ),
-          );
-        } else onEnd(`closed the connection${why || ` (code ${event.code})`}`);
+        if (!opened) resolve({ reason: event.reason });
+        else onEnd(`closed the connection${event.reason ? `: ${event.reason}` : ` (code ${event.code})`}`);
       };
     });
+  }
+}
+
+/**
+ * Tell whether `calu web` answers at all, by asking for the pane's own page.
+ *
+ * @returns True if the page answered with any HTTP status; false on a network error.
+ */
+async function caluWebAnswers(): Promise<boolean> {
+  try {
+    await fetch(location.pathname, { method: 'HEAD', cache: 'no-store' });
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -231,20 +286,13 @@ function titleFor(state: ViewState): string {
 
 /**
  * Open a page of the full web interface in its own window (never inside the pane's frame).
- *
- * The new window is logged in to `calu web` with the pane's token (`?token=`, which `calu web`
- * turns into the window's own login and takes out of the address), so that it does not ask for
- * the login the pane already has. Without a token (the pane uses the browser's login) the
- * window has that login too.
+ * The window has the browser's login to `calu web`, or asks for the password.
  *
  * @param path The path, e.g. "/settings".
- * @param token The pane's login token, or "".
  * @returns Nothing.
  */
-export function openWeb(path: string, token: string): void {
-  const url = new URL(path, location.origin);
-  if (token) url.searchParams.set('token', token);
-  window.open(url.toString(), 'calu-web', 'noopener');
+export function openWeb(path: string): void {
+  window.open(new URL(path, location.origin).toString(), 'calu-web', 'noopener');
 }
 
 /**
@@ -275,7 +323,19 @@ export function startPane(config: PaneConfig): { view: PaneView; host: ChatHost 
     { line: log, append: (text) => log(text.trimEnd()), warn: (text) => void dialogs.notify('warning', text) },
     'web',
     CLIENT_VERSION,
-    new SocketLauncher(`${scheme}//${location.host}/pane/rpc${query}`, loginProtocols(config)),
+    new SocketLauncher(
+      `${scheme}//${location.host}/pane/rpc${query}`,
+      config,
+      (wrong) =>
+        dialogs.input({
+          title: 'Sign in to calu web',
+          prompt: wrong
+            ? 'calu web did not accept that password. The password of calu web:'
+            : 'The password of calu web (the calu user password, or the one chosen with `calu web --set-password`):',
+          password: true,
+        }),
+      caluWebAnswers,
+    ),
     {
       ask: (problem, left) => dialogs.input({ title: PROMPT_TITLE, prompt: promptText(problem, left), password: true }),
       stored: async () => heldPassword,
@@ -363,7 +423,7 @@ export function startPane(config: PaneConfig): { view: PaneView; host: ChatHost 
       }
       case 'openSettings':
       case 'editChecker':
-        openWeb('/settings', config.token);
+        openWeb('/settings');
         return;
       case 'copyServerCommand':
         await copy(host.sessions.serverHelp().command, 'The server command');

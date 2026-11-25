@@ -133,9 +133,7 @@ async def test_the_web_interface_signs_a_browser_in_with_the_user_password(db_ur
     owner = await connect(db_url)
     try:
         assert await user_can_log_in(owner)
-        app = create_app(
-            Db(owner), token="printed", check_password=functools.partial(is_user_password, place)
-        )
+        app = create_app(Db(owner), check_password=functools.partial(is_user_password, place))
         web = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1")
         async with web:
             asked = await web.get("/sessions?x=1")

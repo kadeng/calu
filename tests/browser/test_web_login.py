@@ -1,7 +1,7 @@
 """The login of `calu web` in a real browser, guarded as the command guards it.
 
-The other browser tests run the application open (no token, any loopback name). These run it
-the way `calu web` does -- token, `calu.localhost`, the security headers -- because what they
+The other browser tests run the application open (no login, any loopback name). These run it
+the way `calu web` does -- password, `calu.localhost`, the security headers -- because what they
 check is the browser's own behaviour: which server it sends the cookie to, whether the pages
 still work under the Content-Security-Policy, whether the key reaches the forms, the `fetch`
 calls and the live WebSocket.
@@ -31,7 +31,29 @@ from calu.web.app import WEB_HOST_NAME, create_app  # ruff: ignore[module-import
 
 pytestmark = [pytest.mark.browser, pytest.mark.db, pytest.mark.anyio]
 
-TOKEN = "the-token-calu-web-printed"
+PASSWORD = "the-password-of-calu-web"
+
+
+async def is_password(typed: str) -> bool:
+    """The password check of these tests: `PASSWORD` is the password.
+
+    Args:
+        typed: What the sign-in page sent.
+
+    Returns:
+        Whether it is `PASSWORD`.
+    """
+    return typed == PASSWORD
+
+
+async def sign_in(page: Any) -> None:
+    """Answer the sign-in page that a request without a login got.
+
+    Args:
+        page: The browser page that shows it.
+    """
+    await page.fill("#password", PASSWORD)
+    await page.press("#password", "Enter")
 
 
 def named(base: str) -> str:
@@ -84,26 +106,28 @@ async def test_the_login_works_in_a_browser_and_no_other_port_can_use_it(db_url:
         db = Db(conn)
         session_id, first = await populate(db)
         _other_session, second = await populate(db)
-        app = create_app(db, token=TOKEN, host_name=WEB_HOST_NAME)
+        app = create_app(db, check_password=is_password, host_name=WEB_HOST_NAME)
         other = OtherServer()
         async with serve(app) as bound, serve(other) as other_bound:
             base = named(bound)
 
-            # Under the bare loopback address the interface is not served, token or not.
-            refused = await page.goto(f"{bound}/?token={TOKEN}")
+            # Under the bare loopback address the interface is not served, login or not.
+            refused = await page.goto(f"{bound}/")
             assert refused is not None and refused.status == 403
             assert base in await page.inner_text("body"), "it says where the interface is"
 
-            # The printed address logs in and goes on to the page without the token.
-            said = complaints(page)
-            await page.goto(f"{base}/?token={TOKEN}&all=1")
+            # The printed address asks for the password and goes on to the page asked for.
+            await page.goto(f"{base}/?all=1")
+            await sign_in(page)
             await page.wait_for_url(f"{base}/?all=1")
+            # From here on (the sign-in page itself is a 401, which the console reports).
+            said = complaints(page)
             assert "2 waiting" in await page.inner_text("header")
             cookies = await page.context.cookies()
             mine = [c for c in cookies if c["name"] == "calu_web_session"]
             assert len(mine) == 1 and mine[0]["httpOnly"] and mine[0]["sameSite"] == "Strict"
             assert mine[0]["domain"] == WEB_HOST_NAME, "host-only, for this name"
-            assert TOKEN not in str(cookies), "the token is not kept in the browser"
+            assert PASSWORD not in str(cookies), "the password is not kept in the browser"
             assert await page.evaluate("document.cookie") == "", "no script can read the cookie"
 
             # The operator opens the session's dev server in the same browser, as one does.
@@ -177,15 +201,16 @@ async def test_the_login_works_in_a_browser_and_no_other_port_can_use_it(db_url:
 async def test_the_live_view_attaches_with_the_key(db_url: str, tmp_path: Path, page) -> None:
     """The live WebSocket carries the key as a subprotocol, and the policy lets it connect."""
     turns = [[{"text": "Looking around."}]]
-    async with running(db_url, tmp_path, turns, token=TOKEN, host_name=WEB_HOST_NAME) as (
+    async with running(db_url, tmp_path, turns, password=PASSWORD, host_name=WEB_HOST_NAME) as (
         bound,
         session_id,
         _session,
     ):
         base = named(bound)
-        said = complaints(page)
-        await page.goto(f"{base}/sessions/{session_id}/live?token={TOKEN}")
+        await page.goto(f"{base}/sessions/{session_id}/live")
+        await sign_in(page)
         await page.wait_for_url(f"{base}/sessions/{session_id}/live")
+        said = complaints(page)  # after the sign-in page, a 401 the console reports
         await page.wait_for_function("document.getElementById('note').textContent === 'attached'")
         await page.fill("#text", "look around")
         await page.get_by_role("button", name="Send (queued)").click()

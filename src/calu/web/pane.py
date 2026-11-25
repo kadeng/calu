@@ -11,10 +11,9 @@ this process runs for it, one per browser tab, over a WebSocket:
 
 Login (`TokenGate`): the page and its static files are served without one, because they hold
 no data. The WebSocket needs either the browser's login (cookie and key, as every other page) or
-the login token itself as the subprotocol `calu.token.<token>`. The second is for an iframe of
-another site (Jupyter on another port), where the browser sends no SameSite cookie and keeps no
-key: the page takes the token from its address's fragment (`/pane#token=...`), which the
-browser never sends to a server, and keeps it in the tab's session storage.
+the password as the subprotocol `calu.password.<base64url>` (D279). The second is for an iframe
+of another site (Jupyter on another port), where the browser sends no SameSite cookie and keeps
+no key: the pane asks for the password and keeps it in the page's memory only.
 
 Framing: only `/pane` may be shown in a frame, and only by the origins of
 `web.pane_frame_ancestors` (`SecurityHeaders`); every other page keeps `frame-ancestors 'none'`.
@@ -54,9 +53,10 @@ PANE_PATH = "/pane"
 PANE_RPC_PATH = "/pane/rpc"
 """Address of the pane's WebSocket to its bridge."""
 
-TOKEN_PROTOCOL = "calu.token."
-"""Prefix of the WebSocket subprotocol in which a pane sends the login token (see the module
-comment); `TokenGate` checks it for `PANE_RPC_PATH` only."""
+PASSWORD_PROTOCOL = "calu.password."
+"""Prefix of the WebSocket subprotocol in which a pane in a frame of another site, which gets
+no cookie, sends the password a person typed into it, base64url-encoded (D279); `TokenGate`
+checks it for `PANE_RPC_PATH` only, with the back-off of the sign-in page."""
 
 MAX_PANES = 8
 """Bridges that run at the same time; a further pane is told to close one first."""

@@ -869,15 +869,3 @@ def test_ctrl_d_at_the_user_password_says_what_was_not_done(
     assert str(raised.value) == logins.NOT_ENTERED
     assert run_cli(monkeypatch, store, ["config", "get"], "") == 1
     assert logins.NOT_ENTERED in capsys.readouterr().err
-
-
-def test_the_start_line_of_calu_web_names_the_user_password_only_where_there_is_one() -> None:
-    """After `calu setup --no-password` the line ended with advice that does not apply."""
-    without = cli._web_token_line("calu.localhost", 8800, "tok", has_admin_password=False)
-    assert without == (
-        "calu web on http://calu.localhost:8800/?token=tok (open it once per browser; the "
-        "token is your login, keep it to yourself)."
-    )
-    with_one = cli._web_token_line("calu.localhost", 8800, "tok", has_admin_password=True)
-    assert with_one.startswith(without)
-    assert with_one.endswith("`calu setup` makes the calu user password the login instead.")

@@ -4,7 +4,7 @@ The pane's script is the committed bundle (`src/calu/web/static/pane/pane.js`). 
 serves the pane's routes behind the real `SecurityHeaders` and `TokenGate`, with a bridge per
 browser tab; with no database the bridge starts and answers, and the pane shows that no session
 is attached. One test opens the pane in its own window, one inside an iframe of a page of
-another site, which is the case the token in the address's fragment exists for.
+another site, which gets no cookie of a sign-in: there the pane asks for the password (D279).
 """
 
 import functools
@@ -38,7 +38,32 @@ from calu.web.pane import (  # ruff: ignore[module-import-not-at-top-of-file]
 
 pytestmark = [pytest.mark.browser, pytest.mark.anyio]
 
-TOKEN = "pane-browser-token"
+PASSWORD = "pane-browser-pässword"
+
+
+async def is_password(typed: str) -> bool:
+    """The password check of the gate: `PASSWORD` is the password.
+
+    Args:
+        typed: What the pane sent.
+
+    Returns:
+        Whether it is `PASSWORD`.
+    """
+    return typed == PASSWORD
+
+
+async def sign_in(frame: Any, password: str, prompt: str = "The password of calu web") -> None:
+    """Answer the pane's password dialog.
+
+    Args:
+        frame: The page or the frame that shows the pane.
+        password: What to type.
+        prompt: Text the dialog shows.
+    """
+    await frame.wait_for_selector(f".pane-detail:has-text('{prompt}')", timeout=20_000)
+    await frame.fill(".pane-input", password)
+    await frame.press(".pane-input", "Enter")
 
 
 @pytest.fixture(autouse=True)
@@ -73,7 +98,7 @@ def pane_app(store: CredentialStore) -> Starlette:
         ],
         middleware=[
             Middleware(SecurityHeaders, pane_ancestors=frame_ancestors(None)),
-            Middleware(TokenGate, token=TOKEN),
+            Middleware(TokenGate, check_password=is_password),
         ],
     )
 
@@ -86,12 +111,11 @@ async def wait_for_chat(frame: Any) -> None:
     """
     await frame.wait_for_selector('[data-testid="input-text"]', timeout=20_000)
     # The bridge's status reaches the view: "Starting calu…" goes away once it runs.
-    await frame.wait_for_function(
-        "!document.body.innerText.includes('Starting calu')", timeout=20_000
-    )
+    # A locator, not a string predicate: the pane's policy refuses `eval` in a frame.
+    await frame.get_by_text("Starting calu").first.wait_for(state="hidden", timeout=20_000)
 
 
-async def test_the_pane_in_its_own_window_connects_and_hides_the_token(
+async def test_the_pane_in_its_own_window_asks_for_the_password_and_connects(
     page: Any, tmp_path: Path
 ) -> None:
     errors: list[str] = []
@@ -99,10 +123,11 @@ async def test_the_pane_in_its_own_window_connects_and_hides_the_token(
     project = tmp_path / "project"
     project.mkdir()
     async with serve(pane_app(CredentialStore(tmp_path / "credentials.json"))) as base:
-        await page.goto(f"{base}/pane#token={TOKEN}&dir={project}")
+        # An address of the time when `calu web` printed a token: the token leaves it.
+        await page.goto(f"{base}/pane#token=old&dir={project}")
+        await sign_in(page, PASSWORD)
         await wait_for_chat(page)
-        assert TOKEN not in page.url, "the token is taken out of the address"
-        assert "dir=" in page.url
+        assert "token" not in page.url and "dir=" in page.url
         assert await page.title() == "calu chat"
         # The session list needs the database: the pane says so in a toast instead of failing.
         await page.click('[data-testid="session-dropdown"]')
@@ -116,7 +141,7 @@ async def test_the_pane_runs_in_an_iframe_of_another_site(page: Any, tmp_path: P
     page.on("pageerror", lambda error: errors.append(str(error)))
     async with serve(pane_app(CredentialStore(tmp_path / "credentials.json"))) as base:
         port = base.rsplit(":", 1)[1]
-        frame_src = f"http://127.0.0.1:{port}/pane#token={TOKEN}"
+        frame_src = f"http://127.0.0.1:{port}/pane"
         outer = Starlette(
             routes=[
                 Route(
@@ -131,17 +156,21 @@ async def test_the_pane_runs_in_an_iframe_of_another_site(page: Any, tmp_path: P
         )
         async with serve(outer) as outer_base:
             await page.goto(outer_base.replace("127.0.0.1", "localhost") + "/")
-            frame = page.frame_locator("#chat")
-            await frame.locator('[data-testid="input-text"]').wait_for(timeout=20_000)
+            await page.frame_locator("#chat").locator(".pane-input").wait_for(timeout=20_000)
             inner = next(f for f in page.frames if "/pane" in f.url)
+            await sign_in(inner, "a guess")
+            await sign_in(inner, PASSWORD, prompt="did not accept that password")
             await wait_for_chat(inner)
-            assert TOKEN not in inner.url
     assert errors == [], errors
 
 
-async def test_without_the_token_the_pane_says_how_to_log_in(page: Any, tmp_path: Path) -> None:
+async def test_a_cancelled_password_leaves_the_pane_saying_how_to_sign_in(
+    page: Any, tmp_path: Path
+) -> None:
     async with serve(pane_app(CredentialStore(tmp_path / "credentials.json"))) as base:
         await page.goto(f"{base}/pane")
+        await page.wait_for_selector(".pane-input", timeout=20_000)
+        await page.press(".pane-input", "Escape")
         await page.wait_for_function(
             "document.body.innerText.includes('did not accept this pane')", timeout=20_000
         )

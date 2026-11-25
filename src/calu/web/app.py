@@ -56,7 +56,7 @@ from collections.abc import Awaitable, Callable, Collection
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, urlparse
 
 import anyio
 import psycopg
@@ -87,7 +87,7 @@ from calu.web import settings as web_settings
 from calu.web.pane import (
     PANE_PATH,
     PANE_RPC_PATH,
-    TOKEN_PROTOCOL,
+    PASSWORD_PROTOCOL,
     Panes,
     frame_ancestors,
     pane_page,
@@ -282,12 +282,12 @@ def check_host(host: str) -> None:
 def create_app(
     db: Db,
     git_url_template: str = "",
-    token: str | None = None,
     host_name: str = "",
     check_password: PasswordCheck | None = None,
     store: CredentialStore | None = None,
     pane_frame_ancestors: list[str] | None = None,
     tls: bool = False,
+    web_password: bool = False,
 ) -> Starlette:
     """Build the web application on an open database connection.
 
@@ -301,10 +301,10 @@ def create_app(
         db: The database connection (the user login).
         git_url_template: `web.git_url_template` for commit links to a git browser that is
             neither GitHub, GitLab nor Bitbucket ("" guesses from the project's remote).
-        token: The login token (`TokenGate`, D161). `calu web` always passes one; None leaves
-            the gate out, for in-process tests.
-        check_password: Says whether a typed password is the calu user password: with it and a
-            token, a browser without a login is asked for the password (D216).
+        check_password: Says whether a typed password is the login's password: the calu user
+            password (D216) or the web password (D279). With it every request needs a login
+            (`TokenGate`); None leaves the gate out: the interface asks for nothing (an empty
+            web password, the owner's choice; in-process tests).
         host_name: The only host name a request may carry (`LocalOnly`). `calu web` always
             passes `WEB_HOST_NAME`; "" accepts every loopback name, for in-process tests.
         store: The credential store the chat pane's bridges log in with (`calu.web.pane`);
@@ -314,6 +314,8 @@ def create_app(
         tls: Whether the server speaks HTTPS (`calu web --tls-cert`): the login cookie is
             then `Secure`, and a changing request's `Origin` must be `https://` (`LocalOnly`).
             `calu web` passes it; False, the default, is plain HTTP.
+        web_password: Whether `check_password` checks the web password, which the sign-in page
+            then names.
 
     Returns:
         The Starlette application, ready for uvicorn.
@@ -388,9 +390,11 @@ def create_app(
             LocalOnly, host_name=host_name, scheme=("https" if tls else "http") if host_name else ""
         ),
     ]
-    if token is not None:
+    if check_password is not None:
         middleware.append(
-            Middleware(TokenGate, token=token, check_password=check_password, secure=tls)
+            Middleware(
+                TokenGate, check_password=check_password, secure=tls, web_password=web_password
+            )
         )
     return Starlette(
         routes=routes,
@@ -586,8 +590,10 @@ class TokenGate:
 
     `LocalOnly` keeps other websites out, but not other processes of this user: Claude runs
     as the same user, and a `curl -X POST .../escalations/1/resolve` from its Bash would decide
-    its own step. So the interface has a login of the kind a local web tool usually has: a
-    random token, printed with the address at start (`http://calu.localhost:8800/?token=...`).
+    its own step. So the interface has a login: a password, which `check_password` checks --
+    the calu user password, or, without one, the web password (`calu.web.password`, D279).
+    Nothing is printed: a login token in a terminal's scrollback was readable by Claude's
+    commands.
 
     A login gives the browser two secrets, both random and both known only to this process
     and that browser:
@@ -600,45 +606,54 @@ class TokenGate:
     The cookie is therefore only enough to read, and everything that changes something needs
     the key as well:
 
-        GET /...?token=<right>                 ->  200: a page that stores the key and goes on
-                                                   to the address without the token; sets the
-                                                   cookie
+        POST /_login with the right password   ->  200: a page that stores the key and goes on;
+                                                   sets the cookie
+        GET without a login                    ->  the page that asks for the password
         GET, HEAD, OPTIONS with the cookie     ->  passes
         other methods: cookie and key          ->  passes; the key is the header `X-Calu-Key`
                                                    or the form field `_key`
         WebSocket: cookie and key              ->  passes; the key is the offered subprotocol
                                                    `calu.key.<key>`
-        WebSocket /pane/rpc with the token     ->  passes; the token is the offered subprotocol
-                                                   `calu.token.<token>` (`calu.web.pane`)
+        WebSocket /pane/rpc with the password  ->  passes; the password is the offered
+                                                   subprotocol `calu.password.<base64url>`
+                                                   (`calu.web.pane`, a frame of another site)
         GET /pane, GET /static/pane/...        ->  passes (the chat pane's page; no data)
         anything else                          ->  401 (HTTP) or close code 1008 (WebSocket)
 
-    The token is never stored in the browser. It and the logins live only in this process; a
-    restart prints a new token and forgets every login.
+    The password is never stored in the browser. The logins live only in this process; a
+    restart forgets every login.
     """
 
     def __init__(
         self,
         app: Any,
-        token: str,
-        check_password: PasswordCheck | None = None,
+        check_password: PasswordCheck,
         secure: bool = False,
+        web_password: bool = False,
     ) -> None:
         """Wrap the application.
 
         Args:
             app: The ASGI application.
-            token: The secret a browser logs in with, as `?token=`.
-            check_password: Says whether a typed password is the calu user password; with
-                it, a browser without a login gets a page that asks for the password
-                (agent/records/PLAN.md D216).
-                None leaves the token as the only login.
+            check_password: Says whether a typed password is the login's password (the calu
+                user password, D216, or the web password, D279).
             secure: Whether the server speaks HTTPS: the session cookie is then `Secure`, so
                 a browser never sends it over plain HTTP.
+            web_password: Whether the password is the web password (`calu.web.password`), not
+                the calu user password: the sign-in page names it so.
         """
         self.app = app
-        self.token = token
         self.check_password = check_password
+        self.password_name = (
+            "the password of calu web" if web_password else ("the calu user password")
+        )
+        self.password_note = (
+            "The password chosen with <code>calu web --set-password</code>. Only a hash of it "
+            "is kept."
+            if web_password
+            else "The password you chose at <code>calu setup</code>. The database checks it; "
+            "it is kept nowhere."
+        )
         self.secure = secure
         self._failed = 0
         """Wrong passwords in a row; each one makes its own answer wait longer."""
@@ -669,40 +684,34 @@ class TokenGate:
             offered = [
                 name[len(KEY_PROTOCOL) :] for name in protocols if name.startswith(KEY_PROTOCOL)
             ]
-            # The chat pane in a frame of another site has neither cookie nor key; it sends the
-            # login token itself, and only its own WebSocket takes that (`calu.web.pane`).
-            tokens = [
-                name[len(TOKEN_PROTOCOL) :] for name in protocols if name.startswith(TOKEN_PROTOCOL)
-            ]
-            by_token = scope.get("path") == PANE_RPC_PATH and any(
-                _same(t, self.token) for t in tokens
-            )
-            if by_token or (key is not None and any(_same(given, key) for given in offered)):
+            if key is not None and any(_same(given, key) for given in offered):
                 await self.app(scope, receive, send)
-            else:
-                await send({"type": "websocket.close", "code": 1008})
+                return
+            # The chat pane in a frame of another site has neither cookie nor key; it sends
+            # the password a person typed into it, and only its own WebSocket takes that.
+            typed = [
+                name[len(PASSWORD_PROTOCOL) :]
+                for name in protocols
+                if name.startswith(PASSWORD_PROTOCOL)
+            ]
+            if scope.get("path") == PANE_RPC_PATH and typed and await self._checked(typed[0]):
+                await self.app(scope, receive, send)
+                return
+            await send({"type": "websocket.close", "code": 1008})
             return
         method = scope.get("method", "GET")
         if method in ("GET", "HEAD") and _public(str(scope.get("path", ""))):
             # The chat pane's page and files hold no data; its WebSocket needs the login.
             await self.app(scope, receive, send)
             return
-        if method == "GET" and await self._login(scope, send):
+        if scope.get("path") == LOGIN_PATH and method == "POST":
+            await self._password_login(scope, receive, send)
             return
-        if self.check_password is not None and scope.get("path") == LOGIN_PATH:
-            if method == "POST":
-                await self._password_login(scope, receive, send)
-                return
-        if key is None and self.check_password is not None and method == "GET":
+        if key is None and method == "GET":
             await self._ask_password(send, self._onward(scope), "")
             return
         if key is None:
-            await _plain(
-                send,
-                401,
-                "calu web: open the address that `calu web` printed when it started; it "
-                "carries the login token (once per browser).",
-            )
+            await _plain(send, 401, f"calu web: sign in at / with {self.password_name} first.")
             return
         if method in SAFE_METHODS or _same(_header(scope, KEY_HEADER), key):
             await self.app(scope, receive, send)
@@ -718,36 +727,15 @@ class TokenGate:
                 send,
                 401,
                 "calu web: this request did not carry the key of your browser's login, so "
-                "nothing was changed. Open the address that `calu web` printed once more "
-                "(the pages need JavaScript and the browser's local storage).",
+                "nothing was changed. Sign in once more (the pages need JavaScript and the "
+                "browser's local storage).",
             )
             return
         await self.app(scope, _replay(body, receive), send)
 
-    async def _login(self, scope: Any, send: Any) -> bool:
-        """Log the browser in if the request carries the right `?token=`.
-
-        Side effects: remembers a new session id and key, forgetting the oldest login beyond
-        `MAX_BROWSERS`, and answers the request with the page that stores the key.
-
-        Args:
-            scope: The ASGI scope of a GET request.
-            send: The ASGI send channel.
-
-        Returns:
-            True if the token was right and the response was sent; False if the request
-            carries no token or a wrong one, and nothing was sent.
-        """
-        query = parse_qs(scope.get("query_string", b"").decode("latin-1"))
-        offered = (query.get("token") or [""])[0]
-        if not offered or not _same(offered, self.token):
-            return False
-        await self._logged_in(send, self._onward(scope))
-        return True
-
     @staticmethod
     def _onward(scope: Any) -> str:
-        """Return the address of a request without its login token, as a path on this host.
+        """Return the address of a request as a path on this host, for after the sign-in.
 
         Args:
             scope: The ASGI scope.
@@ -756,12 +744,11 @@ class TokenGate:
             The path and query; one leading slash only, because "//host/" would be read as
             an address on another host.
         """
-        query = parse_qs(scope.get("query_string", b"").decode("latin-1"))
-        rest = urlencode([(k, v) for k, vs in query.items() if k != "token" for v in vs])
-        return "/" + str(scope.get("path", "/")).lstrip("/") + (f"?{rest}" if rest else "")
+        query = scope.get("query_string", b"").decode("latin-1")
+        return "/" + str(scope.get("path", "/")).lstrip("/") + (f"?{query}" if query else "")
 
     async def _ask_password(self, send: Any, onward: str, problem: str) -> None:
-        """Answer with the page that asks for the calu user password.
+        """Answer with the page that asks for the password (`password_name`).
 
         Args:
             send: The ASGI send channel.
@@ -769,7 +756,11 @@ class TokenGate:
             problem: What was wrong with the last attempt, or "".
         """
         page = TEMPLATES.get_template("password.html").render(
-            action=LOGIN_PATH, onward=onward, problem=problem
+            action=LOGIN_PATH,
+            onward=onward,
+            problem=problem,
+            label=self.password_name.removeprefix("the "),
+            note=Markup(self.password_note),  # constant text of this class
         )
         await send(
             {
@@ -784,7 +775,7 @@ class TokenGate:
         await send({"type": "http.response.body", "body": page.encode("utf-8")})
 
     async def _password_login(self, scope: Any, receive: Any, send: Any) -> None:
-        """Check a typed calu user password and log the browser in, or ask again.
+        """Check a typed password (`check_password`) and log the browser in, or ask again.
 
         One password is checked at a time, and after a wrong one the answer waits
         `min(LOGIN_DELAY_MAX_S, 2 ** wrong_in_a_row / 2)` seconds, so guessing is slow. The
@@ -803,40 +794,77 @@ class TokenGate:
             receive: The ASGI receive channel.
             send: The ASGI send channel.
         """
-        assert self.check_password is not None
         body = await _form_body(scope, receive)
         fields = parse_qs((body or b"").decode("utf-8", "replace"), keep_blank_values=True)
         password = (fields.get("password") or [""])[0]
         onward = "/" + (fields.get("onward") or ["/"])[0].lstrip("/")
         if onward.startswith(LOGIN_PATH):
             onward = "/"
-        problem = "Type the calu user password (the one chosen at `calu setup`)."
+        problem = f"Type {self.password_name}."
         delay = 0.0
         if "password" in fields:
-            # Also a blank one: the database says whether it is right.
-            async with self._checking:
-                try:
-                    right = await self.check_password(password)
-                except Exception as exc:
-                    # Not a wrong guess: counting it would lock the operator out while the
-                    # database is away.
-                    log.warning("checking a login password failed: %s", exc)
-                    problem = "The database could not be asked. Try again."
-                else:
-                    if right:
-                        self._failed = 0
-                        await self._logged_in(send, onward)
-                        return
-                    problem = logins.refused(not password)
-                    now = self._clock()
-                    if now - self._last_failure > LOGIN_FAILURES_FORGET_S:
-                        self._failed = 0
-                    self._failed += 1
-                    self._last_failure = now
-                    delay = min(LOGIN_DELAY_MAX_S, 2**self._failed / 2)
+            # Also a blank one: the check says whether it is right.
+            right, delay = await self._try(password)
+            if right:
+                await self._logged_in(send, onward)
+                return
+            if right is None:
+                problem = "The password could not be checked. Try again."
+            else:
+                problem = logins.refused(not password)
         if delay:
             await anyio.sleep(delay)
         await self._ask_password(send, onward, problem)
+
+    async def _try(self, password: str) -> tuple[bool | None, float]:
+        """Check a password, one at a time, and count a wrong one (see `_password_login`).
+
+        Args:
+            password: What a person typed.
+
+        Returns:
+            (True, 0) for the right password; (False, the wait before the answer) for a wrong
+            one; (None, 0) when the check itself failed (the database could not be asked),
+            which is not counted.
+        """
+        async with self._checking:
+            try:
+                right = await self.check_password(password)
+            except Exception as exc:
+                # Not a wrong guess: counting it would lock the operator out while the
+                # database is away.
+                log.warning("checking a login password failed: %s", exc)
+                return None, 0.0
+            if right:
+                self._failed = 0
+                return True, 0.0
+            now = self._clock()
+            if now - self._last_failure > LOGIN_FAILURES_FORGET_S:
+                self._failed = 0
+            self._failed += 1
+            self._last_failure = now
+            return False, min(LOGIN_DELAY_MAX_S, 2**self._failed / 2)
+
+    async def _checked(self, encoded: str) -> bool:
+        """Check the password a chat pane sent in its subprotocol, with the same back-off.
+
+        Args:
+            encoded: The password, base64url-encoded, padding optional (`PASSWORD_PROTOCOL`).
+
+        Returns:
+            True for the right password; False otherwise, after the wait a wrong one earns (text
+            that is no base64url of UTF-8 is refused at once, as no guess).
+        """
+        try:
+            padded = encoded + "=" * (-len(encoded) % 4)
+            raw = base64.b64decode(padded.encode("ascii"), altchars=b"-_", validate=True)
+            password = raw.decode("utf-8")
+        except ValueError:  # not base64url of UTF-8 (binascii.Error, UnicodeError): no guess
+            return False
+        right, delay = await self._try(password)
+        if delay:
+            await anyio.sleep(delay)
+        return bool(right)
 
     async def _logged_in(self, send: Any, onward: str) -> None:
         """Remember a new login and answer with the page that stores its key.

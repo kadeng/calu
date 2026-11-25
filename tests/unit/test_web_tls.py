@@ -25,7 +25,7 @@ from cryptography.x509.oid import NameOID
 
 from calu import cli
 from calu.cli import CliError
-from calu.web.app import WEB_HOST_NAME, LocalOnly, TokenGate
+from calu.web.app import LOGIN_PATH, WEB_HOST_NAME, LocalOnly, TokenGate
 
 
 def make_pair(directory: Path, names: tuple[str, ...] = (WEB_HOST_NAME,)) -> tuple[Path, Path]:
@@ -132,22 +132,37 @@ def test_with_tls_the_login_cookie_is_secure() -> None:
 
         async def run() -> None:
             """Send one login request through the gate."""
-            gate = TokenGate(app=None, token="tok", secure=secure)
+
+            async def right(typed: str) -> bool:
+                """Take any password.
+
+                Args:
+                    typed: What was typed.
+
+                Returns:
+                    True.
+                """
+                return True
+
+            gate = TokenGate(app=None, check_password=right, secure=secure)
             scope = {
                 "type": "http",
-                "method": "GET",
-                "path": "/",
-                "query_string": b"token=tok",
-                "headers": [(b"host", b"calu.localhost:8800")],
+                "method": "POST",
+                "path": LOGIN_PATH,
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"calu.localhost:8800"),
+                    (b"content-type", b"application/x-www-form-urlencoded"),
+                ],
             }
 
             async def receive() -> dict[str, Any]:
-                """No body.
+                """The form with the password.
 
                 Returns:
-                    The end of the body.
+                    The whole body.
                 """
-                return {"type": "http.request", "body": b"", "more_body": False}
+                return {"type": "http.request", "body": b"password=pw&onward=/", "more_body": False}
 
             async def send(message: dict[str, Any]) -> None:
                 """Keep what the gate sends.
@@ -170,13 +185,10 @@ def test_with_tls_the_login_cookie_is_secure() -> None:
 
 
 def test_the_printed_addresses_follow_the_scheme() -> None:
-    assert cli._web_token_line("calu.localhost", 8800, "t", False, "https").startswith(
-        "calu web on https://calu.localhost:8800/?token=t "
+    assert cli._pane_line("calu.localhost", 8800, "https").startswith(
+        "chat pane: https://calu.localhost:8800/pane "
     )
-    assert cli._pane_line("calu.localhost", 8800, "t", "https").startswith(
-        "chat pane: https://calu.localhost:8800/pane#token=t "
-    )
-    assert "http://" in cli._pane_line("calu.localhost", 8800, None)
+    assert "http://" in cli._pane_line("calu.localhost", 8800)
 
 
 def test_uvicorn_serves_https_that_checks_out_for_calu_localhost(tmp_path: Path) -> None:

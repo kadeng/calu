@@ -1031,8 +1031,13 @@ calu web --sudo   # the same, run as root on your behalf: Claude Code cannot rea
 - The page asks for the calu user password. The database checks it; Calu stores it nowhere. Each
   wrong password makes the next answer wait longer; the count starts again after a minute
   without a wrong one.
-- With an empty user password, `calu web` prints an address with a login token
-  (`...?token=...`), to be opened once per browser.
+- With an empty user password (`calu setup --no-password`), `calu web` has a password of its
+  own. Choose it once with `calu web --set-password` (with `sudo` for root's installation;
+  then only root can change it). Calu keeps only a slow hash of it (PBKDF2, 3,000,000 rounds,
+  in `web-password.json` next to calu's `.env`, mode 0600). An empty choice is allowed after a
+  second question: `calu web` then asks for no password and warns at every start that every
+  program of this machine, Claude Code's commands included, can use it. Without a choice
+  `calu web` does not start and says how to make one.
 - The interface answers only under the host name `calu.localhost`. Chrome, Edge and Firefox
   resolve `*.localhost` themselves; for another browser or tool, add `127.0.0.1
   calu.localhost` to the hosts file.
@@ -1046,7 +1051,7 @@ calu web --sudo   # the same, run as root on your behalf: Claude Code cannot rea
   under the same address. `calu serve --web` does not start without its web interface.
 - `calu web` listens on the loopback interface only. Every user and every program of this
   machine can connect to that port (on WSL2 also the programs on Windows); the calu user
-  password or the token keeps them out. Use it on a machine and network you trust; from
+  password or the password of calu web keeps them out. Use it on a machine and network you trust; from
   another machine, reach it through an SSH tunnel (`ssh -L 8800:127.0.0.1:8800 host`), not
   through a proxy.
 - It accepts a change (a form, a decision, a setting, a WebSocket) only from its own pages:
@@ -1171,22 +1176,21 @@ own window, or embed it in another web application, for example next to a Jupyte
 `calu web` prints its address:
 
 ```
-chat pane: http://calu.localhost:8800/pane#token=... (also in an iframe of a local app ...)
+chat pane: http://calu.localhost:8800/pane (in its own window, or in a frame; ...)
 ```
 
-- **Project.** Add `&dir=/path/to/project` to the address (`#dir=...` without a token). The
+- **Project.** Add `#dir=/path/to/project` to the address. The
   pane attaches to the session of that folder, as VSCode does with its workspace folder, and
   starts new sessions there. Without `dir` it uses the folder `calu web` was started in.
 - **One session.** `&session=<id>` attaches the pane to that session first. The sessions list
   of `calu web` links each running session of this machine and of your user this way
   ("chat", in a window of its own). A session of another machine has no such link: the
   pane's bridge runs on the machine of `calu web`; use its "live" view instead.
-- **Login.** The token after `#` is the login of `calu web`. The browser never sends the part
-  after `#` to a server; the pane keeps the token for the tab and removes it from the address.
-  Treat an address with the token like the token itself. When `calu web` signs browsers in
-  with the user password, it prints the pane's address without a token: the pane then works in
-  its own window or in a frame of `calu web` after you signed in, not in a frame of another
-  site.
+- **Login.** In a browser that is signed in to `calu web`, the pane uses that sign-in. In a
+  frame of another site (a notebook) the browser sends no sign-in along, so the pane asks for
+  the password itself: the calu user password, or the password of calu web. It keeps the
+  password in the page's memory for reconnects and stores it nowhere; a reload asks again. A
+  wrong password waits as on the sign-in page.
 - **Opened by another site.** When another web site opens the pane in a window or tab (a link
   or `window.open`), the pane does not connect: a page shows the folder and session that site
   asks for, and "Open the chat" connects. An address you open or type yourself, a link of
@@ -1197,11 +1201,11 @@ chat pane: http://calu.localhost:8800/pane#token=... (also in an iframe of a loc
 
   ```python
   from IPython.display import IFrame
-  IFrame("http://calu.localhost:8800/pane#token=...&dir=/home/me/project", width="100%", height=700)
+  IFrame("http://calu.localhost:8800/pane#dir=/home/me/project", width="100%", height=700)
   ```
 
-- **Settings and checkers** open the full web interface in a separate window, logged in with
-  the pane's token.
+- **Settings and checkers** open the full web interface in a separate window, which uses the
+  browser's sign-in or asks for the password.
 - **Small panes.** In a pane less than 480 pixels high (the corner of a notebook layout, or
   VSCode's bottom panel) the header is one row and the keyboard hint under the input is left
   out. A pane that is also at least twice as wide as high gets two columns: the transcript with

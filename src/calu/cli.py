@@ -63,7 +63,6 @@ import math
 import os
 import pwd
 import re
-import secrets
 import shlex
 import shutil
 import signal
@@ -4303,34 +4302,6 @@ def cmd_ide(args: argparse.Namespace, store: CredentialStore) -> None:
     asyncio.run(serve_ide(Path.cwd(), store))
 
 
-def _web_token_line(
-    host: str, port: int, token: str, has_admin_password: bool, scheme: str = "http"
-) -> str:
-    """Build the start line of `calu web` when the address carries the login token.
-
-    Args:
-        host: The host name the interface is opened under.
-        port: Its port.
-        token: The login token.
-        has_admin_password: Whether a user password was typed for this command although
-            the role `calu_admin` has no login (a schema before migration 0033): `calu
-            setup` would make that password the browser's login. With an empty user
-            password there is none, and the token is the only login there is.
-        scheme: "https" with `--tls-cert`, else "http".
-
-    Returns:
-        One line: the address with the token, what the token is, and, only with a user
-        password, how the password becomes the login.
-    """
-    line = (
-        f"calu web on {scheme}://{host}:{port}/?token={token}"
-        " (open it once per browser; the token is your login, keep it to yourself)."
-    )
-    if has_admin_password:
-        line += " `calu setup` makes the calu user password the login instead."
-    return line
-
-
 def _web_sockets(port: int) -> list[socket.socket]:
     """Take the port of `calu web` on both loopback addresses, `127.0.0.1` and `::1` (D279).
 
@@ -4459,30 +4430,126 @@ WEB_TLS_NAME = "calu.localhost"
 """The name a certificate of `calu web` has to carry (`calu.web.app.WEB_HOST_NAME`)."""
 
 
-def _pane_line(host: str, port: int, token: str | None, scheme: str = "http") -> str:
+def _pane_line(host: str, port: int, scheme: str = "http") -> str:
     """Build the line of `calu web` that names the chat pane (agent/records/PLAN.md D261).
 
     Args:
         host: The host name the interface is opened under.
         port: Its port.
-        token: The login token to put into the address's fragment, for an iframe of another
-            site (the browser never sends a fragment to a server); None when the browser signs
-            in with the user password, which a frame of another site cannot use.
         scheme: "https" with `--tls-cert`, else "http".
 
     Returns:
-        One line with the pane's address.
+        One line with the pane's address. No secret: a pane in a frame of another site asks
+        for the password itself (D279).
     """
-    base = f"{scheme}://{host}:{port}/pane"
-    if token is None:
-        return (
-            f"chat pane: {base} (in its own window or a frame of this interface, after signing "
-            "in; add #dir=/path/to/project to start in a project)"
-        )
     return (
-        f"chat pane: {base}#token={token} (also in an iframe of a local app such as Jupyter; "
-        "add &dir=/path/to/project to start in a project)"
+        f"chat pane: {scheme}://{host}:{port}/pane (in its own window, or in a frame; in a "
+        "frame of another local app it asks for the password; add #dir=/path/to/project to "
+        "start in a project)"
     )
+
+
+def _load_web_password() -> tuple[Any, str]:
+    """Read the web password of this process's configuration (`calu.web.password`).
+
+    Returns:
+        (the stored `WebPassword`, or None when none was chosen; "" or why its file cannot
+        be used). The reason only matters when the web password is needed (`_web_login`).
+    """
+    from calu.web import password as web_password
+
+    try:
+        return web_password.load(), ""
+    except (OSError, ValueError) as exc:
+        return None, f"{web_password.default_path()} cannot be used ({exc})"
+
+
+def _web_login(by_password: bool, place: Target, stored: tuple[Any, str]) -> tuple[Any, str]:
+    """Choose how a browser signs in to `calu web` (D216, D279).
+
+    Side effect: a warning on stderr when the web password is empty.
+
+    Args:
+        by_password: Whether the calu user password is the login (it was typed, and
+            `calu_admin` can log in with it).
+        place: The user login, for checking the user password with the database.
+        stored: What `_load_web_password` found.
+
+    Returns:
+        (the password check for `create_app`, or None for no login; the words that end the
+        address line, e.g. "sign in with the calu user password").
+
+    Raises:
+        CliError: If the web password is needed and none was chosen, or its file cannot be
+            used.
+    """
+    if by_password:
+        return functools.partial(is_user_password, place), "sign in with the calu user password"
+    chosen, problem = stored
+    if problem:
+        raise CliError(problem)
+    if chosen is None:
+        raise CliError(
+            "the calu user password is empty, so calu web needs a password of its own: choose "
+            "one with `calu web --set-password` (with sudo for root's installation); an empty "
+            "one means that calu web asks for none"
+        )
+    if chosen.empty:
+        print(
+            "WARNING: calu web asks for no password (`calu web --set-password` chose none): "
+            "every program of this machine, Claude Code's commands included, can decide "
+            "escalations and change the checkers through it.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None, "no password"
+
+    async def check(typed: str) -> bool:
+        """Compare a typed password with the stored hash, off the event loop (~0.3 s).
+
+        Args:
+            typed: What a person typed.
+
+        Returns:
+            Whether it is the web password.
+        """
+        return await anyio.to_thread.run_sync(chosen.matches, typed)
+
+    return check, "sign in with the password of calu web"
+
+
+def _set_web_password() -> None:
+    """Choose the web password: `calu web --set-password` (D279).
+
+    Asks twice; an empty one is allowed after a second question. As root it is root's
+    (`/etc/calu`), which only root can change.
+
+    Side effects: writes `calu.web.password.default_path()`; prints where.
+
+    Raises:
+        CliError: If the two entries differ, the input ended, or an empty password was not
+            confirmed.
+        OSError: If the file cannot be written.
+    """
+    from calu.web import password as web_password
+
+    typed = read_password("Password of calu web (empty: none): ", confirm=True)
+    try:
+        empty = not typed
+        if empty:
+            answer = ask(
+                "Leave calu web without a password, so that every program of this machine "
+                "can use it? yes/no",
+                "no",
+                "--set-password",
+            )
+            if answer.lower() not in ("yes", "y"):
+                raise CliError("no password was chosen; nothing was changed")
+        web_password.store(typed.decode("utf-8"), web_password.default_path())
+    finally:
+        wipe(typed)
+    what = "the choice of no password" if empty else "the hash of the password"
+    print(f"stored {what} in {web_password.default_path()}")
 
 
 def _read_login_fd(fd: int) -> bytearray:
@@ -4517,9 +4584,10 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
 
     It uses the user login (`_settings_login`), because it also changes what steers the
     checkers, and it serves the loopback interface only: a browser signs in with the user
-    password (D216), or, with an empty user password, with the token in the address it prints;
-    there are no accounts (agent/records/PLAN.md Q4), so reach it from another machine through
-    an SSH tunnel.
+    password (D216), or, with an empty user password, with the web password
+    (`calu.web.password`, D279), which may be empty, and then asks for none. Nothing secret is
+    printed. There are no accounts (agent/records/PLAN.md Q4), so reach it from another
+    machine through an SSH tunnel. `--set-password` only chooses the web password and ends.
 
     The address it prints names the host `calu.localhost` (`calu.web.app.WEB_HOST_NAME`), not
     the bound address: the server answers to no other name, so that the browser keeps the
@@ -4534,8 +4602,9 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
 
     Raises:
         CliError: If the web dependencies are missing, the address is not local, the port is
-            not between 1 and 65535, there is no user login (`_user_target`), or
-            `--tls-cert`/`--tls-key` cannot be used (`_tls_files`).
+            not between 1 and 65535, there is no user login (`_user_target`),
+            `--tls-cert`/`--tls-key` cannot be used (`_tls_files`), or no web password was
+            chosen where one is needed (or its file cannot be read).
         psycopg.Error: On database errors.
     """
     try:
@@ -4546,6 +4615,9 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
             "a package of the web interface is missing; install calu again: "
             f"`uv tool install --reinstall calu` (or `uv sync` in a clone). {exc}"
         ) from exc
+    if args.set_password:
+        _set_web_password()
+        return
     try:
         check_host(args.host)
     except NotLocal as exc:
@@ -4562,10 +4634,12 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
     else:
         url = _settings_login(store, args)
         # With an empty user password nobody knows the password of `calu_admin`, so a
-        # browser cannot be asked for it: the address carries the token instead (D228). A
+        # browser cannot be asked for it: the web password takes its place (D279). A
         # password that was typed for this command is the user password, which the browser
         # is asked for.
         typed_password = "user" in _typed
+    # Read before the switch to the user: as root it is root's (`/etc/calu`).
+    web_password = _load_web_password()
     if run_as is not None:
         # As root for a user (`calu web --sudo`): the login was read from root's store and
         # stays in this process's memory; from here on the process touches files as the user.
@@ -4588,45 +4662,31 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
             web_values = values.get("web") or {}
             template = str(web_values.get("git_url_template") or "")
             ancestors = web_values.get("pane_frame_ancestors") or None
-            # The login token (D161): any local process could otherwise decide escalations,
-            # Claude's own `curl` included. New on every start, never stored.
-            token = secrets.token_urlsafe(24)
             # Where `calu_admin` has the user password, a browser logs in with it, which the
-            # database checks (D216); the token is then not shown.
+            # database checks (D216); otherwise with the web password (D279). Any local process
+            # could otherwise decide escalations, Claude's own `curl` included.
             place = Target.parse(url)
             by_password = typed_password and bool(
                 await db.scalar("SELECT rolcanlogin FROM pg_roles WHERE rolname = %s", (USER_ROLE,))
             )
+            check, how = _web_login(by_password, place, web_password)
             app = create_app(
                 db,
                 git_url_template=template,
-                token=token,
                 host_name=WEB_HOST_NAME,
-                check_password=functools.partial(is_user_password, place) if by_password else None,
+                check_password=check,
                 store=store,
                 pane_frame_ancestors=[str(a) for a in ancestors]
                 if isinstance(ancestors, list)
                 else None,
                 tls=tls is not None,
+                web_password=not by_password,
             )
             # Flushed: this is the one line a user needs, and the process then serves for
             # hours. Without it the address sits in a buffer whenever stdout is a pipe -- a
             # log file, a systemd unit, `tmux pipe-pane` -- and the user sees nothing (D125).
-            if by_password:
-                print(
-                    f"calu web on {scheme}://{WEB_HOST_NAME}:{args.port}/ (sign in with the "
-                    "calu user password)",
-                    flush=True,
-                )
-            else:
-                print(
-                    _web_token_line(WEB_HOST_NAME, args.port, token, typed_password, scheme),
-                    flush=True,
-                )
-            print(
-                _pane_line(WEB_HOST_NAME, args.port, None if by_password else token, scheme),
-                flush=True,
-            )
+            print(f"calu web on {scheme}://{WEB_HOST_NAME}:{args.port}/ ({how})", flush=True)
+            print(_pane_line(WEB_HOST_NAME, args.port, scheme), flush=True)
             config = uvicorn.Config(
                 app,
                 host=args.host,
@@ -7193,6 +7253,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--login-fd", type=int, default=None, help=argparse.SUPPRESS)
     p.add_argument("--login-typed", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--ready-fd", type=int, default=None, help=argparse.SUPPRESS)
+    p.add_argument(
+        "--set-password",
+        action="store_true",
+        help="choose the password of calu web, which it asks for when the calu user password "
+        "is empty (with sudo for root's installation); an empty one means none, then end",
+    )
     p.set_defaults(handler=cmd_web)
 
     p = sub.add_parser("protocol", help="JSON Schema of the client protocol")

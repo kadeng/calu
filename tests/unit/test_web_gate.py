@@ -36,7 +36,23 @@ from calu.web.app import (
 
 pytestmark = pytest.mark.anyio
 
-TOKEN = "s3cret-token"
+
+class Passwords:
+    """A fake check of the calu user password: "right" is it; it can be made to fail."""
+
+    def __init__(self) -> None:
+        """Start with a working database and nothing checked."""
+        self.broken = False
+        """True makes the check raise, as an unreachable database does."""
+        self.checked: list[str] = []
+        """Every password that was checked, in order."""
+
+    async def __call__(self, password: str) -> bool:
+        """Check one password; raises OSError while `broken`."""
+        self.checked.append(password)
+        if self.broken:
+            raise OSError("database away")
+        return password == "right"
 
 
 class Recorder:
@@ -65,18 +81,18 @@ class Recorder:
 
 
 def gated() -> tuple[Recorder, TokenGate, httpx.AsyncClient]:
-    """A recorder behind a `TokenGate`, and a client without any login."""
+    """A recorder behind a `TokenGate` whose password is "right", and a client without login."""
     inner = Recorder()
-    gate = TokenGate(inner, TOKEN)
+    gate = TokenGate(inner, Passwords())
     client = httpx.AsyncClient(
         transport=httpx.ASGITransport(app=gate), base_url=f"http://{WEB_HOST_NAME}:8800"
     )
     return inner, gate, client
 
 
-async def login(client: httpx.AsyncClient) -> tuple[str, str]:
-    """Log the client in with the token. Returns (the cookie's value, the key on the page)."""
-    page = await client.get(f"/?token={TOKEN}")
+async def login(client: httpx.AsyncClient, onward: str = "/") -> tuple[str, str]:
+    """Sign the client in. Returns (the cookie's value, the key on the page)."""
+    page = await client.post(LOGIN_PATH, data={"password": "right", "onward": onward})
     assert page.status_code == 200
     cookie = page.headers["set-cookie"]
     value = cookie.split(";")[0].split("=", 1)[1]
@@ -85,23 +101,27 @@ async def login(client: httpx.AsyncClient) -> tuple[str, str]:
     return value, key.group(1)
 
 
-async def test_the_login_hands_out_a_session_cookie_and_a_key_but_never_the_token() -> None:
-    """wa0: the cookie held the token itself, so whoever saw the cookie held the login."""
+async def test_the_login_hands_out_a_session_cookie_and_a_key_but_never_the_password() -> None:
+    """wa0: the cookie held the login token itself, so whoever saw the cookie held the login."""
     inner, _gate, client = gated()
     async with client:
-        page = await client.get(f"/sessions/abc?token={TOKEN}&detail=full")
+        asked = await client.get("/sessions/abc?detail=full")
+        assert asked.status_code == 401
+        assert 'value="/sessions/abc?detail=full"' in asked.text, "goes on there after"
+        page = await client.post(
+            LOGIN_PATH, data={"password": "right", "onward": "/sessions/abc?detail=full"}
+        )
         assert page.status_code == 200
         cookie = page.headers["set-cookie"]
         assert cookie.startswith("calu_web_session=")
         assert "HttpOnly" in cookie and "SameSite=Strict" in cookie
         assert "Domain" not in cookie, "host-only: no other name gets it"
-        assert TOKEN not in cookie
-        assert TOKEN not in page.text, "the page goes on to the address without the token"
+        assert "right" not in cookie and "right" not in page.text
         assert 'name="calu-onward" content="/sessions/abc?detail=full"' in page.text
         assert page.headers["cache-control"] == "no-store"
         assert inner.seen == [], "the login page is the gate's own answer"
         # Two logins are two browsers: each gets its own cookie and its own key.
-        again = await client.get(f"/?token={TOKEN}")
+        again = await client.post(LOGIN_PATH, data={"password": "right", "onward": "/"})
         assert again.headers["set-cookie"] != cookie
 
 
@@ -109,7 +129,11 @@ async def test_the_login_never_goes_on_to_another_host() -> None:
     """`//evil.example/` as a path is an address on another host once it is a link."""
     _inner, _gate, client = gated()
     async with client:
-        page = await client.get(f"http://calu.localhost:8800//evil.example/?token={TOKEN}")
+        asked = await client.get("http://calu.localhost:8800//evil.example/")
+        assert 'value="/evil.example/"' in asked.text
+        page = await client.post(
+            LOGIN_PATH, data={"password": "right", "onward": "//evil.example/"}
+        )
         assert 'name="calu-onward" content="/evil.example/"' in page.text
 
 
@@ -156,14 +180,14 @@ async def test_without_a_login_nothing_passes() -> None:
     inner, _gate, client = gated()
     async with client:
         assert (await client.get("/")).status_code == 401
-        assert "printed" in (await client.get("/")).text, "says how to get in"
-        assert (await client.get("/?token=wrong")).status_code == 401
-        assert (await client.get("/?token=%C3%A4bc")).status_code == 401, "D168: not a 500"
-        assert (await client.post(f"/?token={TOKEN}")).status_code == 401, "a login is a GET"
+        assert "calu user password" in (await client.get("/")).text, "says how to get in"
+        assert (await client.get("/?token=old-printed-token")).status_code == 401
+        assert (await client.post("/x")).status_code == 401
+        assert "sign in at /" in (await client.post("/x")).text
+        wrong = await client.post(LOGIN_PATH, data={"password": "wrong", "onward": "/"})
+        assert wrong.status_code == 401 and "set-cookie" not in wrong.headers
         client.cookies.set("calu_web_session", "made-up")
         assert (await client.get("/")).status_code == 401
-        client.cookies.set("calu_web_session", TOKEN)
-        assert (await client.get("/")).status_code == 401, "the token is not a cookie value"
     assert inner.seen == []
 
 
@@ -260,14 +284,14 @@ def test_calu_web_answers_to_its_own_host_name_only() -> None:
 
 async def test_every_response_carries_the_security_headers() -> None:
     """wa2: even the refusals, so no page of the interface runs a script that was injected."""
-    app = SecurityHeaders(LocalOnly(TokenGate(Recorder(), TOKEN), host_name=WEB_HOST_NAME))
+    app = SecurityHeaders(LocalOnly(TokenGate(Recorder(), Passwords()), host_name=WEB_HOST_NAME))
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://calu.localhost:8800"
     ) as client:
         for answer in (
             await client.get("/"),  # 401 of the gate
             await client.get("/", headers={"Host": "evil.example"}),  # 403 of the host check
-            await client.get(f"/?token={TOKEN}"),  # the login page
+            await client.post(LOGIN_PATH, data={"password": "right"}),  # the login page
         ):
             policy = answer.headers["content-security-policy"]
             assert "default-src 'self'" in policy
@@ -337,30 +361,12 @@ def test_the_policy_allows_exactly_the_inline_styles_of_the_templates() -> None:
         assert f"'sha256-{digest}'" in policy["style-src"]
 
 
-class Passwords:
-    """A fake check of the calu user password: "right" is it; it can be made to fail."""
-
-    def __init__(self) -> None:
-        """Start with a working database and nothing checked."""
-        self.broken = False
-        """True makes the check raise, as an unreachable database does."""
-        self.checked: list[str] = []
-        """Every password that was checked, in order."""
-
-    async def __call__(self, password: str) -> bool:
-        """Check one password; raises OSError while `broken`."""
-        self.checked.append(password)
-        if self.broken:
-            raise OSError("database away")
-        return password == "right"
-
-
 def password_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[TokenGate, Passwords, list[float], httpx.AsyncClient]:
     """A gate with a fake password check, a fake clock and a recorded (instant) sleep."""
     passwords = Passwords()
-    gate = TokenGate(Recorder(), TOKEN, check_password=passwords)
+    gate = TokenGate(Recorder(), passwords)
     gate._clock = lambda: 1000.0  # the test drives the clock
     slept: list[float] = []
 
@@ -422,7 +428,7 @@ async def test_a_database_failure_is_not_counted_as_a_wrong_password(
         for _ in range(3):
             answer = await client.post(LOGIN_PATH, data={"password": "right", "onward": "/"})
             assert answer.status_code == 401
-            assert "could not be asked" in answer.text
+            assert "could not be checked" in answer.text
         assert slept == [], "answered at once, and nothing counted"
         passwords.broken = False
         await client.post(LOGIN_PATH, data={"password": "wrong", "onward": "/"})
@@ -435,7 +441,7 @@ async def test_the_wait_after_a_wrong_password_does_not_hold_up_the_right_one(
     """Review finding: the delay was slept while holding the check lock, so the operator's
     right password queued behind every wrong one another process had posted."""
     passwords = Passwords()
-    gate = TokenGate(Recorder(), TOKEN, check_password=passwords)
+    gate = TokenGate(Recorder(), passwords)
     waiting = anyio.Event()
     release = anyio.Event()
 
