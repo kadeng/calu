@@ -194,7 +194,8 @@ in which order the calls of one agent get them. Its deterministic tests are part
 layer: `tests/unit/test_locking.py` runs the lock contract against both backends (threads, and
 the state file) and tests the scheme; `tests/unit/test_locking_files.py` starts real processes
 that share a lock directory (marked `slow`): exclusion, FIFO across processes, a holder killed
-with SIGKILL, owners across processes. The randomized tests are marked `fuzz`: they run only
+with SIGKILL, owners across processes; `tests/unit/test_call_locks.py` tests the wiring into the
+session (D276), including a session end to end. The randomized tests are marked `fuzz`: they run only
 when asked for, and never in CI (`tests/conftest.py` skips them unless the `-m` expression
 selects `fuzz`).
 

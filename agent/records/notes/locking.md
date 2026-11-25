@@ -5,8 +5,8 @@ how it works, and why each decision was made. The exploration that led here, wit
 adversarial review of the design, is in `locking-design.md`.
 
 Status (2026-11-25): the component `src/calu/locking/` is built and tested, with a backend for
-the threads of one process and one for the processes of one user on one machine (section 8).
-The wiring into Calu (section 9) comes next.
+the threads of one process and one for the processes of one user on one machine (section 8),
+and wired into Calu, off by default (section 9).
 
 ## 1. What locking guarantees
 
@@ -201,22 +201,54 @@ running command.
   `request` would have to confirm the queued row in `pg_locks`; an unlock must run on the
   holding session.
 
-## 9. Wiring into Calu (next)
+## 9. Wiring into Calu
 
-The owner's decisions of 2026-11-25: locking is off by default and switched on by
-configuration, as are the default waits for edits and commands; Calu always makes the locking
-calls, and when locking is off the no-op scheme answers them.
+The owner's decisions of 2026-11-25 (PLAN.md D276): locking is off by default and switched on by
+configuration (`locking.enabled`, the backend, its directory, the waits of commands and edits);
+Calu always makes the locking calls, and with locking off `NoLockingScheme` answers them.
 
-- The PreToolUse hook issues a ticket per call (per agent), and after the check of an approved
-  call takes its locks, with a wait bounded by the hook's time left. A call that does not get
-  its locks is denied with a note that nothing ran and the call can be repeated.
-- A call that goes to a person takes its locks after the person allowed it, and releases them
-  before a person decides on a call that already holds them.
-- The locks are released with the call's tool result, and all of them at the end of a run or a
-  session.
-- Commands lock the checkouts of their working directory and `cd` targets
-  (`calu.checkouts`); edits lock the checkout of their file, or the global lock when the file
-  is outside every checkout; other tools take no lock.
+`src/calu/call_locks.py` (`CallLocks`, one per session) connects a session to the scheme:
 
-Not built: the second check of a command whose worktree changed between its check and its
-locks; the handling of processes that keep running after their call.
+```
+PreToolUse hook (Session.pre_tool_use)
+  issue the call's ticket (commands and edits; one order per agent)
+  the check, as before
+  approved  -> take the call's locks: a worker thread waits at most the configured wait and
+               the hook's time left (minus 30 s)
+               not in time -> DENY "Not run: ... the same call can be repeated"
+               an escalation came up meanwhile (the last look) -> give the locks back, hold the
+               call, take them again; no await between the last look and the answer
+  denied    -> withdraw the ticket
+  escalated -> keep the ticket; a person decides
+can_use_tool (Session.ask)
+  give back the locks the call holds (Claude Code asks about a call the hook allowed)
+  the person decides: allowed -> take the locks (configured wait); denied -> withdraw the ticket
+tool result (the session's stream)
+  after the write set was measured: give back the locks, withdraw a ticket still there
+end of the run: give back every lock and ticket of the session
+```
+
+- Which locks: a command (Bash, Monitor) locks the checkouts of its working directory and its
+  `cd` targets (`Session.step_checkouts`). An edit (Edit, Write, MultiEdit, NotebookEdit) locks
+  the checkout of its file and the file, or takes the global lock when the file lies outside
+  every checkout. Other tools take no lock. A worktree is named by its resolved root.
+- All sessions of a process share the lock space (`shared_space`): one `ThreadLockSpace` for
+  the backend "process", one `FileLockSpace` per directory for "files".
+- The wait runs in a worker thread (decision 15). When the hook is cancelled, the ticket is
+  withdrawn, which ends a waiting lock call, and a lease that arrives anyway is given back. An
+  exception in the check withdraws the ticket as well.
+- A lock directory that cannot be used does not stop the session: every command and edit is
+  then denied with the reason.
+- A call without a tool call id takes no lock.
+
+Not built:
+- A second check of a command whose worktree changed between its check and its locks
+  (section 1).
+- Commands that write outside their worktrees are not recognised (`writes_outside` stays
+  false), so they take the global lock shared.
+- Processes that keep running after their call.
+- Calu's own writes (the final trace pass before a commit) are not under the locks.
+- Tickets follow the order in which the hooks run; that is the order of issue as long as Claude
+  Code runs one agent's calls one after the other (assumption A1 of `locking-design.md`).
+- A call that escalates keeps its ticket while a person decides, so the agent's later calls
+  wait for their turn (each at most its wait).

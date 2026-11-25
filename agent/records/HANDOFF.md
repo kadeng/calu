@@ -18,7 +18,11 @@ owner's rules of 2026-11-25 are built in: FIFO for every backend, one owner per 
 issue order of an agent's calls (`issue(agent)` gives a `Ticket`; withdrawing it cancels a
 pending call with `LockCancelledError`), and no reentrancy (`LockError` at once). An
 adversarial review on 2026-11-25 found the lock order and the backend sound; its five defects
-in the ticket layer are fixed (PLAN D274). Nothing else imports it.
+in the ticket layer are fixed (PLAN D274). An interprocess backend on files (D275) and the wiring
+into the session (`calu.call_locks`, D276) followed: off by default (`locking.enabled`), and with
+it off every call goes through the same path on the no-op scheme. Next, when the owner says so:
+the second check of a command whose worktree changed since its check (knowledge), and the other
+"Not built" items of agent/records/notes/locking.md section 9.
 Deterministic tests are in `tests/unit/test_locking.py`. The fuzz layer is
 `uv run pytest -m fuzz -s tests/fuzz` (never in CI; docs/TESTING.md); it found no deadlock and
 no overlap in the real scheme and caught all four schemes that are wrong on purpose. Next, when

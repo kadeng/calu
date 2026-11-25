@@ -122,6 +122,7 @@ import os
 import platform
 import re
 import socket
+import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -135,6 +136,7 @@ from pydantic_ai import UsageLimits
 from pydantic_ai.models import Model
 
 from calu import __version__, asuser, human_diffs, machine
+from calu.call_locks import CallLocks
 from calu.changes import default_root
 from calu.checkers import (
     CheckContext,
@@ -174,7 +176,7 @@ from calu.claude.runner import (
     Verdict,
     runs_in_background,
 )
-from calu.claude.sdk_runner import AGENT_TOOLS
+from calu.claude.sdk_runner import AGENT_TOOLS, HOOK_TIMEOUT_S
 from calu.claude.transcripts import unwitnessed_turn
 from calu.clock import ClockJump
 from calu.comments import Comment, format_comment, map_selection
@@ -507,6 +509,11 @@ def _message_text(tool_input: dict[str, Any]) -> str:
     return value if isinstance(value, str) else str(value or "")
 
 
+LOCK_HOOK_MARGIN_S = 30.0
+"""Seconds kept back from the PreToolUse hook's timeout (`HOOK_TIMEOUT_S`) when an approved
+call waits for its locks there, so that the hook answers before Claude Code gives up on it."""
+
+
 class SessionError(Exception):
     """A request cannot be served in the current state (reported to the client)."""
 
@@ -593,6 +600,12 @@ class Session:
         self.checkouts = Checkouts(workspace)
         """The main checkout and the git worktrees of the project (`calu.checkouts`, D251);
         read again at the start and before every step (`_refresh_checkouts`)."""
+        self.locks = CallLocks(
+            self.config.locking, self.step_checkouts, self.checkouts.of, workspace
+        )
+        """The locks of the session's tool calls (`calu.call_locks`, D276): taken for an
+        approved command or edit before it runs, given back with its tool result. With
+        `locking.enabled` off the same calls take no lock."""
         self.honesty = HonestyState(
             workspace, self.config.honesty.max_open_marks, self.config.honesty.sufficient_trust
         )
@@ -3015,6 +3028,7 @@ class Session:
                 # An honesty review in flight ends with the run; it has verified nothing.
                 self._review_run.scope.cancel()
             with anyio.CancelScope(shield=True):
+                self.locks.close()  # every lock and ticket of the session (D276)
                 await self.desk.cancel_all("The Claude session ended.")
                 if self._run_state.queue:  # messages Claude did not read are lost with the session
                     self._run_state.queue.clear()
@@ -3517,6 +3531,26 @@ class Session:
         """
         if step.tool_name == HANDBACK_TOOL and step.agent_id is not None:
             return await self._handback(step)
+        started = time.monotonic()
+        self.locks.issue(step)  # its place in its agent's order, before its check (D276)
+        try:
+            return await self._checked(step, started)
+        except BaseException:
+            # A cancelled hook or an unexpected error: the call gives up its turn, so that its
+            # agent's later calls need not wait for it.
+            self.locks.withdraw(step)
+            raise
+
+    async def _checked(self, step: Step, started: float) -> GateResult:
+        """Implement `pre_tool_use` after the call's ticket was issued.
+
+        Args:
+            step: The tool call.
+            started: When `pre_tool_use` began (`time.monotonic`), for the lock wait's budget.
+
+        Returns:
+            As `pre_tool_use`.
+        """
         pending = PendingNarration(self._run_state.claude_outputs.pop(step.agent_id, []))
         step_id: int | None = None
         expected: str | None = None
@@ -3572,11 +3606,34 @@ class Session:
                 self._run_state.peek(step.tool_use_id or "").running = False
                 self.write_sets.drop_before(step.tool_use_id or "")
                 self._run_state.release(step.tool_use_id or "")
-        if self.gate.last_look(result, source):
-            result, source, kept = await self._held_late(step, step_id, decided, result, source)
-            comment = comment if kept else ""
-        # No await stands between the last look (inside `_held_late`, or the one above) and
-        # the answer to Claude Code.
+        while True:
+            if self.gate.last_look(result, source):
+                result, source, kept = await self._held_late(step, step_id, decided, result, source)
+                comment = comment if kept else ""
+            if not result.decision.approves:
+                break
+            # An approved command or edit takes its locks before it runs (D276), at most for
+            # what is left of the PreToolUse hook's time.
+            left = HOOK_TIMEOUT_S - LOCK_HOOK_MARGIN_S - (time.monotonic() - started)
+            busy = await self.locks.take(step, left)
+            if busy:
+                result = CheckDecision(
+                    decision=Decision.DENY, reason=busy, step_summary=result.step_summary
+                )
+                source, comment = "locks", ""
+                self._run_state.peek(step.tool_use_id or "").running = False
+                self.write_sets.drop_before(step.tool_use_id or "")
+                self._run_state.release(step.tool_use_id or "")
+                break
+            if not self.gate.last_look(result, source):
+                break
+            # An escalation came up while the call waited for its locks: a held call holds no
+            # lock, so it gives them back and is looked at again.
+            self.locks.release(step)
+        if result.decision is Decision.DENY:
+            self.locks.withdraw(step)
+        # No await stands between the last look (above, or inside `_held_late`) and the answer
+        # to Claude Code.
         if result.decision is Decision.ESCALATE:
             self.desk.expect_ask(step, source)
             if step.tool_use_id:
@@ -3782,11 +3839,20 @@ class Session:
             cannot be stored, the step is denied with `DB_UNREACHABLE`, because no human could
             see it.
         """
+        # No call holds locks while a person decides about it (D276): a call that Claude Code
+        # asks about after the hook allowed it gives them back first.
+        self.locks.release(step)
         answer = (await self._ask(step)).answer
-        if answer.allow:
-            refused, _ = await self._finalize_for_commit(step)
-            if refused:
-                return HumanAnswer(allow=False, message=refused, note=answer.note)
+        if not answer.allow:
+            self.locks.withdraw(step)
+            return answer
+        refused, _ = await self._finalize_for_commit(step)
+        if refused:
+            self.locks.withdraw(step)
+            return HumanAnswer(allow=False, message=refused, note=answer.note)
+        busy = await self.locks.take(step, None)
+        if busy:
+            return HumanAnswer(allow=False, message=busy, note=answer.note)
         return answer
 
     async def _ask(self, step: Step) -> Asked:
@@ -4417,6 +4483,9 @@ class Session:
                         call.changeset = None
                         self._run_state.release(event.tool_use_id)
                         self.desk.call_ended(event.tool_use_id)
+                        # After the write set was measured, so that no other call's edit lands
+                        # in it (D276).
+                        self.locks.call_ended(event.tool_use_id)
                     # A runner that has no hook after the call (and every failed or denied
                     # call) reaches the honesty state here; `_apply_honesty` never raises.
                     await self._apply_honesty(event.tool_use_id, ok=not event.is_error)

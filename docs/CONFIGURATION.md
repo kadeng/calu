@@ -118,6 +118,12 @@ This file is generated from `calu.config` by `calu.configdoc`; a test keeps the 
 | `changes.max_file_bytes` | int | `1000000` | Files above this size are reported by path and size, but their content is not shown. |
 | `changes.max_patch_bytes` | int | `400000` | Upper bound on the patch a checker or a client ever sees; a checker shown a cut patch cannot approve (it escalates). |
 | `changes.always_capture` | list of text | `[".env"]` | Paths to snapshot even though a `.gitignore` covers them, so that a write to them is noticed; they are the ones that matter most and the ones git would otherwise hide. |
+| `locking` | LockingConfig | see below | Locks that keep edits away from running commands (agent/records/notes/locking.md); off by default. |
+| `locking.enabled` | bool | `false` | Take the locks. Off, every call runs as soon as it is approved, as before. |
+| `locking.backend` | one of `files`, `process` | `"files"` | Where the locks live: "files" shares them with every Calu process of this user on this machine (a state file in `directory`); "process" keeps them inside this Calu process, which covers all sessions of one `calu serve`. |
+| `locking.directory` | text | `""` | The directory of the "files" backend; blank uses `$XDG_STATE_HOME/calu/locks` (or `~/.local/state/calu/locks`). Every Calu process that shares the locks names the same one. |
+| `locking.command_wait_s` | number | `600.0` | How long a command waits for its locks before it is denied. It never waits longer than Claude Code lets the permission check take (about 15 minutes, minus the check itself). |
+| `locking.edit_wait_s` | number | `600.0` | How long an edit waits for its locks before it is denied, capped the same way. |
 | `web` | WebConfig | see below | Settings of the web interface. |
 | `web.git_url_template` | text | `""` | URL of one commit in whatever git browser the project uses, with `{commit}` and `{remote}` as placeholders, e.g. "http://localhost:8080/calu/commit/{commit}". Empty guesses the URL from the project's git remote, which works for GitHub, GitLab and Bitbucket; calu does not browse git itself. |
 | `web.pane_frame_ancestors` | list of text | (empty) | Who may show the chat pane (`/pane`) in a frame, as CSP source expressions such as "'self'" or "http://localhost:*" (agent/records/PLAN.md D261). Empty allows this interface and pages of this machine's loopback addresses ("'self'", "http://localhost:*", "http://127.0.0.1:*"), e.g. a local Jupyter. Every other page of `calu web` cannot be framed. Read when `calu web` starts. |

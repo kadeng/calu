@@ -633,6 +633,41 @@ calu config set auto_escalate.subagents true  # ... and every subagent's result
   changes.
 - While a session cannot read its configuration, all three switches count as on.
 
+### Locks between agents (optional)
+
+Several agents can work at once: the main agent, its subagents, agents in other worktrees. Then
+one agent's edit can land while another agent's command runs, and the command runs code that
+its checker never saw. With `locking.enabled`, Calu keeps edits and commands apart:
+
+| Call | Waits for |
+|---|---|
+| A command (Bash) | the edits and commands running in its worktrees (that of its working directory and of its `cd` targets), and an edit outside the worktrees |
+| An edit of a file in a worktree | a command running in that worktree, and another edit of the same file |
+| An edit of a file outside every worktree | every running command |
+
+- The calls of one agent get their locks in the order the agent issued them.
+- Calu takes a call's locks after its check approved it, and gives them back when the call has
+  ended. A call that waits for a person holds no lock.
+- A call that does not get its locks within its wait does not run. Claude is told that nothing
+  ran and that the call can be repeated.
+
+```bash
+calu config set locking.enabled true
+calu config set locking.command_wait_s 300   # how long a command waits for its locks
+```
+
+| Setting | Effect |
+|---|---|
+| `locking.enabled` | Take the locks. Off by default: every approved call runs at once, as before |
+| `locking.backend` | `files` (default): the locks are shared by every Calu process of your user on this machine. `process`: only by the sessions of one Calu process |
+| `locking.directory` | Where the `files` backend keeps its state; blank means `~/.local/state/calu/locks` |
+| `locking.command_wait_s`, `locking.edit_wait_s` | How long a command or an edit waits for its locks: 600 s by default, at most 3600 s. A wait never outlasts the time Claude Code gives the permission check (about 15 minutes) |
+
+The locks cover a call while it runs. A process that keeps running after its call (a background
+shell, a server) is not covered, and neither are changes made outside Calu. A new setting
+applies to sessions that start afterwards. The design and its decisions:
+`agent/records/notes/locking.md`.
+
 ---
 
 # Part 2: Tasks
