@@ -6,6 +6,14 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
 
 ## Pick up here
 
+### Newest: the security pass (D279, 2026-11-25), in progress
+
+Two adversarial reviews (an external attacker; the web interface) and the owner's decisions are
+in PLAN D279. Order of work: the quick wins Q1-Q7, then S1 (warnings), S2 (the place file
+split, 3,000,000 SCRAM iterations, `auth_delay`), S3 (the web password instead of the printed
+token; the pane asks for it), S4 (the PyCharm approval). The proof scripts of the reviews are not
+in the repository; some describe ways around the checkers.
+
 ### Newest: locking reviewed twice and wired in, off by default (D274-D276, 2026-11-25)
 
 A second adversarial review (of the file backend and the wiring) found twelve defects; all are
