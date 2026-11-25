@@ -439,20 +439,30 @@ class WriteSets:
             found.append((store, f"{checkout.label}/"))
         return found
 
-    def drop_before(self, tool_use_id: str) -> None:
+    def drop_before(self, tool_use_id: str) -> tuple[int | None, str] | None:
         """Forget the "before" snapshot of a call that does not start yet after all.
 
         For an approved command that is held behind an escalation after its snapshot was
-        taken (`Session._held_late`): the snapshot is taken again when the command is
-        released, so that what other calls write meanwhile is not counted as its write set.
+        taken (`Session._checked`), or whose locks are given back while a person decides about
+        it (`Session.ask`, D276): the snapshot is taken again when the command may run, so that
+        what other calls write meanwhile is not counted as its write set, and its open window
+        does not mark the windows of other commands as overlapping.
 
         Args:
             tool_use_id: Claude's id of the call; a call without a snapshot is ignored.
+
+        Returns:
+            (its `steps` row, its summary) as given to `snapshot_before`, to take the snapshot
+            again with; None when the call had no snapshot.
         """
         call = self._run().calls.get(tool_use_id)
-        if call is not None:
+        dropped = None
+        if call is not None and call.before is not None:
+            _windows, step_id, summary = call.before
+            dropped = (step_id, summary)
             call.before = None
         self._opened.pop(tool_use_id, None)
+        return dropped
 
     async def snapshot_after(self, tool_use_id: str) -> None:
         """Measure a finished command's write set if the review has not done it already (D31).

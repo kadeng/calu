@@ -56,7 +56,7 @@ MAX_WAIT_S = 3600.0
 """The longest wait a call may get, for commands and edits alike (`LockTimeouts` maxima)."""
 
 WAIT_THREADS = 64
-"""How many calls of the process may wait for their locks at the same time (worker threads)."""
+"""How many calls of one session may wait for their locks at the same time (worker threads)."""
 
 _spaces: dict[str, LockSpace] = {}
 _spaces_mutex = threading.Lock()
@@ -85,7 +85,8 @@ def shared_space(config: LockingConfig) -> LockSpace:
         The space.
 
     Raises:
-        OSError: The directory of the "files" backend cannot be created.
+        OSError: The directory of the "files" backend cannot be created, belongs to another
+            user or can be written by others, or `/proc` cannot be read (`FileLockSpace`).
     """
     if config.backend == "process":
         name = "process"
@@ -196,23 +197,26 @@ class CallLocks:
     def withdraw(self, step: Step) -> None:
         """Give up the call's turn: it was denied, or it will run without its locks being taken.
 
-        A lock call of this tool call that is still waiting is cancelled.
+        A lock call of this tool call that is still waiting is cancelled. Never raises: a
+        backend error is logged (see `_give_back`).
 
         Args:
             step: The tool call.
         """
+        key = step.tool_use_id or ""
         with self._mutex:
-            ticket = self._tickets.pop(step.tool_use_id or "", None)
+            ticket = self._tickets.pop(key, None)
         if ticket is not None:
-            ticket.withdraw()
+            _give_back(ticket, key)
 
     async def take(self, step: Step, budget_s: float | None) -> str:
         """Take the locks of an approved call; wait at most the configured wait and `budget_s`.
 
-        The first `take` of a call uses its ticket; a later one (after `release`, when a person
-        decided) enters the queues at once. The wait runs in a worker thread; when this
-        coroutine is cancelled, the ticket is withdrawn and a lease that arrives anyway is
-        given back.
+        The first `take` of a call uses its ticket. A later one (after `release`, e.g. when a
+        person decided) enters the queues at once, with a ticket of its own (agent
+        "retake:<tool call id>"), so that a cancellation ends its wait, too. The wait runs in a
+        worker thread; when this coroutine is cancelled, the ticket is withdrawn and a lease
+        that arrives anyway is given back.
 
         Args:
             step: The approved tool call.
@@ -233,14 +237,12 @@ class CallLocks:
             ticket = self._tickets.pop(key, None)
             old = self._leases.pop(key, None)
         if old is not None:
-            old.release()
+            _give_back(old, key)
+        if ticket is None:
+            ticket = self.scheme.issue(f"retake:{key}")
         try:
-            if isinstance(self.scheme, NoLockingScheme):
-                lease = self._lock_call(step, ticket, budget_s)  # takes no lock, never waits
-            else:
-                lease = await self._in_thread(
-                    lambda: self._lock_call(step, ticket, budget_s), ticket
-                )
+            # Also with locking off: the plan resolves paths and may run git (`_plan`).
+            lease = await self._in_thread(lambda: self._lock_call(step, ticket, budget_s), ticket)
         except LockTimeoutError as exc:
             return _busy(exc, self._plan(step).labels)
         except LockCancelledError:
@@ -255,16 +257,21 @@ class CallLocks:
     def release(self, step: Step) -> None:
         """Give back the locks of a call that holds them, e.g. before a person decides about it.
 
+        Never raises: a backend error is logged (see `_give_back`).
+
         Args:
             step: The tool call.
         """
+        key = step.tool_use_id or ""
         with self._mutex:
-            lease = self._leases.pop(step.tool_use_id or "", None)
+            lease = self._leases.pop(key, None)
         if lease is not None:
-            lease.release()
+            _give_back(lease, key)
 
     def call_ended(self, tool_use_id: str) -> None:
         """Give back the locks of a call that ended (its tool result arrived), and its ticket.
+
+        Never raises: a backend error is logged (see `_give_back`).
 
         Args:
             tool_use_id: The call's id.
@@ -273,19 +280,23 @@ class CallLocks:
             lease = self._leases.pop(tool_use_id, None)
             ticket = self._tickets.pop(tool_use_id, None)
         if lease is not None:
-            lease.release()
+            _give_back(lease, tool_use_id)
         if ticket is not None:
-            ticket.withdraw()
+            _give_back(ticket, tool_use_id)
 
     def close(self) -> None:
-        """Give back every lock and ticket of the session (its run ended)."""
+        """Give back every lock and ticket of the session (its run ended).
+
+        Never raises: each lease and ticket is given back on its own, and a backend error is
+        logged (see `_give_back`).
+        """
         with self._mutex:
-            leases, self._leases = list(self._leases.values()), {}
-            tickets, self._tickets = list(self._tickets.values()), {}
-        for lease in leases:
-            lease.release()
-        for ticket in tickets:
-            ticket.withdraw()
+            leases, self._leases = dict(self._leases), {}
+            tickets, self._tickets = dict(self._tickets), {}
+        for key, lease in leases.items():
+            _give_back(lease, key)
+        for key, ticket in tickets.items():
+            _give_back(ticket, key)
 
     def holding(self) -> dict[str, tuple[tuple[str, str], ...]]:
         """Return the calls that hold locks now, for diagnostics and tests.
@@ -403,7 +414,7 @@ class CallLocks:
                 if not cancelled:
                     arrived.append(lease)
                     return lease
-            lease.release()
+            _give_back(lease, lease.operation.owner)
             raise LockCancelledError(lease.operation, lease.waited_s)
 
         try:
@@ -415,10 +426,30 @@ class CallLocks:
                 cancelled = True
                 late = arrived[0] if arrived else None
             if late is not None:
-                late.release()
+                _give_back(late, late.operation.owner)
             if ticket is not None:
-                ticket.withdraw()
+                _give_back(ticket, ticket.agent)
             raise
+
+
+def _give_back(held: Lease | Ticket, key: str) -> None:
+    """Release a lease or withdraw a ticket; log a failure instead of raising it.
+
+    A lease counts as released even when the backend failed (`Lease.release`). The file
+    backend removes such a forgotten entry with its process's next change of the state; the
+    other processes remove it when the process ends (agent/records/notes/locking.md, section 8).
+
+    Args:
+        held: The lease or ticket.
+        key: The tool call's id, for the log.
+    """
+    try:
+        if isinstance(held, Lease):
+            held.release()
+        else:
+            held.withdraw()
+    except Exception:
+        log.exception("giving back the locks of %s failed", key)
 
 
 def _busy(exc: LockTimeoutError, labels: dict[str, str]) -> str:

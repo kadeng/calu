@@ -684,11 +684,12 @@ class LockingConfig(ConfigModel):
     """Take the locks. Off, every call runs as soon as it is approved, as before."""
     backend: LockingBackend = "files"
     """Where the locks live: "files" shares them with every Calu process of this user on this
-    machine (a state file in `directory`); "process" keeps them inside this Calu process, which
-    covers all sessions of one `calu serve`."""
+    machine and in the same container (state files in `directory`); "process" keeps them inside
+    this Calu process, which covers all sessions of one `calu serve`."""
     directory: str = ""
     """The directory of the "files" backend; blank uses `$XDG_STATE_HOME/calu/locks` (or
-    `~/.local/state/calu/locks`). Every Calu process that shares the locks names the same one."""
+    `~/.local/state/calu/locks`). Every Calu process that shares the locks names the same one.
+    It must belong to the user and must not be writable by the group or others."""
     command_wait_s: float = Field(default=600.0, gt=0, le=3600)
     """How long a command waits for its locks before it is denied. It never waits longer than
     Claude Code lets the permission check take (about 15 minutes, minus the check itself)."""

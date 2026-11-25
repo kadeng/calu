@@ -6,7 +6,16 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
 
 ## Pick up here
 
-### Newest: the locking component (D274, 2026-11-25), built in isolation
+### Newest: locking reviewed twice and wired in, off by default (D274-D276, 2026-11-25)
+
+A second adversarial review (of the file backend and the wiring) found twelve defects; all are
+fixed or documented (PLAN D275 and D276, "Second review"). The most important: a command's
+write-set snapshot now opens after its locks, and the file backend removes an entry only on
+proof that its process ended, with one state file per boot and pid namespace. The user
+documentation (DOCUMENTATION.md, "Locks between agents") says what locking guarantees, what it
+does not, and when to switch it on.
+
+### The locking component (D274, 2026-11-25)
 
 The owner's locking scheme (design and decisions: agent/records/notes/locking.md) is in
 `src/calu/locking/`, with the global lock taken last (the owner's choice of 2026-11-25):
@@ -23,11 +32,10 @@ into the session (`calu.call_locks`, D276) followed: off by default (`locking.en
 it off every call goes through the same path on the no-op scheme. Next, when the owner says so:
 the second check of a command whose worktree changed since its check (knowledge), and the other
 "Not built" items of agent/records/notes/locking.md section 9.
-Deterministic tests are in `tests/unit/test_locking.py`. The fuzz layer is
-`uv run pytest -m fuzz -s tests/fuzz` (never in CI; docs/TESTING.md); it found no deadlock and
-no overlap in the real scheme and caught all four schemes that are wrong on purpose. Next, when
-the owner says so: a backend on file locks (flock) or on PostgreSQL (advisory locks), run under
-the same fuzz harness; then the wiring into the session as the note describes.
+Deterministic tests are in `tests/unit/test_locking.py`, `test_locking_files.py` and
+`test_call_locks.py`. The fuzz layer is `uv run pytest -m fuzz -s tests/fuzz` (never in CI;
+docs/TESTING.md); it found no deadlock and no overlap in the real scheme, on both backends, and
+caught all six schemes that are wrong on purpose.
 
 ### First: one calu login (D265, 2026-11-24) and the migration squash
 

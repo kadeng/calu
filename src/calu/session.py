@@ -2615,6 +2615,12 @@ class Session:
         are recorded and a commit made in a clean honesty state is certified
         (`_apply_honesty`).
 
+        With locking on (D276), the command still holds its locks here, also while a person
+        decides about its write set: they are given back with its tool result. So no other
+        call writes in the command's checkouts until the change stands or was undone, and the
+        undo cannot overwrite another call's edit. Other sessions that share the locks then
+        wait, too (agent/records/notes/locking.md, section 9).
+
         Args:
             step: The tool call that has just run.
 
@@ -3604,11 +3610,14 @@ class Session:
                 )
                 source, comment = "traces", ""
                 self._run_state.peek(step.tool_use_id or "").running = False
-                self.write_sets.drop_before(step.tool_use_id or "")
                 self._run_state.release(step.tool_use_id or "")
+        key = step.tool_use_id or ""
         while True:
             if self.gate.last_look(result, source):
-                result, source, kept = await self._held_late(step, step_id, decided, result, source)
+                # A hold after a lock wait gets what is left of the hook's time, at most.
+                hook_left = HOOK_TIMEOUT_S - LOCK_HOOK_MARGIN_S - (time.monotonic() - started)
+                decided.hold_left = max(0.0, min(decided.hold_left, hook_left))
+                result, source, kept = await self._held_late(step, decided, result, source)
                 comment = comment if kept else ""
             if not result.decision.approves:
                 break
@@ -3621,15 +3630,30 @@ class Session:
                     decision=Decision.DENY, reason=busy, step_summary=result.step_summary
                 )
                 source, comment = "locks", ""
-                self._run_state.peek(step.tool_use_id or "").running = False
-                self.write_sets.drop_before(step.tool_use_id or "")
-                self._run_state.release(step.tool_use_id or "")
+                self._run_state.peek(key).running = False
+                self._run_state.release(key)
                 break
+            if decided.route in (Route.COMMAND, Route.CHANGESET):
+                # The "before" of the command's write set (D31). It holds its locks now, so what
+                # other calls wrote while it waited for them is not counted as its write set.
+                # Edits need no snapshot: their content came through the gate. (The changeset
+                # route is only reached by a tool that the tool policy sends there.)
+                try:
+                    await self.write_sets.snapshot_before(step, step_id, result.step_summary)
+                except Exception as exc:
+                    log.exception("the snapshot before a command failed")
+                    result, source, comment = unrecorded(result, exc), "internal", ""
+                    self.locks.release(step)
+                    self.write_sets.drop_before(key)
+                    self._run_state.peek(key).running = False
+                    self._run_state.release(key)
+                    break
             if not self.gate.last_look(result, source):
                 break
             # An escalation came up while the call waited for its locks: a held call holds no
-            # lock, so it gives them back and is looked at again.
+            # lock and has no open write-set window, so it gives both up and is looked at again.
             self.locks.release(step)
+            self.write_sets.drop_before(key)
         if result.decision is Decision.DENY:
             self.locks.withdraw(step)
         # No await stands between the last look (above, or inside `_held_late`) and the answer
@@ -3656,7 +3680,6 @@ class Session:
     async def _held_late(
         self,
         step: Step,
-        step_id: int | None,
         decided: Decided,
         result: CheckDecision,
         source: str,
@@ -3670,21 +3693,23 @@ class Session:
             look (`StepGate.last_look`) ── nothing holds ──► return: the approval stands
               │ held
               ▼
-            the call no longer counts as running, its "before" snapshot is dropped
+            the call no longer counts as running, its "before" snapshot (if any) is dropped
               │
               ▼
-            wait (`StepGate.wait_again`) ── `HOLD_BUDGET_S` used up ──► ESCALATE (source "held")
-              │ released
+            wait (`StepGate.wait_again`) ── `decided.hold_left` used up ──► ESCALATE
+              │ released                                                  (source "held")
               ▼
-            the call counts as running, the snapshot is taken again ──► look
+            the call counts as running again ──► look
 
-        Side effects: those of the diagram, and the session state follows them. No await
-        stands between the look that ends the loop and the return, so the caller answers
-        Claude Code without another look.
+        The caller then takes the call's locks and its "before" snapshot (`_checked`, D276).
+
+        Side effects: those of the diagram, and the session state follows them;
+        `decided.hold_left` is lowered by the time spent waiting. No await stands between the
+        look that ends the loop and the return, so the caller answers Claude Code without
+        another look.
 
         Args:
             step: The tool call.
-            step_id: Its `steps` row, or None if it could not be stored.
             decided: What `StepGate.decide` returned (route and what is left of the hold).
             result: The recorded approval.
             source: Who decided it.
@@ -3694,21 +3719,20 @@ class Session:
             in here yields an ESCALATE with source "internal", never an approval.
         """
         key = step.tool_use_id or ""
-        left = decided.hold_left
         try:
             while self.gate.last_look(result, source):
                 self._run_state.peek(key).running = False
                 self.write_sets.drop_before(key)
                 await self._refresh_state()
-                replaced, left = await self.gate.wait_again(step, result, source, left)
+                replaced, decided.hold_left = await self.gate.wait_again(
+                    step, result, source, decided.hold_left
+                )
                 if replaced is not None:
                     self._run_state.release(key)
                     return replaced, "held", False
                 if step.tool_use_id:
                     self._run_state.call(step.tool_use_id).running = True
                 await self._refresh_state()
-                if decided.route in (Route.COMMAND, Route.CHANGESET):
-                    await self.write_sets.snapshot_before(step, step_id, result.step_summary)
         except Exception as exc:
             log.exception("holding an approved step failed")
             self._run_state.peek(key).running = False
@@ -3723,8 +3747,9 @@ class Session:
         """Record the decision about a step everywhere it belongs, after it was made.
 
         Side effects: adds the step to the checkers' context, records the checker runs and the
-        decision in the database, emits `check.result`, counts an
-        approved call as running, and takes the "before" snapshot of an approved command (D31).
+        decision in the database, emits `check.result`, and counts an approved call as running.
+        The "before" snapshot of an approved command (D31) comes later, once the command holds
+        its locks (`_checked`, D276).
 
         Args:
             step: The tool call.
@@ -3805,11 +3830,6 @@ class Session:
         if result.decision.approves and step.tool_use_id:
             self._run_state.call(step.tool_use_id).running = True
         await self._refresh_state()
-        if result.decision.approves and route in (Route.COMMAND, Route.CHANGESET):
-            # The command runs as soon as this returns, so this is the "before" of its write set
-            # (D31). Edits need no snapshot: their content came through the gate. (The changeset
-            # route is only reached by a tool that the tool policy sends there.)
-            await self.write_sets.snapshot_before(step, step_id, result.step_summary)
         return comment
 
     async def ask(self, step: Step) -> HumanAnswer:
@@ -3840,19 +3860,30 @@ class Session:
             see it.
         """
         # No call holds locks while a person decides about it (D276): a call that Claude Code
-        # asks about after the hook allowed it gives them back first.
+        # asks about after the hook allowed it gives them back first, and closes its write-set
+        # window (D31) until it may run. (A command whose write set a person reviews after it
+        # ran keeps its locks: see `review_write_set`.)
         self.locks.release(step)
-        answer = (await self._ask(step)).answer
-        if not answer.allow:
-            self.locks.withdraw(step)
-            return answer
-        refused, _ = await self._finalize_for_commit(step)
-        if refused:
-            self.locks.withdraw(step)
-            return HumanAnswer(allow=False, message=refused, note=answer.note)
-        busy = await self.locks.take(step, None)
-        if busy:
-            return HumanAnswer(allow=False, message=busy, note=answer.note)
+        before = self.write_sets.drop_before(step.tool_use_id or "")
+        allowed = False
+        try:
+            answer = (await self._ask(step)).answer
+            if not answer.allow:
+                return answer
+            refused, _ = await self._finalize_for_commit(step)
+            if refused:
+                return HumanAnswer(allow=False, message=refused, note=answer.note)
+            busy = await self.locks.take(step, None)
+            if busy:
+                return HumanAnswer(allow=False, message=busy, note=answer.note)
+            allowed = True
+        finally:
+            if not allowed:
+                # Denied, refused, or this call was cancelled: the call's turn is given up, so
+                # that its agent's later calls need not wait for it.
+                self.locks.withdraw(step)
+        if before is not None:
+            await self.write_sets.snapshot_before(step, *before)
         return answer
 
     async def _ask(self, step: Step) -> Asked:

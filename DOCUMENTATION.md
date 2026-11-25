@@ -635,9 +635,10 @@ calu config set auto_escalate.subagents true  # ... and every subagent's result
 
 ### Locks between agents (optional)
 
-Several agents can work at once: the main agent, its subagents, agents in other worktrees. Then
-one agent's edit can land while another agent's command runs, and the command runs code that
-its checker never saw. With `locking.enabled`, Calu keeps edits and commands apart:
+Several agents can work at once: the main agent, its subagents, agents in other worktrees, other
+sessions on the same checkout. Then one agent's edit can land while another agent's command
+runs, and the command runs code that its checker never saw. With `locking.enabled`, Calu keeps
+edits and commands apart:
 
 | Call | Waits for |
 |---|---|
@@ -647,9 +648,55 @@ its checker never saw. With `locking.enabled`, Calu keeps edits and commands apa
 
 - The calls of one agent get their locks in the order the agent issued them.
 - Calu takes a call's locks after its check approved it, and gives them back when the call has
-  ended. A call that waits for a person holds no lock.
+  ended. A call that waits for a person before it runs holds no lock.
 - A call that does not get its locks within its wait does not run. Claude is told that nothing
   ran and that the call can be repeated.
+
+**What locking guarantees**, for the calls of the sessions that share the locks (below):
+
+- No edit lands in a worktree while a command runs there, and two commands never run in one
+  worktree at once. No edit outside the worktrees lands while any command runs.
+- The write set of a command (`changes.review`) contains only what happened while the command
+  held its locks, so the review judges that command's changes and not another agent's edit.
+- No deadlock: every wait has a bound, and a call that waited too long is denied, not run.
+- Locking never decides whether a call may run. The checkers, Claude Code's own rules and, for
+  an escalation, a person decide as before.
+
+**What it does not guarantee:**
+
+- A command is not checked again when a file changed between its check and the moment it got
+  its locks. Locking keeps the tree still while the command runs, not since it was checked.
+- A process that keeps running after its call ended (a background shell, a server) is not
+  covered, and neither are changes made by people or by programs outside Calu.
+- The `files` backend covers the Calu processes of your user on this machine in the same
+  container (pid namespace). Calu in another container or on another machine that shares the
+  directory does not share the locks. The `process` backend covers the sessions of one Calu
+  process only.
+- A command in the main checkout does not lock the worktrees that Claude Code keeps inside the
+  project (`.claude/worktrees/`).
+- A command that writes outside its worktrees can run at the same time as a command in another
+  worktree.
+
+**Upsides:** commands such as builds and tests run on a tree that does not change under them;
+the write-set review stays exact when agents work in parallel; a misbehaving agent cannot use
+one call to change what another call of it is running.
+
+**Downsides:** less parallel work. Commands in one worktree run one after the other; a long
+command makes the edits in its worktree wait; an edit outside the worktrees waits for every
+running command, and new commands wait behind it. A call that waits too long is denied, and
+Claude has to repeat it. While a person decides about a command's write set, the command keeps
+its locks, so edits in its worktree and outside every worktree wait meanwhile, in every
+session that shares the locks. Each command and edit costs about a millisecond more.
+
+**When to switch it on:**
+
+- You do not fully trust the agents: a main agent or subagents that work on untrusted input,
+  or a model you have not tried yet. Combine it with the write-set review (`changes.review`).
+- Several agents or sessions work on one checkout at the same time (subagents, background
+  agents, agent teams, two `calu run` in one project), and you rely on the checkers' approvals
+  and the write-set review.
+
+One agent that works step by step gains nothing from it; leave it off then.
 
 ```bash
 calu config set locking.enabled true
@@ -660,12 +707,11 @@ calu config set locking.command_wait_s 300   # how long a command waits for its 
 |---|---|
 | `locking.enabled` | Take the locks. Off by default: every approved call runs at once, as before |
 | `locking.backend` | `files` (default): the locks are shared by every Calu process of your user on this machine. `process`: only by the sessions of one Calu process |
-| `locking.directory` | Where the `files` backend keeps its state; blank means `~/.local/state/calu/locks` |
+| `locking.directory` | Where the `files` backend keeps its state; blank means `~/.local/state/calu/locks`. It must belong to you and must not be writable by the group or others |
 | `locking.command_wait_s`, `locking.edit_wait_s` | How long a command or an edit waits for its locks: 600 s by default, at most 3600 s. A wait never outlasts the time Claude Code gives the permission check (about 15 minutes) |
 
-The locks cover a call while it runs. A process that keeps running after its call (a background
-shell, a server) is not covered, and neither are changes made outside Calu. A new setting
-applies to sessions that start afterwards. The design and its decisions:
+A new setting applies to sessions that start afterwards. When the lock directory cannot be used,
+every command and edit is denied with the reason. The design and its decisions:
 `agent/records/notes/locking.md`.
 
 ---

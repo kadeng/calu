@@ -170,24 +170,56 @@ running command.
   process, so this backend covers them.
 - **Processes of one user on one machine** (`FileLockSpace`, PLAN.md D275): two `calu run`, or
   `calu serve` and `calu run`, on the same checkout. Files, not PostgreSQL, for these reasons:
-  - A process that dies is recognised by its process id (with its start time and the boot id),
-    and its holds and requests are removed; no server has to notice a closed connection.
+  - A process that dies is recognised by its process id and start time, and its holds and
+    requests are removed; no server has to notice a closed connection.
   - No database round trip per lock call, and locking works while the database is away.
   - It is tested across real processes in the unit layer, without a database.
   - The checkouts it protects are local to the machine anyway.
 
-  How it works: one state file (`locks.json`) holds the FIFO queue of every lock. A short
-  `flock` on a separate file guards each change; flock belongs to an open file description, and
-  every change opens the file anew, so threads exclude each other as well as processes. The new
-  state is written to a temporary file and renamed, so a reader always sees a whole state.
-  Grants follow the same rules as the thread backend (the same algorithm). A waiting request
-  polls its entry, from every millisecond up to every 20 ms, and a change of its own lock in its
-  own process wakes it at once. Every change removes the entries of processes that no longer run;
-  a waiting request looks for them on its lock every 0.2 s, so a killed holder is gone within a
-  fraction of a second. The holds of a process belong to it: its threads release them, other
-  processes cannot. The directory is private to the user (mode 0o700).
+  How it works: one state file holds the FIFO queue of every lock. A `flock` on a separate
+  mutex file guards each change; flock belongs to an open file description, and every change
+  opens the file anew, so threads exclude each other as well as processes. A change writes the
+  new state (only when it changed) to a temporary file and renames it, so a reader always sees a
+  whole state. Grants follow the same rules as the thread backend (the same algorithm). A
+  waiting request polls its entry, from every millisecond up to every 0.2 s, and a change of its
+  own lock in its own process wakes it at once. Every change removes the entries of processes
+  that ended; a waiting request looks for them on its lock every 0.2 s, so a killed holder is
+  gone within a fraction of a second. The holds of a process belong to it: its threads release
+  them, other processes cannot.
 
-  Costs: a change takes about 0.2 ms, a read 25 us. Under the fuzzer's load (twelve agents, very
+  Decisions from the second review (2026-11-25):
+  - **One process table per file.** Process ids can only be compared within one boot of one
+    kernel and one pid namespace (the "same" relation of `calu.machine`, D202). The files are
+    named after both: `locks.<16 hex digits of the boot id>.<pid namespace inode>.json` and
+    `.mutex`. Processes in another container or on another machine that share the directory
+    (an NFS home) use other files: they do not share the locks, and they cannot remove each
+    other's entries. Before, an entry of another namespace or boot looked dead and was removed,
+    so a lock could be granted twice. Files of earlier boots stay behind (two small files per
+    boot); they can be deleted while no Calu runs.
+  - **Removal only on proof.** An entry is removed when no process has its id, a process with
+    another start time has it, or the process ended and was not reaped (state Z or X). When
+    `/proc` cannot be read (e.g. too many open files), the entry stays; when this process cannot
+    read its own identity, the change fails, and nothing is remembered from the failed read.
+  - **Forget first, heal later.** A space forgets an entry (release, withdraw, timeout) before
+    the change that removes it; its next change removes own entries it no longer wants. An entry
+    or hold that a change adds counts only when the change was written (the in-memory sets are
+    put back when it fails). A full disk therefore cannot leave a hold that nobody releases.
+  - **Bounded flock.** A busy flock is waited for at most 5 s (`FLOCK_WAIT_S`), then the
+    change fails with `TimeoutError`: a process stopped inside its change (Ctrl-Z, a debugger)
+    holds the flock. The wait runs in the kernel's queue in a helper thread on a `dup` of the
+    descriptor; a retry loop with sleeps cost two thirds of the throughput under contention
+    (3,500 against 10,500 grants in 20 s of four processes with four threads each). A helper
+    that times out stays blocked until it gets the flock and then gives it back at once.
+  - **A private directory.** A directory that belongs to another user or that the group or
+    others can write is refused. The temporary file is created with `O_EXCL|O_NOFOLLOW` after
+    removing whatever has its name, and the state and mutex files are opened with `O_NOFOLLOW`.
+  - Releases run on the event loop (`CallLocks.call_ended`, `release`, `close`), so a stopped
+    process can hold up another process's event loop for up to 5 s; such a release is logged
+    and, as above, healed by the next change.
+
+  Costs: a change takes about 0.2 ms with ten entries, 1.3 ms with 100 and 4.7 ms with 400; a
+  read 25 us. Ten waiting requests in another process cost about 2% of a core (polling every
+  0.2 s; 10% at 20 ms). Under the fuzzer's load (twelve agents, very
   short holds) the file backend handles about 200 calls per second, the thread backend about
   1000; real tool calls take seconds, so the difference does not show. Waking only the waiters of
   the changed lock, not all of them, doubled the file backend's throughput.
@@ -195,7 +227,11 @@ running command.
   Tested: the lock contract runs against both backends; across real processes, four processes
   that count in turns lose no update, requests of several processes are granted in FIFO order,
   the hold of a process killed with SIGKILL is given up within seconds, and an owner is refused
-  across processes. The fuzzer runs on the file backend as well.
+  across processes. In this process: a zombie counts as ended and an unreadable process as
+  alive, a failed write leaves no hold behind, a busy flock ends the change after its wait, a
+  directory others can write is refused, a symlink at the temporary name is not followed, and
+  two spaces of one process keep each other's entries. The fuzzer runs on the file backend as
+  well.
 - **PostgreSQL** (not planned): its advisory locks are reentrant per session, so each lease
   would need a session of its own; a sent lock call does not say when the server queued it, so
   `request` would have to confirm the queued row in `pg_locks`; an unlock must run on the
@@ -216,13 +252,19 @@ PreToolUse hook (Session.pre_tool_use)
   approved  -> take the call's locks: a worker thread waits at most the configured wait and
                the hook's time left (minus 30 s)
                not in time -> DENY "Not run: ... the same call can be repeated"
-               an escalation came up meanwhile (the last look) -> give the locks back, hold the
-               call, take them again; no await between the last look and the answer
+               then a command's "before" snapshot of its write set (D31)
+               an escalation came up meanwhile (the last look) -> give the locks back, drop the
+               snapshot, hold the call (at most the hook's time left), take them again; no
+               await between the last look and the answer
   denied    -> withdraw the ticket
   escalated -> keep the ticket; a person decides
 can_use_tool (Session.ask)
-  give back the locks the call holds (Claude Code asks about a call the hook allowed)
-  the person decides: allowed -> take the locks (configured wait); denied -> withdraw the ticket
+  give back the locks the call holds and drop its snapshot (Claude Code asks about a call the
+  hook allowed)
+  the person decides: allowed -> take the locks (configured wait), then the snapshot again;
+  denied, refused or cancelled -> withdraw the ticket
+PostToolUse (Session.review_write_set)
+  the write-set review; the command still holds its locks, also while a person decides
 tool result (the session's stream)
   after the write set was measured: give back the locks, withdraw a ticket still there
 end of the run: give back every lock and ticket of the session
@@ -240,6 +282,24 @@ end of the run: give back every lock and ticket of the session
 - A lock directory that cannot be used does not stop the session: every command and edit is
   then denied with the reason.
 - A call without a tool call id takes no lock.
+- The "before" snapshot of a command's write set is taken once the command holds its locks.
+  Before the second review it was taken before the lock wait, so an edit that another agent
+  made while the command waited counted as the command's change (a DENY of the review then
+  undid it), and a command that only waited marked the running one's write set as overlapping,
+  which left both unreviewed.
+- A command keeps its locks while a person decides about its write set (PostToolUse): no
+  other call writes in its checkouts before the change stands or was undone, so the undo cannot
+  overwrite another call's edit. The price: for as long as the person takes, edits in those
+  checkouts and edits outside every checkout wait, in every session that shares the locks, and
+  are denied after their wait. Releasing only the global lock at that point is a possible
+  refinement.
+- A second lock call of a call (after `release`, e.g. when a person allowed it) gets a ticket of
+  its own (agent `retake:<id>`), so that a cancellation ends its wait.
+- A hold after a lock wait gets at most the hook's time left, and the time a hold used counts
+  against `HOLD_BUDGET_S` across the loop's passes.
+- Giving back locks never raises (`CallLocks.release`, `call_ended`, `close` log a failure), so
+  a failing backend cannot cut the end of a run short.
+- With locking off, the plan of a call (its checkouts) is made in the worker thread too.
 
 Not built:
 - A second check of a command whose worktree changed between its check and its locks
@@ -252,3 +312,7 @@ Not built:
   Code runs one agent's calls one after the other (assumption A1 of `locking-design.md`).
 - A call that escalates keeps its ticket while a person decides, so the agent's later calls
   wait for their turn (each at most its wait).
+- Nested worktrees: Claude Code puts its worktrees inside the project (`.claude/worktrees/`).
+  A command in the main checkout locks the main checkout only, so a command that walks the tree
+  (`grep -r`, a formatter on `.`) runs while edits land in a nested worktree. The write-set
+  snapshots leave nested worktrees out as well.

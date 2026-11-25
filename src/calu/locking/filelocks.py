@@ -2,39 +2,56 @@
 
 The design: agent/records/notes/locking.md, section 8.
 
-All locks of a space live in one JSON state file, `locks.json`, in the space's directory. A
-change of the state works like this:
+All locks of a space live in one JSON state file in the space's directory. A change of the
+state works like this:
 
-1. It takes a short `flock` on a separate file, `locks.mutex`. flock belongs to an open file
+1. It takes the `flock` of a separate mutex file, and waits for it at most `FLOCK_WAIT_S`
+   (another process may be stopped inside its change). flock belongs to an open file
    description, and every change opens the file anew, so threads exclude each other as well as
    processes.
-2. It reads the state, removes the entries of processes that no longer run, applies the change,
-   and grants the waiting requests that fit (FIFO, the same rules as `ThreadRWLock`).
-3. It writes the new state to a temporary file and renames it over `locks.json`, so a reader
-   without the flock always sees a whole state.
+2. It reads the state, removes the entries of processes that ended and the entries this space
+   no longer wants (below), applies the change, and grants the waiting requests that fit
+   (FIFO, the same rules as `ThreadRWLock`).
+3. When the state changed, it writes the new state to a temporary file and renames it over the
+   state file, so a reader without the flock always sees a whole state.
 
-A waiting request polls its entry, at first every millisecond and then up to every `POLL_MAX_S`.
-A change made by its own process wakes it at once. Every `PRUNE_EVERY_S` it also checks the
-entries of its lock, and when one belongs to a process that died, it removes them; so a process
-killed while it holds a lock does not block the others for long.
+A waiting request polls its entry, at first every millisecond and then up to every
+`POLL_MAX_S`. A change made by its own process wakes it at once. Every `PRUNE_EVERY_S` it also
+checks the entries of its lock, and when one belongs to a process that ended, it removes them;
+so a process killed while it holds a lock does not block the others for long.
 
-A process is identified by its id, its start time and the boot id (Linux `/proc`). So a reused
-process id, or a reboot, cannot keep a dead process's entries alive. Without `/proc` (not
-Linux), only the process id is checked.
+Process ids can only be compared within one process table: one boot of one kernel, one pid
+namespace (the "same" relation of `calu.machine`, D202). The two files are therefore named after
+both, `locks.<boot>.<pid namespace>.json` and `.mutex`. Processes in other containers, or on
+other machines that share the directory, use other files and do not share the locks with this
+process. Within a file, an entry names its process by id and start time, so a reused process id
+does not keep a dead process's entries alive. An entry is removed only on proof that its process
+ended: no process has the id, a process with another start time has it, or the process ended
+and was not reaped yet (a zombie). When `/proc` cannot be read, the entry stays. Without `/proc`
+(not Linux) the files are `locks.local.*`, and only the process id is checked.
+
+A space forgets an entry before the change that removes it (release, withdraw, timeout). If that
+change fails (e.g. the disk is full), the entry stays in the file, and the next change of the
+space removes it: no hold is left that nobody knows of. An entry that a change adds counts only
+when the change was written.
 
 The holds of a process belong to it: `release` and `withdraw` work from any of its threads, not
-from other processes. Create one `FileLockSpace` per process; an object inherited across a
-`fork` must not be used in the child. The directory is created with mode 0o700. Every process
+from other processes. Create one `FileLockSpace` per directory and process; an object inherited
+across a `fork` must not be used in the child. The directory must belong to the user and must
+not be writable by the group or others; a new one is created with mode 0o700. Every process
 that uses it shares the locks; that is the point of the backend.
 """
 
+import errno
 import json
 import os
+import secrets
+import stat
 import threading
 import time
 from collections.abc import Callable, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
-from functools import cache
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -55,110 +72,148 @@ if os.name == "posix":
 else:  # pragma: no cover - Calu runs on Linux (and later macOS)
     fcntl = None  # type: ignore[assignment]
 
-STATE_FILE = "locks.json"
-"""The state of every lock of the space."""
-
-MUTEX_FILE = "locks.mutex"
-"""The file whose flock guards every change of the state."""
-
 POLL_MIN_S = 0.001
 """The first interval at which a waiting request looks at its entry."""
 
-POLL_MAX_S = 0.02
+POLL_MAX_S = 0.2
 """The longest interval at which a waiting request looks at its entry."""
 
 PRUNE_EVERY_S = 0.2
-"""How often a waiting request looks for entries of processes that died on its lock."""
+"""How often a waiting request looks for entries of processes that ended on its lock."""
+
+FLOCK_WAIT_S = 5.0
+"""The longest a change waits for the flock of the mutex file."""
+
+_PROC = Path("/proc/self/stat").exists()
+"""Whether this system has a Linux `/proc`."""
+
+_DEAD_STATES = frozenset({"Z", "X", "x"})
+"""Process states (field 3 of `/proc/<pid>/stat`) of a process that ended."""
+
+_MODES = frozenset(mode.value for mode in LockMode)
 
 _T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)
 class _Process:
-    """What identifies a running process across process-id reuse and reboots.
+    """What identifies a process of this process table across process-id reuse.
 
     Attributes:
         pid: The process id.
         start: Its start time (field 22 of `/proc/<pid>/stat`), or "" without `/proc`.
-        boot: The boot id (`/proc/sys/kernel/random/boot_id`), or "" without `/proc`.
     """
 
     pid: int
     start: str
-    boot: str
 
 
-def _start_time(pid: int) -> str | None:
-    """Read a process's start time from `/proc`.
+def _proc_stat(pid: int) -> tuple[str, str] | None:
+    """Read a process's state and start time from `/proc`.
 
     Args:
         pid: The process id.
 
     Returns:
-        Field 22 of `/proc/<pid>/stat`, or None when the process does not exist (or `/proc`
-        cannot be read).
+        (state, start time): fields 3 and 22 of `/proc/<pid>/stat`; None when no process has
+        the id.
+
+    Raises:
+        OSError: The file exists but cannot be read now (e.g. too many open files), or has an
+            unknown format. The caller cannot tell then whether the process runs.
     """
     try:
-        stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii", errors="replace")
-    except OSError:
+        text = Path(f"/proc/{pid}/stat").read_text(encoding="ascii", errors="replace")
+    except FileNotFoundError, ProcessLookupError:
         return None
-    fields = stat[stat.rfind(")") + 2 :].split()
-    return fields[19] if len(fields) > 19 else None
+    fields = text[text.rfind(")") + 2 :].split()
+    if len(fields) < 20:
+        raise OSError(errno.EINVAL, f"/proc/{pid}/stat has an unknown format")
+    return fields[0], fields[19]
 
 
-@cache
-def _boot_id() -> str:
-    """Read the boot id of the running kernel.
+def _scope() -> str:
+    """Name the process table of the calling process: the kernel's boot and the pid namespace.
 
     Returns:
-        The boot id, or "" when it cannot be read (not Linux).
+        "<16 hex digits of the boot id>.<inode of the pid namespace>", or "local" without
+        `/proc`.
+
+    Raises:
+        OSError: `/proc` exists, but the boot id or the pid namespace cannot be read, or `/proc`
+            shows another pid namespace than the one of this process.
     """
-    try:
-        return Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
-    except OSError:
-        return ""
+    if not _PROC:
+        return "local"
+    if os.readlink("/proc/self") != str(os.getpid()):
+        raise OSError(errno.EINVAL, "/proc belongs to another pid namespace than this process")
+    boot = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii")
+    digits = boot.strip().replace("-", "")[:16]
+    if len(digits) != 16 or any(digit not in "0123456789abcdef" for digit in digits):
+        raise OSError(errno.EINVAL, f"the boot id {boot.strip()!r} has an unknown format")
+    return f"{digits}.{os.stat('/proc/self/ns/pid').st_ino}"
 
 
 _me: _Process | None = None
 
 
 def _this_process() -> _Process:
-    """Return the identity of the calling process; computed again after a fork.
+    """Return the identity of the calling process; read again after a fork.
 
     Returns:
         The identity.
+
+    Raises:
+        OSError: `/proc` exists, but this process's start time cannot be read now. Nothing is
+            remembered then; the next call reads again.
     """
     global _me
     pid = os.getpid()
     if _me is None or _me.pid != pid:
-        _me = _Process(pid, _start_time(pid) or "", _boot_id())
+        start = ""
+        if _PROC:
+            found = _proc_stat(pid)
+            if found is None:
+                raise OSError(errno.ESRCH, f"/proc/{pid}/stat of this process is missing")
+            start = found[1]
+        _me = _Process(pid, start)
     return _me
 
 
 def _alive(entry: dict[str, Any]) -> bool:
-    """Tell whether the process that made `entry` still runs.
+    """Tell whether the process that made `entry` may still run; only proof of its end counts.
 
     Args:
-        entry: An entry of the state, with its process's `pid`, `start` and `boot`.
+        entry: An entry of the state, with its process's `pid` and `start`.
 
     Returns:
-        False when the entry is from another boot, or its process ended (or its id now belongs
-        to another process); True otherwise.
+        False when no process has the id, a process with another start time has it (the id was
+        reused), or the process ended and was not reaped yet (a zombie); True otherwise, also
+        when `/proc` cannot be read now.
+
+    Raises:
+        OSError: This process's own start time cannot be read (`_this_process`).
     """
     me = _this_process()
-    if entry["boot"] != me.boot:
-        return False
-    if entry["pid"] == me.pid:
+    pid = entry["pid"]
+    if pid == me.pid:
         return entry["start"] == me.start
-    if me.boot:
-        return _start_time(entry["pid"]) == entry["start"]
-    try:  # without /proc: the process id alone
-        os.kill(entry["pid"], 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
+    if not _PROC:  # the process id alone
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except OSError:
+            return True
         return True
-    return True
+    try:
+        found = _proc_stat(pid)
+    except OSError:
+        return True
+    if found is None:
+        return False
+    state, start = found
+    return start == entry["start"] and state not in _DEAD_STATES
 
 
 def _grant_waiting(entries: list[dict[str, Any]]) -> None:
@@ -218,6 +273,117 @@ def _remove(state: dict[str, Any], key: str, seq: int) -> None:
         state["locks"].pop(key, None)
 
 
+def _unchanged(state: dict[str, Any]) -> None:
+    """Change nothing: a change that only removes the entries of ended processes.
+
+    Args:
+        state: The state.
+    """
+
+
+def _is_state(state: object) -> bool:
+    """Tell whether `state` has the form this backend writes.
+
+    Args:
+        state: What the state file holds, parsed.
+
+    Returns:
+        True for {"version": 1, "seq": int, "locks": {key: [entry, ...]}} with complete entries.
+    """
+    if not isinstance(state, dict) or state.get("version") != 1:
+        return False
+    locks = state.get("locks")
+    if not isinstance(state.get("seq"), int) or not isinstance(locks, dict):
+        return False
+    return all(
+        isinstance(entries, list)
+        and all(
+            isinstance(entry, dict)
+            and isinstance(entry.get("seq"), int)
+            and isinstance(entry.get("owner"), str)
+            and entry.get("mode") in _MODES
+            and isinstance(entry.get("granted"), bool)
+            and isinstance(entry.get("pid"), int)
+            and isinstance(entry.get("start"), str)
+            and isinstance(entry.get("space"), str)
+            for entry in entries
+        )
+        for entries in locks.values()
+    )
+
+
+def _flock(fd: int, deadline: float) -> None:
+    """Take the exclusive flock of `fd`, waiting at most until `deadline`.
+
+    A free flock is taken at once. A busy one is waited for in the kernel's queue by a helper
+    thread on a duplicate of `fd` (the same open file description, so the flock is the same),
+    while this thread waits until `deadline`. When the time runs out, the helper stays blocked
+    until it gets the flock, and then closes its duplicate: once the caller has closed `fd`,
+    that gives the flock back at once.
+
+        free ──► taken            busy ──► helper: flock(dup) ──► close(dup) ──► done
+                                             caller: wait ≤ deadline ──► taken | TimeoutError
+
+    Args:
+        fd: The open mutex file.
+        deadline: The latest moment (`time.monotonic`) to wait until.
+
+    Raises:
+        TimeoutError: The flock was not free in time; another process holds it (it may be
+            stopped inside a change).
+        OSError: flock failed for another reason.
+    """
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return
+    except BlockingIOError:
+        pass
+    duplicate = os.dup(fd)
+    done = threading.Event()
+    failed: list[OSError] = []
+
+    def take() -> None:
+        """Wait for the flock in the kernel's queue, then close the duplicate."""
+        try:
+            fcntl.flock(duplicate, fcntl.LOCK_EX)
+        except OSError as exc:
+            failed.append(exc)
+        finally:
+            os.close(duplicate)
+            done.set()
+
+    threading.Thread(target=take, name="calu-flock", daemon=True).start()
+    if not done.wait(max(0.0, deadline - time.monotonic())):
+        raise TimeoutError(
+            errno.ETIMEDOUT, "another process holds the flock of the lock state too long"
+        )
+    if failed:
+        raise failed[0]
+
+
+def _check_private(directory: Path) -> None:
+    """Refuse a lock directory that another user could change.
+
+    Args:
+        directory: The directory, resolved.
+
+    Raises:
+        OSError: `directory` is not a directory (e.g. a symlink), belongs to another user, or
+            can be written by the group or others.
+    """
+    info = os.lstat(directory)
+    if not stat.S_ISDIR(info.st_mode):
+        raise OSError(errno.ENOTDIR, f"the lock directory {directory} is not a directory")
+    if info.st_uid != os.geteuid():
+        raise OSError(errno.EPERM, f"the lock directory {directory} belongs to another user")
+    if info.st_mode & 0o022:
+        raise OSError(
+            errno.EPERM,
+            f"the lock directory {directory} can be written by the group or others "
+            f"(mode {oct(info.st_mode & 0o777)}; `chmod go-w` it)",
+        )
+
+
 class FileLockRequest(LockRequest):
     """A request in the state file of a `FileLockSpace`, with the contract of `LockRequest`."""
 
@@ -243,7 +409,8 @@ class FileLockRequest(LockRequest):
 
         Called at most once per request. A grant that comes at the moment the time runs out
         counts. When the timeout is invalid, or the wait itself raises, the request is withdrawn
-        (a grant given back) before the exception propagates.
+        (a grant given back) before the exception propagates. The end of the wait can take up
+        to `FLOCK_WAIT_S` longer when another process holds the flock of the state.
 
         Args:
             timeout: Seconds to wait, finite and >= 0 (`checked_timeout`).
@@ -253,23 +420,26 @@ class FileLockRequest(LockRequest):
             then no longer waits and nothing is held.
 
         Raises:
-            LockError: `wait` was called a second time.
+            LockError: `wait` was called a second time, or the state file is not a lock state.
             TypeError: `timeout` is not a number.
             ValueError: `timeout` is negative, NaN or infinite.
             OSError: The space's directory cannot be read or written.
         """
-        space = self._space
+        space, key, seq = self._space, self.key, self._seq
         with space._mutex:
             if self._waited:
-                raise LockError(f"a request for the lock {self.key!r} is waited for once")
+                raise LockError(f"a request for the lock {key!r} is waited for once")
             self._waited = True
         try:
             deadline = time.monotonic() + checked_timeout(timeout)
             poll = POLL_MIN_S
             next_prune = time.monotonic() + PRUNE_EVERY_S
             while True:
+                with space._mutex:
+                    if (key, seq) not in space._mine:
+                        return None  # withdrawn
                 state = space._read()
-                entry = _find(state, self.key, self._seq)
+                entry = _find(state, key, seq)
                 if entry is None:
                     return None
                 if entry["granted"]:
@@ -279,10 +449,11 @@ class FileLockRequest(LockRequest):
                     break
                 if now >= next_prune:
                     next_prune = now + PRUNE_EVERY_S
-                    if not all(_alive(other) for other in state["locks"].get(self.key, ())):
-                        space._change(lambda state: None)  # removes them, grants what fits
+                    if not all(_alive(other) for other in state["locks"].get(key, ())):
+                        with suppress(TimeoutError):  # the flock is busy: next time
+                            space._change(_unchanged, deadline=max(deadline, now + POLL_MAX_S))
                         continue
-                wake = space._wake_of(self.key)
+                wake = space._wake_of(key)
                 with wake:
                     wake.wait(min(poll, deadline - now))
                 poll = min(poll * 2, POLL_MAX_S)
@@ -296,58 +467,74 @@ class FileLockRequest(LockRequest):
 
         The entry leaves the queue, or its grant is given back if `wait` has not returned it; a
         thread of this process blocked in `wait` then gets None. Does nothing when the entry is
-        already gone (timed out, withdrawn, released, or removed with a dead process).
+        already gone (timed out, withdrawn, released, or removed with a dead process). The space
+        forgets the entry first: if the change fails, its next change removes the entry.
 
         Raises:
-            LockError: `wait` returned the hold and it is still held; `FileRWLock.release`
-                gives it back.
+            LockError: `wait` returned the hold and it is still held (`FileRWLock.release` gives
+                it back), or the state file is not a lock state.
             OSError: The space's directory cannot be read or written.
         """
-        key, seq = self.key, self._seq
-
-        def take_back(state: dict[str, Any]) -> None:
-            """Remove the entry, unless `wait` returned its hold.
-
-            Args:
-                state: The state; changed in place.
-
-            Raises:
-                LockError: `wait` returned the hold and it is still held.
-            """
-            if (key, seq) in self._space._held:
+        space, key, seq = self._space, self.key, self._seq
+        with space._mutex:
+            if (key, seq) in space._held:
                 raise LockError(
                     f"the request of {self.owner!r} for {key!r} was granted; "
                     "release its hold instead"
                 )
+            wanted = (key, seq) in space._mine
+            space._mine.discard((key, seq))
+        if not wanted:
+            wake = space._wake_of(key)
+            with wake:
+                wake.notify_all()
+            return
+
+        def take_back(state: dict[str, Any]) -> None:
+            """Remove the entry if it is still there.
+
+            Args:
+                state: The state; changed in place.
+            """
             if _find(state, key, seq) is not None:
                 _remove(state, key, seq)
 
-        self._space._change(take_back, key)
+        space._change(take_back, key)
 
     def _hold(self) -> Hold | None:
         """Turn the granted entry into a hold of this process, unless it was withdrawn meanwhile.
 
+        An entry that this space still wants is never removed by anyone else, so it is still
+        granted when this runs.
+
         Returns:
             The hold, or None when another thread withdrew the request first.
         """
-        space = self._space
+        space, key, seq = self._space, self.key, self._seq
         with space._mutex:
-            entry = _find(space._read(), self.key, self._seq)
-            if entry is None or not entry["granted"]:
+            if (key, seq) not in space._mine:
                 return None
-            space._held.add((self.key, self._seq))
-        return Hold(self.key, self.mode, self.owner, self._seq)
+            hold = Hold(key, self.mode, self.owner, seq)
+            space._held[key, seq] = hold
+        return hold
 
     def _leave_or_hold(self) -> Hold | None:
         """At the end of the time: leave the queue, or take the grant that came just now.
 
         Returns:
             The hold when the entry was granted, else None (the entry is gone).
+
+        Raises:
+            LockError: The state file is not a lock state.
+            OSError: The space's directory cannot be read or written.
         """
-        key, seq = self.key, self._seq
+        space, key, seq = self._space, self.key, self._seq
+        hold = Hold(key, self.mode, self.owner, seq)
 
         def leave(state: dict[str, Any]) -> bool:
             """Remove the queued entry, or keep a grant that came just now as a hold.
+
+            Both count only if the change is written (`FileLockSpace._change`).
 
             Args:
                 state: The state; changed in place.
@@ -356,16 +543,16 @@ class FileLockRequest(LockRequest):
                 True when the entry was granted (now a hold of this process), else False.
             """
             entry = _find(state, key, seq)
-            if entry is None:
+            if entry is None or (key, seq) not in space._mine:
                 return False
             if entry["granted"]:
-                self._space._held.add((key, seq))
+                space._held[key, seq] = hold
                 return True
+            space._mine.discard((key, seq))
             _remove(state, key, seq)
             return False
 
-        granted = self._space._change(leave, key)
-        return Hold(key, self.mode, self.owner, seq) if granted else None
+        return hold if space._change(leave, key) else None
 
 
 class FileRWLock(RWLock):
@@ -382,9 +569,10 @@ class FileRWLock(RWLock):
         self._space = space
 
     def request(self, mode: LockMode, owner: str) -> FileLockRequest:
-        """Put a request for `mode` into the queue at once, without waiting, and return it.
+        """Put a request for `mode` into the queue without waiting for the lock, and return it.
 
-        Its place in the queue is fixed when this returns; it may already be granted.
+        Its place in the queue is fixed when this returns; it may already be granted. Waits
+        only for the flock of the state, at most `FLOCK_WAIT_S`.
 
         Args:
             mode: SHARED or EXCLUSIVE.
@@ -394,17 +582,21 @@ class FileRWLock(RWLock):
             The request; its `wait` gives the hold.
 
         Raises:
-            LockError: `owner` already holds this lock or waits for it, in any process.
+            LockError: `owner` already holds this lock or waits for it, in any process; or the
+                state file is not a lock state.
             TypeError: `owner` is not a string.
             ValueError: `owner` is empty.
-            OSError: The space's directory cannot be read or written.
+            OSError: The space's directory cannot be read or written, or the flock of the
+                state was not free in time (`TimeoutError`).
         """
         checked_owner(owner)
+        space, key = self._space, self.key
         me = _this_process()
-        key = self.key
 
         def enqueue(state: dict[str, Any]) -> int:
             """Append the request to the lock's queue and grant what fits.
+
+            The entry counts as this space's only if the change is written.
 
             Args:
                 state: The state; changed in place.
@@ -417,67 +609,72 @@ class FileRWLock(RWLock):
             """
             entries = state["locks"].setdefault(key, [])
             if any(entry["owner"] == owner for entry in entries):
-                if not entries:
-                    state["locks"].pop(key, None)
                 raise LockError(
                     f"{owner!r} already holds the lock {key!r} or waits for it; "
                     "an owner never takes a lock twice"
                 )
             state["seq"] += 1
-            entry = {
-                "seq": state["seq"],
-                "owner": owner,
-                "mode": mode.value,
-                "granted": False,
-                "pid": me.pid,
-                "start": me.start,
-                "boot": me.boot,
-            }
-            entries.append(entry)
+            seq = state["seq"]
+            entries.append(
+                {
+                    "seq": seq,
+                    "owner": owner,
+                    "mode": mode.value,
+                    "granted": False,
+                    "pid": me.pid,
+                    "start": me.start,
+                    "space": space._token,
+                }
+            )
             _grant_waiting(entries)
-            return state["seq"]
+            space._mine.add((key, seq))
+            return seq
 
-        seq = self._space._change(enqueue, key)
-        return FileLockRequest(self._space, key, seq, mode, owner)
+        seq = space._change(enqueue, key)
+        return FileLockRequest(space, key, seq, mode, owner)
 
     def release(self, hold: Hold) -> None:
         """Give back `hold` and grant the waiting requests that fit now.
+
+        The space forgets the hold first: if the change fails, the hold counts as released all
+        the same, and the space's next change removes its entry.
 
         Args:
             hold: A hold that this lock granted to this process, that `wait` returned and that
                 was not released yet.
 
         Raises:
-            LockError: `hold` is not a current hold of this lock in this process.
+            LockError: `hold` is not a current hold of this lock in this process, or the state
+                file is not a lock state.
             OSError: The space's directory cannot be read or written.
         """
         space, key = self._space, self.key
+        with space._mutex:
+            if hold.key != key or space._held.get((key, hold.token)) != hold:
+                raise LockError(f"{hold!r} is not a current hold of the lock {key!r}")
+            del space._held[key, hold.token]
+            space._mine.discard((key, hold.token))
 
         def give_back(state: dict[str, Any]) -> None:
-            """Remove the held entry and grant what fits.
+            """Remove the held entry, if it is still there, and grant what fits.
 
             Args:
                 state: The state; changed in place.
-
-            Raises:
-                LockError: `hold` is not a current hold of this lock in this process.
             """
-            entry = _find(state, key, hold.token) if hold.key == key else None
-            if (
-                entry is None
-                or (key, hold.token) not in space._held
-                or entry["owner"] != hold.owner
-                or entry["mode"] != hold.mode.value
-            ):
-                raise LockError(f"{hold!r} is not a current hold of the lock {key!r}")
-            space._held.discard((key, hold.token))
-            _remove(state, key, hold.token)
+            if _find(state, key, hold.token) is not None:
+                _remove(state, key, hold.token)
 
         space._change(give_back, key)
 
 
 class FileLockSpace(LockSpace):
-    """The locks of every process that uses one directory (see the module docstring)."""
+    """The locks of every process that uses one directory (see the module docstring).
+
+    Attributes:
+        directory: The directory, resolved.
+        state_path: The state file of this process table.
+        mutex_path: The file whose flock guards every change of the state.
+    """
 
     def __init__(self, directory: str | os.PathLike[str]) -> None:
         """Use `directory` for the state; create it with mode 0o700 when it does not exist.
@@ -486,18 +683,25 @@ class FileLockSpace(LockSpace):
             directory: The directory every sharing process names.
 
         Raises:
-            OSError: The directory cannot be created.
+            OSError: The directory cannot be created, belongs to another user, or can be
+                written by the group or others; or this process's process table cannot be
+                identified (`/proc` cannot be read).
             RuntimeError: The platform has no `flock` (not POSIX).
         """
         if fcntl is None:  # pragma: no cover
             raise RuntimeError("the file lock backend needs flock (POSIX)")
-        self.directory = Path(directory)
+        self.directory = Path(directory).resolve()
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self._state_path = self.directory / STATE_FILE
-        self._mutex_path = self.directory / MUTEX_FILE
+        _check_private(self.directory)
+        scope = _scope()
+        _this_process()
+        self.state_path = self.directory / f"locks.{scope}.json"
+        self.mutex_path = self.directory / f"locks.{scope}.mutex"
+        self._token = secrets.token_hex(8)  # tells this space's entries from other spaces'
         self._mutex = threading.Lock()
         self._wakes: dict[str, threading.Condition] = {}
-        self._held: set[tuple[str, int]] = set()
+        self._mine: set[tuple[str, int]] = set()  # entries this space wants
+        self._held: dict[tuple[str, int], Hold] = {}  # holds `wait` returned
         self._locks: dict[str, FileRWLock] = {}
 
     def lock(self, key: str) -> FileRWLock:
@@ -529,6 +733,7 @@ class FileLockSpace(LockSpace):
             One state per lock that has entries, sorted by key.
 
         Raises:
+            LockError: The state file is not a lock state.
             OSError: The space's directory cannot be read.
         """
         state = self._read()
@@ -560,45 +765,70 @@ class FileLockSpace(LockSpace):
 
         Raises:
             LockError: The file is not a state of this backend.
-            OSError: The file cannot be read.
+            OSError: The file cannot be read, or is a symlink.
         """
         try:
-            text = self._state_path.read_text(encoding="utf-8")
+            fd = os.open(self.state_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
         except FileNotFoundError:
             return {"version": 1, "seq": 0, "locks": {}}
+        with os.fdopen(fd, encoding="utf-8") as source:
+            text = source.read()
         try:
             state = json.loads(text)
         except ValueError as exc:
-            raise LockError(f"{self._state_path} is not a lock state ({exc})") from None
-        if not isinstance(state, dict) or state.get("version") != 1:
-            raise LockError(f"{self._state_path} is not a lock state of version 1")
+            raise LockError(f"{self.state_path} is not a lock state ({exc})") from None
+        if not _is_state(state):
+            raise LockError(f"{self.state_path} is not a lock state of version 1")
         return state
 
-    def _change(self, change: Callable[[dict[str, Any]], _T], key: str | None = None) -> _T:
-        """Change the state under the flock: prune dead processes, apply `change`, write it.
+    def _change(
+        self,
+        change: Callable[[dict[str, Any]], _T],
+        key: str | None = None,
+        deadline: float | None = None,
+    ) -> _T:
+        """Change the state under the flock: prune, apply `change`, write it if it changed.
 
-        When `change` raises, nothing is written (the pruning is repeated by the next change).
-        Afterwards the waiting requests of this process are woken: those of `key`, or all of
-        them when `key` is None or the pruning removed an entry.
+        The pruning removes the entries of processes that ended and the entries of this space
+        that it no longer wants (`_mine`). `change` may add to `_mine` and `_held`; when the
+        change fails (it raises, or the state cannot be written), both are put back as they
+        were, and nothing is written. Afterwards the waiting requests of this process are
+        woken: those of `key`, or all of them when `key` is None or the pruning removed an
+        entry.
 
         Args:
             change: Changes the state in place and returns a result.
             key: The only lock whose entries `change` touches, or None.
+            deadline: The latest moment (`time.monotonic`) to wait for the flock until; None
+                for `FLOCK_WAIT_S` from now.
 
         Returns:
             What `change` returned.
 
         Raises:
-            OSError: The space's directory cannot be read or written.
+            LockError: The state file is not a lock state.
+            OSError: The space's directory cannot be read or written; `TimeoutError` when the
+                flock was not free in time.
         """
+        if deadline is None:
+            deadline = time.monotonic() + FLOCK_WAIT_S
         with self._mutex:
-            fd = os.open(self._mutex_path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+            mine, held = set(self._mine), dict(self._held)
+            fd = os.open(
+                self.mutex_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600
+            )
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                _flock(fd, deadline)
                 state = self._read()
+                before = json.dumps(state, separators=(",", ":"))
                 pruned = self._prune(state)
                 result = change(state)
-                self._write(state)
+                after = json.dumps(state, separators=(",", ":"))
+                if after != before:
+                    self._write(after)
+            except BaseException:
+                self._mine, self._held = mine, held  # the change did not happen
+                raise
             finally:
                 os.close(fd)  # also ends the flock
             wakes = list(self._wakes.values()) if key is None or pruned else [self._wake_of(key)]
@@ -622,39 +852,67 @@ class FileLockSpace(LockSpace):
         return wake
 
     def _prune(self, state: dict[str, Any]) -> bool:
-        """Remove the entries of processes that no longer run, and grant what fits then.
+        """Remove the entries of ended processes and the unwanted ones of this space; grant then.
 
         Args:
             state: The state; changed in place.
 
         Returns:
             Whether an entry was removed.
+
+        Raises:
+            OSError: This process's start time cannot be read (`_this_process`).
         """
+        me = _this_process()
         removed = False
         for key in list(state["locks"]):
             entries = state["locks"][key]
-            alive = [entry for entry in entries if _alive(entry)]
-            if len(alive) == len(entries):
+            kept = [
+                entry
+                for entry in entries
+                if (
+                    (key, entry["seq"]) in self._mine
+                    if entry["space"] == self._token
+                    and entry["pid"] == me.pid
+                    and entry["start"] == me.start
+                    else _alive(entry)
+                )
+            ]
+            if len(kept) == len(entries):
                 continue
             removed = True
-            if alive:
-                _grant_waiting(alive)
-                state["locks"][key] = alive
+            if kept:
+                _grant_waiting(kept)
+                state["locks"][key] = kept
             else:
                 del state["locks"][key]
         return removed
 
-    def _write(self, state: dict[str, Any]) -> None:
-        """Replace the state file as a whole: write a temporary file, then rename it.
+    def _write(self, text: str) -> None:
+        """Replace the state file as a whole: write a new temporary file, then rename it.
+
+        A file or symlink left at the temporary file's name is removed first, and never
+        followed.
 
         Args:
-            state: The state.
+            text: The state as JSON.
 
         Raises:
             OSError: The file cannot be written.
         """
-        temporary = self.directory / f".{STATE_FILE}.{os.getpid()}.tmp"
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_CLOEXEC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as out:
-            json.dump(state, out, separators=(",", ":"))
-        os.replace(temporary, self._state_path)
+        temporary = self.directory / f".{self.state_path.name}.{os.getpid()}.tmp"
+        with suppress(FileNotFoundError):
+            os.unlink(temporary)
+        fd = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as out:
+                out.write(text)
+            os.replace(temporary, self.state_path)
+        except BaseException:
+            with suppress(OSError):
+                os.unlink(temporary)
+            raise

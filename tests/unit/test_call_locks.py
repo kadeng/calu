@@ -5,17 +5,29 @@ Locking uses the "files" backend with its directory below `tmp_path`, so tests d
 locks. Threads of this process only, no output.
 """
 
+import errno
 import time
 from pathlib import Path
 
 import anyio
 import pytest
 
+import calu.gate as gate_module
+import calu.session as session_module
 from calu.call_locks import CallLocks, shared_space
 from calu.checkers import Step
 from calu.checkouts import Checkout
-from calu.config import Config, LockingConfig
-from calu.locking import GLOBAL_KEY, LockTimeouts, RWLockingScheme, file_key, worktree_key
+from calu.claude.runner import GateResult
+from calu.config import ChangesConfig, Config, LockingConfig
+from calu.locking import (
+    GLOBAL_KEY,
+    FileLockSpace,
+    LockMode,
+    LockTimeouts,
+    RWLockingScheme,
+    file_key,
+    worktree_key,
+)
 from calu.protocol.messages import ChatSendParams, ToolResult, TurnResult
 from tests.unit.helpers import make_session
 
@@ -348,3 +360,168 @@ async def test_a_session_gives_back_its_locks_and_denies_a_command_whose_worktre
     denied = rec.of(ToolResult)[-1]
     assert denied.is_error and "Not run: this call waited" in denied.content
     assert session.locks.holding() == {}
+
+
+async def test_a_second_take_ends_when_its_caller_is_cancelled(tmp_path: Path) -> None:
+    tree = Tree(tmp_path / "repo")
+    first, second = call_locks(tmp_path, tree), call_locks(tmp_path, tree)
+    step = bash("cd wt && make", "c2")  # locks the main checkout, then the worktree
+    second.issue(step)
+    assert await second.take(step, None) == ""
+    second.release(step)  # a person decides about it
+    in_worktree = Step(
+        cwd=str(tree.worktree.root), tool_name="Bash", tool_input={"command": "make"}
+    )
+    in_worktree.tool_use_id = "c1"
+    assert await first.take(in_worktree, None) == ""  # another session's command in wt
+    with anyio.move_on_after(0.2):
+        await second.take(step, None)  # the person allowed it; wt is busy
+    await anyio.sleep(0.2)
+    space = shared_space(locking(tmp_path))
+    held = {state.key: (state.holders, state.waiters) for state in space.snapshot() or ()}
+    assert worktree_key(str(tree.main.root)) not in held  # the wait ended, nothing kept
+    assert held[worktree_key(str(tree.worktree.root))][1] == ()
+    first.call_ended("c1")
+    assert second.holding() == {}
+
+
+async def test_giving_back_never_raises_and_the_next_change_removes_what_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tree = Tree(tmp_path / "repo")
+    locks = call_locks(tmp_path, tree)
+    assert await locks.take(bash("make", "c1"), None) == ""
+    assert await locks.take(edit(str(tree.worktree.root / "x.py"), "e2"), None) == ""
+    space = shared_space(locking(tmp_path))
+    assert isinstance(space, FileLockSpace)
+
+    def disk_full(text: str) -> None:
+        """Fail like a write to a full disk.
+
+        Args:
+            text: The state that would be written.
+
+        Raises:
+            OSError: Always.
+        """
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(space, "_write", disk_full)
+    locks.close()  # logs the failures, gives back the rest
+    assert locks.holding() == {}
+    monkeypatch.undo()
+    assert await locks.take(bash("make", "c3"), None) == ""
+    holders = {state.key: state.holders for state in space.snapshot()}
+    assert holders == {
+        worktree_key(str(tree.main.root)): (("c3", LockMode.EXCLUSIVE),),
+        GLOBAL_KEY: (("c3", LockMode.SHARED),),
+    }
+
+
+async def test_a_cancelled_question_to_a_person_gives_up_the_calls_turn(tmp_path: Path) -> None:
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    config = Config(locking=locking(tmp_path, command_wait_s=2))
+    session, _rec, _store = make_session(workspace, [], config)
+
+    def command(text: str, call: str) -> Step:
+        """Return a Bash call of the main agent in the project.
+
+        Args:
+            text: The command.
+            call: The tool call's id.
+
+        Returns:
+            The step.
+        """
+        return Step(
+            tool_name="Bash", tool_input={"command": text}, tool_use_id=call, cwd=str(workspace)
+        )
+
+    first = command("deploy # calu:escalate", "t1")
+    assert (await session.pre_tool_use(first)).verdict.value == "ask"
+    with anyio.move_on_after(0.5):
+        await session.ask(first)  # Claude Code cancels can_use_tool on an interrupt
+    assert session.locks.scheme.open_tickets() == {}
+    second = await session.pre_tool_use(command("make", "t2"))
+    assert second.verdict.value != "deny", second.reason
+    session.locks.close()
+
+
+async def test_an_edit_that_lands_while_a_command_waits_is_not_counted_as_its_change(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    notes = workspace / "notes.txt"
+    notes.write_text("draft\n", encoding="utf-8")
+    config = Config(
+        changes=ChangesConfig(snapshot=True, review=True),
+        locking=locking(tmp_path, command_wait_s=30),
+    )
+    turns = [[{"tool": "Bash", "input": {"command": "make"}, "result": "built"}]]
+    session, rec, _store = make_session(workspace, turns, config)
+    root = str(session.checkouts.main.root)
+    space = shared_space(config.locking)
+    other = RWLockingScheme(space, LockTimeouts(30, 30, 30, 30))
+    # Another agent's approved edit of notes.txt holds the worktree (shared) and the file.
+    agent_b = other.edit_in_worktree(root, path=str(notes), owner="agent-b-edit")
+    async with anyio.create_task_group() as tasks:
+        await session.start(tasks)
+        await session.send_chat(ChatSendParams(text="Build it"))
+        with anyio.fail_after(20):
+            while not any(
+                state.key == worktree_key(root) and state.waiters
+                for state in space.snapshot() or ()
+            ):
+                await anyio.sleep(0.02)
+        # The edit lands now; the changeset checker would refuse it as the command's change.
+        notes.write_text("draft\nagent B's change # calu:deny\n", encoding="utf-8")
+        agent_b.release()
+        with anyio.fail_after(20):
+            while not rec.of(TurnResult):
+                await anyio.sleep(0.02)
+        await session.stop()
+    assert notes.read_text(encoding="utf-8") == "draft\nagent B's change # calu:deny\n"
+
+
+async def test_a_hold_after_a_lock_wait_ends_within_the_hooks_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(session_module, "HOOK_TIMEOUT_S", 4.0)
+    monkeypatch.setattr(session_module, "LOCK_HOOK_MARGIN_S", 0.5)
+    monkeypatch.setattr(gate_module, "HOLD_BUDGET_S", 2.0)
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    config = Config(locking=locking(tmp_path))
+    session, _rec, _store = make_session(workspace, [], config)
+    other = RWLockingScheme(shared_space(config.locking), LockTimeouts(9, 9, 9, 9))
+    busy = other.run_command_in_worktree(str(session.checkouts.main.root), owner="other-session")
+    step = Step(
+        tool_name="Bash", tool_input={"command": "make"}, tool_use_id="t1", cwd=str(workspace)
+    )
+    results: list[GateResult] = []
+    started = time.monotonic()
+
+    async def hook() -> None:
+        results.append(await session.pre_tool_use(step))
+
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(hook)
+        await anyio.sleep(2.5)
+        # A subagent's call is escalated while this one waits for its locks.
+        session.desk.expect_ask(
+            Step(
+                tool_name="Bash",
+                tool_input={"command": "x"},
+                tool_use_id="sub-1",
+                cwd=str(workspace),
+                agent_id="sub",
+            ),
+            "checker",
+        )
+        await anyio.sleep(0.5)
+        busy.release()
+    assert time.monotonic() - started < 4.0
+    assert results[0].verdict.value == "ask"
+    session.locks.close()

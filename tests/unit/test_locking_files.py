@@ -6,9 +6,12 @@ counter files there and nothing else; the test kills the ones it started on purp
 and every other one at its end. No output.
 """
 
+import errno
+import fcntl
 import multiprocessing
 import os
 import signal
+import subprocess
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -242,21 +245,63 @@ def test_an_owner_is_refused_across_processes(tmp_path: Path, children: list[Bas
 # Within this process
 
 
-def test_entries_of_dead_processes_reused_ids_and_earlier_boots_are_not_alive() -> None:
+def test_entries_of_ended_processes_and_reused_ids_are_not_alive() -> None:
     me = filelocks._this_process()
-    alive = {"pid": me.pid, "start": me.start, "boot": me.boot}
+    alive = {"pid": me.pid, "start": me.start}
     assert filelocks._alive(alive)
     assert not filelocks._alive({**alive, "start": "1"})  # the id now belongs to another process
-    assert not filelocks._alive({**alive, "boot": "another boot"})
     assert not filelocks._alive({**alive, "pid": 2**22 + 12345})  # no such process
+
+
+def test_a_zombie_counts_as_ended_and_a_process_that_cannot_be_read_as_alive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    child = subprocess.Popen(["sleep", "30"])
+    try:
+        found = filelocks._proc_stat(child.pid)
+        assert found is not None
+        entry = {"pid": child.pid, "start": found[1]}
+        assert filelocks._alive(entry)
+        os.kill(child.pid, signal.SIGKILL)
+        wait_until(lambda: (filelocks._proc_stat(child.pid) or ("Z", ""))[0] == "Z")
+        assert not filelocks._alive(entry)  # ended, but not reaped yet
+    finally:
+        child.kill()
+        child.wait()
+    filelocks._this_process()
+
+    def unreadable(pid: int) -> tuple[str, str] | None:
+        """Fail like a read of /proc that hit the limit of open files.
+
+        Args:
+            pid: The process id.
+
+        Raises:
+            OSError: Always.
+        """
+        raise OSError(errno.EMFILE, "Too many open files")
+
+    monkeypatch.setattr(filelocks, "_proc_stat", unreadable)
+    assert filelocks._alive({"pid": 1, "start": "unknown"})
+
+
+def test_the_files_are_named_after_the_boot_and_the_pid_namespace(tmp_path: Path) -> None:
+    space = FileLockSpace(tmp_path / "locks")
+    boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip().replace("-", "")[:16]
+    namespace = os.stat("/proc/self/ns/pid").st_ino
+    assert space.state_path.name == f"locks.{boot}.{namespace}.json"
+    assert space.mutex_path.name == f"locks.{boot}.{namespace}.mutex"
 
 
 def test_a_state_file_that_is_not_a_lock_state_is_refused(tmp_path: Path) -> None:
     space = FileLockSpace(tmp_path / "locks")
-    (space.directory / filelocks.STATE_FILE).write_text("not json")
+    space.state_path.write_text("not json")
     with pytest.raises(LockError):
         space.lock("k").request(SHARED, "a")
-    (space.directory / filelocks.STATE_FILE).write_text('{"version": 2}')
+    space.state_path.write_text('{"version": 2}')
+    with pytest.raises(LockError):
+        space.snapshot()
+    space.state_path.write_text('{"version": 1, "seq": 1, "locks": {"k": [{"seq": 1}]}}')
     with pytest.raises(LockError):
         space.snapshot()
 
@@ -270,3 +315,85 @@ def test_the_directory_is_private_and_the_state_empty_after_the_last_release(
     assert hold is not None
     space.lock("k").release(hold)
     assert space.snapshot() == []
+
+
+def test_a_directory_that_others_can_write_is_refused(tmp_path: Path) -> None:
+    directory = tmp_path / "shared"
+    directory.mkdir()
+    directory.chmod(0o777)
+    with pytest.raises(OSError, match="written by the group or others"):
+        FileLockSpace(directory)
+
+
+def test_a_file_left_at_the_temporary_name_is_replaced_not_followed(tmp_path: Path) -> None:
+    space = FileLockSpace(tmp_path / "locks")
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me\n")
+    (space.directory / f".{space.state_path.name}.{os.getpid()}.tmp").symlink_to(victim)
+    hold = space.lock("k").acquire(EXCLUSIVE, 0, "a")
+    assert hold is not None
+    assert victim.read_text() == "keep me\n"
+    assert not space.state_path.is_symlink()
+    assert state(space).holders == (("a", EXCLUSIVE),)
+
+
+def test_a_failed_write_leaves_no_hold_that_nobody_knows_of(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    space = FileLockSpace(tmp_path / "locks")
+    lock = space.lock("k")
+    hold = lock.acquire(EXCLUSIVE, 0, "a")
+    assert hold is not None
+    write = space._write
+
+    def disk_full(text: str) -> None:
+        """Fail like a write to a full disk.
+
+        Args:
+            text: The state that would be written.
+
+        Raises:
+            OSError: Always.
+        """
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(space, "_write", disk_full)
+    with pytest.raises(OSError):
+        lock.release(hold)
+    with pytest.raises(LockError):
+        lock.release(hold)  # forgotten: it counts as released
+    assert state(space).holders == (("a", EXCLUSIVE),)  # but it is still in the file
+    with pytest.raises(OSError):
+        lock.request(SHARED, "b")
+    assert (space._mine, space._held) == (set(), {})  # nothing counts that was not written
+    monkeypatch.setattr(space, "_write", write)
+    later = lock.acquire(EXCLUSIVE, 0, "b")  # the next change removes the forgotten entry
+    assert later is not None
+    assert state(space).holders == (("b", EXCLUSIVE),)
+
+
+def test_a_change_gives_up_when_another_process_keeps_the_flock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    space = FileLockSpace(tmp_path / "locks")
+    monkeypatch.setattr(filelocks, "FLOCK_WAIT_S", 0.2)
+    fd = os.open(space.mutex_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)  # as a process stopped inside its change keeps it
+        started = time.monotonic()
+        with pytest.raises(TimeoutError):
+            space.lock("k").request(SHARED, "a")
+        assert time.monotonic() - started < 2
+    finally:
+        os.close(fd)
+    assert space.lock("k").acquire(SHARED, 0, "a") is not None
+
+
+def test_two_spaces_of_one_process_keep_each_others_entries(tmp_path: Path) -> None:
+    one, two = FileLockSpace(tmp_path / "locks"), FileLockSpace(tmp_path / "locks")
+    hold = one.lock("k").acquire(EXCLUSIVE, 0, "a")
+    assert hold is not None
+    assert two.lock("k").acquire(EXCLUSIVE, 0, "b") is None
+    assert state(two).holders == (("a", EXCLUSIVE),)
+    one.lock("k").release(hold)
+    assert two.lock("k").acquire(EXCLUSIVE, 0, "b") is not None
