@@ -898,6 +898,7 @@ button.link {
 }
 button.link:hover { background: none; }
 .problem { color: var(--bad); font-size: .88rem; }
+.caution { border-left: 3px solid var(--warn); padding: .3rem .6rem; font-size: .88rem; }
 .who {
   font-family: var(--sans);
   font-size: .72rem;

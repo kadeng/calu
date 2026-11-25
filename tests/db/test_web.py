@@ -1447,6 +1447,9 @@ async def test_the_new_session_dialog_makes_a_folder_and_starts_a_session_there(
             )
             listed = await client.get("/start")
             assert str(projects) in listed.text and "shop/" in listed.text
+            # D279: Claude Code trusts the folder, and with it the repository's `.claude/`.
+            assert "Clone only repositories you trust." in listed.text
+            assert "outside Calu's checkers and the" in listed.text
 
             made = await client.post(
                 "/start", data={"at": "shop", "name": "api", "url": "", "pane": "on"}

@@ -3871,6 +3871,13 @@ the missing ones together with the SQL for an administrator:
 - For a server on another host the connection is encrypted (`sslmode=require`). `--sslmode
   verify-full --sslrootcert FILE` also verifies the server's certificate. `--sslmode disable`
   switches encryption off and says so.
+- For a server on another host the logins take only SCRAM (`require_auth=scram-sha-256`), and
+  over TLS also channel binding (`channel_binding=require`): a machine in the middle can then
+  neither read the password nor pass the login on. The passwords of Calu's own roles are
+  stored as SCRAM. The database user you give the setup needs a password stored as SCRAM too;
+  on AWS RDS set `password_encryption = scram-sha-256` in the parameter group and set that
+  user's password again. A server that offers only md5 cannot be used. Channel binding has not
+  been tried against RDS Proxy; the IAM variant (below) needs neither.
 - Calu's roles belong to the whole server. A second Calu database on the same server shares
   them, and with them the user login's password: the last `calu setup` sets it.
 - A connection pooler in transaction mode is not supported: a session needs its own
@@ -4092,6 +4099,11 @@ checkers Claude's words directly, and gives up the three properties.
 - The checkers do not see images.
 - No checker judges your own edits (in an editor, in a shell).
 - A conversation resumed from plain `claude` was not checked before Calu took over.
+- **Claude Code trusts every folder a session starts in.** The folder's `.claude/` settings
+  (hooks, MCP servers, environment variables, a status line, plugins) run as the session's user
+  at once, outside the checkers and the sandbox. Start sessions only in folders whose
+  `.claude/` you trust: clone only trusted repositories (also through the web interface's "New
+  session…" dialog), and look at a `git pull` that changes `.claude/`.
 - With the sandbox off and without the root arrangement, a command of Claude runs with all
   your rights.
 - Trace redaction can miss a secret or a name.

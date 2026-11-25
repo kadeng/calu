@@ -31,6 +31,10 @@
   </p>
   <p class="muted">With a repository, the new folder gets its name unless you give one; it is
     cloned as {{ user }}. An empty new folder needs only a name.</p>
+  <p class="caution"><strong>Clone only repositories you trust.</strong> Claude Code trusts
+    every folder a session starts in: the folder's <code>.claude/</code> settings (hooks, MCP
+    servers, environment variables) run as {{ user }} at once, outside Calu's checkers and the
+    sandbox. The same holds for a folder you choose above.</p>
 
   <h2>2. Session</h2>
   <p class="row">

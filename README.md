@@ -223,6 +223,10 @@ It asks for your sudo password, then for the calu user password. Sessions start 
 > loopback interface; HTTPS with your own certificate is optional (`--tls-cert`,
 > `--tls-key`; see [Calu web](DOCUMENTATION.md#in-a-browser-calu-web)).
 
+> **Security note: project folders.** Claude Code trusts every folder a session starts in: its
+> `.claude/` settings (hooks, MCP servers, environment variables) run as you at once, outside
+> Calu's checkers and the sandbox. Clone and open only repositories you trust.
+
 **5. The IDE extensions** (optional; not on a marketplace yet, so you build them once):
 
 ```bash
