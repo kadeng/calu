@@ -111,7 +111,10 @@ planted in a web page arrives as a report that someone wrote it.
  * Claude Code may run as a different OS user than Calu and cannot approve its own steps.
  * Sessions and databases can be password protected (or not, your choice of convenience vs. security).
 
-<img src="docs/assets/vscode-subagents.png" width="560" alt="Subagents as tabs in the VSCode extension">
+<p>
+<img src="docs/assets/vscode-subagents.png" width="560" alt="Subagents as tabs in the VSCode extension"><br>
+<sub>VSCode extension: subagents as tabs</sub>
+</p>
 
 ## Frontends - Terminal UI, Web UI, IDE extensions
 
@@ -122,17 +125,10 @@ replace the proven Claude Code harness itself; it sits on top of it.
 Claude Code sessions run independently of the frontend. You can detach and attach to sessions
 and switch user interfaces or even use multiple of them in parallel.
 
-- **VSCode extension** ([extensions/vscode](extensions/vscode)): the chat on the right;
-  checker instructions, checker context and honesty one click away; a click on an edit opens
-  its diff, a click on a file name opens the file at the line; a settings dialog with one
-  model for every role. Meant to run where the workspace is (WSL, SSH, a dev container).
-- **PyCharm plugin** ([extensions/jetbrains](extensions/jetbrains)), for PyCharm 2026.3: the
-  same chat as a native tool window, in three modes: everything local; JetBrains'
-  remote development with the IDE backend on the server; a local IDE on a copy that Calu keeps
-  in sync with the server over SSH, with run and debug through PyCharm's SSH interpreter
-  ([guide](DOCUMENTATION.md#pycharm-the-three-ways-to-work)).
-- **Web interface** (`calu web`): all sessions of all machines, history, diffs, a live view,
-  settings, herd management.
+- **IDE extensions** for [VSCode](extensions/vscode) and [PyCharm](extensions/jetbrains):
+  everything you expect, a modern UI, and Calu's own features at your fingertips.
+- **Web interface** (`calu web`): chat, configuration, herd management, central management
+  and logging of the sessions of all machines, and triage of what needs your attention.
 - **Terminal** (`calu attach`): a full-screen client, and a line client for pipes. It and the
   web interface also work from another machine through SSH
   ([guide](DOCUMENTATION.md#from-another-machine)).
@@ -140,11 +136,13 @@ and switch user interfaces or even use multiple of them in parallel.
 - **Command line on the database**: `calu sessions`, `calu escalations`,
   `calu resolve 12 allow`.
 
-<p>
-<img src="docs/assets/pycharm-approval.png" width="32%" alt="The PyCharm plugin: a command waits for a decision in the tool window">
-<img src="docs/assets/web-live-subagents.png" width="32%" alt="The web live view: a decision asked for by one of ten subagents">
-<img src="docs/assets/vscode-settings.png" width="32%" alt="The settings dialog of the VSCode extension">
-</p>
+<table>
+<tr>
+<td width="33%"><img src="docs/assets/pycharm-approval.png" alt="The PyCharm plugin: a command waits for a decision in the tool window"><br><sub>PyCharm plugin: a command waits for a decision</sub></td>
+<td width="33%"><img src="docs/assets/web-live-subagents.png" alt="The web live view: a decision asked for by one of ten subagents"><br><sub>Web interface: a subagent's step waits for a decision</sub></td>
+<td width="33%"><img src="docs/assets/vscode-settings.png" alt="The settings dialog of the VSCode extension"><br><sub>VSCode extension: settings</sub></td>
+</tr>
+</table>
 
 
 ## Quickstart
