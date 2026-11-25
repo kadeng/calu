@@ -583,3 +583,167 @@ def test_claude_keeps_its_own_system_prompt_and_gets_calus_sentence(tmp_path: Pa
         "append": CLAUDE_APPEND,
     }
     assert "src/app.py:12" in CLAUDE_APPEND
+
+
+# Background subagents: Claude Code's default, and what its tool result reports (2026-11-25)
+
+
+def test_only_an_explicit_false_keeps_a_subagent_in_the_foreground():
+    """Without `run_in_background` Claude Code runs a subagent in the background in an SDK
+    session (spikes/RESULTS.md, 2026-11-25); only an explicit false means the foreground."""
+    from calu.claude.runner import runs_in_background
+
+    for value in (None, True, 1, "true", "yes"):
+        assert runs_in_background({"run_in_background": value})
+    assert runs_in_background({})
+    for value in (False, 0, "false", "False", "no", "0"):
+        assert not runs_in_background({"run_in_background": value})
+
+
+def test_the_tool_result_of_an_agent_call_tells_where_the_subagent_ran():
+    from calu.claude.sdk_runner import launched_in_background
+
+    assert launched_in_background({"status": "async_launched", "agentId": "a1"}) is True
+    assert launched_in_background({"isAsync": True}) is True
+    assert launched_in_background({"status": "completed", "content": []}) is False
+    for unknown in ({"status": "failed"}, {}, None, "text"):
+        assert launched_in_background(unknown) is None
+
+
+def agent_hooks(runner: SdkRunner, gate: Any) -> tuple[Any, Any]:
+    """Return the runner's PostToolUse hook for the Agent tool and its SubagentStop hook.
+
+    Args:
+        runner: The runner.
+        gate: The gate the hooks report to.
+
+    Returns:
+        (post_tool_use, subagent_stop), called with plain dicts as the CLI calls them.
+    """
+    hooks = runner._options(gate, None).hooks  # type: ignore[arg-type]
+    assert hooks is not None
+    (post,) = [m for m in hooks["PostToolUse"] if m.matcher == "Agent|Task"]
+    return post.hooks[0], hooks["SubagentStop"][0].hooks[0]
+
+
+class RecordingReviews(AllowAll):
+    """A gate that keeps every subagent result it is asked to review."""
+
+    def __init__(self) -> None:
+        """Start without reviews."""
+        self.reviewed: list[Any] = []
+
+    async def review_subagent_result(self, result):
+        """Keep `result`; no note.
+
+        Args:
+            result: The subagent result to review.
+
+        Returns:
+            "" (no note).
+        """
+        self.reviewed.append(result)
+        return ""
+
+
+@pytest.mark.anyio
+async def test_a_subagent_launched_without_the_field_is_reviewed_when_it_ends(tmp_path: Path):
+    """The gap found on 2026-11-25: an Agent call without `run_in_background` returns at once
+    with status "async_launched", and the subagent's result reaches the main agent later. The
+    PostToolUse hook has nothing to review then; SubagentStop must review the result."""
+    gate = RecordingReviews()
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    post, stop = agent_hooks(runner, gate)
+    agent_input = {"description": "count", "prompt": "Reply with DONE"}
+    runner._translate(
+        AssistantMessage(
+            content=[ToolUseBlock(id="tu1", name="Agent", input=agent_input)], model="m"
+        )
+    )
+    launch = {"status": "async_launched", "agentId": "a1", "isAsync": True}
+    await post(
+        {"tool_name": "Agent", "tool_input": agent_input, "tool_response": launch}, "tu1", None
+    )
+    assert gate.reviewed == []
+    events = runner._translate(
+        UserMessage(
+            content=[ToolResultBlock(tool_use_id="tu1", content="Async agent launched")],
+            tool_use_result=launch,
+        )
+    )
+    (update,) = [event for event in events if isinstance(event, AgentsUpdate)]
+    assert update.agents[0].background is True and update.agents[0].status == "running"
+    await stop(
+        {"agent_id": "a1", "agent_type": "general-purpose", "last_assistant_message": "DONE"},
+        None,
+        None,
+    )
+    (result,) = gate.reviewed
+    assert (result.agent_id, result.result, result.background) == ("tu1", "DONE", True)
+
+
+@pytest.mark.anyio
+async def test_a_subagent_that_ran_in_the_foreground_after_all_is_reviewed_once(tmp_path: Path):
+    """Settings can force a subagent without the field into the foreground. Its SubagentStop
+    comes before its tool result and reviews it (it counts as background until then); the
+    PostToolUse hook then corrects the flag and does not review it again."""
+    from claude_agent_sdk.types import TaskStartedMessage
+
+    gate = RecordingReviews()
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    post, stop = agent_hooks(runner, gate)
+    agent_input = {"description": "count", "prompt": "Reply with DONE"}
+    runner._translate(
+        AssistantMessage(
+            content=[ToolUseBlock(id="tu1", name="Agent", input=agent_input)], model="m"
+        )
+    )
+    runner._translate(
+        TaskStartedMessage(
+            subtype="task_started",
+            data={},
+            task_id="a1",
+            description="count",
+            uuid="u1",
+            session_id="s1",
+            tool_use_id="tu1",
+        )
+    )
+    await stop(
+        {"agent_id": "a1", "agent_type": "general-purpose", "last_assistant_message": "DONE"},
+        None,
+        None,
+    )
+    done = {"status": "completed", "agentId": "a1", "content": [{"type": "text", "text": "DONE"}]}
+    await post(
+        {"tool_name": "Agent", "tool_input": agent_input, "tool_response": done}, "tu1", None
+    )
+    (result,) = gate.reviewed
+    assert result.result == "DONE"
+    assert runner.agents["tu1"].background is False
+
+
+@pytest.mark.anyio
+async def test_a_subagent_asked_for_in_the_foreground_is_reviewed_by_post_tool_use(tmp_path: Path):
+    gate = RecordingReviews()
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    post, stop = agent_hooks(runner, gate)
+    agent_input = {"description": "count", "prompt": "Reply with DONE", "run_in_background": False}
+    runner._translate(
+        AssistantMessage(
+            content=[ToolUseBlock(id="tu1", name="Agent", input=agent_input)], model="m"
+        )
+    )
+    runner._task_to_tool_use["a1"] = "tu1"
+    await stop(
+        {"agent_id": "a1", "agent_type": "general-purpose", "last_assistant_message": "DONE"},
+        None,
+        None,
+    )
+    assert gate.reviewed == []
+    done = {"status": "completed", "agentId": "a1", "content": [{"type": "text", "text": "DONE"}]}
+    await post(
+        {"tool_name": "Agent", "tool_input": agent_input, "tool_response": done}, "tu1", None
+    )
+    (result,) = gate.reviewed
+    assert (result.result, result.background) == ("DONE", False)

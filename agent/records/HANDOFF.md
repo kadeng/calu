@@ -76,6 +76,18 @@ calu: the owner reinstalls with `curl -fsSL .../install.sh | sudo bash` and rest
 `calu serve --sudo`; its checkers need `sudo calu config models auto` (the API key is in
 `/etc/calu/.env`).
 
+### Fixed on 2026-11-25: the result of a subagent started without `run_in_background`
+
+A spike (`spikes/spike_agent_background_default.py`, spikes/RESULTS.md) showed that Claude Code
+runs such a subagent in the background, while calu recorded it as foreground; neither result
+hook then reviewed its final result. Outside auto mode that result reached the main agent
+unreviewed; in auto mode an interrupt could end the review of its hand-back. Now an absent field
+counts as background (`calu.claude.runner.runs_in_background`), and the call's tool result
+corrects the flag (`sdk_runner.launched_in_background`). Still open (small, in RESULTS.md):
+calu reviews up to four undelivered texts after a denied hand-back, and an interrupted hand-back
+review of a foreground subagent answers PASS. Also small: the docstring of `claude.cli_path`
+says None means "look it up on PATH", but the SDK runs its bundled CLI first.
+
 ### The session of 2026-11-22 to 24 (the lead): what is open and what to know
 
 **Waiting for the owner** (he does these himself; he types every password):

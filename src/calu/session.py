@@ -172,6 +172,7 @@ from calu.claude.runner import (
     SideQuestionFailed,
     UsageReport,
     Verdict,
+    runs_in_background,
 )
 from calu.claude.sdk_runner import AGENT_TOOLS
 from calu.claude.transcripts import unwitnessed_turn
@@ -4182,7 +4183,7 @@ class Session:
                 description=str(step.tool_input.get("description") or ""),
                 prompt=str(step.tool_input.get("prompt") or ""),
                 kind="start",
-                background=bool(step.tool_input.get("run_in_background")),
+                background=runs_in_background(step.tool_input),
                 narration=step.narration,
             )
             who = f"Task for subagent {safe_name(step.tool_use_id or 'new')}"

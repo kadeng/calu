@@ -418,6 +418,7 @@ them by hand; they use throwaway directories and databases.
 | `spike_question_tool.py` | Does `AskUserQuestion` reach the hook, and can calu answer it? (D35) | the CLI changes |
 | `spike_fork_session.py` | Can a conversation be forked at an earlier turn? (D36) | the SDK changes |
 | `spike_auto_mode_ask.py` | Does auto mode ask rather than only allow or deny? (D38) | the CLI changes |
+| `spike_agent_background_default.py` | Does an Agent call without `run_in_background` run in the background, which of calu's hooks reviews its result, and how does a subagent hand back its report? (measured 2026-11-25, CLI 2.1.319: in the background; since then calu counts it as background and corrects the flag from the call's tool result) | the CLI or the SDK changes |
 | `spike_dev_channel.py` | Does `--dangerously-load-development-channels` have an effect in the headless mode calu uses? (no: ignored) | the CLI changes |
 | `spike_session_id.py` | Does Claude Code take the session id calu chooses, for a new session and for a fork of a whole conversation? (D203) | the CLI or the SDK changes |
 | `spike_other_uid.sh` (runs `spike_other_uid.py` as root in a container) | Do the hooks, the permission callback, the side question and a resume work when calu is root and Claude Code another uid, and which uid, gid and groups does a command get? (D206) | the CLI or the SDK changes |

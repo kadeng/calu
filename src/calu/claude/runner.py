@@ -8,10 +8,10 @@
 (`fake_runner.py`) replays a script and is used by tests and front-end development.
 """
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from calu.checkers.model import Step, SubagentResult
 from calu.protocol.messages import AgentInfo, ChatImage, ContextUsage, Event, RateLimit
@@ -145,6 +145,28 @@ def hook_decision(verdict: Verdict, mode: str | None, require_auto_mode: bool) -
             return None
         return "ask" if require_auto_mode else "allow"
     return verdict.value
+
+
+def runs_in_background(agent_input: Mapping[str, Any]) -> bool:
+    """Tell whether Claude Code runs an Agent call's subagent in the background, by its input.
+
+    In a session of the Agent SDK, Claude Code runs a subagent in the background unless the
+    call sets `run_in_background` to false; a call without the field runs in the background
+    (measured with CLI 2.1.319, spikes/RESULTS.md, 2026-11-25). The settings can still force
+    the foreground (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`), so a runner corrects this guess
+    with what the call's tool result reports.
+
+    Args:
+        agent_input: The Agent call's input as the model wrote it (not validated).
+
+    Returns:
+        False when `run_in_background` is false, 0 or the text "false", "0" or "no"; True
+        otherwise, also when the field is absent.
+    """
+    value = agent_input.get("run_in_background")
+    if isinstance(value, str):
+        return value.strip().lower() not in ("false", "0", "no")
+    return value is None or bool(value)
 
 
 @dataclass(frozen=True)

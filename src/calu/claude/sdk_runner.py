@@ -72,6 +72,7 @@ from calu.claude.runner import (
     UsageReport,
     Verdict,
     hook_decision,
+    runs_in_background,
 )
 from calu.config import ClaudeConfig, PermissionMode
 from calu.context.foreign import (
@@ -318,6 +319,30 @@ def tool_result_text(content: Any, limit: int = MAX_RESULT_CHARS) -> str:
     return text if len(text) <= limit else text[:limit] + "\n[... truncated]"
 
 
+def launched_in_background(details: Any) -> bool | None:
+    """Read from an Agent call's tool result whether Claude Code ran the subagent in the background.
+
+    Measured with CLI 2.1.319 (spikes/RESULTS.md, 2026-11-25): a background launch returns at once
+    with status "async_launched" (and `isAsync` true); a subagent that ran in the foreground
+    returns its result with status "completed".
+
+    Args:
+        details: The tool result's details: `tool_use_result` of the stream's user message, or
+            `tool_response` of the PostToolUse hook.
+
+    Returns:
+        True for a background launch, False for a foreground run that completed, None when the
+        details say neither (an error, or a form calu does not know).
+    """
+    if not isinstance(details, dict):
+        return None
+    if details.get("status") == "async_launched" or details.get("isAsync") is True:
+        return True
+    if details.get("status") == "completed":
+        return False
+    return None
+
+
 def permission_prompt(ctx: Any) -> str:
     """Return what Claude Code says it is asking permission for (agent/records/PLAN.md D60).
 
@@ -456,6 +481,10 @@ class SdkRunner:
         """How often the sink raised on an event; each time is logged (`_emit`)."""
         self.background_tasks = 0
         """Claude Code's background tasks now running, from `background_tasks_changed` (D158)."""
+        self._reviewed_at_stop: set[str] = set()
+        """Agent calls whose subagent's final result the SubagentStop hook reviewed, so that the
+        PostToolUse hook does not review it a second time (a subagent guessed to run in the
+        background that ran in the foreground)."""
         self.session_id: str | None = None
         self.rate_limits: dict[str, RateLimit] = {}
         """The newest state of each usage limit Claude Code reported, by limit type."""
@@ -1091,6 +1120,13 @@ class SdkRunner:
         ) -> dict[str, Any]:
             """PostToolUse hook: review the result of a finished foreground subagent.
 
+            First it corrects the subagent's `AgentInfo.background` with what the tool result
+            reports (`launched_in_background`): this hook runs before the subagent's SubagentStop
+            when the subagent runs in the background (measured, spikes/RESULTS.md 2026-11-25).
+            A background launch has no result yet and is not reviewed here. Neither is a result
+            that SubagentStop reviewed already: a subagent that was guessed to run in the
+            background but ran in the foreground (`runs_in_background`).
+
             The main agent waits while this runs (verified); a note from the review is sent as
             a priority "next" message, which Claude reads together with the result (verified;
             `additionalContext` was not acted on for the Agent tool).
@@ -1106,7 +1142,13 @@ class SdkRunner:
             if input_data.get("tool_name") not in AGENT_TOOLS:
                 return {}
             response = input_data.get("tool_response")
+            info = self.agents.get(tool_use_id or "")
+            background = launched_in_background(response)
+            if info is not None and background is not None:
+                info.background = background
             if not isinstance(response, dict) or response.get("status") != "completed":
+                return {}
+            if (tool_use_id or "") in self._reviewed_at_stop:
                 return {}
             tool_input = input_data.get("tool_input") or {}
             result = SubagentResult(
@@ -1180,9 +1222,14 @@ class SdkRunner:
         ) -> dict[str, Any]:
             """SubagentStop hook: review the final result of a background subagent.
 
-            Foreground subagents are reviewed in `post_tool_use` instead (it has the full
-            tool result). The note is injected as a priority "next" message; it reaches the
-            main agent before the task notification with the result (verified).
+            A subagent counts as background when its Agent call did not set
+            `run_in_background` to false (`runs_in_background`, Claude Code's default), until
+            its tool result says otherwise (`post_tool_use`, `_agent_result`). Foreground
+            subagents are reviewed in `post_tool_use` instead (it has the full tool result);
+            when this hook reviewed a subagent that then turns out to have run in the
+            foreground, `post_tool_use` leaves it (`_reviewed_at_stop`). The note is injected as
+            a priority "next" message; it reaches the main agent before the task notification
+            with the result (verified).
 
             Args:
                 input_data: Hook input (`agent_id`, `last_assistant_message`, ...).
@@ -1239,6 +1286,7 @@ class SdkRunner:
                 background=True,
             )
             note = await gate.review_subagent_result(result)
+            self._reviewed_at_stop.add(info.agent_id)
             await self._send_note(note)
             return {}
 
@@ -1713,14 +1761,16 @@ class SdkRunner:
                         )
                         if block.name in AGENT_TOOLS:
                             # The model wrote these fields and nothing has validated them
-                            # yet, so each is coerced to the type the record needs.
+                            # yet, so each is coerced to the type the record needs. Without
+                            # `run_in_background` the subagent runs in the background; the
+                            # call's tool result corrects the guess (`_agent_result`).
                             kind = block.input.get("subagent_type")
                             self._agent_prompts[block.id] = str(block.input.get("prompt", ""))
                             self.agents[block.id] = AgentInfo(
                                 agent_id=block.id,
                                 description=str(block.input.get("description", "")),
                                 subagent_type=kind if isinstance(kind, str) else None,
-                                background=bool(block.input.get("run_in_background", False)),
+                                background=runs_in_background(block.input),
                             )
                             events.append(self._agents_update())
             case UserMessage():
@@ -1975,7 +2025,8 @@ class SdkRunner:
     def _agent_result(self, tool_use_id: str, msg: UserMessage) -> list[Event]:
         """Update a subagent's record from the result of its Agent tool call.
 
-        Records the SDK agent id and marks the subagent "completed" if the result says so.
+        Records the SDK agent id, corrects `background` with what the result reports
+        (`launched_in_background`), and marks the subagent "completed" if the result says so.
 
         Args:
             tool_use_id: Id of the tool call whose result arrived.
@@ -1992,6 +2043,9 @@ class SdkRunner:
         info.sdk_agent_id = result.get("agentId") or info.sdk_agent_id
         if info.sdk_agent_id:
             self._task_to_tool_use[info.sdk_agent_id] = tool_use_id
+        background = launched_in_background(result)
+        if background is not None:
+            info.background = background
         status = result.get("status")
         if status == "completed":
             info.status = "completed"

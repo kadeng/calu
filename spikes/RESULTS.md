@@ -1371,3 +1371,134 @@ Code applies the main checkout's; the final redaction for commits in worktrees; 
 
 **Re-run when** the CLI is updated: run 1 and `exit-remove` cost about one cent each on Haiku;
 runs 2-5 add calu's checkers.
+
+## An Agent call without `run_in_background` (2026-11-25, CLI 2.1.319, SDK 0.2.179)
+
+**Why it matters.** calu takes `AgentInfo.background` from the main agent's Agent call: it is
+`run_in_background`, False when the field is absent (`SdkRunner._translate`;
+`Session._review_task` reads the same field). The runner reviews a subagent's final result in
+one of two hooks: PostToolUse on the Agent tool, only when `tool_response.status` is
+"completed", and SubagentStop, only when `AgentInfo.background` is True. The
+claude-code-integration reference says that subagents of the Agent SDK run in the background by
+default. If that holds, a call without the field runs in the background, calu records a
+foreground subagent, and neither hook reviews its result.
+
+**Setup** (`spikes/spike_agent_background_default.py`, `claude-haiku-5-5` for the main agent;
+the subagent inherits it). Each run starts calu's own `SdkRunner` with calu's default
+`ClaudeConfig` apart from the model, so Claude Code gets calu's options: the SDK's bundled CLI
+(`claude.cli_path` is unset and the SDK prefers its bundled CLI to `claude` on PATH; both are
+2.1.319 here, and every `init` message reported 2.1.319), `setting_sources` user, project and
+local, calu's `--settings` document (only the `sandbox` key), no `--permission-mode` (the user
+settings' `defaultMode: auto` applies), calu's hooks, `replay-user-messages`,
+`forward-subagent-text` and `thinking-display summarized`. calu sets nothing that changes
+background behaviour: `_claude_env` blanks the checker keys and sets `CALU_INSIDE_SESSION`, no
+`agents=` is passed, and the `--settings` document holds no `env`; the user settings on this
+machine hold neither an `env` entry nor an agent with `background`. A stand-in gate allows Agent
+and Task, allows or denies `SubagentHandback` per run, denies every other tool, and records each
+call of `review_subagent_result`; wrappers record every SDK message and every call of calu's
+hooks. The spike removes the variables of an enclosing Claude Code session from the environment
+(it was started from inside one) and adds `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`, so that only
+Haiku answers. The prompt gives the main agent the exact JSON input of its one Agent call; the
+subagent is asked to reply with the single word DONE. All seven runs worked at the first
+attempt: the `tool_use` block had the field absent, `false` or `true` as intended, and the
+PreToolUse hook's `tool_input` was the same (Claude Code does not fill the field in).
+
+**Results** (seconds since the start of the run; "pointer" is Claude Code's text "This agent's
+report was delivered to you as a message from "<id>" (its SubagentHandback call). Read it
+there; it is not repeated here.", calu's `HANDBACK_POINTER`):
+
+| Run | Sent | Agent tool result `status` | PostToolUse `tool_response.status` | SubagentStop (`agent_type` general-purpose each time) | `background_tasks_changed` | Where DONE reached the main agent | calu: `background`; review |
+|---|---|---|---|---|---|---|---|
+| a, auto, hand-back allowed | absent | `async_launched` | `async_launched` | once, `af3676367f9306b28`, empty last message | 1 at 3.6, 0 at 5.1 | user message of origin `peer` ("[Subagent hand-back] ...") in a new turn at 5.7, after the task notification (5.1, summary: the pointer) | False; **none** |
+| b, auto, allowed | `false` | `completed`, text: the pointer | `completed` | once, empty | none | `peer` message right after the tool result, same turn | False; PostToolUse, the pointer |
+| c, auto, allowed | `true` | `async_launched` | `async_launched` | once, empty | 1, then 0 | `peer` message in a new turn | True; SubagentStop, "" |
+| a, auto, hand-back denied | absent | `async_launched` | `async_launched` | 4 times, each with the subagent's newest plain text | 1, then 0 at 12.3 | nowhere | False; none |
+| b, auto, denied | `false` | `completed`, text: "The subagent ended without delivering a report ..." | `completed` | 4 times | none | nowhere | False; PostToolUse, that text |
+| c, auto, denied | `true` | `async_launched` | `async_launched` | 4 times | 1, then 0 | nowhere | True; SubagentStop 4 times, the undelivered texts |
+| a, `claude.permission_mode = "default"` | absent | `async_launched` | `async_launched` | once, `a6e32b7f258b0f674`, last message "DONE" | 1 at 2.2, 0 at 3.5 | task notification, summary "DONE"; the main agent answered DONE at 4.2 | False; **none** |
+
+**Observations.**
+
+- An Agent call without `run_in_background` runs in the background in an Agent SDK session.
+  The tool result comes back at once with `status: "async_launched"`, `isAsync: true` and an
+  `outputFile`, `background_tasks_changed` lists a `local_agent` task, the main agent ends its
+  turn ("WAITING"), and Claude Code starts the next turn by itself after the subagent has ended.
+  The bundled CLI's code agrees: for the main agent an absent field counts as a request for the
+  background, and only `false` makes a foreground subagent; switching background tasks off
+  (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, `--bare`, a setting of the host application) makes
+  every subagent a foreground one. The Agent tool's description tells Claude: "Agents run in
+  the background by default ... Set to false only when your very next action depends on this
+  agent's result".
+- In auto mode every subagent, foreground or background, delivered its report with
+  `SubagentHandback`. calu's gate saw each call, with `agent_id` mapped to the Agent call;
+  `Session._handback` reviews the report there, whatever `AgentInfo.background` says. The
+  report reaches the main agent as a user message with `origin` `{"kind": "peer", ...}`, which
+  the runner reports as not from the user.
+- With the hand-back denied, Claude Code tells the subagent "[handback-send-enforce] Your
+  report has not been delivered. Call SubagentHandback({message: <your full report>}) now; the
+  call ends your run." up to three times, and SubagentStop fires after each round. Then the task
+  notification (and a foreground subagent's tool result) says "The subagent ended without
+  delivering a report through SubagentHandback, so no report was delivered. Its unsent text is
+  not shown." The main agent never saw DONE.
+- The CLI's code arms this hand-back only when the spawning agent and the subagent run in auto
+  mode, the subagent is not a fork, and the feature is on (`CLAUDE_CODE_DISABLE_SUBAGENT_HANDBACK`
+  turns it off; a server-side flag turns it on by default). In `default` mode (last row) no
+  `SubagentHandback` was offered, the subagent ended with plain text, and that text became the
+  task notification's summary. The stream carried it only in the system message
+  `task_notification`; no user message was replayed for it.
+- Only `claude-haiku-5-5` was billed; the session costs Claude Code reported add up to $0.045
+  for the seven runs.
+
+**Conclusion.** The reference is right for this CLI, and calu records a subagent started
+without the field as foreground. The gap is real for both hooks: PostToolUse gets
+`async_launched`, SubagentStop returns early for the foreground record, so neither reviews the
+final result. Whether text reaches the main agent unreviewed depends on the hand-back:
+
+- In auto mode, calu's default, the report goes through `SubagentHandback`, which
+  `Session._handback` reviews, and Claude Code delivers no other text. The wrong flag reaches
+  that review as `SubagentResult.background`, and `EscalationDesk.turn_interrupted` ends every
+  pending result review whose `background` is False. So when a person interrupts the main
+  agent's turn while an escalated hand-back of such a subagent waits, the escalation ends as
+  "interrupted", `_review_subagent_result` returns neither a note nor a denial, and `_handback`
+  answers PASS: the hand-back is no longer held for a person. This follows from the code; it was
+  not run.
+- In `default` or `acceptEdits` mode (calu offers both, D247; a settings file or a model without
+  auto mode has the same effect), for fork subagents, and wherever the hand-back is switched
+  off, the subagent's final text reaches the main agent in the task notification, and nothing
+  in calu reviews it. Measured for `default` (last row); `acceptEdits`, forks and the switches
+  are read from the CLI's code.
+
+The flag also decides labels and addressing: the result checker and the subagent checker call
+such a subagent a "subagent" instead of a "background subagent", the clients show it as
+foreground, and `chat.send` to it is refused while it runs (`Session._find_agent`). A separate
+finding: with the hand-back denied, SubagentStop fires once per enforcement round, so calu
+reviews up to four texts of a background subagent that Claude Code never delivers.
+
+**Re-run when** the CLI or the SDK is updated: `uv run python
+spikes/spike_agent_background_default.py --parent DIR`, again with `--handback deny`, and
+`--variants a --permission-mode default` (Haiku, under one cent per run).
+
+**Fixed in calu the same day.** An Agent call without `run_in_background` now counts as
+background (`calu.claude.runner.runs_in_background`, Claude Code's default; only an explicit
+false means the foreground), and the call's tool result corrects the flag
+(`sdk_runner.launched_in_background`: "async_launched" means background, "completed"
+foreground). The PostToolUse hook corrects it first, because it runs before a background
+subagent's SubagentStop; `_agent_result` corrects it again in the stream and sends the corrected
+`agents.update` to the clients. So:
+
+- SubagentStop reviews the final result of a subagent started without the field: the `default`
+  row above is closed.
+- The hand-back review carries `background` True, so an interrupt no longer ends it as
+  "interrupted": the auto-mode bypass above is closed.
+- The clients show the subagent as background, and `chat.send` reaches it while it runs.
+
+A subagent that counts as background but runs in the foreground (a setting such as
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`) is reviewed at its SubagentStop, which comes before its
+tool result, and the PostToolUse hook then does not review it again (`_reviewed_at_stop`).
+Tests: `tests/unit/test_sdk_runner.py`, the five tests after "Background subagents".
+
+Still open:
+- With the hand-back denied, SubagentStop still fires up to four times, and calu reviews each
+  undelivered text. This now also applies to subagents started without the field.
+- An interrupt that ends a hand-back review still lets `_handback` answer PASS. Since the fix
+  this applies only to foreground subagents, which end with the interrupted turn.
