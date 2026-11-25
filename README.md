@@ -2,6 +2,9 @@
 
 [![checks](https://github.com/kadeng/calu/actions/workflows/checks.yml/badge.svg)](https://github.com/kadeng/calu/actions/workflows/checks.yml)
 
+> **Status: alpha.** Calu is mostly functional, but not yet completely tested. Expect rough
+> edges, and report what you find.
+
 > **Ed Dillinger:** "What's the project you're working on?"
 >
 > **Alan Bradley:** "Well, it's called Tron. It's a security program itself, actually. It
