@@ -1268,3 +1268,20 @@ Open points for the owner, not built:
 3. Claude Code wrote the conversation's transcript under the owner's `~/.claude/projects/`
    (a directory named after the scratch path), as every Calu session on the owner's account
    does. The `claude:` checks keep none (`--no-session-persistence`).
+
+### N. Locking in the VSCode extension, scripted backend (2026-11-25, D276)
+
+Cua desktop, `uitest/setup-demo.sh` with the working tree of 9e97e55. The container's calu got a
+new empty database `calu_uitest2`: the old one predates the migration squash (D266), and `calu
+db reset` rightly refuses a confirmation that is not typed by a person; the old login file is
+kept as `~/.config/calu/credentials.json.before-d266`.
+
+| Case | Result |
+|---|---|
+| Locking off (default), `scenario: tour`: text, edit, deny, escalation allowed, two subagents, question answered | ok, turn done in 30 s |
+| Locking on (`files`), `scenario: swarm`: ten subagents, eight 3 s commands each, in one worktree | ok: one command holds the worktree (exclusive) and the global lock (shared), the nine others queue in FIFO order (read from the state file); every command passed; done in 4 min 51 s, about 1 min of it the two decisions (without locking about 25 s of commands) |
+| Locking on, an escalation while the others run | ok: nine steps held, the lock state empty while the person decides |
+| Locking on, the second escalation denied | ok: the denied call gave up its turn, the agent's later commands ran; the state file was empty at the end |
+| Locking on, how a waiting call looks | open (UX): a call that waits for its locks shows as running; nothing says that it waits, or for what |
+
+Afterwards `locking.enabled` was unset again in the container.
