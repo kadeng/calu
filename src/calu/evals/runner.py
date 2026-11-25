@@ -34,6 +34,8 @@ ESCALATE, and every report gives precision and recall per class (`Report.class_m
 
 A command case may state the expected `executes_project_code` (`EvalCase.executes`); a wrong
 or missing answer is reported (`CaseResult.executes_wrong`) and does not change the accuracy.
+The same holds for `writes_outside_worktree` (`EvalCase.writes_outside`,
+`CaseResult.outside_wrong`), where no answer counts as false.
 
 Each case runs in a fresh temporary directory that holds the case's `files`, with the checker
 instructions of the project being evaluated.
@@ -409,6 +411,21 @@ class CaseResult:
         )
 
     @property
+    def outside_wrong(self) -> bool:
+        """Whether a command checker's `writes_outside_worktree` differs from the case's.
+
+        Returns:
+            True if the case states `EvalCase.writes_outside` and the run answered otherwise
+            (no answer counts as false). False for a failed run and for a case that states
+            nothing.
+        """
+        return (
+            self.case.writes_outside is not None
+            and self.decision is not None
+            and (self.decision.writes_outside_worktree is True) is not self.case.writes_outside
+        )
+
+    @property
     def actual(self) -> str:
         """The scored decision (`verdict`) as text, or "ERROR" if the checker failed.
 
@@ -570,10 +587,8 @@ class Report:
             A dict with n, errors, answered, accuracy, preferred, critical_misses,
             critical_cases, critical_always, critical_guarded, unstable_cases,
             over_escalations, escalation_share, escalations_wanted, escalations_spent,
-            slowest_ms, unwanted_comments,
-            missing_comments, unwanted_marks, unit_errors, executes_wrong and the token
-            totals; only "n" if there was no
-            run.
+            slowest_ms, unwanted_comments, missing_comments, unwanted_marks, unit_errors,
+            executes_wrong, outside_wrong and the token totals; only "n" if there was no run.
 
             The shares (`accuracy`, `preferred`, `escalation_share`) are of the checks that
             answered, not of all of them, so a run where checks failed does not report a low
@@ -635,6 +650,7 @@ class Report:
             "unwanted_marks": sum(r.unwanted_mark for r in self.results),
             "unit_errors": sum(len(r.unit_errors) for r in self.results),
             "executes_wrong": sum(r.executes_wrong for r in self.results),
+            "outside_wrong": sum(r.outside_wrong for r in self.results),
             # What the run cost: `calu evals` is the only command that spends tokens on purpose, and
             # a case set times `--repeat` is a bill worth seeing (agent/records/PLAN.md D66).
             "input_tokens": sum(r.input_tokens for r in self.results),
@@ -748,6 +764,11 @@ class Report:
                     if s["executes_wrong"]
                     else ""
                 )
+                + (
+                    f", wrong writes_outside_worktree {s['outside_wrong']}"
+                    if s["outside_wrong"]
+                    else ""
+                )
             )
             if s["input_tokens"]:
                 share = s["cache_read_tokens"] / s["input_tokens"]
@@ -831,6 +852,13 @@ class Report:
                     f"  [executes] {r.case.name} ({r.case.source}): expected "
                     f"executes_project_code {r.case.executes}, got "
                     f"{r.decision.executes_project_code}"
+                )
+            if r.outside_wrong:
+                assert r.decision is not None
+                lines.append(
+                    f"  [outside] {r.case.name} ({r.case.source}): expected "
+                    f"writes_outside_worktree {r.case.writes_outside}, got "
+                    f"{r.decision.writes_outside_worktree}"
                 )
             for path, expected, answered in r.file_pairs:
                 if expected != answered:

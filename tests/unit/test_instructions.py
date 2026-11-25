@@ -83,6 +83,10 @@ FILE_TASK_WORDS = 40
 """Words of the command checker's sentence on judging a file by the task of a subagent that may
 still run (2026-11-22, the owner's request)."""
 
+OUTSIDE_WORDS = 55
+"""Words of the command checker's answer field `writes_outside_worktree`, which decides whether a
+command takes the global lock exclusively (D276; 2026-11-25, the owner's request)."""
+
 
 @pytest.mark.parametrize("name", ["command", "edit", "changeset", "subagent-result"])
 def test_the_shipped_instructions_are_short(name: str) -> None:
@@ -101,7 +105,7 @@ def test_the_shipped_instructions_are_short(name: str) -> None:
     route = "subagent" if name == "subagent-result" else name
     words = len(compose_instructions(route, default_instructions(name)).split())
     evasion = sum(len(read_part(p).split()) for p in (EVASION_PART, ROLE_PART, DISCLOSURE_PART))
-    tasks = {"subagent-result": TASK_WORDS, "command": FILE_TASK_WORDS}.get(name, 0)
+    tasks = {"subagent-result": TASK_WORDS, "command": FILE_TASK_WORDS + OUTSIDE_WORDS}.get(name, 0)
     shared = evasion + PRIVACY_WORDS + SUGGEST_WORDS
     assert words < (410 if name == "command" else 360) + shared + tasks, f"{name}: {words} words"
     assert "auto mode" in system_part(route) or route == "subagent"

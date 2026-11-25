@@ -643,6 +643,7 @@ edits and commands apart:
 | Call | Waits for |
 |---|---|
 | A command (Bash) | the edits and commands running in its worktrees (that of its working directory and of its `cd` targets), and an edit outside the worktrees |
+| A command that writes code or configuration outside its worktrees (the command checker says so) | in addition every running command, as an edit outside the worktrees does |
 | An edit of a file in a worktree | a command running in that worktree, and another edit of the same file |
 | An edit of a file outside every worktree | every running command |
 
@@ -674,8 +675,11 @@ edits and commands apart:
   process only.
 - A command in the main checkout does not lock the worktrees that Claude Code keeps inside the
   project (`.claude/worktrees/`).
-- A command that writes outside its worktrees can run at the same time as a command in another
-  worktree.
+- Whether a command writes outside its worktrees is the command checker's judgement of what the
+  command shows. It counts source code, configuration, scripts and programs, not logs, caches,
+  reports or data, and it is not a search for every side effect. A command it does not flag can
+  run at the same time as a command in another worktree. The judgement is made at the check, so
+  an edit outside that lands between the check and the locks is not seen by it.
 
 **Upsides:** commands such as builds and tests run on a tree that does not change under them;
 the write-set review stays exact when agents work in parallel; a misbehaving agent cannot use

@@ -3575,6 +3575,14 @@ class Session:
         except Exception as exc:
             log.exception("pre_tool_use failed")
             decided = self.gate.failed(step, exc)
+        if any(
+            outcome.decision.writes_outside_worktree is True
+            for checker, outcome in decided.runs
+            if not checker.judges_honesty
+        ):
+            # A command that writes code or configuration outside its checkouts takes the
+            # global lock exclusively (D276); the mark holds for a later take in `ask` too.
+            self.locks.mark_writes_outside(step)
         await self._mark_at_once(step, decided)
         try:
             self._keep_honesty(step, decided, expected)

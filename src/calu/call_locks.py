@@ -8,7 +8,10 @@ which takes no lock and never waits.
 
     tool                                    locks
     Bash, Monitor (SHELL_TOOLS)             a command in the checkouts of its working directory
-                                            and its `cd` targets (`Session.step_checkouts`)
+                                            and its `cd` targets (`Session.step_checkouts`);
+                                            the global lock exclusive when the command checker
+                                            says it writes code or configuration outside them
+                                            (`mark_writes_outside`), else shared
     Edit, Write, MultiEdit, NotebookEdit    an edit in the checkout of its file, with the file's
                                             lock; a file outside every checkout: an edit outside
     every other tool                        none
@@ -126,12 +129,15 @@ class _Plan:
         worktrees: The roots of the checkouts, resolved, as the scheme's worktree ids.
         path: The edited file, resolved, for an edit.
         labels: Lock key -> how a message names it.
+        writes_outside: For a command: it writes code or configuration outside its checkouts,
+            so it takes the global lock exclusively.
     """
 
     kind: str
     worktrees: tuple[str, ...] = ()
     path: str | None = None
     labels: dict[str, str] = field(default_factory=dict)
+    writes_outside: bool = False
 
 
 class CallLocks:
@@ -183,6 +189,7 @@ class CallLocks:
         self._mutex = threading.Lock()
         self._tickets: dict[str, Ticket] = {}
         self._leases: dict[str, Lease] = {}
+        self._outside: set[str] = set()
         self._limiter = anyio.CapacityLimiter(WAIT_THREADS)
 
     def issue(self, step: Step) -> None:
@@ -196,6 +203,20 @@ class CallLocks:
         ticket = self.scheme.issue(step.agent_id or "main")
         with self._mutex:
             self._tickets[step.tool_use_id] = ticket
+
+    def mark_writes_outside(self, step: Step) -> None:
+        """Note that a command writes code or configuration outside its checkouts.
+
+        The command checker says so (`CheckDecision.writes_outside_worktree`). Every later
+        `take` of the call then takes the global lock exclusively, like an edit outside every
+        checkout. The mark ends with the call (`call_ended`, `close`).
+
+        Args:
+            step: The tool call; one that is not a command, or has no id, is ignored.
+        """
+        if step.tool_name in SHELL_TOOLS and step.tool_use_id:
+            with self._mutex:
+                self._outside.add(step.tool_use_id)
 
     def withdraw(self, step: Step) -> None:
         """Give up the call's turn: it was denied, or it will run without its locks being taken.
@@ -282,6 +303,7 @@ class CallLocks:
         with self._mutex:
             lease = self._leases.pop(tool_use_id, None)
             ticket = self._tickets.pop(tool_use_id, None)
+            self._outside.discard(tool_use_id)
         if lease is not None:
             _give_back(lease, tool_use_id)
         if ticket is not None:
@@ -296,6 +318,7 @@ class CallLocks:
         with self._mutex:
             leases, self._leases = dict(self._leases), {}
             tickets, self._tickets = dict(self._tickets), {}
+            self._outside.clear()
         for key, lease in leases.items():
             _give_back(lease, key)
         for key, ticket in tickets.items():
@@ -331,12 +354,17 @@ class CallLocks:
                 worktree_key(str(checkout.root)): f"the worktree `{checkout.label}`"
                 for checkout in checkouts
             }
-            return _Plan("command", roots, labels=labels)
+            labels[GLOBAL_KEY] = "the lock of everything outside the worktrees"
+            with self._mutex:
+                outside = (step.tool_use_id or "") in self._outside
+            return _Plan("command", roots, labels=labels, writes_outside=outside)
         raw = step.tool_input.get("file_path") or step.tool_input.get("notebook_path") or ""
         target = Path(step.cwd or self._workspace) / str(raw)
         checkout = self._checkout_of(target)
         if checkout is None:
-            return _Plan("outside", labels={GLOBAL_KEY: "the lock of everything outside"})
+            return _Plan(
+                "outside", labels={GLOBAL_KEY: "the lock of everything outside the worktrees"}
+            )
         path = str(target.resolve())
         root = str(checkout.root)
         labels = {
@@ -372,7 +400,11 @@ class CallLocks:
             wait = max(0.0, min(wait, budget_s))
         if plan.kind == "command":
             return self.scheme.run_command_in_worktrees(
-                plan.worktrees, timeout=wait, owner=owner, ticket=ticket
+                plan.worktrees,
+                timeout=wait,
+                writes_outside=plan.writes_outside,
+                owner=owner,
+                ticket=ticket,
             )
         if plan.kind == "edit":
             return self.scheme.edit_in_worktree(

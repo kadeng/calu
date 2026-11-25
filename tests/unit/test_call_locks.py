@@ -528,3 +528,54 @@ async def test_a_hold_after_a_lock_wait_ends_within_the_hooks_time(
     assert time.monotonic() - started < 4.0
     assert results[0].verdict.value == "ask"
     session.locks.close()
+
+
+async def test_a_command_that_writes_outside_takes_the_global_lock_exclusively(
+    tmp_path: Path,
+) -> None:
+    tree = Tree(tmp_path / "repo")
+    locks, other = call_locks(tmp_path, tree), call_locks(tmp_path, tree)
+    step = bash("make install", "c1")
+    locks.mark_writes_outside(step)
+    assert await locks.take(step, None) == ""
+    assert locks.holding()["c1"] == (
+        (worktree_key(str(tree.main.root)), "exclusive"),
+        (GLOBAL_KEY, "exclusive"),
+    )
+    elsewhere = Step(cwd=str(tree.worktree.root), tool_name="Bash", tool_input={"command": "ls"})
+    elsewhere.tool_use_id = "c2"
+    reason = await other.take(elsewhere, 0.1)  # a command in another worktree waits now
+    assert reason.startswith("Not run:") and "everything outside" in reason
+    locks.call_ended("c1")
+    assert await other.take(elsewhere, 0.1) == ""
+    other.close()
+    locks.close()
+    assert await locks.take(bash("make", "c4"), None) == ""
+    assert locks.holding()["c4"][-1] == (GLOBAL_KEY, "shared")  # the mark ended with c1
+
+
+async def test_the_command_checkers_flag_reaches_the_locks(tmp_path: Path) -> None:
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    session, _rec, _store = make_session(workspace, [], Config(locking=locking(tmp_path)))
+
+    def command(text: str, call: str) -> Step:
+        """Return a Bash call of the main agent in the project.
+
+        Args:
+            text: The command.
+            call: The tool call's id.
+
+        Returns:
+            The step.
+        """
+        return Step(
+            tool_name="Bash", tool_input={"command": text}, tool_use_id=call, cwd=str(workspace)
+        )
+
+    assert (await session.pre_tool_use(command("install it # calu:outside", "t1"))).verdict
+    assert session.locks.holding()["t1"][-1] == (GLOBAL_KEY, "exclusive")
+    await session._on_runner_event(ToolResult(tool_use_id="t1", is_error=False, content="ok"))
+    assert (await session.pre_tool_use(command("make", "t2"))).verdict
+    assert session.locks.holding()["t2"][-1] == (GLOBAL_KEY, "shared")
+    session.locks.close()

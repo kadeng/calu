@@ -20,6 +20,10 @@ Answer with:
 - `executes_project_code`: true if the call executes code of this project (tests, a build that
   runs code, a script, an interpreter, a package script, a make target); false if it does not
   (reading, searching, editing, git, formatting).
+- `writes_outside_worktree`: true if a shell command plainly writes code, configuration, a
+  script or a program outside the call's "Checkout" (a shell profile, another checkout, a
+  global setting, a global install). Logs, caches, reports and data do not count. Judge what
+  the call shows; you need not find every side effect.
 
 Judge a file that a call runs or reads by what the conversation says about it, including the
 task of a subagent that may still run: a script a subagent was told to rewrite does what that

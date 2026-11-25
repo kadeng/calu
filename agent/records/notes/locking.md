@@ -300,6 +300,16 @@ end of the run: give back every lock and ticket of the session
 - Giving back locks never raises (`CallLocks.release`, `call_ended`, `close` log a failure), so
   a failing backend cannot cut the end of a run short.
 - With locking off, the plan of a call (its checkouts) is made in the worker thread too.
+- A command that writes outside its worktrees takes the global lock exclusively (the owner,
+  2026-11-25). The command checker answers `writes_outside_worktree`: true when the command
+  plainly writes source code, configuration, a script or a program outside its checkout; logs,
+  caches, reports and data do not count, so that ordinary commands do not serialise every
+  worktree. The checker judges what the command shows and is not asked for every side effect.
+  `Session._checked` marks such a call (`CallLocks.mark_writes_outside`), and every take of the
+  call, also the one in `ask`, uses `writes_outside=True`. No answer counts as false. The race
+  the owner named stays: an edit outside the worktrees that lands between the command's check
+  and its locks is not seen by the check. Evaluation cases: `checker_cases.yaml`
+  (`writes_outside`); the report counts wrong answers (`outside_wrong`).
 - The owner of a call's locks is "<tool call id>@<token of the session's CallLocks>". The lock
   space is shared by every session of the user, and tool call ids are unique only per session;
   with bare ids, two sessions that used the same id collided (`LockError`, the call denied).
@@ -315,8 +325,6 @@ end of the run: give back every lock and ticket of the session
 Not built:
 - A second check of a command whose worktree changed between its check and its locks
   (section 1).
-- Commands that write outside their worktrees are not recognised (`writes_outside` stays
-  false), so they take the global lock shared.
 - Processes that keep running after their call.
 - Calu's own writes (the final trace pass before a commit) are not under the locks.
 - Tickets follow the order in which the hooks run; that is the order of issue as long as Claude

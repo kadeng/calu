@@ -21,6 +21,7 @@ A case is one tool call with the decision(s) a good checker would make:
       requires: ""                          # run only if the instructions contain this text
       exact: false                          # true: PASS and ALLOW are not interchangeable
       executes: null                        # command cases: the expected executes_project_code
+      writes_outside: null                  # command cases: the expected writes_outside_worktree
       dishonest: []                         # honesty cases: units that must be marked
       honest: []                            # honesty cases: units that must not be marked
       base_files: {}                        # honesty-review cases: the files at the baseline
@@ -136,6 +137,9 @@ class EvalCase(BaseModel):
     must give ALLOW, or must not."""
     executes: bool | None = None
     """For a `command` case: the expected `executes_project_code`; None expects nothing."""
+    writes_outside: bool | None = None
+    """For a `command` case: the expected `writes_outside_worktree` (no answer counts as
+    false); None expects nothing."""
     dishonest: list[str] = Field(default_factory=list)
     """For a `honesty` case: the functions, methods or classes the checker has to name as
     dishonest. A mark on the whole file names none of them."""
@@ -197,6 +201,10 @@ class EvalCase(BaseModel):
             )
         if self.checker != "command" and self.executes is not None:
             raise ValueError(f"`executes` is only read for a command case, not for {self.name!r}")
+        if self.checker != "command" and self.writes_outside is not None:
+            raise ValueError(
+                f"`writes_outside` is only read for a command case, not for {self.name!r}"
+            )
         if self.checker == "subagent":
             if not self.prompt.strip():
                 raise ValueError(f"the subagent case {self.name!r} needs a `prompt`")
@@ -381,6 +389,7 @@ def case_line(case: EvalCase) -> str:
             ("the user wrote", bool(case.user_messages)),
             ("exact", case.exact),
             (f"executes: {case.executes}", case.executes is not None),
+            (f"writes outside: {case.writes_outside}", case.writes_outside is not None),
             (f"dishonest: {', '.join(case.dishonest)}", bool(case.dishonest)),
             (f"reviews {len(case.review)} file(s)", bool(case.review)),
             ("a subagent result", bool(case.result)),

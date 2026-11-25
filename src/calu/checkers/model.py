@@ -137,6 +137,22 @@ class StepVerdict(BaseModel):
     """Whether the step executes code of the project. The gate reads it while `honesty.mode`
     is "enforce" and the honesty state is not clean (`calu.gate`): for a shell command an
     answer without it counts as true there, for another tool as false."""
+    writes_outside_worktree: bool | None = Field(
+        default=None,
+        description=(
+            "Answered by the command checker, for a shell command: true if the command plainly "
+            "writes or changes source code, a configuration file, a script or another "
+            'executable file outside the checkout named on the call\'s "Checkout" line (for '
+            "example a shell profile, a file in another checkout, a global configuration, an "
+            "installed program). Logs, caches, temporary files, reports and generated data do "
+            "not count. Judge what the call shows; you need not find every side effect. False "
+            "otherwise. Other checkers leave it empty."
+        ),
+    )
+    """Whether a command writes code or configuration outside its checkouts. With locking on
+    (agent/records/notes/locking.md, section 9) such a command takes the global lock
+    exclusively instead of shared, like an edit outside every checkout; no answer counts as
+    false."""
 
 
 class CheckDecision(StepVerdict):
