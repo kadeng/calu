@@ -78,8 +78,10 @@ def folder(projects: Path, at: str) -> Path:
 
     Raises:
         StartRefused: If it lies outside the projects directory or in a hidden folder
-            (`served_path`).
+            (`served_path`), or holds a NUL character.
     """
+    if "\0" in at:
+        raise StartRefused("a folder name holds no NUL character")
     try:
         return served_path(projects, str(projects / at.strip("/")), "this machine")
     except NotServed as exc:

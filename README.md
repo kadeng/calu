@@ -211,6 +211,18 @@ It asks for your sudo password, then for the calu user password. Sessions start 
   a project folder does the same, in the full-screen client.
 - Ctrl-C stops the server, the web interface and the database.
 
+> **Security note: the web interface.** `calu web` (and `calu serve --web`) serves its
+> password-protected interface on the loopback interface of this machine (`calu.localhost`).
+> Every user and every program on this machine can connect to that port, on WSL2 also the
+> programs on Windows; the calu user password is what keeps them out. Whoever is signed in can
+> allow what Claude asks for and change the rules the checkers apply. For now the interface is
+> meant for a machine and a network you trust, such as your own computer: reach it from
+> elsewhere only through an SSH tunnel, and do not publish it through a proxy. It accepts
+> changes only from its own pages, so another web site open in the same browser cannot act
+> through it. It speaks plain HTTP by default, which does not leave the machine on the
+> loopback interface; HTTPS with your own certificate is optional (`--tls-cert`,
+> `--tls-key`; see [Calu web](DOCUMENTATION.md#in-a-browser-calu-web)).
+
 **5. The IDE extensions** (optional; not on a marketplace yet, so you build them once):
 
 ```bash

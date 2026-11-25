@@ -276,6 +276,8 @@ async def test_every_response_carries_the_security_headers() -> None:
             assert "unsafe-inline" not in policy and "unsafe-eval" not in policy
             assert answer.headers["x-content-type-options"] == "nosniff"
             assert answer.headers["referrer-policy"] == "same-origin"
+            assert answer.headers["cross-origin-opener-policy"] == "same-origin"
+            assert answer.headers["cross-origin-resource-policy"] == "same-origin"
         # The live WebSocket of this very address is allowed, and a hostile Host is not copied.
         assert (
             "ws://calu.localhost:8800" in (await client.get("/")).headers["content-security-policy"]

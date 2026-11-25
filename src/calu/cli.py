@@ -2340,8 +2340,8 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
             `--idle-timeout` is not above 0, `--relay-port` is no port, the user cannot be
             switched (`_run_as`), the projects directory is refused
             (`calu.projects_dir.check_projects_dir`, before the password is asked), the
-            database refused the user login, no relay port can be bound, or `--web-port`
-            is no port.
+            database refused the user login, no relay port can be bound, `--web-port`
+            is no port, or `--web-tls-cert`/`--web-tls-key` cannot be used (`_tls_files`).
         CredentialError: On a wrong password.
         OSError: If `calu web` cannot be started.
         psycopg.Error: On database errors at the start.
@@ -2349,6 +2349,10 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
     _check_security_flags(args)
     if args.web and not 1 <= args.web_port <= 65535:
         raise CliError(f"--web-port takes a number from 1 to 65535, not {args.web_port}")
+    if (args.web_tls_cert or args.web_tls_key) and not args.web:
+        raise CliError("--web-tls-cert and --web-tls-key belong to --web")
+    # Checked here as well as in the child, so that a mistake shows before the password.
+    web_tls = _tls_files(args.web_tls_cert, args.web_tls_key) if args.web else None
     if args.max_sessions < 1:
         raise CliError("--max-sessions takes a number of 1 or more")
     if args.idle_timeout is not None and not (
@@ -2369,7 +2373,7 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
     web: subprocess.Popen[bytes] | None = None
     try:
         if args.web:
-            web = _start_web_child(args.web_port, url, "user" in _typed, run_as)
+            web = _start_web_child(args.web_port, url, "user" in _typed, run_as, web_tls)
         options = ServeOptions(
             projects=projects,
             relay=not args.no_relay,
@@ -2423,7 +2427,11 @@ WEB_CHILD_STOP_S = 10.0
 
 
 def _start_web_child(
-    port: int, login: bytearray, typed: bool, run_as: RunAs | None
+    port: int,
+    login: bytearray,
+    typed: bool,
+    run_as: RunAs | None,
+    tls: tuple[str, str] | None = None,
 ) -> subprocess.Popen[bytes]:
     """Start `calu web` as a child of `calu serve --web`, with the login serve already holds.
 
@@ -2444,6 +2452,8 @@ def _start_web_child(
         typed: Whether the user password was typed for it (then a browser signs in with
             it; else the child prints an address with a token).
         run_as: The user Claude Code runs as, when calu runs as root for one.
+        tls: The certificate and key for HTTPS (`--web-tls-cert`, `--web-tls-key`), or None
+            for HTTP; the child checks them.
 
     Returns:
         The child process.
@@ -2457,6 +2467,8 @@ def _start_web_child(
         argv.append("--login-typed")
     if run_as is not None:
         argv += ["--user", run_as.user or str(run_as.uid)]
+    if tls is not None:
+        argv += ["--tls-cert", tls[0], "--tls-key", tls[1]]
     try:
         child = subprocess.Popen(argv, pass_fds=(read_end,), preexec_fn=_die_with_parent)
     finally:
@@ -4131,7 +4143,9 @@ def cmd_ide(args: argparse.Namespace, store: CredentialStore) -> None:
     asyncio.run(serve_ide(Path.cwd(), store))
 
 
-def _web_token_line(host: str, port: int, token: str, has_admin_password: bool) -> str:
+def _web_token_line(
+    host: str, port: int, token: str, has_admin_password: bool, scheme: str = "http"
+) -> str:
     """Build the start line of `calu web` when the address carries the login token.
 
     Args:
@@ -4142,13 +4156,14 @@ def _web_token_line(host: str, port: int, token: str, has_admin_password: bool) 
             the role `calu_admin` has no login (a schema before migration 0033): `calu
             setup` would make that password the browser's login. With an empty user
             password there is none, and the token is the only login there is.
+        scheme: "https" with `--tls-cert`, else "http".
 
     Returns:
         One line: the address with the token, what the token is, and, only with a user
         password, how the password becomes the login.
     """
     line = (
-        f"calu web on http://{host}:{port}/?token={token}"
+        f"calu web on {scheme}://{host}:{port}/?token={token}"
         " (open it once per browser; the token is your login, keep it to yourself)."
     )
     if has_admin_password:
@@ -4156,7 +4171,84 @@ def _web_token_line(host: str, port: int, token: str, has_admin_password: bool) 
     return line
 
 
-def _pane_line(host: str, port: int, token: str | None) -> str:
+def _tls_files(cert: str | None, key: str | None) -> tuple[str, str] | None:
+    """Check the certificate and key of `calu web --tls-cert/--tls-key` before serving.
+
+    TLS is optional: on the loopback interface the connection does not leave the machine. A
+    certificate that browsers trust (e.g. one made with `mkcert calu.localhost`) avoids
+    their warning; a self-signed one works after the browser was told to accept it.
+
+    Side effects: reads both files (as the user the process works for); prints a note when
+    the certificate does not name `calu.localhost`.
+
+    Args:
+        cert: The certificate file (PEM, with its chain), or None.
+        key: Its private key (PEM, not encrypted), or None.
+
+    Returns:
+        (certificate, key) as absolute paths; None when neither was given.
+
+    Raises:
+        CliError: If only one is given, a file cannot be read, the key can be read by the
+            group or others, or the two are no certificate and key that belong together.
+    """
+    import ssl
+
+    if not cert and not key:
+        return None
+    if not (cert and key):
+        raise CliError("--tls-cert and --tls-key go together: give both, or neither for HTTP")
+    cert_path, key_path = Path(cert).expanduser().absolute(), Path(key).expanduser().absolute()
+    try:
+        mode = key_path.stat().st_mode
+    except OSError as exc:
+        raise CliError(f"--tls-key {key}: {exc.strerror}") from None
+    if mode & 0o077:
+        raise CliError(
+            f"--tls-key {key} can be read by others (mode {oct(mode & 0o777)}); "
+            f"`chmod 600 {key}` first"
+        )
+    context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    try:
+        context.load_cert_chain(cert_path, key_path, password=lambda: b"")
+    except (OSError, ssl.SSLError) as exc:
+        raise CliError(
+            f"--tls-cert {cert} and --tls-key {key} cannot be used together ({exc}); the key "
+            "must not be encrypted"
+        ) from None
+    if WEB_TLS_NAME not in _certificate_names(cert_path):
+        print(
+            f"note: {cert} does not name {WEB_TLS_NAME}; browsers will warn about it "
+            f"(e.g. `mkcert {WEB_TLS_NAME}` makes one that names it)",
+            flush=True,
+        )
+    return str(cert_path), str(key_path)
+
+
+def _certificate_names(cert: Path) -> set[str]:
+    """Return the DNS names a PEM certificate is valid for (its subject alternative names).
+
+    Args:
+        cert: The certificate file; its first certificate is read.
+
+    Returns:
+        The names; empty when there are none or the file cannot be parsed.
+    """
+    from cryptography import x509
+
+    try:
+        found = x509.load_pem_x509_certificate(cert.read_bytes())
+        names = found.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except OSError, ValueError, x509.ExtensionNotFound:
+        return set()
+    return set(names.get_values_for_type(x509.DNSName))
+
+
+WEB_TLS_NAME = "calu.localhost"
+"""The name a certificate of `calu web` has to carry (`calu.web.app.WEB_HOST_NAME`)."""
+
+
+def _pane_line(host: str, port: int, token: str | None, scheme: str = "http") -> str:
     """Build the line of `calu web` that names the chat pane (agent/records/PLAN.md D261).
 
     Args:
@@ -4165,11 +4257,12 @@ def _pane_line(host: str, port: int, token: str | None) -> str:
         token: The login token to put into the address's fragment, for an iframe of another
             site (the browser never sends a fragment to a server); None when the browser signs
             in with the user password, which a frame of another site cannot use.
+        scheme: "https" with `--tls-cert`, else "http".
 
     Returns:
         One line with the pane's address.
     """
-    base = f"http://{host}:{port}/pane"
+    base = f"{scheme}://{host}:{port}/pane"
     if token is None:
         return (
             f"chat pane: {base} (in its own window or a frame of this interface, after signing "
@@ -4224,13 +4317,14 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
     opened again with it (`calu.web.database.ReopeningDb`).
 
     Args:
-        args: Parsed arguments (`host`, `port`, `user`, `sudo`; `login_fd` and
-            `login_typed` from `calu serve --web`, whose child this then is).
+        args: Parsed arguments (`host`, `port`, `user`, `sudo`, `tls_cert`, `tls_key`;
+            `login_fd` and `login_typed` from `calu serve --web`, whose child this then is).
         store: The credential store.
 
     Raises:
         CliError: If the web dependencies are missing, the address is not local, the port is
-            not between 1 and 65535, or there is no user login (`_user_target`).
+            not between 1 and 65535, there is no user login (`_user_target`), or
+            `--tls-cert`/`--tls-key` cannot be used (`_tls_files`).
         psycopg.Error: On database errors.
     """
     try:
@@ -4265,6 +4359,9 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
         # As root for a user (`calu web --sudo`): the login was read from root's store and
         # stays in this process's memory; from here on the process touches files as the user.
         _become_client_of(run_as)
+    # Read as the user the interface works for: the certificate and key are theirs.
+    tls = _tls_files(args.tls_cert, args.tls_key)
+    scheme = "https" if tls else "http"
 
     async def serve() -> None:
         """Open the connection, build the app and serve until interrupted."""
@@ -4297,19 +4394,26 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
                 pane_frame_ancestors=[str(a) for a in ancestors]
                 if isinstance(ancestors, list)
                 else None,
+                tls=tls is not None,
             )
             # Flushed: this is the one line a user needs, and the process then serves for
             # hours. Without it the address sits in a buffer whenever stdout is a pipe -- a
             # log file, a systemd unit, `tmux pipe-pane` -- and the user sees nothing (D125).
             if by_password:
                 print(
-                    f"calu web on http://{WEB_HOST_NAME}:{args.port}/ (sign in with the "
+                    f"calu web on {scheme}://{WEB_HOST_NAME}:{args.port}/ (sign in with the "
                     "calu user password)",
                     flush=True,
                 )
             else:
-                print(_web_token_line(WEB_HOST_NAME, args.port, token, typed_password), flush=True)
-            print(_pane_line(WEB_HOST_NAME, args.port, None if by_password else token), flush=True)
+                print(
+                    _web_token_line(WEB_HOST_NAME, args.port, token, typed_password, scheme),
+                    flush=True,
+                )
+            print(
+                _pane_line(WEB_HOST_NAME, args.port, None if by_password else token, scheme),
+                flush=True,
+            )
             config = uvicorn.Config(
                 app,
                 host=args.host,
@@ -4318,6 +4422,8 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
                 access_log=False,
                 # A chat message may carry images (D220).
                 ws_max_size=MAX_FRAME_BYTES,
+                ssl_certfile=tls[0] if tls else None,
+                ssl_keyfile=tls[1] if tls else None,
             )
             await uvicorn.Server(config).serve()
         finally:
@@ -6654,6 +6760,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--web-port", type=int, default=8800, metavar="N", help="the port of --web (default: 8800)"
     )
+    p.add_argument(
+        "--web-tls-cert",
+        metavar="FILE",
+        help="--web serves HTTPS with this certificate (see `calu web --tls-cert`)",
+    )
+    p.add_argument("--web-tls-key", metavar="FILE", help="the private key of --web-tls-cert")
     p.set_defaults(handler=cmd_serve, log_name="serve")
 
     p = sub.add_parser("start", help="ask the running `calu serve` for a session and attach to it")
@@ -6815,6 +6927,18 @@ def build_parser() -> argparse.ArgumentParser:
         "credentials in /etc/calu, and nothing Claude Code runs can reach it",
     )
     p.add_argument("--user", metavar="NAME|UID[:GID]", help="as root: the user to work for")
+    p.add_argument(
+        "--tls-cert",
+        metavar="FILE",
+        help="serve HTTPS with this certificate (PEM; it should name calu.localhost, e.g. from "
+        "`mkcert calu.localhost`); needs --tls-key. Default: plain HTTP, which does not leave "
+        "the machine",
+    )
+    p.add_argument(
+        "--tls-key",
+        metavar="FILE",
+        help="the certificate's private key (PEM, not encrypted, mode 600)",
+    )
     p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
     # `calu serve --web` hands its child the login through an inherited pipe (D268).
     p.add_argument("--login-fd", type=int, default=None, help=argparse.SUPPRESS)

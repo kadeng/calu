@@ -185,19 +185,55 @@ class Panes:
         self.running = 0
 
 
+CONFIRM_PAGE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>calu chat</title>
+<link href="/static/pane/theme.css" rel="stylesheet">
+<link href="/static/pane/pane.css" rel="stylesheet">
+</head>
+<body>
+<main>
+<h1>Open the calu chat?</h1>
+<p>Another web site opened this page. The chat connects to Calu only when you open it here.</p>
+<p id="target"></p>
+<p><a id="go" href="/pane?confirmed=1">Open the chat</a></p>
+</main>
+<script src="/static/pane-confirm.js"></script>
+</body>
+</html>
+"""
+"""What `pane_page` serves to a top-level visit that another site started: the folder and the
+session it asks for, and a link that loads the pane from this origin."""
+
+
 async def pane_page(request: Request) -> Response:
     """Serve the pane's page: the stylesheets, an empty `#app` and the script.
 
     The page holds no data; everything arrives over `PANE_RPC_PATH`. `SecurityHeaders` gives it
     the `frame-ancestors` of `web.pane_frame_ancestors`.
 
+    A top-level visit that another web site started (`Sec-Fetch-Dest: document` and
+    `Sec-Fetch-Site: cross-site` or `same-site`, e.g. `window.open` with a `#dir=...&session=...`
+    of its choosing) gets `CONFIRM_PAGE` instead: the pane would connect with the browser's
+    login at once and start its work there (attach, status checks, file watching). A frame in
+    an application that `web.pane_frame_ancestors` allows, an address the person opened or
+    typed, and a link of this interface get the pane.
+
     Args:
-        request: The request (unused).
+        request: The request; its `Sec-Fetch-*` headers are read.
 
     Returns:
         The HTML page.
     """
-    del request
+    headers = request.headers
+    if headers.get("sec-fetch-dest") == "document" and headers.get("sec-fetch-site") in (
+        "cross-site",
+        "same-site",
+    ):
+        return HTMLResponse(CONFIRM_PAGE, headers={"cache-control": "no-store"})
     page = """<!DOCTYPE html>
 <html lang="en">
 <head>

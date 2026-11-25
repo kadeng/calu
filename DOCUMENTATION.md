@@ -1034,6 +1034,32 @@ calu web --sudo   # the same, run as root on your behalf: Claude Code cannot rea
 - A login lasts until `calu web` stops. After a restart the page says that a new sign-in is
   needed.
 
+**Who can reach it, and HTTPS**
+
+- `calu web` listens on the loopback interface only. Every user and every program of this
+  machine can connect to that port (on WSL2 also the programs on Windows); the calu user
+  password or the token keeps them out. Use it on a machine and network you trust; from
+  another machine, reach it through an SSH tunnel (`ssh -L 8800:127.0.0.1:8800 host`), not
+  through a proxy.
+- It accepts a change (a form, a decision, a setting, a WebSocket) only from its own pages:
+  the host name must be `calu.localhost`, and the browser's `Origin` and `Sec-Fetch-Site`
+  must say that the request comes from the interface itself. Another web site open in the
+  same browser cannot act through it.
+- By default it speaks plain HTTP, which does not leave the machine on the loopback interface;
+  browsers treat `calu.localhost` as a secure address all the same. HTTPS is optional:
+
+  ```bash
+  mkcert calu.localhost    # once: a certificate your browsers trust (mkcert -install first)
+  calu web --tls-cert calu.localhost.pem --tls-key calu.localhost-key.pem
+  calu serve --web --web-tls-cert calu.localhost.pem --web-tls-key calu.localhost-key.pem
+  ```
+
+  The certificate should name `calu.localhost` (a note says so if it does not), the key must
+  not be encrypted and must be readable by you alone (mode 600). The address is then
+  `https://calu.localhost:8800/`, the login cookie is sent over HTTPS only, and a change must
+  come from the `https://` page. A self-signed certificate works too, after the browser was
+  told to accept it.
+
 **The pages**
 
 | Page | Content |
@@ -1153,6 +1179,10 @@ chat pane: http://calu.localhost:8800/pane#token=... (also in an iframe of a loc
   with the user password, it prints the pane's address without a token: the pane then works in
   its own window or in a frame of `calu web` after you signed in, not in a frame of another
   site.
+- **Opened by another site.** When another web site opens the pane in a window or tab (a link
+  or `window.open`), the pane does not connect: a page shows the folder and session that site
+  asks for, and "Open the chat" connects. An address you open or type yourself, a link of
+  `calu web` and an allowed frame connect at once.
 - **Embedding.** Only `/pane` may be shown in a frame, and only by the origins in
   `web.pane_frame_ancestors` (default: `calu web` itself, `http://localhost:*` and
   `http://127.0.0.1:*`). For a Jupyter notebook on this machine:

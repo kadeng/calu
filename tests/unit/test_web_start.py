@@ -167,3 +167,8 @@ def test_a_conversation_is_described_in_one_line() -> None:
     assert len(label.split(" · ")[-1]) == 80 and label.endswith("…")
     running = herd.ConversationRow("id", 5, "", 1, True)
     assert _conversation_label(running) == f"{herd.age_text(5)} ago · running · (no message)"
+
+
+def test_a_folder_with_a_nul_character_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(start.StartRefused, match="NUL"):
+        start.folder(projects_dir(tmp_path), "shop\0x")

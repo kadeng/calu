@@ -287,6 +287,7 @@ def create_app(
     check_password: PasswordCheck | None = None,
     store: CredentialStore | None = None,
     pane_frame_ancestors: list[str] | None = None,
+    tls: bool = False,
 ) -> Starlette:
     """Build the web application on an open database connection.
 
@@ -310,6 +311,9 @@ def create_app(
             None refuses every pane connection.
         pane_frame_ancestors: `web.pane_frame_ancestors`: who may show `/pane` in a frame
             (`calu.web.pane.frame_ancestors`; None uses its default).
+        tls: Whether the server speaks HTTPS (`calu web --tls-cert`): the login cookie is
+            then `Secure`, and a changing request's `Origin` must be `https://` (`LocalOnly`).
+            `calu web` passes it; False, the default, is plain HTTP.
 
     Returns:
         The Starlette application, ready for uvicorn.
@@ -380,10 +384,14 @@ def create_app(
     # included.
     middleware = [
         Middleware(SecurityHeaders, pane_ancestors=ancestors),
-        Middleware(LocalOnly, host_name=host_name),
+        Middleware(
+            LocalOnly, host_name=host_name, scheme=("https" if tls else "http") if host_name else ""
+        ),
     ]
     if token is not None:
-        middleware.append(Middleware(TokenGate, token=token, check_password=check_password))
+        middleware.append(
+            Middleware(TokenGate, token=token, check_password=check_password, secure=tls)
+        )
     return Starlette(
         routes=routes,
         middleware=middleware,
@@ -483,9 +491,13 @@ cannot post anywhere else.
 class SecurityHeaders:
     """Add the browser security headers to every HTTP response (finding wa2).
 
-    Content-Security-Policy   `CONTENT_SECURITY_POLICY`
-    X-Content-Type-Options    nosniff
-    Referrer-Policy           same-origin (no other site learns the address of a page)
+    Content-Security-Policy        `CONTENT_SECURITY_POLICY`
+    X-Content-Type-Options         nosniff
+    Referrer-Policy                same-origin (no other site learns the address of a page)
+    Cross-Origin-Opener-Policy     same-origin (a window another site opened keeps no handle
+                                   on a page of this interface)
+    Cross-Origin-Resource-Policy   same-origin (no other site embeds a page, image or data of
+                                   this interface, e.g. `/sessions/{id}/file` with the cookie)
     """
 
     def __init__(self, app: Any, pane_ancestors: str = "'none'") -> None:
@@ -523,6 +535,8 @@ class SecurityHeaders:
             (b"content-security-policy", policy.encode("latin-1")),
             (b"x-content-type-options", b"nosniff"),
             (b"referrer-policy", b"same-origin"),
+            (b"cross-origin-opener-policy", b"same-origin"),
+            (b"cross-origin-resource-policy", b"same-origin"),
         ]
 
         async def send_with_headers(message: Any) -> None:
@@ -603,7 +617,13 @@ class TokenGate:
     restart prints a new token and forgets every login.
     """
 
-    def __init__(self, app: Any, token: str, check_password: PasswordCheck | None = None) -> None:
+    def __init__(
+        self,
+        app: Any,
+        token: str,
+        check_password: PasswordCheck | None = None,
+        secure: bool = False,
+    ) -> None:
         """Wrap the application.
 
         Args:
@@ -613,10 +633,13 @@ class TokenGate:
                 it, a browser without a login gets a page that asks for the password
                 (agent/records/PLAN.md D216).
                 None leaves the token as the only login.
+            secure: Whether the server speaks HTTPS: the session cookie is then `Secure`, so
+                a browser never sends it over plain HTTP.
         """
         self.app = app
         self.token = token
         self.check_password = check_password
+        self.secure = secure
         self._failed = 0
         """Wrong passwords in a row; each one makes its own answer wait longer."""
         self._last_failure = 0.0
@@ -830,7 +853,9 @@ class TokenGate:
         while len(self.browsers) > MAX_BROWSERS:
             del self.browsers[next(iter(self.browsers))]
         page = TEMPLATES.get_template("login.html").render(key=key, onward=onward)
-        cookie = f"{SESSION_COOKIE}={session_id}; HttpOnly; SameSite=Strict; Path=/"
+        cookie = f"{SESSION_COOKIE}={session_id}; HttpOnly; SameSite=Strict; Path=/" + (
+            "; Secure" if self.secure else ""
+        )
         await send(
             {
                 "type": "http.response.start",
@@ -874,9 +899,10 @@ def _public(path: str) -> bool:
         path: The request path.
 
     Returns:
-        True for `PANE_PATH` and for files below `/static/pane/` (no ".." part).
+        True for `PANE_PATH`, for the script of its confirmation page
+        (`calu.web.pane.CONFIRM_PAGE`) and for files below `/static/pane/` (no ".." part).
     """
-    if path == PANE_PATH:
+    if path in (PANE_PATH, "/static/pane-confirm.js"):
         return True
     return path.startswith("/static/pane/") and ".." not in path.split("/")
 
@@ -988,11 +1014,18 @@ class LocalOnly:
     - A request that can change something -- every method but GET, HEAD and OPTIONS, and every
       WebSocket -- must come from this interface's own pages: `Sec-Fetch-Site` may not say
       `cross-site` or `same-site` (another port on localhost is "same-site"), and an `Origin`,
-      when sent, must be this server's own. Browsers send both on such requests; a client that
-      sends neither (curl, `calu`'s own tests) is not a browser acting for someone else.
+      when sent, must be this server's own: its host and port, and its scheme where `scheme`
+      is given. Browsers send both on such requests; a client that sends neither (curl,
+      `calu`'s own tests) is not a browser acting for someone else.
     """
 
-    def __init__(self, app: Any, extra_hosts: Collection[str] = (), host_name: str = "") -> None:
+    def __init__(
+        self,
+        app: Any,
+        extra_hosts: Collection[str] = (),
+        host_name: str = "",
+        scheme: str = "",
+    ) -> None:
         """Wrap the application.
 
         Args:
@@ -1001,9 +1034,12 @@ class LocalOnly:
                 a loopback name.
             host_name: The only host name to accept, next to `extra_hosts`; "" accepts every
                 name of `LOOPBACK_HOSTS`.
+            scheme: The scheme the server speaks, "http" or "https", which an `Origin` must
+                have; "" does not compare it (in-process tests).
         """
         self.app = app
         self.host_name = host_name
+        self.scheme = scheme
         self.hosts = (frozenset({host_name}) if host_name else LOOPBACK_HOSTS) | set(extra_hosts)
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
@@ -1055,7 +1091,8 @@ class LocalOnly:
                 port = host.rsplit(":", 1)[1] if ":" in host and not host.endswith("]") else ""
                 where = self.host_name + (f":{port}" if port.isdigit() else "")
                 return (
-                    f"host {host!r} is not the name of this interface; open http://{where}/ "
+                    f"host {host!r} is not the name of this interface; open "
+                    f"{self.scheme or 'http'}://{where}/ "
                     "(with the ?token=... that `calu web` printed, the first time)"
                 )
             return f"host {host!r} is not this machine (the interface serves loopback only)"
@@ -1069,6 +1106,8 @@ class LocalOnly:
             parsed = urlparse(origin)
             if origin == "null" or parsed.netloc != host:
                 return f"origin {origin!r} is not this interface"
+            if self.scheme and parsed.scheme != self.scheme:
+                return f"origin {origin!r} is not this interface (it speaks {self.scheme})"
         return None
 
 

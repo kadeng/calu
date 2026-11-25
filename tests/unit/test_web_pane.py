@@ -15,6 +15,7 @@ pytest.importorskip("starlette", reason="the web interface's packages are missin
 pytest.importorskip("jinja2", reason="the web interface's packages are missing: uv sync")
 
 from starlette.applications import Starlette
+from starlette.requests import Request
 from starlette.routing import Route, WebSocketRoute
 from starlette.testclient import TestClient
 
@@ -99,6 +100,46 @@ async def test_only_the_pane_may_be_framed_and_only_by_the_configured_origins() 
         assert "frame-ancestors 'self' http://localhost:* http://127.0.0.1:*;" in pane
         other = (await client.get("/settings")).headers["content-security-policy"]
         assert "frame-ancestors 'none'" in other
+
+
+async def test_a_pane_another_site_opens_waits_for_a_click() -> None:
+    """A site's `window.open` of `/pane#dir=...&session=...` must not connect with the login."""
+    from calu.web.pane import pane_page
+
+    async def page(**headers: str) -> str:
+        """Ask for the pane's page with these request headers.
+
+        Args:
+            **headers: Request headers, `_` for `-`.
+
+        Returns:
+            The page's text.
+        """
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/pane",
+            "query_string": b"",
+            "headers": [(k.replace("_", "-").encode(), v.encode()) for k, v in headers.items()],
+        }
+        return bytes((await pane_page(Request(scope))).body).decode()
+
+    for site in ("cross-site", "same-site"):
+        asked = await page(sec_fetch_dest="document", sec_fetch_site=site)
+        assert "Open the calu chat?" in asked and "/static/pane-confirm.js" in asked
+        assert "/static/pane/pane.js" not in asked
+    for headers in (
+        {"sec_fetch_dest": "document", "sec_fetch_site": "none"},  # typed or bookmarked
+        {"sec_fetch_dest": "document", "sec_fetch_site": "same-origin"},  # the confirm link
+        {"sec_fetch_dest": "iframe", "sec_fetch_site": "cross-site"},  # an allowed frame
+        {},  # a client without these headers
+    ):
+        assert "/static/pane/pane.js" in await page(**headers), headers
+    script = (Path(__file__).parents[2] / "src/calu/web/static/pane-confirm.js").read_text()
+    assert "/pane?confirmed=1${location.hash}" in script, "a navigation, not a fragment change"
+    from calu.web.app import _public
+
+    assert _public("/static/pane-confirm.js"), "the page shows its target also without a login"
 
 
 def test_the_frame_setting_cannot_add_directives() -> None:

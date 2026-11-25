@@ -1162,6 +1162,17 @@ escalation resolved from the database alone.
    id, or the field together with a new folder are refused with a reason and file nothing.
    Run on 2026-11-25 in the Cua desktop against the scripted server (Firefox); not yet with
    a real Claude Code.
+58. HTTPS for the web interface (PLAN.md D278): with `mkcert calu.localhost`, `calu web
+   --tls-cert ... --tls-key ...` prints `https://calu.localhost:8800/`; the browser shows no
+   warning, signing in works, the live view's WebSocket and the chat pane connect (`wss:`),
+   and a decision is taken. `calu serve --web --web-tls-cert ... --web-tls-key ...` does the
+   same through its child. A key of mode 644, a certificate without its key and a key of
+   another certificate are refused before the password is asked. Not yet run by hand.
+59. The chat pane opened by another site (PLAN.md D278): a page on another port with a link to
+   `http://calu.localhost:8800/pane#dir=...` opens "Open the calu chat?" with the folder named
+   and nothing connected; "Open the chat" connects the pane there (signed in: "No session is
+   attached" with "New session"). The printed `#token=` address and a frame in Jupyter connect
+   at once. Run on 2026-11-25 in the Cua desktop (Firefox, link from another port).
 
 ## Measuring the checkers
 
