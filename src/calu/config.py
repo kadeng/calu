@@ -106,13 +106,13 @@ class CheckerConfig(ConfigModel):
     a lower cap makes it fail rather than decide (measured, agent/records/PLAN.md D72)."""
 
 
-CHANGESET_REQUEST_LIMIT = 40
+CHANGESET_REQUEST_LIMIT = 80
 """Model requests of one changeset check, tool calls included (a step checker has 5)."""
 
-CHANGESET_OUTPUT_TOKENS_LIMIT = 120_000
+CHANGESET_OUTPUT_TOKENS_LIMIT = 240_000
 """Token budget for all answers of one changeset check, thinking included."""
 
-CHANGESET_MAX_TOKENS = 16_000
+CHANGESET_MAX_TOKENS = 32_000
 """Token cap for one answer of the changeset checker."""
 
 
@@ -655,7 +655,7 @@ class ChangesConfig(ConfigModel):
     on something that already stands: the files go back to the state from before the command."""
     max_file_bytes: int = Field(default=1_000_000, ge=0)
     """Files above this size are reported by path and size, but their content is not shown."""
-    max_patch_bytes: int = Field(default=400_000, ge=0)
+    max_patch_bytes: int = Field(default=800_000, ge=0)
     """Upper bound on the patch a checker or a client ever sees; a checker shown a cut patch
     cannot approve (it escalates)."""
     always_capture: list[str] = Field(default_factory=lambda: [".env"])

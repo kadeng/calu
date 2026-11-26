@@ -115,7 +115,7 @@ This file is generated from `calu.config` by `calu.configdoc`; a test keeps the 
 | `changes.snapshot` | bool | `false` | Take a git snapshot of the project directory before and after every Bash step. |
 | `changes.review` | bool | `false` | Let a checker judge what a command wrote, once it has run, and undo the change if it refuses (needs `snapshot`). The agent waits for that review, so a refusal is not a comment on something that already stands: the files go back to the state from before the command. |
 | `changes.max_file_bytes` | int | `1000000` | Files above this size are reported by path and size, but their content is not shown. |
-| `changes.max_patch_bytes` | int | `400000` | Upper bound on the patch a checker or a client ever sees; a checker shown a cut patch cannot approve (it escalates). |
+| `changes.max_patch_bytes` | int | `800000` | Upper bound on the patch a checker or a client ever sees; a checker shown a cut patch cannot approve (it escalates). |
 | `changes.always_capture` | list of text | `[".env"]` | Paths to snapshot even though a `.gitignore` covers them, so that a write to them is noticed; they are the ones that matter most and the ones git would otherwise hide. |
 | `locking` | LockingConfig | see below | Locks that keep edits away from running commands (agent/records/notes/locking.md); off by default. |
 | `locking.enabled` | bool | `false` | Take the locks. Off, every call runs as soon as it is approved, as before. |
