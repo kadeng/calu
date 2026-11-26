@@ -305,6 +305,35 @@ async def test_sending_one_held_message_now_keeps_the_others_held(tmp_path: Path
         await session.stop()
 
 
+async def test_the_end_of_a_turn_writes_one_held_message_and_keeps_the_rest(tmp_path: Path):
+    """A message still held can be sent at once ahead of the others, or retracted."""
+    session, rec, _ = make_session(
+        tmp_path,
+        [
+            [{"sleep": 0.3}, {"text": "did the task"}],
+            [{"sleep": 5}, {"text": "never said"}],
+            [{"text": "did the third"}],
+        ],
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="a task"))
+        await rec.wait_for(UserInput)
+        for text in ("first", "second", "third"):
+            await session.send_chat(ChatSendParams(text=text))
+        with anyio.fail_after(4):
+            while [e.text for e in rec.of(UserInput)] != ["a task", "first"]:
+                await anyio.sleep(0.02)
+        second, third = _queue_now(rec)
+        assert (second.text, second.held, third.text, third.held) == ("second", True, "third", True)
+        assert await session.retract_queued(second.id) == "second"
+        with anyio.fail_after(4):
+            await session.send_queued_now(third.id)
+            while [e.text for e in rec.of(UserInput)] != ["a task", "first", "third"]:
+                await anyio.sleep(0.02)
+        await session.stop()
+
+
 async def test_messages_outside_a_turn_or_injected_are_not_held(tmp_path: Path):
     session, rec, _ = make_session(tmp_path, [[{"sleep": 0.3}, {"text": "done"}]])
     async with anyio.create_task_group() as tg:

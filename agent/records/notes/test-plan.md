@@ -1289,3 +1289,15 @@ kept as `~/.config/calu/credentials.json.before-d266`.
 | The same run, switched off in the dialog while commands queued | ok: the queued calls (issued while on) kept their locks and ran, the queue was empty a few seconds later, and the rest of the run took no lock (the state file's sequence number stayed at 32 until the end, 2 min 24 s with both decisions) |
 
 Afterwards `locking.enabled` was unset again in the container.
+
+### O. Queued messages and `/btw` in the VSCode extension (2026-11-26, D283 (5))
+
+Cua desktop, the working tree after `e8f458f` with the one-message-per-turn release.
+
+| Case | Result |
+|---|---|
+| `/btw what are you doing?` while a turn runs (a real Claude Code on Haiku, left running by `setup-real.sh`) | ok: the side questions open, the question is answered while the turn goes on, nothing is queued. Screenshot: `screenshots/vscode-btw-side-question.png` |
+| Scripted backend, `scenario: queue`, three messages queued during the first turn | ok: the turn's end sends "first" alone; "second" and "third" keep "Send now" and "Retract". Screenshot: `screenshots/vscode-queue-held-after-turn.png` |
+| "Send now" on "third" while the turn of "second" runs | ok: the turn is interrupted at its running command and "third" is the next message (read back with `calu attach --plain`) |
+| "Send now" on one of several held messages in the same turn: the others stay held | only in the unit test (`test_sending_one_held_message_now_keeps_the_others_held`); the click in the desktop came after the turn had ended |
+| The web chat pane | open: rebuilt from the same sources, not looked at in a browser |

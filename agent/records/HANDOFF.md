@@ -11,9 +11,9 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
 The owner tested by hand in the VSCode extension and the web interface. This session fixed what
 came up, then built the features the owner asked for. A second session worked in parallel in
 `~/projects/calu`; this one merged `origin/main` after every commit. Everything below is
-committed and pushed, except step 2 of the temporary rules, which is in the working tree.
+committed and pushed.
 
-**In progress: temporary rules, step 2 of 6 (uncommitted).** The design is
+**In progress: temporary rules, steps 1 and 2 of 6 done, step 3 next.** The design is
 `agent/records/notes/temporary-rules-design.md`, with the owner's decisions in its section 7.
 The owner chose option B for the built-in protections; the limits of B in section 6 are
 Claude's proposal. Claude's message asked two things at once: whether the owner confirms those
@@ -23,7 +23,8 @@ feature must work end to end in the Cua desktop before the owner tests by hand.
 
 - Step 1 is committed and pushed (`6a56ca3`): migration `0002_temporary_rules.sql`,
   `src/calu/temp_rules.py`, `tests/unit/test_temp_rules.py`, `tests/db/test_temp_rules.py`.
-- Step 2 is written but **not committed and not yet green**. The working tree holds:
+- Step 2 is committed and pushed (`e8f458f`); unit layer, database layer (serially) and
+  pyright were green. It holds:
   - `src/calu/temp_rules.py`: `for_project` (read in `ConfigStore.load`) and `applies_to`;
   - `src/calu/store/config.py`: `ProjectSettings.temporary_rules`, loaded in the same lock,
     part of the fingerprint;
@@ -36,13 +37,11 @@ feature must work end to end in the Cua desktop before the owner tests by hand.
     `LIFTABLE_SUBCOMMANDS`, `ALWAYS_ASKING_FILES`, `calu_subcommand` (fails closed: only the
     word right after calu's program), the lifting in `_deny_command` and `_deny_rule`;
   - `tests/unit/test_temp_rules.py`: tests for all of that.
-- Next action: run `tests/unit/test_temp_rules.py` and `tests/unit/test_rules.py` (the last
-  run was interrupted right after `_run_state` was moved), fix what fails, then the unit
-  layer (`pytest -n 8 tests/unit`), the database layer **serially** (`scripts/db-tests.sh -q
-  -p no:randomly`; it fails under `-n 8`), pyright over the whole repository, and commit.
-  `honesty.mode` is `enforce` in the owner's session: running tests needs a clean honesty
-  state, so settle open marks first. Make code edits with the Edit tool; a script edit leaves
-  the file unreviewed.
+- How to check: the unit layer (`pytest -n 8 tests/unit`), the database layer **serially**
+  (`scripts/db-tests.sh -q -p no:randomly`; it fails under `-n 8`), pyright over the whole
+  repository (`uv run pyright`). `honesty.mode` is `enforce` in the owner's session:
+  running tests needs a clean honesty state, so settle open marks first. Make code edits
+  with the Edit tool; a script edit leaves the file unreviewed.
 - Then step 3: `calu rule add/list/remove` in the terminal, the slash commands in `calu
   attach` and in the VSCode chat and the web pane (bridge requests `ide.rules.*`), and a Cua
   test of the VSCode chat. `"rule"` is in `ALWAYS_ASKING_SUBCOMMANDS` already; the
@@ -118,6 +117,11 @@ How the owner wants to work, as learned in this session:
 - D283: queued messages are held by calu during a turn; "Send now" and "Retract" in the VSCode
   chat and the web chat pane (`chat.send_now`, `chat.retract`); the pane is rebuilt. Not in the
   full-screen terminal client or the PyCharm plugin yet; not tried in a real browser yet.
+  The `calu2` session changed this on 2026-11-26 after the owner reported three defects
+  (D283 (5)). A turn's end writes one held message (Claude's choice of fix, not decided by
+  the owner). "Send now" sends its message alone. `/btw` is the side question. The test
+  plan's section O says which of these were seen in the Cua desktop and which only in a
+  unit test.
 
 ### Dormant sessions come back on attach (D280, 2026-11-25), done, committed in `78b1bc8`
 

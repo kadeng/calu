@@ -171,9 +171,9 @@ class RunState:
     """The chat messages Claude has not read yet, each with the text that was sent for it."""
     held: dict[str, list[ChatImage]] = field(default_factory=dict[str, list[ChatImage]])
     """The messages of `queue` that calu still holds, by their id, with their images: queued
-    for the main agent while a turn ran, and written to Claude Code when the turn ends
-    (D283). Until then they can be withdrawn or sent at once (`Session.retract_queued`,
-    `Session.send_queued_now`)."""
+    for the main agent while a turn ran. A turn's end writes one of them to Claude Code: the
+    oldest, or instead those in `send_now` (D283). Until then they can be withdrawn or sent
+    at once (`Session.retract_queued`, `Session.send_queued_now`)."""
     send_now: set[str] = field(default_factory=set[str])
     """The ids of the held messages the user chose to send at once
     (`Session.send_queued_now`). The end of the interrupted turn writes these alone and

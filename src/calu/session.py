@@ -3621,14 +3621,18 @@ class Session:
         await self.interrupt()
 
     async def _release_held(self) -> None:
-        """Write held messages to Claude Code, in queue order, once a turn has ended (D283).
+        """Write the next held message to Claude Code once a turn has ended (D283).
 
-        If the user chose messages to send at once (`RunState.send_now`), only those are
-        written and the rest stay held. Otherwise every held message is written. They go as
-        "later" messages, so Claude reads them as it would have at the end of the turn; they
-        stay in the queue, no longer held, until Claude takes them in. Does nothing without
-        held messages or without a running session. A failed write is reported as a `log`
-        error, and the message is dropped from the queue.
+        The messages the user chose to send at once (`RunState.send_now`) are written, in
+        queue order. If there are none, the oldest held message alone is written. The rest
+        stay held and can still be sent at once or retracted. So no message waits in Claude
+        Code's own queue ahead of one that is sent at once later.
+
+        A written message goes as a "later" message and starts the next turn. It stays in
+        the queue, no longer held, until Claude takes it in. Does nothing without held
+        messages or without a running session. A failed write is reported as a `log` error
+        and the message is dropped from the queue; the next held message is then written in
+        its place.
 
         Side effects: writes to the runner; empties `RunState.send_now`; sends `chat.queue`;
         marks the session busy.
@@ -3638,8 +3642,9 @@ class Session:
         runner = self.runner
         only = self._run_state.send_now & self._run_state.held.keys()
         self._run_state.send_now.clear()
+        written = False
         for queued, text in list(self._run_state.queue):
-            if only and queued.id not in only:
+            if (only and queued.id not in only) or (not only and written):
                 continue
             images = self._run_state.held.pop(queued.id, None)
             if images is None:
@@ -3659,6 +3664,7 @@ class Session:
                 )
                 continue
             self._run_state.queue[index] = (queued.model_copy(update={"held": False}), text)
+            written = True
         await self._emit_queue()
         await self._mark_busy()
 
