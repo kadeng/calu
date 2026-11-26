@@ -313,7 +313,7 @@ def process_exists(pid: int) -> bool:
     return True
 
 
-async def sessions(db: Db, active_only: bool = True) -> list[SessionRow]:
+async def sessions(db: Db, active_only: bool = True, recent_ended: int = 0) -> list[SessionRow]:
     """List the sessions of all hosts, newest first.
 
     Side effects: closes the open escalations of sessions that are gone first (`close_gone`),
@@ -321,22 +321,30 @@ async def sessions(db: Db, active_only: bool = True) -> list[SessionRow]:
 
     Args:
         db: A connection with read access to `sessions` (the user login or the owner).
-        active_only: Only sessions that have not ended.
+        active_only: Only sessions that have not ended, plus the `recent_ended` ones.
+        recent_ended: With `active_only`, also the sessions that ended last, at most this
+            many (by `ended_at`, the newest first); 0 for none. Ignored without
+            `active_only`, which lists every session.
 
     Returns:
-        The sessions, newest first.
+        The sessions, newest start first.
 
     Raises:
         psycopg.Error: On database errors.
     """
     await close_gone(db)
-    where = " WHERE (NOT %s::boolean OR s.ended_at IS NULL) ORDER BY s.started_at DESC"
+    where = (
+        " WHERE (NOT %s::boolean OR s.ended_at IS NULL OR s.id IN (SELECT e.id FROM sessions e"
+        " WHERE e.ended_at IS NOT NULL ORDER BY e.ended_at DESC LIMIT %s))"
+        " ORDER BY s.started_at DESC"
+    )
+    params = (active_only, max(recent_ended, 0))
     try:
-        rows = await db.all(_session_query("s.name") + where, (active_only,))
+        rows = await db.all(_session_query("s.name") + where, params)
     except psycopg.errors.UndefinedColumn:
         # A schema from before migration 0036 (a newer calu on a database nobody ran `calu
         # setup` on since): the sessions are listed without names instead of not at all.
-        rows = await db.all(_session_query("''") + where, (active_only,))
+        rows = await db.all(_session_query("''") + where, params)
     return _session_rows(rows)
 
 

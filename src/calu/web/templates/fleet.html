@@ -2,7 +2,8 @@
 {% block title %}Sessions · calu{% endblock %}
 {% block main_attrs %} data-reload-after="5000"{% endblock %}
 {% block body %}
-<h1>{{ sessions | length }} session{{ '' if sessions | length == 1 else 's' }}{{ ' (including ended)' if show_all }}</h1>
+{% if show_all %}<h1>{{ sessions | length }} session{{ '' if sessions | length == 1 else 's' }} (including ended)</h1>
+{% else %}<h1>{{ running }} running session{{ '' if running == 1 else 's' }}</h1>{% endif %}
 <p><a class="button primary" id="new-session" href="{{ url_for('start') }}" target="calu-start">New session…</a>
   <span class="muted">in a folder of your projects, a new one, or a clone of a git repository</span></p>
 <script>
@@ -22,7 +23,8 @@ document.getElementById("new-session").addEventListener("click", (event) => {
 </form>
 <p class="muted">
   {% if show_all %}<a href="{{ url_for('fleet') }}{% if query %}?q={{ query }}{% endif %}">only the running ones</a>
-  {% else %}<a href="{{ url_for('fleet') }}?all=1{% if query %}&q={{ query }}{% endif %}">show the ended ones too</a>{% endif %}
+  {% else %}the {{ recent_ended }} sessions that ended last are listed below the running ones ·
+  <a href="{{ url_for('fleet') }}?all=1{% if query %}&q={{ query }}{% endif %}">show every ended session</a>{% endif %}
   · this page reloads every 5 seconds (not while you type)
 </p>
 {% for title, rows in groups %}
@@ -31,7 +33,7 @@ document.getElementById("new-session").addEventListener("click", (event) => {
   <thead><tr><th>State</th><th>Name</th><th>Host</th><th>Directory</th><th>Started</th><th>Waiting</th><th></th></tr></thead>
   <tbody>
   {% for s in rows %}
-    <tr>
+    <tr{% if s.ended_at %} class="ended"{% endif %}>
       <td><span class="state {{ s.state }}">{{ s.state }}</span>{% if s.stale %}
         <span class="decision deny" title="the process stopped saying it is there">no heartbeat for {{ (s.silent_for_s / 60) | round | int }} min</span>{% endif %}</td>
       <td data-label="Name"{% if not s.name %} class="none"{% endif %}>{% if s.name %}<a class="session-name" href="{{ url_for('session', session_id=s.id) }}">{{ s.name }}</a>{% else %}<span class="muted">–</span>{% endif %}</td>
@@ -44,6 +46,8 @@ document.getElementById("new-session").addEventListener("click", (event) => {
         {% if s.address %}· <a href="{{ url_for('live', session_id=s.id) }}">live</a>{% endif %}
         {% if s.address and not s.stale and s.hostname == this_host and s.os_user == this_user %}·
         <a href="{{ url_for('pane') }}#dir={{ s.directory | urlencode }}&amp;session={{ s.id }}" target="calu-chat-{{ s.id }}" title="the chat pane of this session, in a window of its own">chat</a>{% endif %}
+        {% if s.ended_at and s.claude_session_id and s.hostname == this_host and s.os_user == this_user %}·
+        <a href="{{ url_for('pane') }}#dir={{ s.directory | urlencode }}&amp;session={{ s.id }}" target="calu-chat-{{ s.id }}" title="resume this conversation through calu serve, in the chat pane">resume</a>{% endif %}
       </td>
     </tr>
   {% endfor %}

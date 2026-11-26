@@ -1,5 +1,7 @@
 """The web interface against a real database: the pages, resolving, minting, editing."""
 
+import socket
+
 import httpx
 import psycopg
 import pytest
@@ -127,6 +129,41 @@ async def test_the_fleet_page_lists_the_sessions_and_their_escalations(db_url: s
             assert fleet["sessions"][0]["url"].endswith(session_id)
             # It serves clients, so the palette jumps straight to the live view.
             assert fleet["sessions"][0]["live"].endswith(f"{session_id}/live")
+    finally:
+        await conn.close()
+
+
+async def test_the_fleet_page_lists_the_ten_sessions_that_ended_last_greyed(db_url: str) -> None:
+    """The owner, 2026-11-26: the stopped sessions are listed without a click, greyed, at
+    the bottom; the ones of this machine and user can be resumed from there."""
+    from calu.web.app import RECENT_ENDED
+    from calu.web.start import web_user
+
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        running, _ = await populate(db)
+        here = SessionIdentity(
+            hostname=socket.gethostname(), os_user=web_user(), directory="/p", pid=8, os="Linux"
+        )
+        ended: list[str] = []
+        for number in range(RECENT_ENDED + 2):
+            store = DatabaseSessionStore(db)
+            ended.append(await store.start(here))
+            await store.set_claude_session(f"claude-{number}")
+            await store.end("stopped")
+        async with await client_for(db) as client:
+            page = (await client.get("/")).text
+            assert "1 running session" in page
+            assert running in page
+            shown = [session for session in ended if session in page]
+            assert shown == ended[-RECENT_ENDED:]  # the ones that ended last
+            assert page.count('<tr class="ended">') == RECENT_ENDED
+            assert page.index(running) < page.index(ended[-1])  # below the running one
+            assert f"session={ended[-1]}" in page and ">resume</a>" in page
+            every = (await client.get("/?all=1")).text
+            assert all(session in every for session in ended)
     finally:
         await conn.close()
 

@@ -1196,6 +1196,11 @@ open in the web-based git browser that your project already uses (`web.git_url_t
 
 **Starting a session from the web interface**
 
+The sessions page lists the running sessions and, greyed below them, the 10 sessions that
+ended last ("show every ended session" lists all of them). An ended session of this machine
+and of your user has a **resume** link: it opens the chat pane, which asks your `calu serve`
+to resume that conversation.
+
 The sessions page has a **New session…** button. It opens a window with a dialog (a new tab
 where the browser blocks popups):
 

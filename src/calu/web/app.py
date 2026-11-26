@@ -227,6 +227,9 @@ claims a state, and nothing an operator does for them has any effect, so they ar
 "needs you" and named for what they are.
 """
 
+RECENT_ENDED = 10
+"""How many of the sessions that ended last the fleet page lists without `?all=1`."""
+
 DETAIL_LEVELS = {
     "summary": "What the checkers see (your words verbatim, Claude narrated, every step as a "
     "checker described it)",
@@ -1244,10 +1247,13 @@ def _render(request: Request, template: str, values: dict[str, Any]) -> Response
 async def fleet(request: Request, state: _State) -> Response:
     """Show every session of every host, newest first.
 
-    With `?all=1` the sessions that have ended are shown as well. A running session of this
-    machine and of the user the interface works for gets a "chat" link: the chat pane,
-    attached to that session, in a window of its own (`/pane#dir=...&session=...`, D271);
-    the pane's bridge runs here, so a session of another machine has none.
+    Without `?all=1` the `RECENT_ENDED` sessions that ended last are shown below the running
+    ones, greyed (the owner, 2026-11-26: no click needed to find a stopped session); with it,
+    every session. A running session of this machine and of the user the interface works for
+    gets a "chat" link: the chat pane, attached to that session, in a window of its own
+    (`/pane#dir=...&session=...`, D271); the pane's bridge runs here, so a session of another
+    machine has none. An ended session of this machine and user with a Claude conversation
+    gets the same link as "resume": the pane's bridge resumes it through `calu serve` (D280).
 
     Args:
         request: The request.
@@ -1260,7 +1266,7 @@ async def fleet(request: Request, state: _State) -> Response:
 
     show_all = request.query_params.get("all") == "1"
     query = (request.query_params.get("q") or "").strip().lower()
-    rows = await herd.sessions(state.db, active_only=not show_all)
+    rows = await herd.sessions(state.db, active_only=not show_all, recent_ended=RECENT_ENDED)
     if query:
         rows = [row for row in rows if query in _searchable(row)]
     waiting = await herd.escalations(state.db)
@@ -1273,6 +1279,8 @@ async def fleet(request: Request, state: _State) -> Response:
         {
             "groups": [(title, found) for title, found in groups if found],
             "sessions": rows,
+            "running": sum(1 for row in rows if row.ended_at is None),
+            "recent_ended": RECENT_ENDED,
             "open_escalations": len(waiting),
             "show_all": show_all,
             "query": request.query_params.get("q") or "",
@@ -2345,7 +2353,7 @@ async def sessions_json(request: Request, state: _State) -> Response:
         `{"sessions": [...], "waiting": n}` with the number of escalations waiting anywhere.
     """
     show_all = request.query_params.get("all") == "1"
-    rows = await herd.sessions(state.db, active_only=not show_all)
+    rows = await herd.sessions(state.db, active_only=not show_all, recent_ended=RECENT_ENDED)
     waiting = await herd.escalations(state.db)
     return JSONResponse(
         {
@@ -2597,7 +2605,10 @@ def _group_of(row: herd.SessionRow) -> str:
         says, because that is what a human has to act on -- unless it has stopped saying it is
         there (D56), in which case it is "gone": answering its escalation would reach nobody,
         and showing it among the sessions that need a decision would waste the operator's time.
+        A session that has ended is "ended", whatever state its row last recorded.
     """
+    if row.ended_at is not None:
+        return "ended"
     if row.stale:
         return "gone"
     if row.open_escalations:

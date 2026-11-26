@@ -88,6 +88,8 @@ h2 { font-size: 1.05rem; font-weight: 620; letter-spacing: -0.005em; margin: 2re
 h3 { font-size: .95rem; font-weight: 600; margin: 1.2rem 0 .5rem; }
 p { margin: .4rem 0 .8rem; }
 .muted { color: var(--muted); }
+tr.ended { opacity: .6; }
+tr.ended:hover { opacity: 1; }
 code, pre, .mono { font-family: var(--mono); font-size: .88em; }
 code {
   background: var(--surface-2);
