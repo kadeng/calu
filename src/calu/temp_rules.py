@@ -415,6 +415,109 @@ def applies_to(rule: TemporaryRule, conversation: str | None) -> bool:
     )
 
 
+def applies_to_session(rule: TemporaryRule, conversation: str | None, project: str | None) -> bool:
+    """Tell whether a rule of any project applies to one session (for a list a person reads).
+
+    Args:
+        rule: The rule, as `listed` returns it.
+        conversation: The session's conversation, or None.
+        project: The session's project, or None.
+
+    Returns:
+        True for a global rule, a rule of the session's project and a rule of its
+        conversation; False for the rules of other projects and sessions.
+    """
+    if rule.scope == "project":
+        return project is not None and rule.project == project
+    return applies_to(rule, conversation)
+
+
+async def session_scope(db: Db, session_id: str | None) -> tuple[str | None, str | None]:
+    """Find what a session rule and a project rule of one calu session are bound to.
+
+    Args:
+        db: A connection that may read `sessions` and `projects`.
+        session_id: The calu session's id, or None if a client is attached to none.
+
+    Returns:
+        (the session's conversation, its project's name); None for each one that does not
+        exist yet, and (None, None) without a session or for an unknown id.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    if not session_id:
+        return None, None
+    row = await db.one(
+        "SELECT s.claude_session_id, p.name FROM sessions s"
+        " LEFT JOIN projects p ON p.id = s.project_id WHERE s.id = %s::uuid",
+        (session_id,),
+    )
+    return (row[0], row[1]) if row else (None, None)
+
+
+async def add_from_client(
+    db: Db,
+    session_id: str | None,
+    text: str,
+    duration: str | None,
+    scope: str | None,
+    by: str,
+) -> tuple[TemporaryRule, str | None]:
+    """Store a rule a person typed in a client attached to a session (a chat's `/rule`).
+
+    Such a rule never lifts calu's built-in protections. The scope "session" (the default)
+    binds it to the session's conversation, "project" to the session's project.
+
+    Side effects: inserts a `temporary_rules` row (`add`).
+
+    Args:
+        db: A connection with the user login.
+        session_id: The attached calu session's id, or None.
+        text: The rule's text (`split_command` took the duration and the scope off).
+        duration: The duration as typed ("3d", "30m"), or None for one day.
+        scope: "session", "project" or "global"; None means "session".
+        by: Who adds it, for the record.
+
+    Returns:
+        (the stored rule, the attached session's conversation or None).
+
+    Raises:
+        RuleError: If the text, the duration or the scope is refused; if the scope needs a
+            conversation or a project that the session does not have; or if the text starts
+            with "--". Its first word is then not a rule option here (`--lift-builtin`, for
+            example) and would become part of the rule.
+        psycopg.Error: On database errors.
+    """
+    conversation, project = await session_scope(db, session_id)
+    chosen = scope or "session"
+    if text.lstrip().startswith("--"):
+        raise RuleError(
+            f"{text.split()[0]} is not a rule option here; the options are --session,"
+            " --project and --global. A rule that lifts calu's built-in protections is"
+            " added in the web settings or with `calu rule add --lift-builtin`"
+        )
+    if chosen == "session" and not conversation:
+        raise RuleError(
+            "a session rule needs an attached session that has started its conversation; "
+            "send a message first, or use --project or --global"
+        )
+    if chosen == "project" and not project:
+        raise RuleError("a project rule needs an attached session of a registered project")
+    if chosen not in ("session", "project", "global"):
+        raise RuleError(f"{chosen!r} is no scope: session, project or global")
+    rule = await add(
+        db,
+        text,
+        created_by=by,
+        duration=parse_duration(duration),
+        scope=chosen,  # type: ignore[arg-type]  # checked just above
+        project=project,
+        conversation=conversation,
+    )
+    return rule, conversation
+
+
 async def listed(db: Db, include_ended: bool = False) -> list[TemporaryRule]:
     """List the stored rules for a person, newest first.
 

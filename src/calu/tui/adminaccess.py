@@ -1,18 +1,21 @@
 """What the full-screen client changes in the database, with the user login.
 
 A session may read the checkers' instructions and its settings and cannot change them: it
-must not be able to change what it is judged by. Two things of the client therefore do not go
-through the session at all:
+must not be able to change what it is judged by. Three things of the client therefore do not
+go through the session at all:
 
 * saving a checker's instructions (the checkers screen), as `calu checker edit` does;
-* setting `honesty.mode` (`/honesty off | track | enforce`), as `calu config set` does.
+* setting `honesty.mode` (`/honesty off | track | enforce`), as `calu config set` does;
+* adding, listing and removing temporary rules (`/rule`, `/rules`, `/rule-remove`), as
+  `calu rule` does.
 
-Both use the user login (the role `calu_admin`, `calu.logins`, agent/records/PLAN.md D265):
+All use the user login (the role `calu_admin`, `calu.logins`, agent/records/PLAN.md D265):
 the `user` entry of the local credential store (`calu.credentials`), or, given a database
-login without a password, that login with the user password a person types; and the
-functions of `calu.admin`. The client asks for the user password when it is needed. Where
-the machine has no login, `AdminAccess.problem` says so and the client shows the command that
-does the same.
+login without a password, that login with the user password a person types. The checker
+instructions and `honesty.mode` are written with the functions of `calu.admin`, the
+temporary rules with those of `calu.temp_rules`. The client
+asks for the user password when it is needed. Where the machine has no login,
+`AdminAccess.problem` says so and the client shows the command that does the same.
 
 `AdminAccess` is the interface the client uses; `StoreAdmin` is the real one, and tests pass
 their own. This module imports nothing from Textual.
@@ -24,6 +27,7 @@ A save names the version the editor was opened on (`base_version`): if the store
 has another version by then, somebody changed it meanwhile and the save is refused.
 """
 
+import getpass
 import socket
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -33,7 +37,7 @@ from typing import Any, NoReturn, Protocol
 import anyio
 import psycopg
 
-from calu import admin, herd, logins, servers, session_requests
+from calu import admin, herd, logins, servers, session_requests, temp_rules
 from calu.credentials import CredentialError, CredentialStore, WrongPassword, wipe
 from calu.db.connection import Db
 from calu.db.connection import open_stored as connect
@@ -263,6 +267,66 @@ class AdminAccess(Protocol):
         """
         ...
 
+    async def temporary_rules(
+        self, session_id: str | None, password: str | None
+    ) -> list[tuple[str, bool]]:
+        """List the temporary rules that count now (`/rules`, `calu.temp_rules`).
+
+        Args:
+            session_id: The attached calu session's id, or None.
+            password: The credential's password, or None if it has none.
+
+        Returns:
+            One (line, applies) per active rule, newest first: the rule in one line
+            (`TemporaryRule.line`), and whether it applies to the attached session.
+
+        Raises:
+            PasswordNeeded: If the password is missing or wrong.
+            AdminFailed: If there is no credential or the database refuses.
+        """
+        ...
+
+    async def add_temporary_rule(
+        self, arguments: str, session_id: str | None, password: str | None
+    ) -> str:
+        """Store a temporary rule as `/rule` gives it (`temp_rules.add_from_client`).
+
+        Args:
+            arguments: What followed `/rule`: `[duration] [--session | --project | --global]
+                text`.
+            session_id: The attached calu session's id, or None.
+            password: The credential's password, or None if it has none.
+
+        Returns:
+            The stored rule in one line.
+
+        Raises:
+            PasswordNeeded: If the password is missing or wrong.
+            AdminFailed: If the rule is refused (the message says why), there is no
+                credential or the database refuses.
+        """
+        ...
+
+    async def remove_temporary_rule(
+        self, rule_id: int, session_id: str | None, password: str | None
+    ) -> str:
+        """End a temporary rule before it expires (`/rule-remove`).
+
+        Args:
+            rule_id: The rule's number.
+            session_id: The attached calu session's id, or None.
+            password: The credential's password, or None if it has none.
+
+        Returns:
+            The removed rule in one line.
+
+        Raises:
+            PasswordNeeded: If the password is missing or wrong.
+            AdminFailed: If no active rule has the number, there is no credential or the
+                database refuses.
+        """
+        ...
+
 
 def _has_secret(database: Target) -> bool:
     """Tell whether a login can connect as it is, without a typed password.
@@ -279,6 +343,18 @@ def _has_secret(database: Target) -> bool:
 
 class NoServerAnswered(AdminFailed):
     """No `calu serve` claimed a session request; it was withdrawn."""
+
+
+def _os_user() -> str:
+    """Name the person at this client, for the record of a temporary rule.
+
+    Returns:
+        The OS user name, or "unknown" if the system does not tell it.
+    """
+    try:
+        return getpass.getuser() or "unknown"
+    except OSError, KeyError:
+        return "unknown"
 
 
 def weakens(before: str, after: str) -> bool:
@@ -745,6 +821,128 @@ class StoreAdmin:
 
         return await self._with_db(password, work)
 
+    async def temporary_rules(
+        self, session_id: str | None, password: str | None
+    ) -> list[tuple[str, bool]]:
+        """List the temporary rules that count now (see `AdminAccess.temporary_rules`).
+
+        Args:
+            session_id: The attached calu session's id, or None.
+            password: The credential's password, or None if it has none.
+
+        Returns:
+            One (line, applies) per active rule, newest first.
+
+        Raises:
+            PasswordNeeded: If the password is missing or wrong.
+            AdminFailed: If there is no credential or the database refuses.
+        """
+
+        async def work(db: Db) -> list[tuple[str, bool]]:
+            """Read the rules and the session's scope.
+
+            Args:
+                db: The connection of the user login.
+
+            Returns:
+                The lines.
+            """
+            conversation, project = await temp_rules.session_scope(db, session_id)
+            return [
+                (
+                    rule.line(conversation),
+                    temp_rules.applies_to_session(rule, conversation, project),
+                )
+                for rule in await temp_rules.listed(db)
+            ]
+
+        return await self._with_db(password, work)
+
+    async def add_temporary_rule(
+        self, arguments: str, session_id: str | None, password: str | None
+    ) -> str:
+        """Store a temporary rule as `/rule` gives it (see `AdminAccess.add_temporary_rule`).
+
+        Side effects: inserts a `temporary_rules` row with the user login.
+
+        Args:
+            arguments: What followed `/rule`.
+            session_id: The attached calu session's id, or None.
+            password: The credential's password, or None if it has none.
+
+        Returns:
+            The stored rule in one line.
+
+        Raises:
+            PasswordNeeded: If the password is missing or wrong.
+            AdminFailed: If the rule is refused, there is no credential or the database
+                refuses.
+        """
+        duration, scope, text = temp_rules.split_command(arguments)
+
+        async def work(db: Db) -> str:
+            """Store the rule.
+
+            Args:
+                db: The connection of the user login.
+
+            Returns:
+                The rule in one line.
+
+            Raises:
+                AdminFailed: If the rule is refused.
+            """
+            try:
+                rule, conversation = await temp_rules.add_from_client(
+                    db, session_id, text, duration, scope, f"calu attach:{_os_user()}"
+                )
+            except temp_rules.RuleError as error:
+                raise AdminFailed(str(error)) from error
+            return rule.line(conversation)
+
+        return await self._with_db(password, work)
+
+    async def remove_temporary_rule(
+        self, rule_id: int, session_id: str | None, password: str | None
+    ) -> str:
+        """End a temporary rule (see `AdminAccess.remove_temporary_rule`).
+
+        Side effects: marks the rule as removed with the user login.
+
+        Args:
+            rule_id: The rule's number.
+            session_id: The attached calu session's id, or None.
+            password: The credential's password, or None if it has none.
+
+        Returns:
+            The removed rule in one line.
+
+        Raises:
+            PasswordNeeded: If the password is missing or wrong.
+            AdminFailed: If no active rule has the number, there is no credential or the
+                database refuses.
+        """
+
+        async def work(db: Db) -> str:
+            """Remove the rule.
+
+            Args:
+                db: The connection of the user login.
+
+            Returns:
+                The rule in one line.
+
+            Raises:
+                AdminFailed: If no active rule has the number.
+            """
+            conversation, _project = await temp_rules.session_scope(db, session_id)
+            gone = await temp_rules.remove(db, rule_id, f"calu attach:{_os_user()}")
+            if gone is None:
+                raise AdminFailed(f"no active temporary rule #{rule_id}")
+            return gone.line(conversation)
+
+        return await self._with_db(password, work)
+
 
 RELAY_START_TIMEOUT_S = 150.0
 """How long `RelayAdmin.request_session` waits for the relay's answer: a little longer than
@@ -756,8 +954,8 @@ class RelayAdmin:
 
     The relay answers for the server's sessions: `sessions` lists them and `request_session`
     asks the server for one (`relay.start`), both with the server token. Settings changes
-    (checker instructions, `honesty.mode`, a session's name) need the database and are
-    refused with `unavailable`, which `problem` returns.
+    (checker instructions, `honesty.mode`, a session's name) and the temporary rules need
+    the database and are refused with `unavailable`, which `problem` returns.
     """
 
     def __init__(self, relay: RelayTarget, unavailable: str) -> None:
@@ -942,6 +1140,48 @@ class RelayAdmin:
         Args:
             mode: Ignored.
             project: Ignored.
+            password: Ignored.
+
+        Raises:
+            AdminFailed: Always, with `unavailable`.
+        """
+        raise AdminFailed(self.unavailable)
+
+    async def temporary_rules(self, session_id: str | None, password: str | None) -> NoReturn:
+        """Refuse: the temporary rules are stored in the database.
+
+        Args:
+            session_id: Ignored.
+            password: Ignored.
+
+        Raises:
+            AdminFailed: Always, with `unavailable`.
+        """
+        raise AdminFailed(self.unavailable)
+
+    async def add_temporary_rule(
+        self, arguments: str, session_id: str | None, password: str | None
+    ) -> NoReturn:
+        """Refuse: the temporary rules are stored in the database.
+
+        Args:
+            arguments: Ignored.
+            session_id: Ignored.
+            password: Ignored.
+
+        Raises:
+            AdminFailed: Always, with `unavailable`.
+        """
+        raise AdminFailed(self.unavailable)
+
+    async def remove_temporary_rule(
+        self, rule_id: int, session_id: str | None, password: str | None
+    ) -> NoReturn:
+        """Refuse: the temporary rules are stored in the database.
+
+        Args:
+            rule_id: Ignored.
+            session_id: Ignored.
             password: Ignored.
 
         Raises:

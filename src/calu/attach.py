@@ -33,6 +33,8 @@ Commands typed instead of a message:
     /trust-file PATH      certify the present content of one file as honest
     /honesty-review       ask for an honesty review of the unreviewed and marked files
     /clear-mark <id>      close one open honesty mark by hand
+    /rule, /rules, /rule-remove   print the `calu rule` command that adds, lists or removes a
+                          temporary rule (this client has no database login)
     /checker-context      print the conversation as the checkers see it
     /usage                the usage limits Claude Code reported, Claude Code's own `/usage`
                           (read without a turn), cost and context fill (`usage.panel`)
@@ -106,6 +108,7 @@ HELP = (
     "/inject <text>  /to <agent> <text>  /comment <path> <from> <to> <text>  /state  "
     "/checker-context  /checkers  /usage  /sessions  /history [id]  /honesty  "
     "/trust [worktree] [commit-or-branch]  /trust-file <path>  /honesty-review  /clear-mark <id>  "
+    "/rule /rules /rule-remove (print the `calu rule` command)  "
     "/running  /switch <id>  "
     "/new [text]  /fork [text]  /shutdown  (any other /word goes to Claude Code)"
 )
@@ -516,6 +519,16 @@ class Console:
             case "/honesty":
                 snapshot = await self.client.request("state.get")
                 say(describe_honesty(snapshot.get("honesty") or {}), flush=True)
+            case "/rule" | "/rules" | "/rule-remove":
+                # The line client has no database login, and a rule never goes through the
+                # session, which the rule judges. `calu rule` stores it with the user login.
+                session = self.client.initialize.get("calu_session_id") or "<session id>"
+                use = {
+                    "/rule": f"calu rule add --session {str(session)[:8]} {rest or '<text>'}",
+                    "/rules": "calu rule list",
+                    "/rule-remove": f"calu rule remove {rest or '<id>'}",
+                }[command]
+                say(f"[rules] the line client stores no rules; run in a terminal: {use}")
             case "/clear-mark":
                 # The marks are in the session's memory: clearing one is a request to the
                 # session, a person's override of a checker.

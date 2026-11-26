@@ -195,6 +195,8 @@ class FakeAdmin:
         """What `served` answers."""
         """The sessions that were asked for (`request_session`)."""
         """Every `(mode, project)` stored, oldest first."""
+        self.rules: list[str] = []
+        """The temporary rules added, as their lines, oldest first; a removed one is ""."""
         self.fail = ""
         """If set, every change is refused with this sentence."""
         self.other_database = False
@@ -386,6 +388,70 @@ class FakeAdmin:
                 },
             )
         return SavedMode(mode, "global")
+
+    async def temporary_rules(
+        self, session_id: str | None, password: str | None
+    ) -> list[tuple[str, bool]]:
+        """List the rules `add_temporary_rule` recorded, newest first, all for this session.
+
+        Args:
+            session_id: Ignored.
+            password: The password the client passed.
+
+        Returns:
+            One (line, True) per rule in `rules` that was not removed.
+
+        Raises:
+            PasswordNeeded: As `_check`.
+            AdminFailed: As `_check`.
+        """
+        self._check(password)
+        return [(line, True) for line in reversed(self.rules) if line]
+
+    async def add_temporary_rule(
+        self, arguments: str, session_id: str | None, password: str | None
+    ) -> str:
+        """Record a rule in `rules`, as the line "#<n>  this session  <arguments>".
+
+        Args:
+            arguments: What followed `/rule`.
+            session_id: Ignored.
+            password: The password the client passed.
+
+        Returns:
+            The recorded line.
+
+        Raises:
+            PasswordNeeded: As `_check`.
+            AdminFailed: As `_check`.
+        """
+        self._check(password)
+        line = f"#{len(self.rules) + 1}  this session  {' '.join(arguments.split())}"
+        self.rules.append(line)
+        return line
+
+    async def remove_temporary_rule(
+        self, rule_id: int, session_id: str | None, password: str | None
+    ) -> str:
+        """Remove a rule from `rules` (its place stays, empty, so that numbers stay).
+
+        Args:
+            rule_id: The rule's number.
+            session_id: Ignored.
+            password: The password the client passed.
+
+        Returns:
+            The removed line.
+
+        Raises:
+            PasswordNeeded: As `_check`.
+            AdminFailed: As `_check`, or if no recorded rule has the number.
+        """
+        self._check(password)
+        if not 1 <= rule_id <= len(self.rules) or not self.rules[rule_id - 1]:
+            raise AdminFailed(f"no active temporary rule #{rule_id}")
+        line, self.rules[rule_id - 1] = self.rules[rule_id - 1], ""
+        return line
 
 
 class FakeSession:

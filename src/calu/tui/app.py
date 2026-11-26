@@ -4500,6 +4500,135 @@ class CaluApp(App[None]):
         ]
         self._page("Log", body or [Text("no log lines yet", self.palette.muted)])
 
+    def _with_user_login(
+        self,
+        what: str,
+        work: Callable[[str | None], Coroutine[Any, Any, None]],
+        command: str,
+        problem: str = "",
+    ) -> None:
+        """Run a change with the user login, asking for the password where it is needed.
+
+        `work` gets the password (None if the credential has none) and shows its own result.
+        A missing or wrong password asks again; any other failure is shown in the header.
+
+        Args:
+            what: What the change does, for the password dialog and the failure line.
+            work: `async (password) -> None`; raises `PasswordNeeded` or `AdminFailed`.
+            command: The terminal command that does the same, shown where this machine has
+                no calu login.
+            problem: What was wrong with the password given before, or "".
+        """
+        missing = self.admin.problem()
+        if missing is not None:
+            self.flash(f"not done here; use: {command} · {missing}", error=True)
+            return
+
+        async def run(password: str | None) -> None:
+            """Run `work`, and report a failure.
+
+            Args:
+                password: The password, or None.
+            """
+            try:
+                await work(password)
+            except PasswordNeeded as error:
+                self._with_user_login(what, work, command, str(error))
+            except AdminFailed as error:
+                self.flash(f"{what}: {error}", error=True)
+
+        def answered(password: str | None) -> None:
+            """Go on with the typed password; without one nothing is done.
+
+            Args:
+                password: What the user typed, or None.
+            """
+            if password is None:
+                self.flash(f"{what}: no password given, nothing done", error=True)
+            else:
+                self._spawn(run(password))
+
+        if self.admin.needs_password():
+            self.push_screen(PasswordScreen(f"{what}.", self.palette, problem), answered)
+        else:
+            self._spawn(run(None))
+
+    def _cmd_rule(self, rest: str) -> None:
+        """Add a temporary rule for the checkers (`/rule [3d] [--project | --global] text`).
+
+        The rule is stored with the user login, never through the session, and never sent
+        to Claude. It applies to this session unless `--project` or `--global` is given.
+
+        Args:
+            rest: The duration, the scope and the text.
+        """
+        if not rest.strip():
+            self.flash("usage: /rule [3d] [--project | --global] text", error=True)
+            return
+
+        async def work(password: str | None) -> None:
+            """Store the rule and say what was stored.
+
+            Args:
+                password: The password, or None.
+            """
+            line = await self.admin.add_temporary_rule(rest, self.model.calu_session_id, password)
+            self.flash(f"temporary rule added: {line}")
+
+        self._with_user_login("Add a temporary rule", work, f"calu rule add {rest}")
+
+    def _cmd_rules(self, rest: str) -> None:
+        """List the temporary rules that count now on a page (`/rules`).
+
+        Args:
+            rest: Ignored.
+        """
+
+        async def work(password: str | None) -> None:
+            """Read the rules and open the page.
+
+            Args:
+                password: The password, or None.
+            """
+            rules = await self.admin.temporary_rules(self.model.calu_session_id, password)
+            mine = [line for line, applies in rules if applies]
+            others = [line for line, applies in rules if not applies]
+            lines = [Text("No temporary rules are active.")] if not rules else []
+            if mine:
+                lines += [Text("Temporary rules that apply to this session", "bold")]
+                lines += [Text(line) for line in mine] + [Text("")]
+            if others:
+                lines += [Text("Temporary rules of other sessions and projects", "bold")]
+                lines += [Text(line) for line in others] + [Text("")]
+            lines.append(Text("/rule-remove <id> removes one; /rule adds one.", "dim"))
+            self._page("Temporary rules", lines)
+
+        self._with_user_login("List the temporary rules", work, "calu rule list")
+
+    def _cmd_rule_remove(self, rest: str) -> None:
+        """End a temporary rule before it expires (`/rule-remove <id>`).
+
+        Args:
+            rest: The rule's number, with or without "#".
+        """
+        number = rest.strip().lstrip("#")
+        if not number.isdigit() or int(number) < 1:
+            self.flash("usage: /rule-remove <id> · /rules lists them", error=True)
+            return
+
+        async def work(password: str | None) -> None:
+            """Remove the rule and say which one.
+
+            Args:
+                password: The password, or None.
+            """
+            line = await self.admin.remove_temporary_rule(
+                int(number), self.model.calu_session_id, password
+            )
+            self.flash(f"temporary rule removed: {line}")
+
+        self._with_user_login("Remove a temporary rule", work, f"calu rule remove {number}")
+
     def _cmd_clear_mark(self, rest: str) -> None:
         """Clear an honesty mark (`/clear-mark <id>`).
 

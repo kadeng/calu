@@ -366,30 +366,6 @@ async def save_instructions(
     return {"version": row.version}
 
 
-async def _session_scope(db: Db, session_id: str | None) -> tuple[str | None, str | None]:
-    """Find what a session rule and a project rule of one session are bound to.
-
-    Args:
-        db: A connection that may read `sessions` and `projects`.
-        session_id: The attached session's id, or None if none is attached.
-
-    Returns:
-        (the session's conversation, its project's name); None for each one that does not
-        exist yet, and (None, None) without a session.
-
-    Raises:
-        psycopg.Error: On database errors.
-    """
-    if not session_id:
-        return None, None
-    row = await db.one(
-        "SELECT s.claude_session_id, p.name FROM sessions s"
-        " LEFT JOIN projects p ON p.id = s.project_id WHERE s.id = %s::uuid",
-        (session_id,),
-    )
-    return (row[0], row[1]) if row else (None, None)
-
-
 def _rule_json(rule: temp_rules.TemporaryRule, conversation: str | None) -> dict[str, Any]:
     """Return a temporary rule for the editor.
 
@@ -421,15 +397,14 @@ async def rules_view(db: Db, session_id: str | None) -> dict[str, Any]:
     Raises:
         psycopg.Error: On database errors.
     """
-    conversation, project = await _session_scope(db, session_id)
-    rules: list[dict[str, Any]] = []
-    for rule in await temp_rules.listed(db):
-        applies = (
-            rule.scope == "global"
-            or (rule.scope == "project" and project is not None and rule.project == project)
-            or (rule.scope == "session" and temp_rules.applies_to(rule, conversation))
-        )
-        rules.append({**_rule_json(rule, conversation), "applies": applies})
+    conversation, project = await temp_rules.session_scope(db, session_id)
+    rules = [
+        {
+            **_rule_json(rule, conversation),
+            "applies": temp_rules.applies_to_session(rule, conversation, project),
+        }
+        for rule in await temp_rules.listed(db)
+    ]
     return {"rules": rules, "conversation": conversation, "project": project}
 
 
@@ -443,9 +418,10 @@ async def add_rule(
 ) -> dict[str, Any]:
     """Store a temporary rule for the attached session, its project or every project.
 
-    A rule from the editor never lifts calu's built-in protections.
+    A rule from the editor never lifts calu's built-in protections
+    (`temp_rules.add_from_client`).
 
-    Side effects: inserts a `temporary_rules` row (`temp_rules.add`).
+    Side effects: inserts a `temporary_rules` row.
 
     Args:
         db: A connection with the user login.
@@ -465,34 +441,9 @@ async def add_rule(
             option here (`--lift-builtin`, for example) and would become part of the rule.
         psycopg.Error: On database errors.
     """
-    conversation, project = await _session_scope(db, session_id)
-    chosen = scope or "session"
-    if text.lstrip().startswith("--"):
-        raise RpcError(
-            INVALID_PARAMS,
-            f"{text.split()[0]} is not a rule option here; the options are --session,"
-            " --project and --global. A rule that lifts calu's built-in protections is"
-            " added in the web settings or with `calu rule add --lift-builtin`",
-        )
-    if chosen == "session" and not conversation:
-        raise RpcError(
-            INVALID_PARAMS,
-            "a session rule needs an attached session that has started its conversation; "
-            "send a message first, or use --project or --global",
-        )
-    if chosen == "project" and not project:
-        raise RpcError(
-            INVALID_PARAMS, "a project rule needs an attached session of a registered project"
-        )
     try:
-        rule = await temp_rules.add(
-            db,
-            text,
-            created_by=by,
-            duration=temp_rules.parse_duration(duration),
-            scope=chosen,  # type: ignore[arg-type]  # `add` refuses any other word
-            project=project,
-            conversation=conversation,
+        rule, conversation = await temp_rules.add_from_client(
+            db, session_id, text, duration, scope, by
         )
     except temp_rules.RuleError as error:
         raise RpcError(INVALID_PARAMS, str(error)) from error
@@ -517,7 +468,7 @@ async def remove_rule(db: Db, session_id: str | None, rule_id: int, by: str) -> 
         RpcError: `INVALID_PARAMS` if no active rule has that id.
         psycopg.Error: On database errors.
     """
-    conversation, _project = await _session_scope(db, session_id)
+    conversation, _project = await temp_rules.session_scope(db, session_id)
     gone = await temp_rules.remove(db, rule_id, by)
     if gone is None:
         raise RpcError(INVALID_PARAMS, f"no active temporary rule #{rule_id}")

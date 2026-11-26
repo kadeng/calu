@@ -495,8 +495,8 @@ def test_a_bridge_of_root_for_a_user_works_for_that_user(
 ) -> None:
     """The chat pane of `calu web --sudo`: its sessions and requests are the user's, not root's.
 
-    The owner's web interface runs as root for their user; its pane could not resume a
-    session because the bridge took itself for root.
+    Such a web interface runs as root for one user; its pane could not resume a session
+    because the bridge took itself for root.
     """
     from calu import asuser
     from calu.ide import bridge as ide_bridge

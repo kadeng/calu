@@ -344,6 +344,30 @@ async def test_rename_stores_the_name_and_the_status_line_shows_it() -> None:
         assert '"' not in run.line("status") and "removed" in run.app.message
 
 
+async def test_temporary_rules_are_added_listed_and_removed_with_the_user_login() -> None:
+    """`/rule`, `/rules`, `/rule-remove`: stored through `AdminAccess`, never sent to Claude."""
+    session = FakeSession()
+    access = FakeAdmin(session)
+    async with running("simple_turn", session=session, admin=access) as run:
+        await command(run, "/rule 2h --global  never push")
+        assert access.rules == ["#1  this session  2h --global never push"]
+        assert "temporary rule added: #1" in run.app.message
+        await command(run, "/rule")
+        assert "usage: /rule" in run.app.message and len(access.rules) == 1
+        await command(run, "/rules")
+        assert isinstance(run.app.screen, TextScreen)
+        await run.press("escape")
+        await command(run, "/rule-remove #1")
+        assert access.rules == [""] and "temporary rule removed: #1" in run.app.message
+        await command(run, "/rule-remove 1")
+        assert "no active temporary rule #1" in run.app.message
+        await command(run, "/rule-remove soon")
+        assert "usage: /rule-remove" in run.app.message
+    async with running("simple_turn", session=session, admin=FakeAdmin(session, False)) as run:
+        await command(run, "/rule ask first")
+        assert "use: calu rule add ask first" in run.app.message
+
+
 async def test_rename_without_the_credential_says_so() -> None:
     session = FakeSession()
     async with running("simple_turn", session=session, admin=FakeAdmin(session, False)) as run:

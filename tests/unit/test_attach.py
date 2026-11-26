@@ -26,6 +26,8 @@ class FakeClient:
         self.sent: list[tuple[str, dict[str, Any]]] = []
         self.results = results or {}
         self.fail: str | None = None
+        self.initialize: dict[str, Any] = {}
+        """What the session answered to `initialize`, as `SessionClient.initialize`."""
 
     async def request(self, method: str, params: dict[str, Any] | None = None) -> Any:
         """Record the request and return its prepared result.
@@ -111,6 +113,19 @@ async def test_an_escalation_id_may_be_written_as_the_full_screen_client_shows_i
         ("escalation.decide", {"escalation_id": "21", "answer": "Dark"}),
         ("escalation.context", {"escalation_id": "19"}),
     ]
+
+
+async def test_the_rule_commands_print_the_terminal_command_and_send_nothing(capsys):
+    """The line client has no database login; a rule never goes through the session."""
+    con, client = console({})
+    client.initialize = {"calu_session_id": "5ff11351-4d86-4cff-93a7-400c86067710"}
+    await con.line("/rule 2h ask first")
+    await con.line("/rules")
+    await con.line("/rule-remove 4")
+    assert client.sent == []
+    out = capsys.readouterr().out
+    assert "calu rule add --session 5ff11351 2h ask first" in out
+    assert "calu rule list" in out and "calu rule remove 4" in out
 
 
 async def test_the_honesty_commands_become_requests_and_print_their_answers(capsys):

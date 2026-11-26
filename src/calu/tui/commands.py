@@ -234,6 +234,18 @@ COMMANDS: tuple[Command, ...] = (
     Command("log", "The session's log", "", "/log"),
     Command("clear_mark", "Clear an honesty mark", "", "/clear-mark <id>"),
     Command(
+        "rule",
+        "Add a temporary rule for the checkers",
+        "",
+        "/rule [duration] [--project | --global] <text>",
+        about=(
+            "1m to 7d, default 1d; for this session unless --project or --global. Stored "
+            "with this machine's calu login, never sent to Claude."
+        ),
+    ),
+    Command("rules", "List the active temporary rules", "", "/rules"),
+    Command("rule_remove", "Remove a temporary rule", "", "/rule-remove <id>"),
+    Command(
         "start", "Start the session, or resume a stored one", "enter", "/start [resume id | new]"
     ),
     Command(
