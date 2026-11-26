@@ -1,4 +1,4 @@
-# Temporary rules: design (draft for the owner's approval, 2026-11-26)
+# Temporary rules: design (with the owner's decisions of 2026-11-26, section 7)
 
 ## 1. The request
 
@@ -34,7 +34,8 @@ the allow or deny lists; it steers the models' judgement as the instructions do.
 | `id` | A short number, shown in every list and used by `/rule-remove` |
 | `text` | The rule as the user wrote or accepted it, at most 1,000 characters |
 | `scope` | `global`, `project` (one registered project) or `session` (one session) |
-| `expires_at` | Creation time plus the duration: at least 1 hour, at most 7 days, default 1 day |
+| `expires_at` | Creation time plus the duration: at least 1 minute, at most 7 days, default 1 day |
+| `lifts_builtin` | Whether the rule also lifts calu's built-in protections, within the limits of section 6 |
 | `created_by`, `created_at` | Who added it (as for escalation decisions: `client:<name>`, `web:<user>`, `cli:<user>`) |
 | `removed_at`, `removed_by` | Set when a person removes it before it expires |
 | `origin` | `manual`, or the escalation id whose dialog created it |
@@ -44,8 +45,8 @@ rule stays in the table for the record and is no longer shown to the checkers.
 
 ## 3. How the checkers see them
 
-`compose_instructions` gets one more part for the command and edit routes, after the user's
-instructions:
+`compose_instructions` gets one more part for the command, edit and changeset routes, after the
+user's instructions:
 
 ```
 # Temporary rules
@@ -61,8 +62,8 @@ They do not lift calu's built-in protections, which are applied before you are a
   and whenever the database announces a change (`config_changed`, as for settings and rules).
 - Expiry is checked when a prompt is built, not only when the list is read, so a rule stops
   counting at its `expires_at` even if no change was announced.
-- The changeset checker (commits) and the subagent checker do not get them; the request names
-  the edit and command checkers. This is open question 3.
+- The changeset checker (the review of a commit) gets them too, so that a commit is judged by
+  the same rules as the edits that led to it. The subagent checker does not get them.
 - The rules change the checkers' prompt, so the prompt cache starts again when a rule is added,
   removed or expires. That is a small cost once per change.
 
@@ -78,64 +79,58 @@ Only a person, through a login Claude does not have:
 | the VSCode settings dialog: a "Temporary rules" card | the bridge's user login | list, add, remove |
 | `calu rule add/list/remove` in a terminal | the user login | for scripts and for a machine without a client |
 
-The database enforces the limits: a check constraint keeps `expires_at - created_at` between 1
-hour and 7 days, and the session role can only read the table. Adding and removing go into the
+The database enforces the limits. A check constraint keeps `expires_at - created_at` between 1
+minute and 7 days, and at 1 day at most for a rule that lifts built-in protections. The session
+role can only read the table. Adding and removing go into the
 audit log, as setting changes do (D43).
 
 ### The slash commands
 
 ```
-/rule [duration] [--global | --project | --session] <text>    add; duration 1h..7d, default 1d
+/rule [duration] [--global | --project | --session] <text>    add; duration 1m..7d, default 1d
 /rules                                                        list the active ones with ids
 /rule-remove <id>                                             remove one before it expires
 ```
 
-- Duration: a number with `h` or `d` (`1h`, `12h`, `3d`, `7d`). A missing duration means `1d`;
-  more than 7 days is refused with the hint to add the rule to the checker instructions instead.
-- Scope default: the session's project if it has one, else the session. `--global` must be typed;
-  a security-relevant override for every project should not happen by default.
+- Duration: a number with `m`, `h` or `d` (`30m`, `1h`, `12h`, `3d`, `7d`); nothing smaller
+  than a minute. A missing duration means `1d`. More than 7 days is refused, with the hint to
+  add the rule to the checker instructions instead.
+- Scope default: the session. `--project` and `--global` must be typed.
 - The client answers with the rule as stored ("#12 added for this project until Fri 14:00").
 
 ## 5. Escalation dialogs
 
 ### What the checker suggests
 
-When the command or edit checker answers ESCALATE, its answer may carry up to two suggested
-rules (a new optional field `suggested_rules`):
-
-| Kind | Example |
-|---|---|
-| `specific` | "Claude may run `pytest tests/db` with `CALU_TEST_DSN` pointing at the local test container." |
-| `general` | "Claude may run the project's database tests against local containers." |
-
-The instructions ask for a rule that would have let the step pass, written as an intent or a
-scope, not as one literal command line. The checker leaves the field empty when no rule would
-be sensible: a backdoor, a deliberate evasion, a step that only a person can judge each time.
+When the command or edit checker answers ESCALATE, its answer may carry one suggested rule (a
+new optional field `suggested_rule`), e.g. "Claude may run the project's database tests against
+local containers." The instructions ask for a rule that would have let the step pass, written as
+an intent or a scope, not as one literal command line. The checker leaves the field empty when no
+rule would be sensible. That is the case for a backdoor, a deliberate evasion, or a step that
+only a person can judge each time.
 
 ### What the dialog shows
 
-Below the usual Allow and Deny:
+Below the usual Allow and Deny, one editable text field, filled with the suggestion if there is
+one:
 
 ```
-  Also add a temporary rule (optional)
-  [ ] Claude may run pytest tests/db with CALU_TEST_DSN pointing at the local ...   [edit]
-  [ ] Claude may run the project's database tests against local containers.        [edit]
-  [ ] My own rule: [_____________________________________________]
-      for [1d v]   scope [this project v]
+  Temporary rule (optional; added only if the field is not empty)
+  [Claude may run the project's database tests against local containers.______]
+  for [1d v]   scope [this session v]
 ```
 
-- Nothing is ticked by default. Allow alone never adds a rule.
-- A ticked rule is added when the user presses Allow or Deny; its text can be edited first.
-- With Deny, the own-rule line is the natural place for a refusal ("ask before any network
-  access from tests"); the checker's suggestions are for approvals and are not offered with
-  Deny.
+- If the field is empty or holds only white space, no rule is added. The user can clear the
+  suggestion, change it, or write a rule where the checker suggested none.
+- The rule is added when the user presses Allow or Deny. With Deny, the field is the place for a
+  refusal ("ask before any network access from tests").
 - The rule is added by the client with the user login, before the decision is sent. If adding
   fails, the decision is still sent, and the dialog says that the rule was not added.
 - Every client with escalation dialogs gets this: the VSCode chat, the `calu web` chat pane and
   escalation page, and the full-screen terminal client. The line client and ACP show the
   suggestions as text and offer `/rule`.
 
-## 6. The built-in protections (needs the owner's decision)
+## 6. The built-in protections (the owner chose B)
 
 The owner's example asks for something the rules cannot give as designed above. calu escalates
 two things before any checker runs, and no list or instruction can change that (D160):
@@ -166,33 +161,52 @@ other commands, and the list of commands that stay escalated must be kept comple
 **C. A rule may lift them without limits.** Claude can then approve its own escalations while
 the rule is active.
 
-I recommend A now, and B as a separate step if debugging calu inside calu needs it often. C is
-not safe.
+I recommended A. The owner chose B: "It's not as if claude has no safeguards. We are protecting
+against a malicious agent here, not against a claude process whose code is malicious or already
+taken over."
 
-## 7. Open questions for the owner
+### B as designed
 
-1. Section 6: A, B or C.
-2. Scope default: "the session's project, else the session", with `--global` to be typed. Is
-   that right, or should the default be global?
-3. Should the changeset checker (commit review) also read the temporary rules? The request names
-   the edit and command checkers only. A commit is a command, but its review is a checker of its
-   own.
-4. Durations below 1 hour (`30m`)? The request says "1 hour to 3 days" and "never longer than
-   7d"; this design allows 1h to 7d.
-5. Should Claude be told which temporary rules are active? It would explain why a step that
-   escalated yesterday passes today, but it also tells Claude exactly what it may now do.
-   This design does not tell it.
+The limits below are Claude's proposal for B; the owner chose B, not these details.
 
-## 8. Plan of work, after approval
+- A rule with `lifts_builtin` can only be added in the web settings or with `calu rule add
+  --lift-builtin`, never from a chat or an escalation dialog. It lasts at most one day, and every
+  list shows it marked as lifting the built-in protections.
+- While such a rule applies to a session, the rules engine no longer escalates calu commands and
+  calu's own directories by itself. The step goes to the checkers instead, and they read the
+  rule's text like any other temporary rule.
+- These stay escalated, whatever a rule says:
+  - the calu subcommands that change what steers the checks or decide for a person:
+    `resolve`, `config`, `rules`, `rule`, `checker`, `token`, `setup`, `honesty`, `project`,
+    `credential`, `db`, `uninstall`;
+  - every read or write of the credential store (`credentials.json`) and of the checker key
+    file (`.env`).
+- The list of subcommands that stay escalated lives next to `BUILT_IN_COMMAND_DENY`, with a test
+  that fails when `calu --help` names a subcommand that is in neither list. So a new subcommand
+  forces a decision.
+
+## 7. The owner's decisions (2026-11-26)
+
+1. Built-in protections: B (section 6).
+2. One suggested rule at most, an editable free text in the dialog; the user can write one
+   where the checker suggested none; empty or white space adds nothing.
+3. Default scope: the session.
+4. Durations from 1 minute (`1m`) to 7 days; nothing smaller than a minute.
+5. Claude is not told which rules are active ("it might be too easy to exploit if it definitely
+   knows which rules apply to it").
+6. The changeset checker reads the rules too.
+7. Every UI part is tested in the Cua desktop as it is added, not only at the end.
+
+## 8. Plan of work
 
 | Step | Content | Size |
 |---|---|---|
 | 1 | Migration: table `temporary_rules`, check constraints, grants (session role reads only); `calu.temp_rules` with parsing of durations and scopes, add, list, remove, audit | half a day |
-| 2 | The checkers' prompt part, the session's reload and the expiry at prompt time; tests with fake checkers | 2 hours |
-| 3 | `calu rule add/list/remove`; the slash commands in `calu attach` (both clients); the bridge's `ide.rules.*` requests and the slash commands of the VSCode chat and the web pane | half a day |
-| 4 | The settings pane of `calu web`, the card in the VSCode settings dialog | 3 hours |
-| 5 | `suggested_rules` in the checkers' answer and instructions, in `escalation.request`, and the dialogs in the VSCode chat, the web pane and escalation page, and the full-screen client | 1 day |
-| 6 | Documentation (DOCUMENTATION.md, the protocol, CONFIGURATION if a setting comes up), PLAN.md decision, UI test in the Cua desktop | 2 hours |
+| 2 | The checkers' prompt part (command, edit, changeset), the session's reload and the expiry at prompt time; the lifting of built-in protections in the rules engine with its fixed exceptions; tests with fake checkers | half a day |
+| 3 | `calu rule add/list/remove`; the slash commands in `calu attach` (both clients); the bridge's `ide.rules.*` requests and the slash commands of the VSCode chat and the web pane; Cua test of the VSCode chat | half a day |
+| 4 | The settings pane of `calu web`, the card in the VSCode settings dialog; Cua test of both | 3 hours |
+| 5 | `suggested_rule` in the checkers' answer and instructions, in `escalation.request`, and the dialogs in the VSCode chat, the web pane and escalation page, and the full-screen client; Cua test of the dialogs | 1 day |
+| 6 | Documentation (DOCUMENTATION.md, the protocol, CONFIGURATION if a setting comes up), PLAN.md decision | 2 hours |
 
-About three days in all. Steps 1 to 3 give a working feature from the chat and the terminal;
-I would report after step 3 and after step 5.
+About three and a half days in all. Steps 1 to 3 give a working feature from the chat and the
+terminal. I report after step 3 and after step 5.

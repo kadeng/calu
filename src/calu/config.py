@@ -760,7 +760,7 @@ class HonestyConfig(ConfigModel):
     review_batch_files: int = Field(default=8, ge=1)
     """How many files one run of the reviewer agent judges at most. A review splits its files
     into batches of this size, and closes a batch earlier when its files' texts together
-    exceed 120,000 characters."""
+    exceed `review_batch_bytes`."""
     review_concurrency: int = Field(default=4, ge=1)
     """How many batches of one honesty review run at the same time."""
     generated_paths: list[str] = Field(default_factory=list)
