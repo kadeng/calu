@@ -28,6 +28,9 @@
  *     /trust [WT] [REV]  Act("honestyTrust", {checkout?, rev?})   (the chat asks for confirmation)
  *     /trust-file PATH   Act("honestyTrust", {path})       /trust-file    Ui("trustFile")
  *     /honesty-review    Act("honestyReview", {})
+ *     /btw <question>    Act("sideAsk", {question})        /btw           Ui("side")
+ *     /rule <args>       Act("ruleAdd", {command})         /rules         Act("rulesList", {})
+ *     /rule-remove <id>  Act("ruleRemove", {id})
  */
 package io.github.kadeng.calu.logic
 
@@ -119,6 +122,10 @@ val CALU_COMMANDS: List<SlashCommand> = listOf(
     SlashCommand("rename", "Rename the attached session", "calu"),
     SlashCommand("settings", "Open calu's settings", "calu"),
     SlashCommand("interrupt", "Interrupt Claude's running turn", "calu"),
+    SlashCommand("btw", "Ask a side question beside the running work: /btw [question]", "calu"),
+    SlashCommand("rule", "Add a temporary rule for the checkers: /rule [3d] [--project | --global] text (1m to 7d, default 1d, this session)", "calu"),
+    SlashCommand("rules", "List the active temporary rules", "calu"),
+    SlashCommand("rule-remove", "Remove a temporary rule: /rule-remove <id>", "calu"),
 )
 
 private val COMMAND_NAME = Regex("^[\\w:.-]+$")
@@ -225,6 +232,7 @@ sealed interface SlashResult {
 
 private val SLASH_INPUT = Regex("^/([\\w:.-]+)(?:\\s+([\\s\\S]*))?$")
 private val MODEL_NAME = Regex("^[\\w.:\\[\\]-]{1,100}$")
+private val RULE_ID = Regex("#?(\\d{1,9})")
 
 /**
  * Build the arguments of an action with one string member.
@@ -290,6 +298,19 @@ fun resolveSlash(text: String, attachedId: String?): SlashResult {
         "rename" -> needsSession(SlashResult.Ui("rename"))
         "settings" -> SlashResult.Ui("settings")
         "interrupt" -> needsSession(SlashResult.Act("interrupt"))
+        // Never chat text: as a chat message it would wait in the queue until the turn ends.
+        "btw" -> if (value.isEmpty()) SlashResult.Ui("side") else needsSession(SlashResult.Act("sideAsk", arg("question", value)))
+        // Stored by the bridge with the user login; no session is needed for --project or
+        // --global, and the bridge refuses a session rule without one.
+        "rule" -> if (value.isEmpty()) {
+            SlashResult.Error("/rule needs a text: /rule [3d] [--session | --project | --global] text")
+        } else {
+            SlashResult.Act("ruleAdd", arg("command", value))
+        }
+        "rules" -> SlashResult.Act("rulesList")
+        "rule-remove" -> RULE_ID.matchEntire(value)?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it > 0 }
+            ?.let { SlashResult.Act("ruleRemove", buildJsonObject { put("id", JsonPrimitive(it)) }) }
+            ?: SlashResult.Error("/rule-remove needs the id of a rule; /rules lists them.")
         else -> SlashResult.Chat
     }
 }

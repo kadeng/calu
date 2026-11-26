@@ -9,6 +9,7 @@
  *     act("sideAsk", {question})     ──► side.ask {question, history}  (state: `ViewState.side`)
  *     act("honestyReview" | "honestyTrust" | "honestyClear" {mark_id})  ──► honesty.review / .trust / .clear
  *     act("comment", <params of comment.add>)                           ──► comment.add
+ *     act("ruleAdd" {command} | "rulesList" | "ruleRemove" {id})        ──► ide.rules.add / .list / .remove
  *
  * They are extension functions so that `ChatController.kt` stays readable; they behave like
  * its own actions: a failed request is reported as a notice in the chat and nothing is thrown.
@@ -236,6 +237,60 @@ suspend fun ChatController.honestyClear(markId: Int): Boolean =
     run("Clearing the mark") { supervisor.session("honesty.clear", buildJsonObject { put("mark_id", JsonPrimitive(markId)) }) }
 
 /**
+ * Add a temporary rule for the checkers (`/rule`, `ide.rules.add`) and say in the chat what
+ * was stored. The bridge stores it with the user login; nothing goes to Claude.
+ *
+ * @param command The arguments of `/rule` as typed: `[duration] [--session | --project |
+ *   --global] text`.
+ * @return True if the rule was stored; a refused rule is an error notice with the reason.
+ */
+suspend fun ChatController.ruleAdd(command: String): Boolean = run("Adding the temporary rule") {
+    val rule = supervisor.request("ide.rules.add", buildJsonObject { put("command", JsonPrimitive(command)) }).asObj()?.get("rule")?.asObj()
+    notice("info", "Temporary rule added: ${rule?.str("line").orEmpty()}")
+}
+
+/**
+ * List the active temporary rules in the chat (`/rules`, `ide.rules.list`).
+ *
+ * @return True if the bridge answered.
+ */
+suspend fun ChatController.rulesList(): Boolean = run("Listing the temporary rules") {
+    val rules = (supervisor.request("ide.rules.list").asObj() ?: EMPTY_OBJECT).arr("rules").mapNotNull { it.asObj() }
+    // A rule without `applies` is counted as applying: the bridge sets it for every rule.
+    notice("info", rulesNotice(rules.map { it.str("line").orEmpty() to (!it.containsKey("applies") || it.bool("applies")) }))
+}
+
+/**
+ * End a temporary rule before it expires (`/rule-remove`, `ide.rules.remove`).
+ *
+ * @param id The rule's number.
+ * @return True if the rule was removed; an unknown number is an error notice.
+ */
+suspend fun ChatController.ruleRemove(id: Int): Boolean = run("Removing the temporary rule") {
+    val rule = supervisor.request("ide.rules.remove", buildJsonObject { put("id", JsonPrimitive(id)) }).asObj()?.get("rule")?.asObj()
+    notice("info", "Temporary rule removed: ${rule?.str("line").orEmpty()}")
+}
+
+/**
+ * Build the chat notice that answers `/rules` (as the VSCode extension's `rulesNotice`).
+ *
+ * @param rules (line, applies) per active rule, newest first.
+ * @return "No temporary rules are active." without rules; otherwise the rules that apply to
+ *   the attached session, then under their own heading those of other sessions and projects,
+ *   then how to remove one.
+ */
+fun rulesNotice(rules: List<Pair<String, Boolean>>): String {
+    if (rules.isEmpty()) return "No temporary rules are active."
+    val lines = mutableListOf<String>()
+    val mine = rules.filter { it.second }.map { it.first }
+    val others = rules.filterNot { it.second }.map { it.first }
+    if (mine.isNotEmpty()) lines += listOf("Temporary rules that apply to this session:") + mine
+    if (others.isNotEmpty()) lines += listOf("Temporary rules of other sessions and projects:") + others
+    lines += "/rule-remove <id> removes one."
+    return lines.joinToString("\n")
+}
+
+/**
  * Send a comment on a selection to Claude (`comment.add`): calu cuts the commented excerpt,
  * relays the comment to Claude and stores it.
  *
@@ -286,6 +341,7 @@ suspend fun ChatController.comment(input: CommentInput): Boolean {
  *     rewind {turn, uuid?}          forkAt {turn, uuid?}          forkConversation {}
  *     sideAsk {question}            honestyReview {}              honestyTrust {rev?, checkout?, path?}
  *     honestyClear {mark_id}        comment {kind, path, side, start_line, end_line, after_text, text, before_text?, ref?}
+ *     ruleAdd {command}             rulesList {}                  ruleRemove {id}
  *
  * @param action The action's name.
  * @param args Its arguments (missing members count as absent; a missing required member makes
@@ -320,6 +376,9 @@ suspend fun ChatController.act(action: String, args: JsonObject = EMPTY_OBJECT):
     "honestyReview" -> honestyReview()
     "honestyTrust" -> honestyTrust(args)
     "honestyClear" -> args.int("mark_id")?.let { honestyClear(it) } ?: false
+    "ruleAdd" -> args.str("command")?.takeIf { it.isNotBlank() }?.let { ruleAdd(it) } ?: false
+    "rulesList" -> rulesList()
+    "ruleRemove" -> args.int("id")?.let { ruleRemove(it) } ?: false
     "comment" -> comment(args)
     else -> null
 }

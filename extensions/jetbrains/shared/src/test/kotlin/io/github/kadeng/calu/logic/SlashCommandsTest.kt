@@ -12,7 +12,7 @@ class SlashCommandsTest {
     @Test
     fun `holds the plugin commands and the built-in Claude Code commands, sorted`() {
         assertEquals(
-            listOf("model", "effort", "level", "mode", "honesty", "trust", "trust-file", "honesty-review", "checkers", "checker-context", "sessions", "new", "fork", "rename", "settings", "interrupt"),
+            listOf("model", "effort", "level", "mode", "honesty", "trust", "trust-file", "honesty-review", "checkers", "checker-context", "sessions", "new", "fork", "rename", "settings", "interrupt", "btw", "rule", "rules", "rule-remove"),
             CALU_COMMANDS.map { it.name },
         )
         // No /help: a session without a terminal answers that it is not available.
@@ -121,5 +121,37 @@ class SlashCommandsTest {
         assertEquals(SlashResult.Act("honestyTrust", jo("path" to "src/a b.py")), resolveSlash("/trust-file src/a b.py", "s1"))
         assertEquals(SlashResult.Ui("trustFile"), resolveSlash("/trust-file", "s1"))
         assertEquals(SlashResult.Act("honestyReview"), resolveSlash("/honesty-review", "s1"))
+    }
+
+    @Test
+    fun `btw is a side question and never chat text`() {
+        assertEquals(SlashResult.Act("sideAsk", jo("question" to "what now?")), resolveSlash("/btw  what now? ", "s1"))
+        assertEquals(SlashResult.Ui("side"), resolveSlash("/btw", "s1"))
+        assertTrue(resolveSlash("/btw why", null) is SlashResult.Error)
+    }
+
+    @Test
+    fun `the rule commands go to the bridge as typed and need no attached session`() {
+        assertEquals(SlashResult.Act("ruleAdd", jo("command" to "3d --project run\nthe tests")), resolveSlash("/rule 3d --project run\nthe tests", null))
+        assertEquals(SlashResult.Act("rulesList"), resolveSlash("/rules", null))
+        assertEquals(SlashResult.Act("ruleRemove", jo("id" to 12)), resolveSlash("/rule-remove #12", "s1"))
+        assertTrue(resolveSlash("/rule", "s1") is SlashResult.Error)
+        for (text in listOf("/rule-remove", "/rule-remove soon", "/rule-remove 0", "/rule-remove 1 2")) {
+            val result = resolveSlash(text, "s1")
+            assertTrue(result is SlashResult.Error && result.text.contains("needs the id"), text)
+        }
+    }
+
+    @Test
+    fun `the answer to rules lists the rules of this session first`() {
+        assertEquals("No temporary rules are active.", io.github.kadeng.calu.chat.rulesNotice(emptyList()))
+        assertEquals(
+            listOf(
+                "Temporary rules that apply to this session:", "#2  mine",
+                "Temporary rules of other sessions and projects:", "#3  theirs",
+                "/rule-remove <id> removes one.",
+            ),
+            io.github.kadeng.calu.chat.rulesNotice(listOf("#3  theirs" to false, "#2  mine" to true)).lines(),
+        )
     }
 }

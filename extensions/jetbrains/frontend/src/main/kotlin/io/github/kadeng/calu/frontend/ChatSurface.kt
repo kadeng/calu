@@ -694,6 +694,8 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
         when {
             action == "start" && args.str("kind") == "new" -> newSession()
             action == "honestyTrust" -> confirmTrust(args)
+            // `/btw question`: the answer shows in the side questions, which then open.
+            action == "sideAsk" -> { host.act(action, args); SideQuestionDialog(project, host).show() }
             else -> host.act(action, args)
         }
     }
@@ -710,6 +712,7 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
             "rename" -> rename()
             "settings" -> showCaluSettings(project, host)
             "trustFile" -> askTrustFile()
+            "side" -> SideQuestionDialog(project, host).show()
         }
     }
 
