@@ -155,13 +155,20 @@ fi
 say "6. Fake server (tmux session $TMUX_SESSION)"
 stop_server
 # The user login has no password, so nothing is asked; stdin is /dev/null all the same.
+# The log of an earlier run would pass the check below at once.
+rm -f /tmp/calu-fake-server.log
 tmux new-session -d -s "$TMUX_SESSION" -c "$COPY" \
     "'$TOOL_PYTHON' uitest/fake_server.py </dev/null 2>&1 | tee /tmp/calu-fake-server.log"
-sleep 3
-tmux capture-pane -p -t "$TMUX_SESSION" | grep -v '^$' | tail -5 || {
-    echo "the fake server did not start: see /tmp/calu-fake-server.log" >&2
+# The server needs several seconds to import calu and connect; wait for its ready line.
+for _ in $(seq 60); do
+    grep -q "answering session requests" /tmp/calu-fake-server.log 2>/dev/null && break
+    sleep 0.5
+done
+grep -q "answering session requests" /tmp/calu-fake-server.log 2>/dev/null || {
+    echo "the fake server did not start within 30 s: see /tmp/calu-fake-server.log" >&2
     exit 1
 }
+tail -3 /tmp/calu-fake-server.log
 
 if [ "${1:-}" = "--no-vscode" ]; then
     exit 0
