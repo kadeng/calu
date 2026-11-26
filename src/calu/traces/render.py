@@ -897,7 +897,8 @@ def create_trace_file(workspace: Path, target: Path, random_name: bool = False) 
 
     The file is `session_NNN.md` with NNN one above the highest number in `target` (001 in an
     empty directory; four digits after 999), or with `random_name` `session_<12 random hex
-    digits>.md`. It is created with an exclusive open, so two sessions that start at the same
+    digits>.md`. A random name is never all digits, because such a name would read as a
+    number. The file is created with an exclusive open, so two sessions that start at the same
     moment get two files.
 
     Side effects: creates `target` with its parents, and the file (mode 0644, less the umask).
@@ -952,6 +953,8 @@ def create_trace_file(workspace: Path, target: Path, random_name: bool = False) 
         while True:
             number += 1
             name = secrets.token_hex(RANDOM_NAME_BYTES) if random_name else f"{number:03d}"
+            if random_name and name.isdigit():
+                continue  # read as a number, it would raise the number of the next numbered file
             path = target / f"session_{name}.md"
             try:
                 fd = os.open(

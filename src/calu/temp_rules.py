@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal
 
+import psycopg
+
 from calu.db import Db
 
 Scope = Literal["session", "project", "global"]
@@ -305,6 +307,61 @@ async def active(
         (project, conversation),
     )
     return [_rule(row) for row in rows]
+
+
+async def for_project(conn: psycopg.AsyncConnection, project_id: int | None) -> list[TemporaryRule]:
+    """Read the rules that may apply to a session of one project, for `ConfigStore.load`.
+
+    The session itself leaves out the rules of other conversations (`applies_to`) and those
+    that expire later (`prompt_part`): it reads this list when the settings change, not before
+    every check.
+
+    Args:
+        conn: A connection the caller holds; it is used as it is (no lock, no transaction).
+        project_id: The session's project row, or None for a session without a project.
+
+    Returns:
+        The rules that were not removed and do not expire before the database's present time,
+        oldest first. They are those of scope "global", those of the project, and those of
+        scope "session" of every conversation. Empty if the table does not exist, in a
+        database that `calu setup` has not migrated yet.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    cur = await conn.execute(b"SELECT to_regclass('temporary_rules') IS NOT NULL")
+    exists = await cur.fetchone()
+    if not exists or not exists[0]:
+        return []
+    cur = await conn.execute(
+        (
+            "SELECT "
+            + _COLUMNS
+            + _FROM
+            + " WHERE r.removed_at IS NULL AND r.expires_at > now() AND (r.scope <> 'project'"
+            " OR r.project_id = %s) ORDER BY r.created_at, r.id"
+        ).encode(),
+        (project_id,),
+    )
+    return [_rule(row) for row in await cur.fetchall()]
+
+
+def applies_to(rule: TemporaryRule, conversation: str | None) -> bool:
+    """Tell whether a rule read by `for_project` applies to one session.
+
+    Args:
+        rule: The rule.
+        conversation: The session's conversation (Claude's session id), or None before it is
+            known.
+
+    Returns:
+        True for a rule of scope "global", for one of scope "project" (`for_project` read
+        only the session's project), and for one of scope "session" whose conversation is the
+        session's.
+    """
+    return rule.scope != "session" or (
+        conversation is not None and rule.conversation == conversation
+    )
 
 
 async def listed(db: Db, include_ended: bool = False) -> list[TemporaryRule]:

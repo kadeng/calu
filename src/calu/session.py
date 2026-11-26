@@ -299,6 +299,7 @@ from calu.steps import result_summary
 from calu.steps import workspace_relative_input as workspace_relative_input
 from calu.store import CheckerRun, ProjectSettings, SessionIdentity, SessionStore, StepDecision
 from calu.store.trust import TrustSource
+from calu.temp_rules import applies_to, prompt_part
 from calu.tokens import token_hash
 from calu.traces import (
     Header,
@@ -535,6 +536,10 @@ HONESTY_NOTICE = (
 """The notice to Claude's main agent after `honesty.notify_after_dishonest_edits` dishonest
 steps (the owner, 2026-11-26)."""
 
+RULED_ROUTES = frozenset({"command", "edit", "changeset"})
+"""The routes whose checkers read the temporary rules (`calu.temp_rules`; the owner chose the
+command and edit checkers, and the changeset checker that reviews a commit)."""
+
 PAUSE_HOOK_MARGIN_S = 60.0
 """Seconds of the PreToolUse hook's time that a call held by the user's pause leaves for its
 locks and its answer, on top of `LOCK_HOOK_MARGIN_S`."""
@@ -695,11 +700,13 @@ class Session:
             overrides=self.config.tool_routes, default=self.config.default_route
         )
         self.rules = settings.rules
-        self.checkers: dict[Route, list[Checker]] = {
-            Route.COMMAND: self._route_checkers(Route.COMMAND, self.config.command_checker),
-            Route.EDIT: self._route_checkers(Route.EDIT, self.config.edit_checker),
-            Route.CHANGESET: self._route_checkers(Route.CHANGESET, self.config.changeset_checker),
-        }
+        self._run_state = RunState.before_first_run()
+        """Everything that describes one run; `start` replaces it (`calu.run_state`). Created
+        before the checkers, whose temporary rules depend on the run's conversation."""
+        self._rules_part = ""
+        """The temporary rules' part of the command, edit and changeset checkers' prompts that
+        `checkers` were built with (`_follow_temporary_rules`)."""
+        self.checkers: dict[Route, list[Checker]] = self._build_route_checkers()
         """The checkers of each step route, in the order they are reported. A route may carry
         several -- honesty, security, over-engineering beside the built-in one -- and a step runs
         all of them (D81)."""
@@ -714,8 +721,6 @@ class Session:
             on_summary=self._store_summary,
         )
         self.narrator: Narrator | None = self._narrator()
-        self._run_state = RunState.before_first_run()
-        """Everything that describes one run; `start` replaces it (`calu.run_state`)."""
         self.recorder = Recorder(
             store,
             lambda: self._run_state,
@@ -882,15 +887,19 @@ class Session:
         Returns:
             The prompt `compose_instructions` builds: for the honesty checker with the
             configured honesty rules; for the other checkers of the command, edit and
-            changeset routes with the part about unverified code while `honesty.mode` is on.
+            changeset routes with the part about unverified code while `honesty.mode` is on,
+            followed by the temporary rules that apply (`_rules_part`).
         """
-        return compose_instructions(
+        prompt = compose_instructions(
             route,
             self._instructions(name),
             self.config.honesty.rules,
             honesty_state=self.config.honesty.mode != "off",
             name=name,
         )
+        if route in RULED_ROUTES and name != "honesty" and self._rules_part:
+            prompt += "\n" + self._rules_part
+        return prompt
 
     def _result_checker(self) -> ResultChecker:
         """Build the subagent result checker from the configuration as it is now.
@@ -959,6 +968,49 @@ class Session:
             self._run_state.checking -= 1
             with anyio.CancelScope(shield=True):
                 await self._refresh_state()
+
+    def _build_route_checkers(self) -> dict[Route, list[Checker]]:
+        """Create the checkers of the command, edit and changeset routes.
+
+        Side effects: sets `_rules_part` to the temporary rules' part of their prompts at this
+        moment (`_temporary_part`), which `_prompt` appends, and `rules.lifted` to whether a
+        temporary rule that lifts calu's built-in protections applies to this session.
+
+        Returns:
+            Route -> its checkers (`_route_checkers`).
+        """
+        self._rules_part = self._temporary_part()
+        now = datetime.now(UTC)
+        self.rules.lifted = any(
+            rule.lifts_builtin and rule.active(now) and applies_to(rule, self.session_id)
+            for rule in self.settings.temporary_rules
+        )
+        return {
+            Route.COMMAND: self._route_checkers(Route.COMMAND, self.config.command_checker),
+            Route.EDIT: self._route_checkers(Route.EDIT, self.config.edit_checker),
+            Route.CHANGESET: self._route_checkers(Route.CHANGESET, self.config.changeset_checker),
+        }
+
+    def _temporary_part(self) -> str:
+        """Render the temporary rules that apply to this session now, for the checkers' prompts.
+
+        Returns:
+            `calu.temp_rules.prompt_part` of the loaded rules of its scope (`applies_to`, with
+            the conversation this session runs); "" when none applies.
+        """
+        mine = [rule for rule in self.settings.temporary_rules if applies_to(rule, self.session_id)]
+        return prompt_part(mine, datetime.now(UTC))
+
+    def _follow_temporary_rules(self) -> None:
+        """Rebuild the route checkers when the temporary rules' part of their prompts changed.
+
+        The settings are loaded again when a rule is added or removed; a rule that expires, or
+        the conversation that becomes known after the start, changes the part without a load.
+        So this compares before every check. Side effects: as `_build_route_checkers`, when the
+        part differs from the one the checkers have.
+        """
+        if self._temporary_part() != self._rules_part:
+            self.checkers = self._build_route_checkers()
 
     def _route_checkers(self, route: Route, cfg: CheckerConfig) -> list[Checker]:
         """Create every enabled checker of one step route (`calu.gate.route_checkers`).
@@ -2680,11 +2732,7 @@ class Session:
         # row added, removed or disabled while the session runs takes effect at the next step,
         # as its instructions and its model already did. The code tools of the new checkers
         # follow the new read deny lists, because `_checker` passes the current rules.
-        self.checkers = {
-            Route.COMMAND: self._route_checkers(Route.COMMAND, self.config.command_checker),
-            Route.EDIT: self._route_checkers(Route.EDIT, self.config.edit_checker),
-            Route.CHANGESET: self._route_checkers(Route.CHANGESET, self.config.changeset_checker),
-        }
+        self.checkers = self._build_route_checkers()
         # Rebuilt like the route checkers above, so that its limits and its effort follow a
         # changed configuration as its model and its instructions always did (D135).
         self.result_checker = self._result_checker()
@@ -3183,6 +3231,7 @@ class Session:
                 if self._run_state.queue:  # messages Claude did not read are lost with the session
                     self._run_state.queue.clear()
                     self._run_state.held.clear()
+                    self._run_state.send_now.clear()
                     await self._emit_safely(ChatQueue(messages=[]))
                 await self._wait_quiet()  # the last turn is recorded before the session ends
                 final: State = "failed" if self._run_state.run_error else "stopped"
@@ -3538,6 +3587,7 @@ class Session:
         """
         queued, _ = self._run_state.queue.pop(self._held_index(message_id))
         self._run_state.held.pop(message_id, None)
+        self._run_state.send_now.discard(message_id)
         await self._emit_queue()
         return queued.text
 
@@ -3545,9 +3595,11 @@ class Session:
         """Send a held message at once: stop the running turn, then send it (`chat.send_now`).
 
         This is what the user's stop followed by sending the message does (D283). The message
-        moves to the front of the held ones and the turn is interrupted (`interrupt`); the end
-        of the turn writes the held messages to Claude Code (`_release_held`), this one first.
-        If no turn runs any more, they are written at once.
+        moves to the front of the held ones and is marked in `RunState.send_now`. Then the turn
+        is interrupted (`interrupt`), and its end writes the marked messages alone to Claude
+        Code (`_release_held`). The other held messages stay held, so they can still be sent
+        or retracted, until the turn that the sent one starts has ended. If no turn runs any
+        more, the message is written at once.
 
         Side effects: sends `chat.queue`; interrupts the turn.
 
@@ -3561,6 +3613,7 @@ class Session:
         entry = self._run_state.queue.pop(self._held_index(message_id))
         first = next((i for i, (q, _) in enumerate(self._run_state.queue) if q.held), None)
         self._run_state.queue.insert(len(self._run_state.queue) if first is None else first, entry)
+        self._run_state.send_now.add(message_id)
         await self._emit_queue()
         if not self._run_state.busy:
             await self._release_held()
@@ -3568,19 +3621,26 @@ class Session:
         await self.interrupt()
 
     async def _release_held(self) -> None:
-        """Write the held messages to Claude Code, oldest first, once a turn has ended (D283).
+        """Write held messages to Claude Code, in queue order, once a turn has ended (D283).
 
-        They go as "later" messages, so Claude reads them as it would have at the end of the
-        turn; they stay in the queue, no longer held, until Claude takes them in. Does nothing
-        without held messages or without a running session. A failed write is reported as a
-        `log` error, and the message is dropped from the queue.
+        If the user chose messages to send at once (`RunState.send_now`), only those are
+        written and the rest stay held. Otherwise every held message is written. They go as
+        "later" messages, so Claude reads them as it would have at the end of the turn; they
+        stay in the queue, no longer held, until Claude takes them in. Does nothing without
+        held messages or without a running session. A failed write is reported as a `log`
+        error, and the message is dropped from the queue.
 
-        Side effects: writes to the runner; sends `chat.queue`; marks the session busy.
+        Side effects: writes to the runner; empties `RunState.send_now`; sends `chat.queue`;
+        marks the session busy.
         """
         if not self._run_state.held or self.runner is None or self._run_state.run_done.is_set():
             return
         runner = self.runner
+        only = self._run_state.send_now & self._run_state.held.keys()
+        self._run_state.send_now.clear()
         for queued, text in list(self._run_state.queue):
+            if only and queued.id not in only:
+                continue
             images = self._run_state.held.pop(queued.id, None)
             if images is None:
                 continue
@@ -3845,6 +3905,7 @@ class Session:
             step.generated = await anyio.to_thread.run_sync(self.gate.generated_named, step)
             step_id = await self.recorder.add_step(step)
             expected = await self._expect_edit(step)
+            self._follow_temporary_rules()
             decided = await self.gate.decide(step, pending)
         except Exception as exc:
             log.exception("pre_tool_use failed")

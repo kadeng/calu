@@ -195,14 +195,69 @@ OTHER_RULED_TOOLS = frozenset({"DesignSync", "ExitWorktree"})
 """Tools of CLI 2.1.319 that read files or destroy work without being a read, edit or shell
 tool; `Rules._evaluate_other` applies the rules to them (D165)."""
 
-BUILT_IN_COMMAND_DENY = (
-    Rule(
-        re.compile(
-            r"^((uv|pipx|poetry|pdm|hatch) (run|exec) |uv tool run |uvx |python[0-9.]* -m )?"
-            r"calu( |$)"
-        ),
-        "built-in",
+CALU_RULE = Rule(
+    re.compile(
+        r"^((uv|pipx|poetry|pdm|hatch) (run|exec) |uv tool run |uvx |python[0-9.]* -m )?"
+        r"calu( |$)"
     ),
+    "built-in",
+)
+"""The built-in pattern of commands that run calu; a lifting temporary rule sets it aside for
+the subcommands outside `ALWAYS_ASKING_SUBCOMMANDS` (`Rules.lifted`)."""
+
+ALWAYS_ASKING_SUBCOMMANDS = frozenset(
+    {
+        "resolve",
+        "config",
+        "rules",
+        "rule",
+        "checker",
+        "token",
+        "setup",
+        "honesty",
+        "project",
+        "credential",
+        "db",
+        "uninstall",
+        "summary",
+        "login",
+        "traces",
+        "escalation",
+    }
+)
+"""calu subcommands that ask a person even while a temporary rule lifts the built-in
+protections: they change what steers the checks, decide for a person, or reach the database
+and the logins (agent/records/notes/temporary-rules-design.md, section 6)."""
+
+LIFTABLE_SUBCOMMANDS = frozenset(
+    {
+        "run",
+        "serve",
+        "start",
+        "attach",
+        "acp",
+        "ide",
+        "web",
+        "doctor",
+        "sessions",
+        "list-sessions",
+        "escalations",
+        "protocol",
+        "evals",
+        "lightcycles",
+    }
+)
+"""calu subcommands that a lifting temporary rule leaves to the checkers. A test fails when
+`calu --help` names a subcommand in neither this set nor `ALWAYS_ASKING_SUBCOMMANDS`, so a new
+subcommand needs a decision."""
+
+ALWAYS_ASKING_FILES = frozenset({"credentials.json", ".env"})
+"""Files in calu's own directories that are read or written only with a person's decision,
+also while a temporary rule lifts the built-in protections: the store of calu's logins and
+the checker key file."""
+
+BUILT_IN_COMMAND_DENY = (
+    CALU_RULE,
     Rule(
         re.compile(r"^git( -[Cc] \S+)* worktree remove(?=.* (--force|-[a-zA-Z]*f[a-zA-Z]*)( |$))"),
         "built-in (removes a worktree with its uncommitted work, D251)",
@@ -298,6 +353,12 @@ class Rules:
         """The session's registry of checkouts (D251), set by the session; None reads a path
         below `.claude/worktrees/<name>/` relative to that worktree only if it has a `.git`
         entry (`match_form`)."""
+        self.lifted = False
+        """Whether a temporary rule that lifts calu's built-in protections applies (the
+        session sets it, `calu.temp_rules`). Then commands that run calu and calu's own
+        directories no longer ask by themselves; the checkers judge them with the rule's text.
+        These still ask: the calu subcommands of `ALWAYS_ASKING_SUBCOMMANDS`, a calu command
+        whose subcommand cannot be read, and every read or write of `ALWAYS_ASKING_FILES`."""
         self._lists: dict[str, tuple[list[Rule], list[str]]] = {}
         self.replace(lists or {})
 
@@ -506,6 +567,13 @@ class Rules:
     ) -> bool:
         """Add an `ask` reason if `command`, or a form of it, matches the command deny list.
 
+        The built-in reasons come first: calu's database container (D171), and a command that
+        runs calu (D160, `runs_calu`). While a temporary rule lifts the built-in protections
+        (`lifted`), a command that runs calu asks only if its subcommand
+        (`calu_subcommand`) is in `ALWAYS_ASKING_SUBCOMMANDS` or cannot be read; otherwise
+        the built-in calu pattern (`CALU_RULE`) is set aside for it, and the other built-in
+        pattern and the user's `command-deny` list still apply.
+
         Args:
             command: One simple command; `shell.command_variants` gives the forms checked.
             outcome: Collects the reason.
@@ -532,13 +600,28 @@ class Rules:
                     "always asks (built-in, D171): it holds the escalations Claude is waiting on."
                 )
                 return True
+            lifted = False
             if runs_calu(variant):
-                outcome.ask.append(
-                    f"The command `{command}` runs calu itself, which always asks (built-in, "
-                    "D160): calu decides Claude's escalations."
+                subcommand = calu_subcommand(variant)
+                lifted = (
+                    self.lifted
+                    and subcommand is not None
+                    and subcommand not in ALWAYS_ASKING_SUBCOMMANDS
                 )
-                return True
-            rule = _first_match([*BUILT_IN_COMMAND_DENY, *self.lists("command-deny")[0]], variant)
+                if not lifted:
+                    outcome.ask.append(
+                        f"The command `{command}` runs calu itself, which always asks "
+                        "(built-in, D160): calu decides Claude's escalations."
+                        + (
+                            " A temporary rule lifts this protection, but not for "
+                            f"`calu {subcommand or '?'}`."
+                            if self.lifted
+                            else ""
+                        )
+                    )
+                    return True
+            built_in = [one for one in BUILT_IN_COMMAND_DENY if not (lifted and one is CALU_RULE)]
+            rule = _first_match([*built_in, *self.lists("command-deny")[0]], variant)
             if rule is None:
                 continue
             seen = "" if variant == command else f" (as `{variant}`)"
@@ -856,6 +939,11 @@ class Rules:
         session traces (`trace_rule`), then the built-in patterns, then the `read-deny` or
         `write-deny` list.
 
+        While a temporary rule lifts the built-in protections (`lifted`), calu's own
+        directories no longer count: `built_in_path_rule`, and the built-in patterns whose
+        pattern is `_CALU_CONFIG`. A file named in `ALWAYS_ASKING_FILES` still counts. So do
+        any other built-in pattern, the trace and human-diff directories, and the lists.
+
         Args:
             path: An absolute path.
             kind: "read" or "write".
@@ -864,12 +952,15 @@ class Rules:
             The rule, or None if no deny rule covers the path. The patterns are matched against
             the path's matching form (`match_form`).
         """
-        own = built_in_path_rule(path)
+        lifted = self.lifted and path.name not in ALWAYS_ASKING_FILES
+        own = None if lifted else built_in_path_rule(path)
         if own is None and kind == "write":
             own = self.trace_rule(path) or self.human_diffs_rule(path)
         if own is not None:
             return own
         built_in = BUILT_IN_READ_DENY if kind == "read" else BUILT_IN_WRITE_DENY
+        if lifted:
+            built_in = tuple(rule for rule in built_in if rule.pattern is not _CALU_CONFIG)
         return _first_match([*built_in, *self.lists(f"{kind}-deny")[0]], self.match_form(path))
 
     def match_form(self, path: Path) -> str:
@@ -1112,6 +1203,41 @@ close it: a script that looks the container up by id first is still the checker'
 
 LAUNCHERS = frozenset({"uv", "uvx", "pipx", "poetry", "pdm", "hatch", "rye", "pixi", "conda"})
 """Programs that start another program named later on their command line (D168)."""
+
+
+def calu_subcommand(command: str) -> str | None:
+    """Read which calu subcommand a command that runs calu (`runs_calu`) starts.
+
+    calu's program is a word named `calu` (any path; a version suffix such as `calu@1.2` is
+    ignored), or a `-m`/`--module` naming `calu`, `calu.cli` or `calu.__main__`. The
+    subcommand is the word directly after it. An option before the subcommand makes it
+    unreadable, because its value could pose as a subcommand (`calu --opt run resolve`). The
+    caller treats None as a subcommand that always asks, so this fails closed.
+
+    Args:
+        command: One simple command.
+
+    Returns:
+        The subcommand; None when calu's program cannot be found, a word after it starts
+        with "-" or is missing, or the words cannot be split.
+    """
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    start: int | None = None
+    for index, word in enumerate(words):
+        name = os.path.basename(word).split("@", 1)[0]
+        if name == "calu":
+            start = index + 1
+            break
+        if word in ("-m", "--module") and index + 1 < len(words):
+            if words[index + 1] in ("calu", "calu.cli", "calu.__main__"):
+                start = index + 2
+                break
+    if start is None or start >= len(words) or words[start].startswith("-"):
+        return None
+    return words[start]
 
 
 def runs_calu(command: str) -> bool:

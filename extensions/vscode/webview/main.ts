@@ -1422,6 +1422,7 @@ function sendInput(delivery: 'queued' | 'inject'): void {
     if (result.kind === 'message') {
       vscode.postMessage(result.message);
       setInput('');
+      if (result.message.type === 'sideAsk' && !ui.side) openUi('side'); // the answer shows there
       return;
     }
     if (result.kind === 'ui') {
@@ -1447,7 +1448,8 @@ function sendInput(delivery: 'queued' | 'inject'): void {
 }
 
 /**
- * Open the part of the view a slash command without an argument asks for.
+ * Open the part of the view a slash command asks for: a menu, a select, or the side
+ * questions. "side" switches the composer to side mode, as the side-question button does.
  *
  * @param action The part.
  * @returns Nothing.
@@ -1455,7 +1457,12 @@ function sendInput(delivery: 'queued' | 'inject'): void {
 function openUi(action: SlashUiAction): void {
   if (action === 'sessions') toggleSessionMenu();
   else if (action === 'honesty') toggleHonestyMenu();
-  else {
+  else if (action === 'side') {
+    ui.side = true;
+    updateCompletions();
+    render();
+    input.focus();
+  } else {
     const select = document.querySelector<HTMLSelectElement>(`select[data-select="${action}"]`);
     select?.focus();
     try {

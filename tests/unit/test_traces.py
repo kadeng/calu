@@ -1154,6 +1154,17 @@ def test_a_random_name_says_nothing_about_the_number_of_sessions(tmp_path: Path)
     assert path.name == "session_001.md"
 
 
+def test_a_random_name_of_digits_alone_is_drawn_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`session_242259208858.md` would count as file number 242259208858."""
+    drawn = iter(["242259208858", "0a2259208858"])
+    monkeypatch.setattr("calu.traces.render.secrets.token_hex", lambda _n: next(drawn))
+    path, fd = create_trace_file(tmp_path, tmp_path / "traces", random_name=True)
+    os.close(fd)
+    assert path.name == "session_0a2259208858.md"
+
+
 async def test_a_flat_layout_with_random_names_is_found_and_never_removes_the_directory(
     tmp_path: Path,
 ):

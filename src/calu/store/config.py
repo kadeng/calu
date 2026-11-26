@@ -27,6 +27,7 @@ import anyio
 import psycopg
 from pydantic import ValidationError
 
+from calu import temp_rules
 from calu.checkers.rules import Rules
 from calu.config import (
     SETTINGS_KEY,
@@ -38,6 +39,7 @@ from calu.config import (
 )
 from calu.db import Db
 from calu.db.notify import CONFIG_CHANGED, Dirty, Notifier
+from calu.temp_rules import TemporaryRule
 
 log = logging.getLogger(__name__)
 
@@ -120,12 +122,15 @@ class ProjectSettings:
     """Everything a session reads from the database before and during a run.
 
     `config` holds the merged settings (see `calu.config.build_config`), `checkers` the enabled
-    checker definitions by name, and `rules` the allow and deny lists of the project.
+    checker definitions by name, `rules` the allow and deny lists of the project, and
+    `temporary_rules` the temporary rules that may apply to a session of the project
+    (`calu.temp_rules.for_project`: every conversation's; the session picks its own).
     """
 
     config: Config
     checkers: Mapping[str, CheckerDefinition] = field(default_factory=dict)
     rules: Rules = field(default_factory=lambda: Rules(Path.cwd()))
+    temporary_rules: tuple[TemporaryRule, ...] = ()
 
     def instructions(self, name: str, default: str = "") -> str:
         """Return the instructions of one checker type.
@@ -173,12 +178,14 @@ class ConfigStore:
         """SHA-256 over the rows of the last successful `load`; None before the first."""
 
     async def load(self) -> ProjectSettings:
-        """Read configuration, checker definitions and rules from the database.
+        """Read configuration, checker definitions, rules and temporary rules from the database.
 
         Returns:
             The settings as the database holds them now. Global rows apply first, project rows
             override them; rules apply in the order (global before project, then `position`).
-            Disabled checker types and disabled rules are left out.
+            Disabled checker types and disabled rules are left out. The temporary rules are
+            those `calu.temp_rules.for_project` reads. They count in the fingerprint, so adding
+            or removing one reloads the settings.
 
         Side effects: on success, stores the fingerprint of the rows read in `fingerprint`.
 
@@ -189,11 +196,12 @@ class ConfigStore:
             UnknownProject: If a project name was given and no `projects` row has it.
         """
         async with self._db.exclusive() as conn:
-            # One lock for all four queries, so the settings cannot be read half-changed.
+            # One lock for all five queries, so the settings cannot be read half-changed.
             project_id, policy = await self._project(conn)
             layers = await self._settings_layers(conn)
             checkers = await self._checker_definitions(conn)
             rule_rows = await self._rule_rows(conn, project_id)
+            temporary = tuple(await temp_rules.for_project(conn, project_id))
         rules = Rules.from_rows(self.workspace, rule_rows)
         config = build_config(
             layers,
@@ -213,7 +221,7 @@ class ConfigStore:
                     )
                 }
             )
-        seen = repr((project_id, policy, layers, sorted(checkers.items()), rule_rows))
+        seen = repr((project_id, policy, layers, sorted(checkers.items()), rule_rows, temporary))
         # A definition without a model of its own (an extra checker such as `honesty`) uses
         # the default model, which follows Bedrock mode (D194).
         fallback = default_model(config.claude.use_bedrock)
@@ -222,7 +230,9 @@ class ConfigStore:
             for name, definition in checkers.items()
         }
         self.fingerprint = hashlib.sha256(seen.encode()).hexdigest()
-        return ProjectSettings(config=config, checkers=checkers, rules=rules)
+        return ProjectSettings(
+            config=config, checkers=checkers, rules=rules, temporary_rules=temporary
+        )
 
     async def watch(
         self,

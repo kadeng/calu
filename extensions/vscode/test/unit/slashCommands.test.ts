@@ -9,7 +9,7 @@ const table = allCommands();
 describe('command table', () => {
   it('holds the extension commands and the built-in Claude Code commands, sorted', () => {
     expect(CALU_COMMANDS.map((c) => c.name)).toEqual([
-      'model', 'effort', 'level', 'mode', 'honesty', 'trust', 'trust-file', 'honesty-review', 'checkers', 'checker-context', 'sessions', 'new', 'fork', 'rename', 'settings', 'interrupt',
+      'model', 'effort', 'level', 'mode', 'honesty', 'trust', 'trust-file', 'honesty-review', 'checkers', 'checker-context', 'sessions', 'new', 'fork', 'rename', 'settings', 'interrupt', 'btw',
     ]);
     // No /help: a session without a terminal answers that it is not available.
     expect(CLAUDE_COMMANDS.map((c) => c.name)).toEqual(['compact', 'clear', 'usage', 'context', 'cost']);
@@ -79,6 +79,8 @@ describe('resolveSlash', () => {
       ['/rename', { type: 'renameSession', sessionId: 's1' }],
       ['/settings', { type: 'openSettings' }],
       ['  /interrupt  ', { type: 'interrupt' }],
+      // A side question, never chat text: as a chat message it would wait in the queue.
+      ['/btw  what are you\ndoing? ', { type: 'sideAsk', question: 'what are you\ndoing?' }],
     ];
     for (const [text, message] of cases) {
       expect(resolveSlash(text, 's1'), text).toEqual({ kind: 'message', message });
@@ -88,6 +90,7 @@ describe('resolveSlash', () => {
 
   it('opens a part of the view when a choice is missing', () => {
     expect(resolveSlash('/sessions', null)).toEqual({ kind: 'ui', action: 'sessions' });
+    expect(resolveSlash('/btw', 's1')).toEqual({ kind: 'ui', action: 'side' });
     for (const name of ['model', 'effort', 'level', 'honesty']) expect(resolveSlash(`/${name}`, 's1')).toEqual({ kind: 'ui', action: name });
   });
 
@@ -98,7 +101,7 @@ describe('resolveSlash', () => {
     expect(resolveSlash('/mode', 's1')).toEqual({ kind: 'ui', action: 'permission' });
     expect(parseWebviewMessage({ type: 'setPermissionMode', mode: 'bypassPermissions' })).toBeUndefined();
     expect(resolveSlash('/model has space', 's1').kind).toBe('error');
-    for (const text of ['/fork', '/rename', '/interrupt', '/model opus', '/level edits', '/mode auto', '/checker-context']) {
+    for (const text of ['/fork', '/rename', '/interrupt', '/btw why?', '/model opus', '/level edits', '/mode auto', '/checker-context']) {
       expect(resolveSlash(text, null), text).toMatchObject({ kind: 'error', text: expect.stringContaining('needs an attached session') });
     }
     expect(resolveSlash('/settings', null).kind).toBe('message');

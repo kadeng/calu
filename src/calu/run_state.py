@@ -174,6 +174,11 @@ class RunState:
     for the main agent while a turn ran, and written to Claude Code when the turn ends
     (D283). Until then they can be withdrawn or sent at once (`Session.retract_queued`,
     `Session.send_queued_now`)."""
+    send_now: set[str] = field(default_factory=set[str])
+    """The ids of the held messages the user chose to send at once
+    (`Session.send_queued_now`). The end of the interrupted turn writes these alone and
+    empties the set (`Session._release_held`). The other held messages stay held until the
+    next turn ends."""
     clock_alarm: str | None = None  # a backward clock jump no human has answered yet (D32)
     store_failures: int = 0  # database writes that failed in a row (D59)
     stopping: bool = False  # a stop was already started, so it is not started twice
@@ -195,7 +200,7 @@ class RunState:
         Every field has its default again, with these exceptions, which keep what `self` has
         (the same objects, so a task that still holds one of them sees the same content):
 
-        - `queue` and `held`: the end of a run empties them, not its start.
+        - `queue`, `held` and `send_now`: the end of a run empties them, not its start.
         - `clock_alarm`: it stays until a human has decided the escalation that shows it.
 
         `store_failures` and `stopping` start from their defaults like the rest: a run that
@@ -214,6 +219,7 @@ class RunState:
             tg=tg,
             queue=self.queue,
             held=self.held,
+            send_now=self.send_now,
             clock_alarm=self.clock_alarm,
         )
 

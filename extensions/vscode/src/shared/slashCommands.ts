@@ -84,6 +84,7 @@ export const CALU_COMMANDS: readonly SlashCommand[] = [
   command('rename', 'calu', 'Rename the attached session'),
   command('settings', 'calu', "Open calu's settings"),
   command('interrupt', 'calu', "Interrupt Claude's running turn"),
+  command('btw', 'calu', 'Ask a side question beside the running work: /btw [question]'),
 ];
 
 /**
@@ -158,7 +159,7 @@ export function completions(text: string, commands: readonly SlashCommand[]): Co
 }
 
 /** Parts of the view a command opens. */
-export type SlashUiAction = 'sessions' | 'model' | 'effort' | 'level' | 'permission' | 'honesty';
+export type SlashUiAction = 'sessions' | 'model' | 'effort' | 'level' | 'permission' | 'honesty' | 'side';
 
 /** What submitting a composer text that starts with "/" does. */
 export type SlashResult =
@@ -177,7 +178,8 @@ export type SlashResult =
  * @param text The composer text (trimmed by the caller or not).
  * @param attachedId Id of the attached session, or `null`.
  * @returns "chat" for a text that does not start with "/", for Claude Code's commands and for
- *   unknown commands; the message or view action of an extension command; "error" for an
+ *   unknown commands; the message or view action of an extension command. "/btw question" is
+ *   the side question `sideAsk`, and "/btw" alone opens the side questions. "error" for an
  *   argument that is not one of the command's values, or a command that needs a session while
  *   none is attached.
  */
@@ -238,6 +240,10 @@ export function resolveSlash(text: string, attachedId: string | null): SlashResu
       return { kind: 'message', message: { type: 'openSettings' } };
     case 'interrupt':
       return needsSession({ type: 'interrupt' });
+    case 'btw':
+      // Never chat text: as a chat message it would wait in the queue until the turn ends.
+      if (!arg) return { kind: 'ui', action: 'side' };
+      return needsSession({ type: 'sideAsk', question: arg });
     default:
       return { kind: 'chat' };
   }
