@@ -708,9 +708,10 @@ class Bridge:
         """Find out how to continue the session `hint` names when it does not run (D280).
 
         The session is looked up among those of this host and of the OS user this bridge runs
-        as that have a Claude session id (`herd.dormant_session`). If a session that serves clients already
-        continues its conversation (another editor, calu's own resume after an end, D282),
-        that one is meant; else the conversation is to be resumed in the session's directory.
+        as that have a Claude session id (`herd.dormant_session`). If a session that serves
+        clients already continues its conversation (another editor, calu's own resume after
+        an end, D282), that one is meant; else the conversation is to be resumed in the
+        session's directory.
         A bridge that runs as root resumes nothing: root's sessions are `calu run`
         processes, which no `calu serve` resumes.
 

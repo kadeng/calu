@@ -678,6 +678,39 @@ export interface ModelSetParams {
   model?: string | null;
 }
 /**
+ * The session was paused, its pause was started again, or it ended (`pause.set`).
+ *
+ * Sent to every client, so that each shows the pause; also when the time ran out (then
+ * `client` is ""). While the session is paused, every call it holds sends `step.held` with
+ * the reason "the user's pause". Not recorded in the history.
+ */
+export interface PauseChanged {
+  client?: string;
+  paused: boolean;
+  seq?: number;
+  until?: string | null;
+}
+/**
+ * Whether the session is paused, and until when (`state.get`, `pause.set`).
+ */
+export interface PauseInfo {
+  paused?: boolean;
+  until?: string | null;
+}
+/**
+ * `pause.set`: pause the session, or end its pause (the owner, 2026-11-26).
+ *
+ * A pause interrupts nothing. The next tool call that needs a check (an edit, a command, a
+ * commit, the start of a subagent, of any agent) is checked as usual and, if approved,
+ * waits until the pause ends: by `pause.set {paused: false}`, after `minutes`, or when the
+ * PreToolUse hook's time is used up. A denied or escalated call is answered at once.
+ * Pausing a paused session starts its time again. Result: `PauseInfo`.
+ */
+export interface PauseSetParams {
+  minutes?: number | null;
+  paused: boolean;
+}
+/**
  * Claude Code's permission mode changed, as Claude Code reports it.
  *
  * Sent when a client switched the mode (`permission_mode.set`) and when Claude Code reports
@@ -904,6 +937,7 @@ export interface SessionSnapshot {
   honesty_mode?: string;
   last_seq?: number;
   model?: string | null;
+  pause?: PauseInfo;
   permission_mode?: string | null;
   project?: string | null;
   queue?: QueuedMessage[];
@@ -1330,6 +1364,7 @@ export interface RequestParams {
   'initialize': InitializeParams;
   'interrupt': EmptyParams;
   'model.set': ModelSetParams;
+  'pause.set': PauseSetParams;
   'permission_mode.set': PermissionModeSetParams;
   'session.history': SessionHistoryParams;
   'session.list': SessionListParams;
@@ -1377,6 +1412,7 @@ export interface EventParams {
   'escalation.resolved': EscalationResolved;
   'honesty.update': HonestyUpdate;
   'log': Log;
+  'pause.changed': PauseChanged;
   'permission_mode.changed': PermissionModeChanged;
   'session.state': SessionState;
   'step.held': StepHeld;

@@ -93,6 +93,7 @@ from calu.protocol.messages import (
     HumanDiffAddParams,
     InitializeParams,
     ModelSetParams,
+    PauseSetParams,
     PermissionModeSetParams,
     SessionHistoryParams,
     SessionListParams,
@@ -1345,6 +1346,11 @@ class Client:
                     AutoEscalate(**params.model_dump()), client=self.name or "unknown"
                 )
                 return {}
+            case "pause.set":
+                assert isinstance(params, PauseSetParams)
+                return await session.set_pause(
+                    params.paused, params.minutes, client=self.name or "unknown"
+                )
             case "honesty.clear":
                 assert isinstance(params, HonestyClearParams)
                 await session.clear_mark(params.mark_id, client=self.name or "unknown")

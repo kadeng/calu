@@ -472,6 +472,11 @@ export interface ViewState {
    * the snapshot's `permission_mode`); `null` while it is not known.
    */
   permissionMode: string | null;
+  /**
+   * The user's pause of the session (`pause.changed`, the snapshot's `pause`): while it lasts,
+   * approved checked tool calls wait. `until` is the ISO time it ends by itself.
+   */
+  pause: { paused: boolean; until: string | null };
   /** Code honesty state of the session; `null` before the first report. */
   honesty: HonestyInfo | null;
   /**
@@ -659,6 +664,7 @@ export function initialViewState(): ViewState {
     hints: [],
     autoEscalate: { commands: false, edits: false, subagents: false },
     permissionMode: null,
+    pause: { paused: false, until: null },
     honesty: null,
     honestyStored: null,
     starting: null,
@@ -1876,6 +1882,8 @@ function reduce(state: ViewState, method: string, p: Record<string, unknown>): V
         autoEscalate: { commands: s.commands === true, edits: s.edits === true, subagents: s.subagents === true },
       };
     }
+    case 'pause.changed':
+      return { ...state, pause: pauseOf(p) };
     case 'permission_mode.changed':
       return typeof p.mode === 'string' && p.mode ? { ...state, permissionMode: p.mode } : state;
     case 'honesty.update':
@@ -1953,7 +1961,18 @@ export function applyEvents(state: ViewState, events: readonly ViewEvent[]): Vie
 }
 
 /** Methods of recorded events that describe the live session and are taken from the snapshot. */
-const NOT_REPLAYED = new Set(['session.state', 'log', 'chat.queue', 'auto_escalate.changed', 'permission_mode.changed', 'honesty.update', 'usage.update']);
+const NOT_REPLAYED = new Set(['session.state', 'log', 'chat.queue', 'auto_escalate.changed', 'pause.changed', 'permission_mode.changed', 'honesty.update', 'usage.update']);
+
+/**
+ * Read the pause from `pause.changed` params or the snapshot's `pause`.
+ *
+ * @param p `{paused, until}` as the session sends it (untrusted shape).
+ * @returns The pause; not paused unless `paused` is true.
+ */
+function pauseOf(p: Record<string, unknown>): ViewState['pause'] {
+  const paused = p.paused === true;
+  return { paused, until: paused && typeof p.until === 'string' && p.until ? p.until : null };
+}
 
 /**
  * Rebuild the state from the result of `ide.attach` / `ide.start` (reducer case `ui.attached`).
@@ -2019,7 +2038,7 @@ export function applyAttach(state: ViewState, p: Record<string, unknown>): ViewS
   if (Array.isArray(snapshot.agents)) next = applyEvent(next, { method: 'agents.update', params: { agents: snapshot.agents } });
   next = applyEvent(next, { method: 'chat.queue', params: { messages: Array.isArray(snapshot.queue) ? snapshot.queue : [] } });
   next = applyEvent(next, { method: 'auto_escalate.changed', params: { settings: obj(snapshot.auto_escalate) } });
-  next = { ...next, permissionMode: str(snapshot.permission_mode) };
+  next = { ...next, permissionMode: str(snapshot.permission_mode), pause: pauseOf(obj(snapshot.pause)) };
 
   const snapshotSeq = typeof snapshot.last_seq === 'number' ? snapshot.last_seq : 0;
   const stateName = typeof snapshot.state === 'string' ? (snapshot.state as SessionStateName) : 'idle';

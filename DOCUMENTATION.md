@@ -857,6 +857,12 @@ subsection of the client you use.
 - Decide escalations and answer Claude's questions ([Deciding a step](#deciding-a-step)).
 - Show a step's command, checks, result and diff.
 - Interrupt the turn, stop the session.
+- **Pause** the session to review what it does: the pause button next to the stop button in
+  the VSCode chat and the chat pane of the web interface (a client of the protocol sends
+  `pause.set`). The pause interrupts nothing. The next edit, command, commit or subagent start
+  of any agent is checked as usual and, if approved, waits until you click the button again
+  (▶) or `pause_timeout_s` (10 minutes) has passed. A step the checkers deny or escalate is
+  answered at once. The terminal clients show when a pause begins and ends.
 - Switch the supervision level and Claude Code's permission mode.
 
 **Example prompts**

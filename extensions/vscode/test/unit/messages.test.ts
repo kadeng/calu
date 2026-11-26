@@ -112,6 +112,8 @@ describe('parseWebviewMessage', () => {
     expect(parseWebviewMessage({ type: 'setModel', model: 'sonnet' })).toEqual({ type: 'setModel', model: 'sonnet' });
     expect(parseWebviewMessage({ type: 'setEffort', effort: 'xhigh' })).toEqual({ type: 'setEffort', effort: 'xhigh' });
     expect(parseWebviewMessage({ type: 'setLevel', level: 'writes' })).toEqual({ type: 'setLevel', level: 'writes' });
+    expect(parseWebviewMessage({ type: 'setPause', paused: true })).toEqual({ type: 'setPause', paused: true });
+    expect(parseWebviewMessage({ type: 'setPause', paused: 'true' })).toBeUndefined();
     expect(parseWebviewMessage({ type: 'openFile', path: '/w/a.py' })).toEqual({ type: 'openFile', path: '/w/a.py' });
     expect(parseWebviewMessage({ type: 'openFile', path: '/w/a.py', line: 12 })).toEqual({ type: 'openFile', path: '/w/a.py', line: 12 });
     expect(parseWebviewMessage({ type: 'openFile', path: '/w/a.py', line: 0 })).toEqual({ type: 'openFile', path: '/w/a.py' });

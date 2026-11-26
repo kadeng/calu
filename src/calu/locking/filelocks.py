@@ -379,7 +379,7 @@ def _file_uid(status: Path = Path("/proc/thread-self/status")) -> int:
         for line in status.read_text().splitlines():
             if line.startswith("Uid:"):
                 return int(line.split()[4])
-    except (OSError, ValueError, IndexError):
+    except OSError, ValueError, IndexError:
         pass
     return os.geteuid()
 

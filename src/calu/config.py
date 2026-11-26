@@ -1014,6 +1014,14 @@ class Config(ConfigModel):
     recorded, so that `calu run --resume <id>` takes the conversation up again. 0 waits
     without a limit.
     """
+    pause_timeout_s: float = Field(default=600.0, gt=0, le=780)
+    """How long a user's pause of a session lasts at most (`pause.set`, the pause button of
+    the chat).
+
+    While a session is paused, an approved tool call that needed a check waits before it
+    runs, so that the user can review what the session does. The wait runs inside Claude
+    Code's PreToolUse hook, whose 15 minutes also hold the call's check: hence at most 780
+    seconds."""
     store_failures_before_stop: int = Field(default=10, ge=0)
     """How many database writes may fail in a row before the session stops.
 

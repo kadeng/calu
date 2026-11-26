@@ -34,6 +34,7 @@ NOT_CARRIED_BY_ACP = {
     "agents.update",
     "usage.update",  # ACP has no shape for the usage limits of the agent's account
     "step.held",  # ACP has no state of a tool call that waits for another one's decision
+    "pause.changed",  # ACP has no pause; a held call is a tool call in progress there
 }
 """Events the ACP adapter deliberately drops, because the protocol has nowhere to put them."""
 

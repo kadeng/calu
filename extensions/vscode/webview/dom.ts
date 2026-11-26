@@ -84,6 +84,7 @@ const ICONS = {
   side: 'M3 3.5h10v7H8l-3 2.5v-2.5H3z',
   thinking: 'M5.5 12.5h5M6.5 14h3M8 2a4 4 0 0 0-2.5 7.1c.5.4.8 1 .8 1.6h3.4c0-.6.3-1.2.8-1.6A4 4 0 0 0 8 2z',
   pause: 'M5.5 3.5v9M10.5 3.5v9',
+  play: 'M5 3.5l7 4.5-7 4.5z',
   warning: 'M8 2.5l6 10.5H2zM8 6.5v3M8 11.5v.5',
 } as const;
 

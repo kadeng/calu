@@ -230,6 +230,15 @@ describe('ChatHost', () => {
     host.dispose();
   });
 
+  it('pauses and resumes the session with pause.set', async () => {
+    const { bridge, host } = await started();
+    await host.handle({ type: 'setPause', paused: true });
+    expect(bridge.last('session.call')).toEqual({ method: 'pause.set', params: { paused: true } });
+    await host.handle({ type: 'setPause', paused: false });
+    expect(bridge.last('session.call')).toEqual({ method: 'pause.set', params: { paused: false } });
+    host.dispose();
+  });
+
   it('puts a message back into the input when it could not be sent', async () => {
     const { view, host } = await started({
       'session.call': (p) => {

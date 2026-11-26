@@ -241,6 +241,7 @@ from calu.honesty import (
 )
 from calu.logfile import one_line
 from calu.models import resolve_model
+from calu.pause import Pause
 from calu.protocol.messages import (
     REFUSED_PERMISSION_MODES,
     SWITCHABLE_PERMISSION_MODES,
@@ -270,6 +271,7 @@ from calu.protocol.messages import (
     HumanDiffAddResult,
     InitializeResult,
     Log,
+    PauseInfo,
     PermissionModeChanged,
     QueuedMessage,
     RateLimit,
@@ -520,6 +522,10 @@ LOCK_HOOK_MARGIN_S = 30.0
 """Seconds kept back from the PreToolUse hook's timeout (`HOOK_TIMEOUT_S`) when an approved
 call waits for its locks there, so that the hook answers before Claude Code gives up on it."""
 
+PAUSE_HOOK_MARGIN_S = 60.0
+"""Seconds of the PreToolUse hook's time that a call held by the user's pause leaves for its
+locks and its answer, on top of `LOCK_HOOK_MARGIN_S`."""
+
 
 class SessionError(Exception):
     """A request cannot be served in the current state (reported to the client)."""
@@ -726,6 +732,9 @@ class Session:
         )
         """The escalations of this session and the hold they put on other steps
         (`calu.escalations`); it outlives runs."""
+        self.pause = Pause(self._emit_safely)
+        """The user's pause (`pause.set`): approved checked calls wait while it lasts
+        (`calu.pause`); it outlives runs."""
         self.gate = StepGate(
             workspace,
             self.desk,
@@ -2791,7 +2800,34 @@ class Session:
             honesty_marks=list(self._honesty_sent.marks),
             honesty=self._honesty_sent.model_copy(update={"mode": self.config.honesty.mode}),
             rate_limits=list(self._rate_limits),
+            pause=self.pause.info(),
         )
+
+    async def set_pause(
+        self, paused: bool, minutes: float | None = None, client: str = "unknown"
+    ) -> PauseInfo:
+        """Pause the session or end its pause (`pause.set`, `calu.pause`).
+
+        Lives in the running session only, like `set_auto_escalate`; nothing is weakened by a
+        pause, so nothing goes into the audit log.
+
+        Side effects: emits `pause.changed` and a `log` line; ending the pause lets every held
+        call go on.
+
+        Args:
+            paused: True to pause (or start the time of a pause again), False to end it.
+            minutes: The pause's length; None, or more than `pause_timeout_s` allows, takes
+                `pause_timeout_s`.
+            client: Name of the client that asked.
+
+        Returns:
+            The pause as it is now.
+        """
+        if not paused:
+            return await self.pause.end(client)
+        limit = self.config.pause_timeout_s
+        seconds = limit if minutes is None else min(minutes * 60.0, limit)
+        return await self.pause.start(seconds, client)
 
     async def recent_sessions(self, limit: int = 20) -> list[SessionSummary]:
         """List the stored sessions of this workspace, newest first (`session.list`).
@@ -3778,6 +3814,17 @@ class Session:
                 self._run_state.release(step.tool_use_id or "")
         key = step.tool_use_id or ""
         while True:
+            if result.decision.approves and source != "policy":
+                # The user's pause holds an approved call that needed a check (`calu.pause`),
+                # for at most what is left of the hook's time; an escalation that came up
+                # meanwhile is seen by the last look below.
+                hook_left = (
+                    HOOK_TIMEOUT_S
+                    - LOCK_HOOK_MARGIN_S
+                    - PAUSE_HOOK_MARGIN_S
+                    - (time.monotonic() - started)
+                )
+                await self.pause.wait(step, hook_left)
             if self.gate.last_look(result, source):
                 # A hold after a lock wait gets what is left of the hook's time, at most.
                 hook_left = HOOK_TIMEOUT_S - LOCK_HOOK_MARGIN_S - (time.monotonic() - started)

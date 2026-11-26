@@ -114,6 +114,8 @@ export type WebviewMessage =
   | { type: 'usagePanel' }
   /** Interrupt the running turn. */
   | { type: 'interrupt' }
+  /** Pause the session, or end its pause (`pause.set`): approved checked steps wait meanwhile. */
+  | { type: 'setPause'; paused: boolean }
   /**
    * Open a file by absolute path; the host accepts only paths it knows from tool file links.
    * `line` (1-based) puts the cursor there.
@@ -325,6 +327,8 @@ export function parseWebviewMessage(raw: unknown): WebviewMessage | undefined {
       return CLAUDE_EFFORTS.includes(m.effort as ClaudeEffort) ? { type: 'setEffort', effort: m.effort as ClaudeEffort } : undefined;
     case 'setLevel':
       return LEVEL_IDS.includes(m.level as LevelId) ? { type: 'setLevel', level: m.level as LevelId } : undefined;
+    case 'setPause':
+      return typeof m.paused === 'boolean' ? { type: 'setPause', paused: m.paused } : undefined;
     case 'setPermissionMode':
       return PERMISSION_MODES.includes(m.mode as PermissionModeId)
         ? { type: 'setPermissionMode', mode: m.mode as PermissionModeId }

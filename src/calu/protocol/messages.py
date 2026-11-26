@@ -238,6 +238,32 @@ class AutoEscalateSetParams(AutoEscalate):
     """`auto_escalate.set`: replace the auto-escalation settings of the session. Result: `{}`."""
 
 
+class PauseSetParams(BaseModel):
+    """`pause.set`: pause the session, or end its pause (the owner, 2026-11-26).
+
+    A pause interrupts nothing. The next tool call that needs a check (an edit, a command, a
+    commit, the start of a subagent, of any agent) is checked as usual and, if approved,
+    waits until the pause ends: by `pause.set {paused: false}`, after `minutes`, or when the
+    PreToolUse hook's time is used up. A denied or escalated call is answered at once.
+    Pausing a paused session starts its time again. Result: `PauseInfo`.
+    """
+
+    paused: bool
+    minutes: float | None = Field(default=None, gt=0)
+    """How long the pause lasts at most. This model only checks that it is positive: the
+    session (`Session.set_pause`, which the `pause.set` handler of `calu.protocol.server`
+    calls) takes `pause_timeout_s` of the configuration for None and shortens a longer value
+    to it."""
+
+
+class PauseInfo(BaseModel):
+    """Whether the session is paused, and until when (`state.get`, `pause.set`)."""
+
+    paused: bool = False
+    until: datetime | None = None
+    """When the pause ends by itself (UTC); None when not paused."""
+
+
 # --- code honesty: requests (kept together; see also `HonestyInfo` and `HonestyUpdate`) ---
 
 
@@ -809,6 +835,8 @@ class SessionSnapshot(BaseModel):
     for every checked step and after every change, and sent as `honesty.update`)."""
     rate_limits: list[RateLimit] = Field(default_factory=list)
     """The newest state of each usage limit Claude Code reported (`usage.update`)."""
+    pause: PauseInfo = Field(default_factory=PauseInfo)
+    """The user's pause (`pause.set`, `pause.changed`)."""
 
 
 class CheckerContextResult(BaseModel):
@@ -841,6 +869,7 @@ REQUESTS: dict[str, type[BaseModel]] = {
     "escalation.context": EscalationContextParams,
     "checkers.get": EmptyParams,
     "auto_escalate.set": AutoEscalateSetParams,
+    "pause.set": PauseSetParams,
     "honesty.clear": HonestyClearParams,
     "honesty.trust": HonestyTrustParams,
     "honesty.review": EmptyParams,
@@ -1319,6 +1348,22 @@ class Log(Event):
     message: str
 
 
+class PauseChanged(Event):
+    """The session was paused, its pause was started again, or it ended (`pause.set`).
+
+    Sent to every client, so that each shows the pause; also when the time ran out (then
+    `client` is ""). While the session is paused, every call it holds sends `step.held` with
+    the reason "the user's pause". Not recorded in the history.
+    """
+
+    method: ClassVar[str] = "pause.changed"
+    paused: bool
+    until: datetime | None = None
+    """When the pause ends by itself (UTC); None when it ended."""
+    client: str = ""
+    """The client that paused or resumed; "" when the time ran out."""
+
+
 class AutoEscalateChanged(Event):
     """The auto-escalation categories of the session changed (`AutoEscalate`).
 
@@ -1382,6 +1427,7 @@ EVENTS: list[type[Event]] = [
     StepHeld,
     EditDiff,
     AutoEscalateChanged,
+    PauseChanged,
     PermissionModeChanged,
     HonestyUpdate,
     UsageUpdate,

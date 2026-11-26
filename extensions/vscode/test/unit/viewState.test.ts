@@ -479,3 +479,24 @@ describe("Claude Code's permission mode (D247)", () => {
     expect(older.permissionMode).toBeNull();
   });
 });
+
+describe("the user's pause (pause.changed)", () => {
+  it('comes from the snapshot, follows every change and is not replayed from the history', () => {
+    const until = '2026-11-26T12:00:00+00:00';
+    const attached = applyEvent(
+      initialViewState(),
+      ev('ui.attached', {
+        session_id: 's1',
+        snapshot: { state: 'idle', workspace: '/w', pause: { paused: true, until } },
+        events: [{ method: 'pause.changed', params: { paused: false } }],
+      }),
+    );
+    expect(attached.pause).toEqual({ paused: true, until });
+    const ended = applyEvent(attached, ev('pause.changed', { paused: false, until: null, client: 'web' }));
+    expect(ended.pause).toEqual({ paused: false, until: null });
+    // An odd shape is read as not paused.
+    expect(applyEvent(ended, ev('pause.changed', { paused: 'yes', until })).pause).toEqual({ paused: false, until: null });
+    const older = applyEvent(initialViewState(), ev('ui.attached', { session_id: 's2', snapshot: { state: 'idle', workspace: '/w' }, events: [] }));
+    expect(older.pause).toEqual({ paused: false, until: null });
+  });
+});

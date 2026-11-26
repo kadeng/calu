@@ -69,6 +69,7 @@ HANDLED: frozenset[str] = frozenset(
         "step.held",
         "edit.diff",
         "auto_escalate.changed",
+        "pause.changed",
         "permission_mode.changed",
         "honesty.update",
         "usage.update",
@@ -1520,6 +1521,15 @@ class SessionModel:
                 if time is not None and not self.own_level_change:
                     change.notices.append(Notice(f"supervision level changed: {self.level()}"))
                 self.own_level_change = False
+            case m.PauseChanged():
+                # This client has no pause button yet; it says what the pause does.
+                if time is not None:
+                    if event.paused and event.until is not None:
+                        until = event.until.astimezone()
+                        text = f"paused until {until:%H:%M}: approved steps wait"
+                    else:
+                        text = "pause ended"
+                    change.notices.append(Notice(text))
             case m.PermissionModeChanged():
                 self.permission_mode = event.mode
                 change.status = True

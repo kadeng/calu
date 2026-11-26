@@ -414,6 +414,10 @@ export class ChatHost implements Disposable {
       case 'interrupt':
         await this.run('Interrupting', () => this.bridge.session('interrupt', {}));
         return;
+      case 'setPause':
+        // The session answers every client with `pause.changed`; the button follows it.
+        await this.run(message.paused ? 'Pausing' : 'Resuming', () => this.bridge.session('pause.set', { paused: message.paused }));
+        return;
       case 'unlock':
         await this.unlock();
         return;

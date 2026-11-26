@@ -213,6 +213,9 @@ let input!: HTMLTextAreaElement;
 let footerSlot!: HTMLElement;
 let sendButton!: HTMLButtonElement;
 let interruptButton!: HTMLButtonElement;
+let pauseButton!: HTMLButtonElement;
+/** Renders the composer again when the shown pause ends by itself (`pausedNow`). */
+let pauseTimer: ReturnType<typeof setTimeout> | undefined;
 let attachButton!: HTMLButtonElement;
 let sideButton!: HTMLButtonElement;
 let fileInput!: HTMLInputElement;
@@ -276,11 +279,13 @@ function buildSkeleton(): void {
     title: 'Side question: ask about the running work without becoming part of the conversation',
   });
   interruptButton = iconButton('stop', 'Interrupt', 'post', { class: 'secondary round', 'data-type': 'interrupt', 'data-testid': 'input-interrupt', title: "Interrupt Claude's running turn" });
+  pauseButton = iconButton('pause', 'Pause', 'togglePause', { class: 'secondary round', 'data-testid': 'input-pause', title: PAUSE_TITLE });
   sendButton = iconButton('send', 'Send', 'send', { class: 'primary round', 'data-testid': 'input-send' });
   const buttons = el('div', 'composer-buttons');
-  // Interrupt comes first: it appears only while Claude works, and placed there it moves no
-  // other button, so a click aimed at the side-question button never stops the turn.
-  buttons.append(interruptButton, attachButton, sideButton, sendButton);
+  // Pause and interrupt come first: pause is there while a session is attached, interrupt
+  // appears only while Claude works, and placed there it moves no other button, so a click
+  // aimed at the side-question button never stops the turn.
+  buttons.append(pauseButton, interruptButton, attachButton, sideButton, sendButton);
   footer.append(footerSlot, buttons);
   composer.append(completionBox, thumbsSlot, input, footer, fileInput);
   hintEl = el('div', 'hint', undefined, { 'data-testid': 'input-hint' });
@@ -1210,6 +1215,44 @@ function showNotice(text: string): void {
   renderComposer();
 }
 
+/** Title of the pause button while the session is not paused. */
+const PAUSE_TITLE = 'Pause: the next approved edit, command or subagent start of any agent waits until you resume (at most 10 minutes by default)';
+
+/**
+ * Tell whether the session is paused as far as this view knows: the session said so and the
+ * end it named has not passed (a pause that ran out while no step waited sends no event).
+ *
+ * @returns True while paused.
+ */
+function pausedNow(): boolean {
+  const { paused, until } = view.pause;
+  return paused && (until === null || Date.parse(until) > Date.now());
+}
+
+/**
+ * Show the pause button as pause or play, and schedule a render for when the shown pause
+ * ends by itself (`pauseTimer`).
+ *
+ * @param attached Whether a session is attached; without one the button is hidden.
+ * @returns Nothing.
+ */
+function renderPauseButton(attached: boolean): void {
+  const paused = pausedNow();
+  pauseButton.hidden = !attached;
+  if (pauseButton.dataset.paused !== String(paused)) {
+    pauseButton.dataset.paused = String(paused);
+    pauseButton.replaceChildren(icon(paused ? 'play' : 'pause'));
+    const label = paused ? 'Resume' : 'Pause';
+    pauseButton.setAttribute('aria-label', label);
+    pauseButton.classList.toggle('on', paused);
+  }
+  const until = view.pause.until ? new Date(view.pause.until) : null;
+  const at = until ? until.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+  pauseButton.title = paused ? `Resume: paused${at ? ` until ${at}` : ''}; held steps go on` : PAUSE_TITLE;
+  clearTimeout(pauseTimer);
+  pauseTimer = paused && until ? setTimeout(renderComposer, Math.max(until.getTime() - Date.now(), 0) + 50) : undefined;
+}
+
 /**
  * Update the composer: placeholder, enabled state, buttons, the footer controls, the image
  * thumbnails and the delivery hint.
@@ -1240,6 +1283,7 @@ function renderComposer(): void {
   sendButton.disabled = input.disabled || !hasContent;
   sendButton.title = ui.side ? 'Ask (Enter)' : busy ? 'Send for the next turn (Enter); Ctrl+Enter sends into the running turn' : 'Send (Enter)';
   interruptButton.hidden = !busy;
+  renderPauseButton(attached);
   const imagesAllowed = attached && !ui.side && target.to === MAIN;
   attachButton.disabled = !imagesAllowed;
   sideButton.disabled = !attached;
@@ -1265,7 +1309,9 @@ function renderComposer(): void {
     ? noticeText
     : !attached
       ? ''
-      : ui.side
+      : pausedNow()
+        ? 'Paused: approved edits, commands and subagent starts wait · ▶ resumes'
+        : ui.side
         ? 'Enter asks the side question · it does not become part of the conversation'
         : blocked
           ? ''
@@ -1842,6 +1888,9 @@ function onClick(event: MouseEvent): void {
       return;
     case 'postJson':
       vscode.postMessage(JSON.parse(data.message ?? '{}') as WebviewMessage);
+      return;
+    case 'togglePause':
+      vscode.postMessage({ type: 'setPause', paused: !pausedNow() });
       return;
     case 'sessionMenu':
       toggleSessionMenu();
