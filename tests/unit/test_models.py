@@ -1,17 +1,19 @@
 """Model string resolution and model settings: EU endpoint, Bedrock, checker effort."""
 
+import logging
 from pathlib import Path
 
 import pytest
-from pydantic_ai import Agent, ModelMessage, ModelResponse, TextPart, UsageLimits
-from pydantic_ai.exceptions import UsageLimitExceeded
+from pydantic import BaseModel
+from pydantic_ai import Agent, ModelMessage, ModelResponse, TextPart, ToolCallPart, UsageLimits
+from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.models.bedrock import BedrockConverseModel
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.mistral import MistralModel
 from pydantic_ai.settings import ModelSettings
 
 from calu.checkers import Checker
-from calu.models import MISTRAL_EU_BASE_URL, resolve_model, run_bounded
+from calu.models import MISTRAL_EU_BASE_URL, OUTPUT_RETRIES, resolve_model, run_bounded
 
 
 def test_mistral_uses_the_eu_endpoint_by_default(monkeypatch: pytest.MonkeyPatch):
@@ -86,6 +88,60 @@ async def test_run_bounded_gives_up_after_the_second_runaway():
             usage_limits=UsageLimits(output_tokens_limit=1_000),
             model_settings=ModelSettings(),
         )
+
+
+class _Verdict(BaseModel):
+    verdict: str
+
+
+def _answers(bad: int) -> tuple[FunctionModel, list[int]]:
+    """A model whose first `bad` structured answers lack the required field."""
+    calls: list[int] = []
+
+    def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        calls.append(1)
+        tool = info.output_tools[0].name
+        args = {"verdikt": "ACCEPT"} if len(calls) <= bad else {"verdict": "ACCEPT"}
+        return ModelResponse(parts=[ToolCallPart(tool, args)])
+
+    return FunctionModel(answer), calls
+
+
+@pytest.mark.anyio
+async def test_run_bounded_asks_again_for_an_invalid_answer_up_to_output_retries():
+    """The case of 2026-11-26: one invalid retry failed the subagent check with
+    "Exceeded maximum output retries (1)"."""
+    model, calls = _answers(bad=OUTPUT_RETRIES)
+    result = await run_bounded(
+        Agent(name="test", output_type=_Verdict),
+        "hi",
+        model=model,
+        usage_limits=UsageLimits(request_limit=10),
+        model_settings=ModelSettings(),
+    )
+    assert result.output.verdict == "ACCEPT"
+    assert len(calls) == OUTPUT_RETRIES + 1
+
+
+@pytest.mark.anyio
+async def test_run_bounded_logs_the_refused_answers_when_retries_run_out(
+    caplog: pytest.LogCaptureFixture,
+):
+    model, _ = _answers(bad=100)
+    with caplog.at_level(logging.WARNING, logger="calu.models"):
+        with pytest.raises(UnexpectedModelBehavior):
+            await run_bounded(
+                Agent(name="judge", output_type=_Verdict),
+                "hi",
+                model=model,
+                usage_limits=UsageLimits(request_limit=10),
+                model_settings=ModelSettings(),
+            )
+    [record] = [r for r in caplog.records if "no valid answer" in r.getMessage()]
+    text = record.getMessage()
+    assert text.startswith("judge: no valid answer")
+    assert text.count('"verdikt"') == OUTPUT_RETRIES + 1  # every refused answer
+    assert "sent back" in text and "verdict" in text  # and why it was refused
 
 
 def test_a_checker_passes_its_effort_to_the_provider() -> None:

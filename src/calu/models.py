@@ -17,7 +17,9 @@ Models are created lazily by Pydantic AI only when called, so resolving needs no
 
 `run_bounded` runs an agent with a cap on the length of each answer and one retry, for all
 models: a model that repeats itself without end, or reasons at great length, would otherwise
-cost time and tokens and end the run with `UsageLimitExceeded`.
+cost time and tokens and end the run with `UsageLimitExceeded`. It also gives the model
+`OUTPUT_RETRIES` chances to correct a structured answer that does not validate, and logs the
+rejected answers when it runs out of them, since nothing else keeps them.
 
 Importing this module sets `PYDANTIC_AI_NO_BANNER=1` unless the variable is set already:
 Pydantic AI otherwise prints an advertisement for its observability service into the terminal
@@ -28,8 +30,18 @@ import logging
 import os
 from collections.abc import Sequence
 
-from pydantic_ai import Agent, AgentRunResult, CachePoint, UsageLimits
-from pydantic_ai.exceptions import IncompleteToolCall, UsageLimitExceeded
+from pydantic_ai import Agent, AgentRunResult, CachePoint, UsageLimits, capture_run_messages
+from pydantic_ai.exceptions import IncompleteToolCall, UnexpectedModelBehavior, UsageLimitExceeded
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    RetryPromptPart,
+    TextPart,
+    ThinkingPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 
@@ -46,6 +58,15 @@ Measured on a reasoning model: with 4000, a checker judging an obfuscated comman
 the whole cap on thinking and never wrote a decision, which escalates the step with "the checker
 failed" instead of deciding it (agent/records/PLAN.md D72). `CheckerConfig.max_tokens` overrides it
 per checker."""
+
+OUTPUT_RETRIES = 2
+"""How often one run asks the model again for an answer that failed validation (wrong shape,
+or refused by an output validator). Pydantic AI's default is 1; a single rejected retry then
+failed a whole check ("Exceeded maximum output retries (1)"), which escalates the step to a
+person for nothing."""
+
+LOGGED_PART_CHARS = 2_000
+"""Longest text of one message part in the log of a failed run (`describe_messages`)."""
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +88,8 @@ async def run_bounded[T](
     stops at the provider. A cut-off structured answer (`IncompleteToolCall`) or a run over
     `usage_limits` (`UsageLimitExceeded`) is retried once with a fresh run; such runaways are
     usually random, e.g. a model repeating a sentence. The retry is logged as a warning.
+    Within each run, an answer that fails validation is sent back up to `OUTPUT_RETRIES`
+    times; when those run out, the answers are logged (`describe_messages`).
 
     Args:
         agent: The agent to run.
@@ -87,12 +110,114 @@ async def run_bounded[T](
     settings = ModelSettings(**model_settings)
     settings["max_tokens"] = max_tokens
     try:
-        return await agent.run(
-            prompt, model=model, usage_limits=usage_limits, model_settings=settings
-        )
+        return await _run_logged(agent, prompt, model, usage_limits, settings)
     except (IncompleteToolCall, UsageLimitExceeded) as exc:
         log.warning("%s: answer too long, asking once more (%s)", agent.name, exc)
-    return await agent.run(prompt, model=model, usage_limits=usage_limits, model_settings=settings)
+    return await _run_logged(agent, prompt, model, usage_limits, settings)
+
+
+async def _run_logged[T](
+    agent: Agent[None, T],
+    prompt: str | Sequence[str | CachePoint],
+    model: str | Model,
+    usage_limits: UsageLimits,
+    settings: ModelSettings,
+) -> AgentRunResult[T]:
+    """Run `agent` once with `OUTPUT_RETRIES`; log the model's answers if they never validated.
+
+    Side effects: on `UnexpectedModelBehavior` (e.g. the output retries ran out), one warning
+    with the agent's name, the error and `describe_messages` of the run's answers and of the
+    reasons they were sent back.
+
+    Args:
+        agent: The agent to run.
+        prompt: The user prompt.
+        model: The model for this run.
+        usage_limits: Limits of the run.
+        settings: Model settings of the run, `max_tokens` included.
+
+    Returns:
+        The result of the run.
+
+    Raises:
+        UnexpectedModelBehavior: After it was logged, unchanged.
+        Exception: Any other error of `agent.run`, unchanged and not logged here.
+    """
+    with capture_run_messages() as messages:
+        try:
+            return await agent.run(
+                prompt,
+                model=model,
+                usage_limits=usage_limits,
+                model_settings=settings,
+                retries={"output": OUTPUT_RETRIES},
+            )
+        except UnexpectedModelBehavior as exc:
+            log.warning(
+                "%s: no valid answer (%s); the model's answers and why they were refused:\n%s",
+                agent.name,
+                exc,
+                describe_messages(messages),
+            )
+            raise
+
+
+def describe_messages(messages: Sequence[ModelMessage]) -> str:
+    """Render what a model answered in a run and why answers were sent back, for the log.
+
+    The prompt is left out (it is large, and the session has it): only the model's answers
+    (text, structured answers and other tool calls, the length of its thinking) and the retry
+    prompts (the validation error or the validator's reason) are listed, in order. Each text
+    is cut to `LOGGED_PART_CHARS`.
+
+    Args:
+        messages: The messages of one run, as `capture_run_messages` collected them.
+
+    Returns:
+        One line per part, e.g. `answer: tool call final_result {...}` or `sent back: ...`;
+        "(the model gave no answer)" if there is none.
+    """
+
+    def cut(text: str) -> str:
+        """Shorten `text` to `LOGGED_PART_CHARS`.
+
+        Args:
+            text: The text.
+
+        Returns:
+            The text, or its start with the number of characters left out.
+        """
+        if len(text) <= LOGGED_PART_CHARS:
+            return text
+        return f"{text[:LOGGED_PART_CHARS]} [... {len(text) - LOGGED_PART_CHARS} more characters]"
+
+    lines: list[str] = []
+    for message in messages:
+        if isinstance(message, ModelResponse):
+            for part in message.parts:
+                if isinstance(part, TextPart):
+                    lines.append(f"answer: text {cut(part.content)!r}")
+                elif isinstance(part, ToolCallPart):
+                    lines.append(
+                        f"answer: tool call {part.tool_name} {cut(part.args_as_json_str())}"
+                    )
+                elif isinstance(part, ThinkingPart):
+                    lines.append(f"answer: thinking ({len(part.content)} characters)")
+                else:
+                    lines.append(f"answer: {part.part_kind}")
+            if message.finish_reason not in (None, "stop", "tool_call"):
+                lines.append(f"answer ended: {message.finish_reason}")
+        elif isinstance(message, ModelRequest):
+            for part in message.parts:
+                # A refused plain-text answer comes back as a retry prompt; a refused
+                # structured answer (a tool call) as a tool return marked "retried".
+                if isinstance(part, RetryPromptPart) or (
+                    isinstance(part, ToolReturnPart) and part.outcome == "retried"
+                ):
+                    content = part.content if isinstance(part.content, str) else str(part.content)
+                    target = f" ({part.tool_name})" if part.tool_name else ""
+                    lines.append(f"sent back{target}: {cut(content)}")
+    return "\n".join(lines) or "(the model gave no answer)"
 
 
 def cache_settings(model: str | Model, key: str) -> ModelSettings:
