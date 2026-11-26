@@ -138,6 +138,43 @@ async def test_the_page_of_an_ended_session_offers_no_live_view(db_url: str) -> 
         await conn.close()
 
 
+async def test_the_live_view_of_an_ended_session_goes_on_or_offers_to_continue(
+    db_url: str,
+) -> None:
+    """The owner could resume only from the history page: "live view" showed nothing to do."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        ended = DatabaseSessionStore(db)
+        ended_id = await ended.start(IDENTITY)
+        await ended.set_claude_session("claude-1", "haiku")
+        await ended.set_address("ws://127.0.0.1:1")
+        await ended.end("stopped")
+        blank = DatabaseSessionStore(db)
+        blank_id = await blank.start(IDENTITY)
+        await blank.end("stopped")
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(db)), base_url="http://127.0.0.1"
+        ) as client:
+            page = await client.get(f"/sessions/{ended_id}/live")
+            assert page.status_code == 200 and "Continue this conversation" in page.text
+            assert f'action="http://127.0.0.1/sessions/{ended_id}/request"' in page.text
+            nothing = await client.get(f"/sessions/{blank_id}/live")
+            assert "nothing to continue" in nothing.text
+
+            # Once another session continues the conversation, the old live view leads there.
+            later = DatabaseSessionStore(db)
+            later_id = await later.start(IDENTITY)
+            await later.set_claude_session("claude-1", "haiku")
+            await later.set_address("ws://127.0.0.1:2")
+            moved = await client.get(f"/sessions/{ended_id}/live")
+            assert moved.status_code == 303
+            assert moved.headers["location"].endswith(f"/sessions/{later_id}/live")
+    finally:
+        await conn.close()
+
+
 async def test_an_answer_never_redirects_to_another_site(db_url: str) -> None:
     """`back` travels through the browser, so only this interface's own pages are accepted."""
     conn = await connect(db_url)

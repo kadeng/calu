@@ -716,8 +716,10 @@ class Bridge:
         clients already continues its conversation (another editor, calu's own resume after
         an end, D282), that one is meant; else the conversation is to be resumed in the
         session's directory.
-        A bridge that runs as root resumes nothing: root's sessions are `calu run`
-        processes, which no `calu serve` resumes.
+        A bridge that runs as root for root itself resumes nothing: root's own sessions are
+        `calu run` processes, which no `calu serve` resumes. A bridge in a root process that
+        works for a user (`asuser.active`, the chat pane of `calu web --sudo`) resumes that
+        user's sessions through the user's `calu serve`, like a bridge of the user.
 
         Side effects: reads `sessions`; for a running successor, writes a `client_tokens` row.
 
@@ -733,7 +735,7 @@ class Bridge:
         Raises:
             RpcError: `NEEDS_PASSWORD` or `NO_DATABASE`.
         """
-        if os.geteuid() == 0:
+        if os.geteuid() == 0 and asuser.active() is None:
             return None
         # The sessions are recorded with the OS user they work for (`session_os_user`), whose
         # home holds the transcripts: this process's. The request goes to the server that
@@ -1503,11 +1505,19 @@ class Bridge:
 
 
 def _os_user() -> str:
-    """Name the OS user this process runs as, as a session records it.
+    """Name the OS user this bridge works for, as a session records it.
+
+    That is the user the process switched to (`asuser.active`: `calu web --sudo` or `calu
+    serve --web` as root for a user, whose chat pane runs this bridge), else the user the
+    process runs as.
 
     Returns:
-        The user name, or "unknown" if the system does not tell it.
+        The user name (a uid as text for a switched-to uid without a name), or "unknown" if
+        the system does not tell it.
     """
+    switched = asuser.active()
+    if switched is not None:
+        return switched.user or str(switched.uid)
     try:
         return getpass.getuser() or "unknown"
     except OSError, KeyError:

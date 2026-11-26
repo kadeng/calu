@@ -488,3 +488,24 @@ async def test_a_token_that_cannot_be_revoked_is_reported_to_the_editor(
     assert method == "ide.log" and params["level"] == "warning"
     assert "token 7 could not be revoked" in params["message"]
     assert ("refused" if outcome == "refused" else "no answer within") in params["message"]
+
+
+def test_a_bridge_of_root_for_a_user_works_for_that_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The chat pane of `calu web --sudo`: its sessions and requests are the user's, not root's.
+
+    The owner's web interface runs as root for their user; its pane could not resume a
+    session because the bridge took itself for root.
+    """
+    from calu import asuser
+    from calu.ide import bridge as ide_bridge
+    from calu.launch import RunAs
+
+    monkeypatch.setattr(asuser, "_active", RunAs(uid=1000, gid=1000, home="/home/kai", user="kai"))
+    assert ide_bridge._os_user() == "kai"
+    monkeypatch.setattr(asuser, "_active", RunAs(uid=1234, gid=1234, home="/home/x"))
+    assert ide_bridge._os_user() == "1234"
+    monkeypatch.setattr(asuser, "_active", None)
+    monkeypatch.setattr(ide_bridge.getpass, "getuser", lambda: "runner")
+    assert ide_bridge._os_user() == "runner"

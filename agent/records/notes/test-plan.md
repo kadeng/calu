@@ -1315,3 +1315,17 @@ Cua desktop, scripted backend, VSCode extension built from the working tree afte
 | `/rule --lift-builtin calu may serve` | ok: refused; the message names the web settings and `calu rule add --lift-builtin` |
 | That a checker's prompt holds the rule | only in the unit tests: the scripted checkers do not read instructions |
 | The web chat pane, `calu attach`, the PyCharm plugin | open |
+
+### Q. Resuming after `calu serve` was stopped (2026-11-26 evening)
+
+Cua desktop, scripted server stopped and started again with `uitest/setup-demo.sh`, `calu web`
+in the container (no web password), Chromium.
+
+| Case | Result |
+|---|---|
+| VSCode chat attached when the server stops and starts | ok: it resumed the conversation in a new session by itself; a "server stopped" notification stayed in the corner afterwards |
+| Web chat pane tab open when the server stops and starts | ok, inferred: with the pane tab open (and the VSCode bridge stopped) a new session of the conversation ran after the restart; after the tab was closed, none did. The pane itself was not looked at in that moment |
+| Web session list, "live" of an ended session | was: "nothing live to show", no way on. Fixed: "Continue this conversation" starts the session and opens its live view; a session that already continues the conversation is opened directly |
+| Web session list, "chat" of an ended session | was a second link to the dead session. Fixed: ended rows offer "resume" only |
+| Web session list, "resume" with no session running | ok: the pane asked the server and attached to the resumed session |
+| The pane of `calu web --sudo` (root for a user) | fixed in code, not tried: the bridge took itself for root and refused every resume (unit test only; the desktop has no root web interface) |

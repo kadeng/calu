@@ -1777,27 +1777,72 @@ async def summary_page(request: Request, state: _State) -> Response:
     )
 
 
+async def _running_successor(state: _State, row: herd.SessionRow) -> herd.SessionRow | None:
+    """Find the session that continues the conversation of an ended session and still runs.
+
+    Args:
+        state: The shared state.
+        row: The ended session.
+
+    Returns:
+        The newest session of the same host, OS user and Claude conversation that has not
+        ended, has a client address and is not stale; None if there is none or `row` has
+        no conversation.
+
+    Raises:
+        psycopg.OperationalError: If the database cannot be reached.
+    """
+    if not row.claude_session_id:
+        return None
+    running = [
+        other
+        for other in await herd.sessions(state.db, active_only=True)
+        if other.id != row.id
+        and other.claude_session_id == row.claude_session_id
+        and (other.hostname, other.os_user) == (row.hostname, row.os_user)
+        and other.address
+        and other.ended_at is None
+        and not other.stale
+    ]
+    return max(running, key=lambda other: other.started_at) if running else None
+
+
 async def live_page(request: Request, state: _State) -> Response:
     """Show the live view of one running session.
 
     The page itself is static; everything in it arrives over the WebSocket of `live_socket`.
+
+    A session that ended or whose process is gone has nothing live. If another session that
+    serves clients continues its conversation (a resume from an editor, the chat pane, or
+    calu's own resume after an end, D282), the page redirects to that session's live view.
+    Otherwise the page says the session ended and, for a conversation that can be continued,
+    offers "Continue this conversation" (`request_session` with kind "resume").
 
     Args:
         request: The request; its path holds the session id.
         state: The shared state.
 
     Returns:
-        The live page, or a 404 page if no session has that id.
+        The live page; a redirect to the live view of the session that continues the
+        conversation; or a 404 page if no session has that id.
     """
     session_id = str(request.path_params["session_id"])
     row = await herd.session(state.db, session_id)
     if row is None:
         return _not_found(request, session_id)
+    ended = row.ended_at is not None or row.stale
+    if ended:
+        successor = await _running_successor(state, row)
+        if successor is not None:
+            return RedirectResponse(
+                request.url_for("live", session_id=successor.id), status_code=303
+            )
     return _render(
         request,
         "live.html",
         {
             "session": row,
+            "ended": ended,
             "origin": await herd.fork_origin(state.db, session_id),
             "socket": request.url_for("live_ws", session_id=session_id),
             "efforts": EFFORTS,

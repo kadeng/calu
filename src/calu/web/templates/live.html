@@ -15,6 +15,21 @@
 </p>
 <p id="words" class="state-words" role="status"></p>
 
+{% if ended %}
+<div class="card notice" id="ended">
+  {% if session.claude_session_id %}
+  <form class="inline" method="post" action="{{ url_for('request_session', session_id=session.id) }}">
+    <button name="kind" value="resume" class="primary">Continue this conversation</button>
+  </form>
+  <span class="muted">This session has ended. Continuing starts a new session of the same
+    conversation with the <code>calu serve</code> of {{ session.os_user }} on {{ session.hostname }}
+    and opens its live view.</span>
+  {% else %}
+  <span class="muted">This session has ended before its conversation began, so there is nothing to continue.</span>
+  {% endif %}
+</div>
+{% endif %}
+
 {% if origin %}
 <p class="notice">
   This session is a <strong>fork</strong> of
