@@ -13,12 +13,44 @@ came up, then built the features the owner asked for. A second session worked in
 `~/projects/calu`; this one merged `origin/main` after every commit. Everything below is
 committed and pushed with this handoff.
 
-**Next: temporary rules (design with the owner's decisions of 2026-11-26; implementation not
-started).** The design is `agent/records/notes/temporary-rules-design.md`, with the owner's
-decisions in its section 7. The owner chose option B for calu's built-in protections. The limits
-of B in section 6 are Claude's proposal, and the last message asked the owner to confirm them
-before step 1. Start with that question, then follow section 8: six steps, Cua UI tests with
-each UI step, a report after steps 3 and 5.
+**In progress: temporary rules, step 2 of 6 (uncommitted).** The design is
+`agent/records/notes/temporary-rules-design.md`, with the owner's decisions in its section 7.
+The owner chose option B for the built-in protections; the limits of B in section 6 are
+Claude's proposal. Claude's message asked two things at once: whether the owner confirms those
+limits, and whether to start step 1 of the plan of section 8 (with reports after steps 3 and 5).
+The owner answered "Yes, go ahead." Cua UI tests come with each UI step (3, 4, 5); the whole
+feature must work end to end in the Cua desktop before the owner tests by hand.
+
+- Step 1 is committed and pushed (`6a56ca3`): migration `0002_temporary_rules.sql`,
+  `src/calu/temp_rules.py`, `tests/unit/test_temp_rules.py`, `tests/db/test_temp_rules.py`.
+- Step 2 is written but **not committed and not yet green**. The working tree holds:
+  - `src/calu/temp_rules.py`: `for_project` (read in `ConfigStore.load`) and `applies_to`;
+  - `src/calu/store/config.py`: `ProjectSettings.temporary_rules`, loaded in the same lock,
+    part of the fingerprint;
+  - `src/calu/session.py`: `RULED_ROUTES`, `_build_route_checkers` (sets `_rules_part` and
+    `rules.lifted`), `_temporary_part`, `_follow_temporary_rules` (called in `_checked`
+    before `gate.decide`); `_prompt` appends the part for command, edit and changeset
+    checkers (not the honesty checker); `_run_state` is now created before the checkers;
+  - `src/calu/checkers/rules.py`: `Rules.lifted`, `CALU_RULE`, `ALWAYS_ASKING_SUBCOMMANDS`
+    (Claude's list; today also `summary`, `login`, `traces`, `escalation`),
+    `LIFTABLE_SUBCOMMANDS`, `ALWAYS_ASKING_FILES`, `calu_subcommand` (fails closed: only the
+    word right after calu's program), the lifting in `_deny_command` and `_deny_rule`;
+  - `tests/unit/test_temp_rules.py`: tests for all of that.
+- Next action: run `tests/unit/test_temp_rules.py` and `tests/unit/test_rules.py` (the last
+  run was interrupted right after `_run_state` was moved), fix what fails, then the unit
+  layer (`pytest -n 8 tests/unit`), the database layer **serially** (`scripts/db-tests.sh -q
+  -p no:randomly`; it fails under `-n 8`), pyright over the whole repository, and commit.
+  `honesty.mode` is `enforce` in the owner's session: running tests needs a clean honesty
+  state, so settle open marks first. Make code edits with the Edit tool; a script edit leaves
+  the file unreviewed.
+- Then step 3: `calu rule add/list/remove` in the terminal, the slash commands in `calu
+  attach` and in the VSCode chat and the web pane (bridge requests `ide.rules.*`), and a Cua
+  test of the VSCode chat. `"rule"` is in `ALWAYS_ASKING_SUBCOMMANDS` already; the
+  subcommand test expects it to exist once step 3 adds it.
+
+Also open from today: the length guard of the checker instructions has allowances for the
+generated-code sections and the owner's AI-slop rule (`tests/unit/test_instructions.py`); a
+checker suggested shortening the sections instead, which is still to weigh.
 
 Built in this session, newest first:
 
