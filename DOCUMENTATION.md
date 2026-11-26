@@ -2060,8 +2060,8 @@ A file either list matches:
 
 - an honesty review verifies it without the reviewer and closes a mark that is open on it;
 - a mark a checker puts on it is not recorded (the log says so);
-- an edit of it by hand (Edit, Write, MultiEdit) waits for a person, whatever `honesty.mode`
-  says. Only the build writes such a file without a person's decision.
+- an edit of it by hand (Edit, Write, MultiEdit, NotebookEdit) waits for a person, whatever
+  `honesty.mode` says. Only the build writes such a file without a person's decision.
 
 The checkers also look for code that is plainly generated, minified or obfuscated but not
 listed. The edit and command checkers escalate a hand edit of such code; a build command is

@@ -1142,8 +1142,26 @@ class GeneratedRules:
 
     Both lists are empty by default, so nothing is generated until a person configures it.
     A generated file is not judged for honesty. An honesty review verifies it without a
-    model, and a mark on it is not recorded. A hand edit of one escalates to a person
-    (`calu.gate.StepGate._generated_edit`).
+    model, and a mark on it is not recorded. An Edit, Write, MultiEdit or NotebookEdit of it
+    or any other tool call or command that modifies them selectively without going through
+    a code-generation tool, command or script is to escalate to a person.
+
+    How far the code achieves that:
+
+        any tool but a shell command or a        deterministic: a call whose input names a
+        tool that only reads (edit tools, MCP    generated file escalates
+        tools, tools calu does not know yet)     (`calu.gate.StepGate._generated_edit`)
+        a shell command                          the command checker decides whether a call
+                                                 changes such a file by hand or runs its
+                                                 generator; calu names the generated files
+                                                 the command line refers to ("Generated:",
+                                                 `StepGate.generated_named`)
+
+    Not covered: a script or program can write a file without naming it on the command line,
+    and a tool can write one without naming it in its input. A content pattern only recognises
+    a file that exists. Nothing compares a generated file before and after a step. Keep these
+    checks as close to the intent above as the code allows when tools, the shell parser or the
+    gate change, and close a gap where that is cheap.
     """
 
     paths: tuple[re.Pattern[str], ...] = ()

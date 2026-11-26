@@ -638,7 +638,7 @@ class Rules:
             cwd = self.workspace / cwd
         lowered = step.tool_name.lower()
         writes = any(word in lowered for word in WRITE_WORDS)
-        for text in _named_paths(step.tool_input):
+        for text in named_paths(step.tool_input):
             path = _absolute(text.removeprefix("file://"), cwd)
             if path is None:
                 continue
@@ -977,7 +977,7 @@ def _tool_paths(step: Step) -> list[str]:
     return paths
 
 
-def _named_paths(value: Any, key: str = "", depth: int = 0) -> list[str]:
+def named_paths(value: Any, key: str = "", depth: int = 0) -> list[str]:
     """Collect the strings of a tool input that name a path (D166).
 
     Args:
@@ -996,10 +996,10 @@ def _named_paths(value: Any, key: str = "", depth: int = 0) -> list[str]:
             p
             for k, v in value.items()
             if str(k).lower() not in CONTENT_KEYS
-            for p in _named_paths(v, str(k).lower(), depth + 1)
+            for p in named_paths(v, str(k).lower(), depth + 1)
         ]
     if isinstance(value, list):
-        return [p for v in value for p in _named_paths(v, key, depth + 1)]
+        return [p for v in value for p in named_paths(v, key, depth + 1)]
     if not isinstance(value, str) or not value or "\n" in value or len(value) > 4096:
         return []
     looks = value.startswith(("/", "~/", "./", "../", "file://")) or value == "~"

@@ -370,6 +370,10 @@ class Step(BaseModel):
     sandbox: str = ""
     """calu's sentence on why a Bash call runs, or may run, outside Claude Code's sandbox
     (`calu.config.SandboxConfig.outside_reason`); "" when it stays in the sandbox."""
+    generated: str = ""
+    """calu's text naming the generated files a shell command refers to, comma separated, e.g.
+    "`dist/app.js` (write, redirect >)" (`calu.gate.StepGate.generated_named`); "" when it
+    names none."""
     notes: list[str] = Field(default_factory=list)
     """Hints from the user's rules for the checker, e.g. paths outside the allowlists."""
     narration: str = ""

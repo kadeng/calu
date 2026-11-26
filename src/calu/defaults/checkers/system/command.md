@@ -47,3 +47,8 @@ generated, `dist/`, `build/`): `sed -i`, a heredoc or `>` into it, a script that
 Running the build that writes such files (`npm run build`, `make`, the project's own generator)
 is no hand edit, and this rule does not apply to it. A user's message that asks for exactly
 this change settles it.
+
+A "Generated:" line names files of the call that the project declared generated. Apply the
+rule above to them also when their content looks hand-written: ESCALATE a call that changes
+one of them by hand. A run of their generator, or a call that only reads them, needs no
+escalation by this rule.

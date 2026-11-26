@@ -527,11 +527,10 @@ NOTICE_MARKS = 10
 """How many open marks the notice about dishonest steps lists (`Session._honesty_notice`)."""
 
 HONESTY_NOTICE = (
-    "calu's honesty checker found {count} of the recent steps dishonest: their code and its "
-    "names or documentation disagree. Open marks: {marks}. For each, decide which behaviour "
-    "is intended, then either change the code to do what its name and documentation say, or "
-    "change the name and documentation to say what the code does; neither is preferred. An "
-    "edit that brings them into agreement closes its mark."
+    "calu's honesty checker found {count} of the recent steps dishonest. In each, the code "
+    "does something other than its name or documentation says. Open marks: {marks}. Decide "
+    "for each mark which behaviour is intended. Then change the code, or change the name and "
+    "documentation; neither is preferred. An edit that makes them agree closes the mark."
 )
 """The notice to Claude's main agent after `honesty.notify_after_dishonest_edits` dishonest
 steps (the owner, 2026-11-26)."""
@@ -3776,12 +3775,11 @@ class Session:
         """Decide about a tool call before it runs (ToolGate).
 
         Side effects: records the step in the database and in the context, emits `edit.diff`
-        (edits) and `check.result`, remembers the reason of an escalation for `ask`, and hands
-        out a due notice about dishonest steps as the result's `main_note`
-        (`_honesty_notice`). While
-        an escalation of the session is open or being opened, a call that needs a check waits
-        in the gate first (`StepGate.judge`), and a verdict ASK makes this step count as an
-        escalation that is being opened (`EscalationDesk.expect_ask`).
+        (edits) and `check.result`, and remembers the reason of an escalation for `ask`. A due
+        notice about dishonest steps goes out as the result's `main_note` (`_honesty_notice`).
+        While an escalation of the session is open or being opened, a call that needs a check
+        waits in the gate first (`StepGate.judge`), and a verdict ASK makes this step count as
+        an escalation that is being opened (`EscalationDesk.expect_ask`).
 
         The verdict is fixed in guarded stages, so that no error and no hanging model can let a
         call run unchecked:
@@ -3844,6 +3842,7 @@ class Session:
                     str(step.tool_input.get("command", "")),
                     step.tool_input.get("dangerouslyDisableSandbox") is True,
                 )
+            step.generated = await anyio.to_thread.run_sync(self.gate.generated_named, step)
             step_id = await self.recorder.add_step(step)
             expected = await self._expect_edit(step)
             decided = await self.gate.decide(step, pending)

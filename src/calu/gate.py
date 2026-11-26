@@ -136,7 +136,9 @@ from calu.checkers.rules import (
     WRITE_PATH_TOOLS,
     RuleOutcome,
     Rules,
+    named_paths,
 )
+from calu.checkers.shell import parse_command
 from calu.config import CheckerConfig, Config
 from calu.context import label_for_unchecked
 from calu.context.narrator import ClaudeOutput, unread_chars
@@ -218,11 +220,10 @@ UNRECORDED = (
 
 HONESTY_MARKS = (
     "calu runs and commits code only after it was verified to say what it does "
-    "(honesty.mode is enforce), and {what}. Recorded as dishonest: {spots}. Edit each of these "
-    "files so that the code and its documentation agree: either change the code to do what "
-    "its name and documentation say, or change the name and documentation to say what the "
-    "code does. Which behaviour is intended is your decision. The check of that edit closes "
-    "the mark.{review}"
+    "(honesty.mode is enforce), and {what}. Recorded as dishonest: {spots}. Make the code and "
+    "its documentation agree in each of these files. You may change the code, or the name and "
+    "documentation; which behaviour is intended is your decision. The check of that edit "
+    "closes the mark.{review}"
 )
 """Reason of the denial of a step that needs a clean honesty state while marks are open."""
 
@@ -1370,29 +1371,66 @@ class StepGate:
             decided.source = "auto"
         return decided
 
-    def _generated_edit(self, step: Step) -> str:
-        """Tell whether an edit tool writes a file that counts as generated.
+    def _generated_rules(self) -> GeneratedRules | None:
+        """Return the configured patterns of generated files.
 
-        The patterns are `honesty.generated_paths` and `honesty.generated_contents`
-        (`calu.honesty.GeneratedRules`); a content pattern is matched against the file as it
-        is, and for a Write also against the content it writes. Applies whatever
-        `honesty.mode` says, so that the exemption of generated files from the honesty checks
-        never goes along with unchecked hand edits.
+        Returns:
+            The rules from `honesty.generated_paths` and `honesty.generated_contents`; None if
+            both lists are empty.
+        """
+        cfg = self._config().honesty
+        if not cfg.generated_paths and not cfg.generated_contents:
+            return None
+        return GeneratedRules.of(cfg.generated_paths, cfg.generated_contents)
+
+    def _workspace_key(self, raw: str, cwd: Path) -> str | None:
+        """Turn a path a tool names into the form `GeneratedRules` matches.
+
+        Args:
+            raw: The path as written; relative ones resolve against `cwd`, "~" is expanded.
+            cwd: The tool call's working directory.
+
+        Returns:
+            The path relative to the workspace, with "/"; None for a path outside it.
+        """
+        try:
+            path = (cwd / Path(raw.removeprefix("file://")).expanduser()).resolve()
+            return path.relative_to(self._workspace.resolve()).as_posix()
+        except OSError, ValueError, RuntimeError:
+            return None
+
+    def _generated_edit(self, step: Step) -> str:
+        """Tell whether a tool call that is no shell command may write a generated file.
+
+        Two kinds of tool are left out: shell commands (`SHELL_TOOLS`), which the command
+        checker judges with the "Generated:" line (`generated_named`), and tools that only read
+        (`NEVER_EXECUTES`). Every other tool counts, also one calu does not know yet, such as a
+        new MCP tool. For the edit tools the paths are their file arguments. For any other tool
+        they are the strings of its input that name a path (`calu.checkers.rules.named_paths`).
+        A content pattern is matched against the file as it is, and for a Write also against
+        the content it writes. The check applies in every `honesty.mode`: generated files are
+        left out of the honesty checks, and hand edits of them must not go unseen.
 
         Args:
             step: The tool call.
 
         Returns:
-            The pattern that matched, as `GeneratedRules.reason` names it; "" for a tool that
-            is no edit, a file that is not generated, or no patterns configured.
+            "path: pattern" of the first generated file, as `GeneratedRules.reason` names the
+            pattern; "" for a shell command, a reading tool, a call that names no generated
+            file, or no patterns configured.
         """
-        if step.tool_name not in EDIT_TOOLS:
+        if step.tool_name in SHELL_TOOLS or step.tool_name in NEVER_EXECUTES:
             return ""
-        cfg = self._config().honesty
-        if not cfg.generated_paths and not cfg.generated_contents:
+        rules = self._generated_rules()
+        if rules is None:
             return ""
-        rules = GeneratedRules.of(cfg.generated_paths, cfg.generated_contents)
-        for key in sorted(paths_of_step(step, self._workspace)):
+        if step.tool_name in EDIT_TOOLS:
+            keys = sorted(paths_of_step(step, self._workspace))
+        else:
+            cwd = Path(step.cwd or self._workspace)
+            named = (self._workspace_key(raw, cwd) for raw in named_paths(step.tool_input))
+            keys = sorted({key for key in named if key})
+        for key in keys:
             found = rules.file_reason(self._workspace, key)
             written = step.tool_input.get("content")
             if not found and step.tool_name == "Write" and isinstance(written, str):
@@ -1400,6 +1438,44 @@ class StepGate:
             if found:
                 return f"{key}: {found}"
         return ""
+
+    def generated_named(self, step: Step) -> str:
+        """Name the generated files a shell command refers to, for the checkers.
+
+        The session puts the result on the step's "Generated:" line (`Step.generated`). The
+        command checker's instructions say to escalate a selective change of such a file and
+        to let a run of its generator pass; only a model can tell the two apart. Paths come
+        from the command's parse (`calu.checkers.shell.parse_command`): arguments, redirects,
+        `cd` targets. A file that a script or a program writes without naming it on the
+        command line is not found.
+
+        Args:
+            step: The tool call.
+
+        Returns:
+            E.g. "`dist/app.js` (write, redirect >)", comma separated; "" for a tool that is
+            no shell command, a command that names no generated file, or no patterns
+            configured.
+        """
+        if step.tool_name not in SHELL_TOOLS:
+            return ""
+        rules = self._generated_rules()
+        command = step.tool_input.get("command")
+        if rules is None or not isinstance(command, str) or not command:
+            return ""
+        root = self._workspace.resolve()
+        found: dict[str, str] = {}
+        for used in parse_command(command, Path(step.cwd or self._workspace)).paths:
+            for candidate in used.paths:
+                if candidate is None:
+                    continue
+                try:
+                    key = candidate.relative_to(root).as_posix()
+                except ValueError:
+                    continue
+                if key not in found and rules.file_reason(self._workspace, key):
+                    found[key] = f"`{key}` ({used.kind}, {used.via})"
+        return ", ".join(found.values())
 
     async def _hold(
         self, step: Step, budget: anyio.CancelScope | None, limit_s: float | None = None

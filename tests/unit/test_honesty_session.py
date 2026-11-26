@@ -16,7 +16,7 @@ import pytest
 from pydantic_ai.models import Model
 from pydantic_ai.models.function import FunctionModel
 
-from calu.checkers import CodeMark, Decision, Route
+from calu.checkers import CodeMark, Decision, Route, Step, render_step
 from calu.config import ChangesConfig, Config, HonestyConfig
 from calu.honesty import HonestySnapshot, HonestyState
 from calu.protocol.client import RequestFailed
@@ -406,6 +406,39 @@ async def test_a_hand_edit_of_a_generated_file_waits_for_a_person(repo: Path, mo
         await rec.wait_for(TurnResult)
         await session.stop()
     assert [check.decision for check in checks(rec)] == [Decision.ESCALATE, Decision.PASS]
+
+
+async def test_any_writing_tool_and_a_shell_command_on_a_generated_file_are_checked(repo: Path):
+    """The check is not limited to the edit tools. A tool calu does not know, here an MCP
+    tool, escalates when it names a generated file. A reading tool does not. A shell command
+    that names one gets the "Generated:" line, from which the command checker tells a hand
+    change from a build."""
+    (repo / "dist").mkdir()
+    (repo / "dist" / "app.js").write_text("var a=1;\n", encoding="utf-8")
+    session, _rec, _store = await session_on(repo, [], "track", generated_paths=["^dist/"])
+    mcp = Step(
+        tool_name="mcp__files__write_file",
+        tool_input={"path": "dist/app.js", "content": "var a=2;\n"},
+        tool_use_id="t1",
+        cwd=str(repo),
+    )
+    read = Step(
+        tool_name="Read", tool_input={"file_path": "dist/app.js"}, tool_use_id="t2", cwd=str(repo)
+    )
+    command = Step(
+        tool_name="Bash",
+        tool_input={"command": "sed -i s/a/b/ dist/app.js && cat src/parser.py"},
+        tool_use_id="t3",
+        cwd=str(repo),
+    )
+    assert session.gate._generated_edit(mcp) == "dist/app.js: honesty.generated_paths `^dist/`"
+    assert session.gate._generated_edit(read) == ""
+    assert session.gate._generated_edit(command) == ""  # the command checker's to judge
+    named = session.gate.generated_named(command)
+    assert named.startswith("`dist/app.js` (write") and "parser.py" not in named
+    command.generated = named
+    assert "\nGenerated: `dist/app.js` (write" in render_step(command, repo)
+    assert session.gate.generated_named(read) == ""
 
 
 @pytest.mark.parametrize("limit", [3, 0])

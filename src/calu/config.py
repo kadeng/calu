@@ -740,11 +740,10 @@ class HonestyConfig(ConfigModel):
     required. With more, a checker's single clean marks are ignored and only an honesty review
     clears the marks, which keeps documentation updates close to the edits they belong to."""
     notify_after_dishonest_edits: int = Field(default=3, ge=0)
-    """After this many steps that the honesty checker found dishonest, Claude's main agent is
-    told so, with the open marks, also under `track`: with its next checked tool call
-    (`Session._honesty_notice`), and once per that many dishonest steps. A step counts when it
-    opened at least one mark (an edit, or a command the honesty checker judged), of any agent.
-    0 never tells."""
+    """How many dishonest steps calu counts before it tells Claude's main agent about the open
+    marks. A step counts when it opened at least one mark; it may be an edit or a command, by
+    any agent. The notice comes with the next checked tool call (`Session._honesty_notice`),
+    also under `track`, and the count starts again. 0 switches the notice off."""
     review_max_files: int = Field(default=300, ge=1)
     """The largest number of files one honesty review reads: the files that are unreviewed or
     carry a mark. With more, the review does not run, and the step that needed it is escalated
@@ -769,8 +768,8 @@ class HonestyConfig(ConfigModel):
     the project directory with "/", e.g. `^src/calu/web/static/pane/` or `\\.min\\.js$`.
     Empty by default: nothing counts as generated until a person lists it. A generated file
     is not judged for honesty. An honesty review verifies it without a model, and a mark on it
-    is not recorded. An edit of it by hand (Edit, Write, MultiEdit) waits for a person. Pair
-    the setting with a test that compares the files with a fresh build."""
+    is not recorded. An edit of it by hand (Edit, Write, MultiEdit, NotebookEdit) waits for a
+    person. Pair the setting with a test that compares the files with a fresh build."""
     generated_contents: list[str] = Field(default_factory=list)
     """Regular expressions searched in the first 8192 bytes of a file to tell that it is
     generated, e.g. `\\A"use strict";` for a bundle that starts so, or `@generated`. Anchor
