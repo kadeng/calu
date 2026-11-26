@@ -67,7 +67,7 @@ $D shell 'bash /workspace/calu/uitest/setup-demo.sh'    # idempotent: database, 
 ## VSCode extension
 
 ```bash
-(cd extensions/vscode && export PATH=$HOME/.nvm/versions/node/v24.22.2/bin:$PATH && \
+(cd extensions/vscode && export PATH=$(ls -d $HOME/.nvm/versions/node/v24*/bin | tail -1):$PATH && \
    npm run check-types && npm run test:unit && npm run build && npm run package)
 cp extensions/vscode/calu.vsix ~/.cache/calu-uitest/share/
 $D shell 'uitest-code --install-extension /share/calu.vsix --force'
