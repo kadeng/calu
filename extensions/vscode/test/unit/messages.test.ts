@@ -99,6 +99,10 @@ describe('parseWebviewMessage', () => {
       type: 'decide', escalationId: 'e', decision: 'allow', answer: 'SQLite',
     });
     expect(parseWebviewMessage({ type: 'why', escalationId: 'e' })).toEqual({ type: 'why', escalationId: 'e' });
+    expect(parseWebviewMessage({ type: 'sendQueuedNow', id: 'q3', extra: 1 })).toEqual({ type: 'sendQueuedNow', id: 'q3' });
+    expect(parseWebviewMessage({ type: 'retractQueued', id: 'q3' })).toEqual({ type: 'retractQueued', id: 'q3' });
+    expect(parseWebviewMessage({ type: 'retractQueued', id: '' })).toBeUndefined();
+    expect(parseWebviewMessage({ type: 'sendQueuedNow' })).toBeUndefined();
     expect(parseWebviewMessage({ type: 'sideAsk', question: ' what now? ' })).toEqual({ type: 'sideAsk', question: 'what now?' });
     expect(parseWebviewMessage({ type: 'switchSession', sessionId: 's1' })).toEqual({ type: 'switchSession', sessionId: 's1' });
     expect(parseWebviewMessage({ type: 'renameSession', sessionId: 's1', name: 'ignored' })).toEqual({ type: 'renameSession', sessionId: 's1' });

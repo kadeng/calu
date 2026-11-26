@@ -202,6 +202,7 @@ class EscalationDesk:
         row_context: Callable[[Step, str], dict[str, Any]],
         step_row: Callable[[Step], int | None],
         stop_session: Callable[[], None],
+        resumes_after_timeout: Callable[[], bool] = lambda: False,
     ) -> None:
         """Create a desk without escalations.
 
@@ -221,7 +222,11 @@ class EscalationDesk:
             row_context: Returns the context to store with a step's escalation row, given the
                 step and its Markdown rendering.
             step_row: Returns the id of a step's `steps` row, or None if it has none.
-            stop_session: Starts stopping the session in a task of its own and returns at once.
+            stop_session: Starts stopping the session in a task of its own and returns at once
+                (after an escalation timeout; the session may resume it, D282).
+            resumes_after_timeout: Returns whether the session resumes its conversation at
+                once after the stop of an escalation timeout; the message of the timeout says
+                which of the two happens.
         """
         self._store = store
         self._workspace = workspace
@@ -235,6 +240,7 @@ class EscalationDesk:
         self._row_context = row_context
         self._step_row = step_row
         self._stop_session = stop_session
+        self._resumes_after_timeout = resumes_after_timeout
         self.escalations: dict[str, Escalation] = {}
         """The open escalations, by the id clients know them by (the row id as a string).
         Others read it; only the desk changes it."""
@@ -631,24 +637,33 @@ class EscalationDesk:
             await self._timed_out(esc)
 
     async def _timed_out(self, esc: Escalation) -> None:
-        """Deny the step of an escalation nobody answered, and stop the session (D27).
+        """Deny the step of an escalation nobody answered, and stop the session (D27, D282).
 
-        The session gives the machine and the Claude session back instead of waiting for ever.
-        Claude's session id is in the database, so `calu run --resume <id>` takes the
-        conversation up again; the escalation row is cancelled with the reason. The stop runs in
-        its own task (`stop_session` of the constructor), because this call happens inside the
-        tool call that is being held: waiting for the runner to end here would deadlock.
+        The session ends the running turn and Claude Code's process instead of waiting for
+        ever. Where a person can come back (`resumes_after_timeout`), the session resumes the
+        conversation at once and waits for a message; otherwise Claude's session id is in the
+        database, so `calu run --resume <id>` takes the conversation up again. The escalation
+        row is cancelled with the reason. The stop runs in its own task (`stop_session` of the
+        constructor), because this call happens inside the tool call that is being held:
+        waiting for the runner to end here would deadlock.
 
         Args:
             esc: The escalation that was not answered.
         """
         seconds = self._timeout_s()
-        session_id = self._claude_session_id()
-        resume = f"calu run --resume {session_id}" if session_id else "calu sessions"
-        message = (
-            f"No decision within {wait_text(seconds)}. The step was denied and the session "
-            f"stops; take the conversation up again with `{resume}`."
-        )
+        if self._resumes_after_timeout():
+            message = (
+                f"No decision within {wait_text(seconds)}. The step was denied and the session "
+                "was stopped by the escalation timeout; it is resumed at once and waits for the "
+                "user's next message."
+            )
+        else:
+            session_id = self._claude_session_id()
+            resume = f"calu run --resume {session_id}" if session_id else "calu sessions"
+            message = (
+                f"No decision within {wait_text(seconds)}. The step was denied and the session "
+                f"stops; take the conversation up again with `{resume}`."
+            )
         esc.answer = HumanAnswer(allow=False, message=message, cancelled=True)
         esc.outcome = "timed_out"
         esc.done.set()

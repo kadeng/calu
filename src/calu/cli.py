@@ -208,6 +208,13 @@ class CliError(Exception):
     """An error to report to the user without a traceback (exit code 1)."""
 
 
+class NoRunningSession(CliError):
+    """No running session of this host matches what a client asked for (`_pick_session`).
+
+    The one case in which a dormant session may be resumed instead (D280).
+    """
+
+
 class NeedsPassword(CliError):
     """A stored credential needs its password, and the caller said not to ask for one."""
 
@@ -2714,46 +2721,25 @@ def cmd_start(args: argparse.Namespace, store: CredentialStore) -> None:
             asyncio.CancelledError: On Ctrl-C while waiting; the request was withdrawn
                 first where that was still possible.
         """
-        request_id = await session_requests.file(db, wanted)
-        try:
-            done = await session_requests.wait_for(db, request_id)
-        except asyncio.CancelledError:
-            # Ctrl-C: `asyncio.run` cancels this task. Take the request back, so that a
-            # server does not start a session for a client that has gone.
-            withdrawn = False
-            with contextlib.suppress(Exception):
-                withdrawn = await session_requests.withdraw(db, request_id)
-            print(
-                "withdrew the session request"
-                if withdrawn
-                else "the session request could not be withdrawn (a server may have taken it "
-                "already; `calu sessions` shows the session if it starts)",
-                file=sys.stderr,
-                flush=True,
-            )
-            raise
-        except session_requests.NoServer:
-            raise CliError(
-                f"no `calu serve` answered for {user} on {host}: start it in a terminal with "
-                "`calu serve`, or run this one session with `calu run`"
-            ) from None
-        except TimeoutError as exc:
-            raise CliError(str(exc)) from None
-        if done.state != "started" or done.session_id is None:
-            raise CliError(f"the server did not start the session: {done.message}")
+        session_id = await _served_session(
+            db,
+            wanted,
+            f"no `calu serve` answered for {user} on {host}: start it in a terminal with "
+            "`calu serve`, or run this one session with `calu run`",
+        )
         row = await db.one(
             "SELECT coalesce(address, ''), coalesce(claude_session_id, '') "
             "FROM sessions WHERE id = %s::uuid",
-            (done.session_id,),
+            (session_id,),
         )
         address, claude_id = row if row is not None else ("", "")
         if args.no_attach:
-            return Endpoint(address, "", None, done.session_id), claude_id
-        local = _local_endpoint(done.session_id)
+            return Endpoint(address, "", None, session_id), claude_id
+        local = _local_endpoint(session_id)
         if local is not None:
             return local, claude_id
-        token_id, token = await herd.mint_token(db, done.session_id, "calu start")
-        return Endpoint(address, token, token_id, done.session_id), claude_id
+        token_id, token = await herd.mint_token(db, session_id, "calu start")
+        return Endpoint(address, token, token_id, session_id), claude_id
 
     endpoint, claude_id = _herd_value(store, work)
     if claude_id:
@@ -2764,6 +2750,53 @@ def cmd_start(args: argparse.Namespace, store: CredentialStore) -> None:
         print(f"[clients] attach with: calu attach --session {endpoint.session_id}", flush=True)
         return
     _attach(endpoint, store, args.plain, 0, args.thinking, run_as)
+
+
+async def _served_session(db: Db, wanted: SessionRequest, no_server: str) -> str:
+    """File a session request, wait until a `calu serve` started it, and return its id.
+
+    Side effects: writes a `session_requests` row; on cancellation (Ctrl-C) withdraws it where
+    no server has claimed it yet and prints a line about that on stderr.
+
+    Args:
+        db: The connection (the user login).
+        wanted: The request.
+        no_server: The message of the error when no server of the user answers.
+
+    Returns:
+        The calu session id of the started session.
+
+    Raises:
+        CliError: If no server answered (with `no_server`), the wait timed out, or the server
+            refused or failed to start the session.
+        asyncio.CancelledError: On Ctrl-C while waiting; the request was withdrawn first where
+            that was still possible.
+    """
+    request_id = await session_requests.file(db, wanted)
+    try:
+        done = await session_requests.wait_for(db, request_id)
+    except asyncio.CancelledError:
+        # Ctrl-C: `asyncio.run` cancels this task. Take the request back, so that a server
+        # does not start a session for a client that has gone.
+        withdrawn = False
+        with contextlib.suppress(Exception):
+            withdrawn = await session_requests.withdraw(db, request_id)
+        print(
+            "withdrew the session request"
+            if withdrawn
+            else "the session request could not be withdrawn (a server may have taken it "
+            "already; `calu sessions` shows the session if it starts)",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise
+    except session_requests.NoServer:
+        raise CliError(no_server) from None
+    except TimeoutError as exc:
+        raise CliError(str(exc)) from None
+    if done.state != "started" or done.session_id is None:
+        raise CliError(f"the server did not start the session: {done.message}")
+    return done.session_id
 
 
 def _start_through_relay(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -2855,7 +2888,8 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
     Raises:
         CliError: If there is no user login, the directory does not exist, the
             options contradict each other (`--fork` with `--resume` or with
-            `--fork-before-turn`), `--resume` or `--fork` name no UUID, `--fork-before-turn`
+            `--fork-before-turn`, `--continue` with either), `--resume` or `--fork` name no
+            UUID, `--fork-before-turn`
             is below 2, or the session could not be started.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
@@ -2867,6 +2901,11 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
     ):
         raise CliError("--background-timeout needs --batch and a number of seconds above 0")
     _check_conversation_choice(args)
+    if args.continue_last and (args.resume or args.fork):
+        raise CliError(
+            "--continue resumes the newest conversation of the directory; --resume and --fork "
+            "name one themselves, so give only one of them"
+        )
     _check_security_flags(args)
     socket_path = _socket_path(args.socket)
     # Last: `--sudo` replaces this process by sudo, which asks for a password, so every
@@ -2879,6 +2918,7 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
         resume_id=args.resume,
         fork_id=args.fork,
         fork_before_turn=args.fork_before_turn,
+        continue_last=args.continue_last,
         socket_path=socket_path,
         model=args.model,
         effort=args.effort,
@@ -3034,8 +3074,9 @@ def _pick_session(rows: list[herd.SessionRow], hint: str | None) -> herd.Session
         The session to connect to.
 
     Raises:
-        CliError: If no session matches, or if several do and `hint` does not single one out.
-            The message says what to do: which sessions there are, or how to name one.
+        NoRunningSession: If no session matches.
+        CliError: If several match and `hint` does not single one out. The message says what
+            to do: which sessions there are, or how to name one.
     """
     here = Path.cwd().resolve()
     local = [
@@ -3046,7 +3087,7 @@ def _pick_session(rows: list[herd.SessionRow], hint: str | None) -> herd.Session
     if hint:
         chosen = [row for row in local if row.id.startswith(hint)]
         if not chosen:
-            raise CliError(
+            raise NoRunningSession(
                 f"no session on this host whose id starts with {hint!r} is serving clients "
                 "(`calu sessions` lists them)"
             )
@@ -3056,7 +3097,7 @@ def _pick_session(rows: list[herd.SessionRow], hint: str | None) -> herd.Session
         return chosen[0]
     matching = [row for row in local if here == Path(row.directory) or _inside(here, row.directory)]
     if not matching:
-        raise CliError(
+        raise NoRunningSession(
             f"no running session of {here} on this host\n"
             "`calu start` asks a running `calu serve` for one and attaches, and `calu run` "
             "starts one in this terminal. `calu sessions` lists the sessions of every host; "
@@ -3424,9 +3465,11 @@ def _find_endpoint(
     tries the local sockets (`_local_socket_endpoint`: root's own for a root client, the user's
     `--insecure` ones otherwise), which need neither the database nor a token (D226, D227); a
     session found in the database that has such a socket is reached through it too
-    (`_local_endpoint`).
+    (`_local_endpoint`). When no session runs, the newest dormant one of the directory (or
+    the one `hint` names) is resumed through the user's `calu serve` (`_wake_dormant`, D280).
 
-    Side effects: inserts a `client_tokens` row, unless the session was reached through a
+    Side effects: on that path also a `session_requests` row and a line on stderr; inserts a
+    `client_tokens` row, unless the session was reached through a
     local socket; with a local socket, keeps a password-free login in memory
     (`_hold_password_free`); otherwise those of `_herd_value` (`_admin_place`, `_held`).
 
@@ -3463,7 +3506,15 @@ def _find_endpoint(
         Returns:
             The endpoint.
         """
-        row = _pick_session(await herd.sessions(db, active_only=True), hint)
+        try:
+            row = _pick_session(await herd.sessions(db, active_only=True), hint)
+        except NoRunningSession as missing:
+            session_id = await _wake_dormant(db, hint, missing, label)
+            address = await db.scalar(
+                "SELECT coalesce(address, '') FROM sessions WHERE id = %s::uuid", (session_id,)
+            )
+            token_id, token = await herd.mint_token(db, session_id, label)
+            return Endpoint(str(address or ""), token, token_id, session_id)
         local = _local_endpoint(row.id)
         if local is not None:
             return dataclasses.replace(local, gone=_row_gone(row))
@@ -3471,6 +3522,73 @@ def _find_endpoint(
         return Endpoint(row.address, token, token_id, row.id, gone=_row_gone(row))
 
     return _herd_value(store, work, may_ask)
+
+
+async def _wake_dormant(db: Db, hint: str | None, missing: NoRunningSession, label: str) -> str:
+    """Resume the dormant session a client means through the user's `calu serve` (D280).
+
+    A session is dormant when its calu process ended or is gone (`calu serve` or `calu run`
+    was stopped) while its conversation stays in the database and in Claude Code's
+    transcript. Without `hint` the newest session of the current directory or the nearest
+    directory above it is meant; with `hint`, the newest one of this host whose id starts with
+    it. The server resumes its conversation as `calu start --resume` would: Claude Code
+    continues the transcript, and the new session reads the history of the earlier ones
+    (D65). Claude Code starts only now, when a client asks for the session.
+
+    Side effects: prints a line on stderr; files a `session_requests` row (`_served_session`).
+
+    Args:
+        db: The connection (the user login).
+        hint: `--session`, or None for "this directory".
+        missing: The error of the lookup of running sessions; raised again when there is
+            no dormant session either.
+        label: What the client calls itself, e.g. "calu attach"; part of the request's label.
+
+    Returns:
+        The calu session id of the resumed session.
+
+    Raises:
+        NoRunningSession: `missing`, if there is no dormant session, or if this client runs
+            as root (root's sessions are `calu run` processes, which no `calu serve` resumes).
+        CliError: If the newest session still runs but serves no clients, no `calu serve`
+            answered, or the server did not start the session.
+        asyncio.CancelledError: On Ctrl-C while waiting for the server.
+    """
+    if os.geteuid() == 0:
+        raise missing
+    here = Path.cwd().resolve()
+    directories = None if hint else [str(here), *(str(parent) for parent in here.parents)]
+    host, user = socket.gethostname(), serve_os_user()
+    row = await herd.dormant_session(db, host, user, directories, hint)
+    if row is None or row.claude_session_id is None:
+        raise missing
+    if row.ended_at is None and not row.stale:
+        raise CliError(
+            f"the newest session of {row.directory}, {row.id}, is running but serves no "
+            "clients (`calu sessions` shows it)"
+        )
+    claude_id = row.claude_session_id
+    print(
+        f"[session] resuming the dormant session {row.id} of {row.directory} (Claude "
+        f"{claude_id}) through `calu serve` …",
+        file=sys.stderr,
+        flush=True,
+    )
+    wanted = SessionRequest(
+        hostname=host,
+        os_user=user,
+        directory=row.directory,
+        kind="resume",
+        claude_session_id=claude_id,
+        label=f"{label} ({user})",
+    )
+    return await _served_session(
+        db,
+        wanted,
+        f"no running session of {row.directory}, and no `calu serve` answered for {user} on "
+        f"{host} to resume the dormant one ({row.id}): start `calu serve`, or continue it in "
+        f"a terminal with `calu run --resume {claude_id}` (or `calu run --continue`)",
+    )
 
 
 def _revoke(store: CredentialStore, token_id: int, may_ask: bool = True) -> None:
@@ -6920,6 +7038,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--resume",
         metavar="SESSION_ID",
         help="Claude session id to resume (`calu list-sessions` shows those of this directory)",
+    )
+    p.add_argument(
+        "--continue",
+        dest="continue_last",
+        action="store_true",
+        help="resume the conversation of the newest session of this directory, with its calu"
+        " history; a new conversation if there is none. Not together with --resume or --fork",
     )
     p.add_argument(
         "--fork",

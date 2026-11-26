@@ -29,7 +29,7 @@ from calu.changes import SnapshotStore
 from calu.checkers.model import CodeMark
 from calu.checkers.tools import StepTime
 from calu.context.narrator import ClaudeOutput
-from calu.protocol.messages import QueuedMessage
+from calu.protocol.messages import ChatImage, QueuedMessage
 
 STEP_TIMES_KEPT = 500
 """How many step times a session keeps in memory for `step_times` (agent/records/PLAN.md D32)."""
@@ -169,6 +169,11 @@ class RunState:
     # The fields below are not reset by a start: `following` carries them into the next run.
     queue: list[tuple[QueuedMessage, str]] = field(default_factory=list[tuple[QueuedMessage, str]])
     """The chat messages Claude has not read yet, each with the text that was sent for it."""
+    held: dict[str, list[ChatImage]] = field(default_factory=dict[str, list[ChatImage]])
+    """The messages of `queue` that calu still holds, by their id, with their images: queued
+    for the main agent while a turn ran, and written to Claude Code when the turn ends
+    (D283). Until then they can be withdrawn or sent at once (`Session.retract_queued`,
+    `Session.send_queued_now`)."""
     clock_alarm: str | None = None  # a backward clock jump no human has answered yet (D32)
     store_failures: int = 0  # database writes that failed in a row (D59)
     stopping: bool = False  # a stop was already started, so it is not started twice
@@ -190,7 +195,7 @@ class RunState:
         Every field has its default again, with these exceptions, which keep what `self` has
         (the same objects, so a task that still holds one of them sees the same content):
 
-        - `queue`: the end of a run empties it, not its start.
+        - `queue` and `held`: the end of a run empties them, not its start.
         - `clock_alarm`: it stays until a human has decided the escalation that shows it.
 
         `store_failures` and `stopping` start from their defaults like the rest: a run that
@@ -208,6 +213,7 @@ class RunState:
         return RunState(
             tg=tg,
             queue=self.queue,
+            held=self.held,
             clock_alarm=self.clock_alarm,
         )
 

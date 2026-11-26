@@ -226,6 +226,37 @@ describe('ChatHost', () => {
     host.dispose();
   });
 
+  it('sends a held message now or retracts it and gives its text back to the view (D283)', async () => {
+    const calls: Record<string, unknown>[] = [];
+    const { view, host } = await started({
+      'session.call': (p) => {
+        calls.push(p);
+        if (p.method === 'chat.retract') return { text: 'take this back' };
+        return {};
+      },
+    });
+    await host.handle({ type: 'sendQueuedNow', id: 'q1' });
+    await host.handle({ type: 'retractQueued', id: 'q2' });
+    expect(calls.filter((c) => String(c.method).startsWith('chat.'))).toEqual([
+      { method: 'chat.send_now', params: { id: 'q1' } },
+      { method: 'chat.retract', params: { id: 'q2' } },
+    ]);
+    expect(view.sent).toContainEqual({ type: 'retracted', text: 'take this back' });
+    host.dispose();
+  });
+
+  it('gives nothing back when a retract is refused (Claude Code has the message)', async () => {
+    const { view, host } = await started({
+      'session.call': (p) => {
+        if (p.method === 'chat.retract') throw new Error('Claude Code has this message already');
+        return {};
+      },
+    });
+    await host.handle({ type: 'retractQueued', id: 'q2' });
+    expect(view.sent.some((m) => (m as { type: string }).type === 'retracted')).toBe(false);
+    host.dispose();
+  });
+
   it('trusts a commit only after the confirmation, with the worktree and rev typed', async () => {
     const trusted: Record<string, unknown>[] = [];
     const answers = {

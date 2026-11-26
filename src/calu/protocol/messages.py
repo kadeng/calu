@@ -172,6 +172,27 @@ class ChatSendParams(BaseModel):
     checkers are told how many there were, not what they show."""
 
 
+class ChatQueuedParams(BaseModel):
+    """`chat.retract` and `chat.send_now`: one queued message that calu still holds (D283).
+
+    `chat.retract` takes the message out of the queue; Claude never sees it. Result:
+    `ChatRetractResult`, with the text, so that a client can put it back into its input.
+    `chat.send_now` interrupts the running turn, as the user's stop does, and the message is
+    sent as soon as the turn has ended. Result: `{}`. Both refuse a message that calu no
+    longer holds (`QueuedMessage.held` false: it was handed to Claude Code or taken in).
+    """
+
+    id: str = Field(min_length=1)
+    """The `QueuedMessage.id` from `chat.queue`."""
+
+
+class ChatRetractResult(BaseModel):
+    """Result of `chat.retract`: the withdrawn message."""
+
+    text: str
+    """The user's text of the message, as it was sent."""
+
+
 class CommentAddParams(BaseModel):
     """A comment on a selection; the core computes the `Comment` (result: `CommentAddResult`).
 
@@ -813,6 +834,8 @@ REQUESTS: dict[str, type[BaseModel]] = {
     "session.list": SessionListParams,
     "session.history": SessionHistoryParams,
     "chat.send": ChatSendParams,
+    "chat.retract": ChatQueuedParams,
+    "chat.send_now": ChatQueuedParams,
     "comment.add": CommentAddParams,
     "escalation.decide": EscalationDecideParams,
     "escalation.context": EscalationContextParams,
@@ -1046,6 +1069,10 @@ class QueuedMessage(BaseModel):
     text: str
     delivery: Literal["queued", "inject"]
     to: str = "main"
+    held: bool = False
+    """True while calu still holds the message (a "queued" message for the main agent, sent
+    while a turn ran; it is written to Claude Code when the turn ends, D283): `chat.retract`
+    and `chat.send_now` apply to it. False once Claude Code has it."""
 
 
 class ChatQueue(Event):

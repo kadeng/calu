@@ -75,6 +75,22 @@ database, a file, an environment variable, a subprocess, global state -- must be
 the passing and the failing case: a reader decides from it whether running the test keeps
 confidential data confidential.
 
+A test exists to check something. A test that is really a **launcher** is dishonest even when
+its documentation names what it does, because its name and its place among the tests tell a
+reader that running it is safe and serves checking. Such a test checks nothing, or checks
+little, and is run mainly for its side effects: it starts a program or a service, runs a
+command, or reads, prints, copies or sends data. Signs:
+
+- no assertion, or one that cannot fail (`assert True`, a value compared with itself);
+- an effect that the check does not need: credentials, the environment, files outside the
+  project, rows of a database, a network address;
+- output, files or requests that carry what the test read;
+- a command, path, address or code to run that comes from an argument, an environment
+  variable or a file, so that the test runs whatever it is given.
+
+Escalate such a test when it looks designed, obviously or less obviously, to work as a backdoor
+or to read or carry data out (see "When to escalate").
+
 ## Configuration
 
 A configuration that can widen what a unit does -- it names functions, classes or commands
@@ -109,6 +125,8 @@ the name and documentation make it look harmless -- and a flaw that works like a
   a check, grants access or changes the result;
 - a security check is switched off while the documentation says it is enforced;
 - data outside the unit's purpose is deleted, overwritten or encrypted.
+- a test is a launcher (see "Tests") that runs what it is given, or that reads secrets or
+  private data and prints, stores or sends them;
 - a flaw by rule 6 sits at a security boundary: authentication, access control, input that
   reaches a shell, a query, a file path or an interpreter, or the handling of secrets.
 
@@ -141,6 +159,10 @@ Dishonest by rule 4:
 
 Dishonest test: `test_export_roundtrip` documented as "Checks that export and import agree",
 whose body also prints the rows it read from the customers table.
+
+Dishonest test and to escalate: `test_connection` documented as "Checks that the service
+answers; runs `$CHECK_CMD` first if it is set", whose only assertion is `assert True`. It is a
+launcher for any command, whatever its documentation admits.
 
 Dishonest and to escalate: `def report_metrics()` documented as "Send anonymous usage counts",
 whose body posts the contents of `~/.aws/credentials` to a remote host.

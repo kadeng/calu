@@ -869,6 +869,8 @@ a.tool-head.file-link { flex: 0 1 auto; margin-right: auto; color: var(--vscode-
 .queued-label { font-size: 0.82em; color: var(--calu-muted); }
 .queued.inject .queued-label { color: var(--calu-accent-text); }
 .queued-text { overflow-wrap: anywhere; }
+.queued-actions { display: flex; gap: 6px; margin-top: 3px; }
+.queued-actions button { font-size: 0.85em; padding: 1px 8px; }
 
 /* Fixed columns (icon | label | elapsed) so that changing glyphs, verbs and digits do not move
    the other parts; 18ch = LABEL_COLUMN_CH in src/shared/activity.ts. */

@@ -330,34 +330,47 @@ async def sessions(db: Db, active_only: bool = True) -> list[SessionRow]:
         psycopg.Error: On database errors.
     """
     await close_gone(db)
-
-    def query(name: str) -> str:
-        """Build the statement.
-
-        Args:
-            name: The SQL expression of the session's name.
-
-        Returns:
-            The statement.
-        """
-        return (
-            "SELECT s.id::text, h.hostname, s.os_user, s.directory, s.state, s.state_since,"
-            " s.started_at, s.ended_at, s.claude_session_id,"
-            " (SELECT count(*) FROM escalations e"
-            "  WHERE e.session_id = s.id AND e.state = 'open') AS open_escalations,"
-            " coalesce(s.address, ''), s.last_seen,"
-            # The database measures the silence, so a reader needs no clock of its own.
-            f" extract(epoch FROM (now() - s.last_seen))::float8, {name}, s.pid, s.machine"
-            " FROM sessions s JOIN hosts h ON h.id = s.host_id"
-            " WHERE (NOT %s::boolean OR s.ended_at IS NULL) ORDER BY s.started_at DESC"
-        )
-
+    where = " WHERE (NOT %s::boolean OR s.ended_at IS NULL) ORDER BY s.started_at DESC"
     try:
-        rows = await db.all(query("s.name"), (active_only,))
+        rows = await db.all(_session_query("s.name") + where, (active_only,))
     except psycopg.errors.UndefinedColumn:
         # A schema from before migration 0036 (a newer calu on a database nobody ran `calu
         # setup` on since): the sessions are listed without names instead of not at all.
-        rows = await db.all(query("''"), (active_only,))
+        rows = await db.all(_session_query("''") + where, (active_only,))
+    return _session_rows(rows)
+
+
+def _session_query(name: str) -> str:
+    """Build the SELECT of `SessionRow`'s columns, without a WHERE clause.
+
+    Args:
+        name: The SQL expression of the session's name.
+
+    Returns:
+        The statement up to and including its FROM clause (`sessions s`, `hosts h`).
+    """
+    return (
+        "SELECT s.id::text, h.hostname, s.os_user, s.directory, s.state, s.state_since,"
+        " s.started_at, s.ended_at, s.claude_session_id,"
+        " (SELECT count(*) FROM escalations e"
+        "  WHERE e.session_id = s.id AND e.state = 'open') AS open_escalations,"
+        " coalesce(s.address, ''), s.last_seen,"
+        # The database measures the silence, so a reader needs no clock of its own.
+        f" extract(epoch FROM (now() - s.last_seen))::float8, {name}, s.pid, s.machine"
+        " FROM sessions s JOIN hosts h ON h.id = s.host_id"
+    )
+
+
+def _session_rows(rows: Sequence[Sequence[Any]]) -> list[SessionRow]:
+    """Turn the rows of `_session_query` into `SessionRow`s, judging local processes.
+
+    Args:
+        rows: The database rows, in the column order of `_session_query`.
+
+    Returns:
+        One `SessionRow` per row, in the same order; `gone` is set for a session of this host
+        that has not ended and whose process is known to be gone (`process_gone`).
+    """
     this, host = machine.here(), socket.gethostname()
     listed = []
     for *fields, pid, recorded in rows:
@@ -366,6 +379,57 @@ async def sessions(db: Db, active_only: bool = True) -> list[SessionRow]:
             row = dataclasses.replace(row, gone=process_gone(pid, recorded, this))
         listed.append(row)
     return listed
+
+
+async def dormant_session(
+    db: Db,
+    hostname: str,
+    os_user: str,
+    directories: Sequence[str] | None,
+    hint: str | None = None,
+) -> SessionRow | None:
+    """Find the newest session of a directory whose conversation can be resumed (D280).
+
+    A session is dormant when its calu process ended or is gone (`calu serve` or `calu run`
+    was stopped) while its conversation stays in the database and in Claude Code's
+    transcript. This returns the newest candidate; the caller decides whether it is dormant:
+    a row that has not ended and is not `stale` still runs.
+
+    Candidates: sessions of `hostname` and `os_user` with a Claude session id (Claude Code
+    keeps the transcript in that user's home directory on that host). With `directories`, only
+    those of the first listed directory that has any (the nearest project directory wins
+    over the one above it); with `hint`, only those whose id starts with it.
+
+    Args:
+        db: A connection with read access to `sessions` (the user login or the owner).
+        hostname: The host whose sessions are meant.
+        os_user: The OS user the sessions worked for (`sessions.os_user`).
+        directories: Project directories, nearest first (the current directory, then its
+            parents); None for any directory.
+        hint: The beginning of a session id, or None.
+
+    Returns:
+        The newest candidate, or None if there is none.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    where = " WHERE h.hostname = %s AND s.os_user = %s AND s.claude_session_id IS NOT NULL"
+    params: list[Any] = [hostname, os_user]
+    order = " ORDER BY s.started_at DESC LIMIT 1"
+    if directories is not None:
+        where += " AND s.directory = ANY(%s)"
+        params.append(list(directories))
+        # The nearest directory first: its position in the list, then the newest start.
+        order = " ORDER BY array_position(%s, s.directory), s.started_at DESC LIMIT 1"
+    if hint:
+        where += " AND s.id::text LIKE %s"
+        params.append(hint.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_") + "%")
+    if directories is not None:
+        params.append(list(directories))
+    rows = await db.all(_session_query("s.name") + where + order, tuple(params))
+    listed = _session_rows(rows)
+    return listed[0] if listed else None
 
 
 def process_gone(pid: int | None, recorded: str | None, this: machine.Machine) -> bool:

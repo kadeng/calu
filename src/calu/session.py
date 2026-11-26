@@ -239,6 +239,7 @@ from calu.honesty import (
     run_git,
     shown,
 )
+from calu.logfile import one_line
 from calu.models import resolve_model
 from calu.protocol.messages import (
     REFUSED_PERMISSION_MODES,
@@ -329,6 +330,12 @@ folding the chat summary) before it gives up on it."""
 TRACE_END_TIMEOUT_S = 60
 """How long `stop` waits for the session trace to be written to its end; longer than the
 writer's own limit for that (`calu.traces.writer.FLUSH_TIMEOUT_S`)."""
+AUTO_RESUME_LIMIT = 3
+"""How many automatic resumes (`Session.auto_resume`, D282) a session makes within
+`AUTO_RESUME_WINDOW_S`; one more end in that time leaves it stopped, so that a Claude Code
+that ends at every start is not started for ever."""
+AUTO_RESUME_WINDOW_S = 600.0
+"""The time window of `AUTO_RESUME_LIMIT`, in seconds."""
 COMMIT_HOLD_S = 600.0
 """How long the trace writer stays held after the final pass for a commit of Claude's, at most,
 if the commit's tool result never arrives (`_finalize_for_commit`)."""
@@ -518,7 +525,7 @@ class SessionError(Exception):
     """A request cannot be served in the current state (reported to the client)."""
 
 
-def _os_user() -> str:
+def session_os_user() -> str:
     """Name the OS user a session works for, for its `sessions` row.
 
     Returns:
@@ -551,6 +558,7 @@ class Session:
         snapshot_root: Path | None = None,
         transcript_inputs: Callable[[str], list[str]] | None = None,
         secret_env: Collection[str] = (),
+        auto_resume: bool = False,
     ) -> None:
         """Set up the checkers, the context builder and the rules from `settings`.
 
@@ -580,7 +588,20 @@ class Session:
             secret_env: Names of environment variables whose values are secret (the ones calu
                 hides from Claude Code, `calu.config.load_secrets`). A session trace never
                 holds their values (`calu.traces.redact`).
+            auto_resume: When a run ends that calu did not end itself -- an escalation
+                timeout stopped it, or Claude Code ended or failed on its own -- resume its
+                conversation at once in this object, so that it waits for the user's next
+                message (D282). At most `AUTO_RESUME_LIMIT` times within
+                `AUTO_RESUME_WINDOW_S`. For a session a person can come back to (`calu
+                serve`, interactive `calu run`); False (an unattended run) leaves it stopped.
         """
+        self.auto_resume = auto_resume
+        self._auto_resumed: list[float] = []
+        """`anyio.current_time()` of the automatic resumes within the last
+        `AUTO_RESUME_WINDOW_S` (`_resume_after_end`)."""
+        self._stops = 0
+        """How many times `stop` was called; a run's end with no `stop` since its start is an
+        end calu did not ask for."""
         self.transcript_inputs = transcript_inputs
         self.workspace = workspace
         self.settings = settings
@@ -700,7 +721,8 @@ class Session:
             claude_session_id=lambda: self.session_id,
             row_context=self._escalation_row_context,
             step_row=self.recorder.step_row,
-            stop_session=self._stop_soon,
+            stop_session=self._stop_after_timeout_soon,
+            resumes_after_timeout=lambda: self.auto_resume,
         )
         """The escalations of this session and the hold they put on other steps
         (`calu.escalations`); it outlives runs."""
@@ -1270,7 +1292,7 @@ class Session:
             before=before,
             after=after,
             when=datetime.now(UTC),
-            user=_os_user(),
+            user=session_os_user(),
             session_id=self.store.session_id,
             client=client,
         )
@@ -3008,7 +3030,10 @@ class Session:
     ) -> None:
         """Run `runner` until it ends; then mark the session as stopped or failed.
 
-        Never raises: runner errors are logged and reported as a `log` event.
+        Never raises: runner errors are logged and reported as a `log` event. A run that
+        ended without a `stop` since it began -- Claude Code ended or failed on its own -- is
+        resumed afterwards in a task of its own with `auto_resume` (`_resume_after_end`,
+        D282).
 
         Args:
             runner: The runner of this session.
@@ -3016,6 +3041,7 @@ class Session:
             fork: Where to branch off the resumed conversation, or None (agent/records/PLAN.md D36).
             session_id: The id a new or forked conversation gets, or None (D203).
         """
+        stops = self._stops
         try:
             await runner.run(self, self._on_runner_event, resume_id, fork, session_id)
         except Exception as exc:
@@ -3041,6 +3067,7 @@ class Session:
                 await self.desk.cancel_all("The Claude session ended.")
                 if self._run_state.queue:  # messages Claude did not read are lost with the session
                     self._run_state.queue.clear()
+                    self._run_state.held.clear()
                     await self._emit_safely(ChatQueue(messages=[]))
                 await self._wait_quiet()  # the last turn is recorded before the session ends
                 final: State = "failed" if self._run_state.run_error else "stopped"
@@ -3051,6 +3078,10 @@ class Session:
                     "recording the end of the session", self.store.end(final)
                 )
                 await self.write_sets.discard()
+            tg = self._run_state.tg
+            if self.auto_resume and self._stops == stops and tg is not None:
+                why = self._run_state.run_error or "Claude Code ended the session"
+                tg.start_soon(self._resume_after_end, tg, stops, why)
 
     async def stop(self) -> None:
         """Stop the Claude session and wait until its runner has ended.
@@ -3059,8 +3090,10 @@ class Session:
         not narrated yet is dropped. Waits for the background work of the last turn (narration,
         storing the turn, folding), at most `BACKGROUND_TIMEOUT_S` seconds, and for the
         session trace to be written to its end, at most `TRACE_END_TIMEOUT_S` seconds. Does
-        nothing if no session runs and nothing is pending.
+        nothing if no session runs and nothing is pending. A run that ends after this call was
+        ended by calu, and is not resumed automatically (`auto_resume`).
         """
+        self._stops += 1
         self._run_state.claude_outputs.clear()
         if not self._run_state.run_done.is_set():
             await self.desk.cancel_all("The session was stopped.")
@@ -3295,6 +3328,12 @@ class Session:
         running tool calls finish. A message to a subagent is wrapped in a request to the main
         agent to relay it with SendMessage and is always injected.
 
+        A "queued" message for the main agent that is sent while a turn runs is **held** by
+        calu (D283): it is listed in `chat.queue` with `held` set and written to Claude Code
+        when the turn ends (`_release_held`), so that until then the user can withdraw it
+        (`retract_queued`) or send it at once (`send_queued_now`). Claude reads such a
+        message at the end of the turn either way. Every other message is written at once.
+
         Args:
             params: Text, delivery and target of the message.
 
@@ -3303,6 +3342,18 @@ class Session:
                 running background subagent.
         """
         runner = self._require_running()
+        if params.delivery == "queued" and params.to == "main" and self._run_state.busy:
+            queued = QueuedMessage(
+                id=f"q{next(self._queue_ids)}",
+                text=params.text,
+                delivery="queued",
+                to="main",
+                held=True,
+            )
+            self._run_state.queue.append((queued, params.text))
+            self._run_state.held[queued.id] = list(params.images)
+            await self._emit_queue()
+            return
         priority: Literal["next", "later"] = "next" if params.delivery == "inject" else "later"
         text = params.text
         if params.images and params.to != "main":
@@ -3332,6 +3383,109 @@ class Session:
     async def _emit_queue(self) -> None:
         """Send `chat.queue` with the messages that Claude has not taken in yet."""
         await self.emit(ChatQueue(messages=[message for message, _ in self._run_state.queue]))
+
+    def _held_index(self, message_id: str) -> int:
+        """Find a held queued message by its id.
+
+        Args:
+            message_id: The `QueuedMessage.id`.
+
+        Returns:
+            Its index in the queue.
+
+        Raises:
+            SessionError: If no queued message has that id, or calu no longer holds it (it
+                was handed to Claude Code, which cannot give a message back).
+        """
+        for i, (queued, _) in enumerate(self._run_state.queue):
+            if queued.id == message_id:
+                if message_id not in self._run_state.held:
+                    raise SessionError(
+                        "Claude Code has this message already; it can no longer be withdrawn "
+                        "or sent at once"
+                    )
+                return i
+        raise SessionError(f"no queued message {message_id!r}")
+
+    async def retract_queued(self, message_id: str) -> str:
+        """Withdraw a message that calu still holds (`chat.retract`, D283).
+
+        Side effects: removes it from the queue and sends `chat.queue`. Claude never sees it.
+
+        Args:
+            message_id: The `QueuedMessage.id`.
+
+        Returns:
+            The user's text of the message.
+
+        Raises:
+            SessionError: As `_held_index`.
+        """
+        queued, _ = self._run_state.queue.pop(self._held_index(message_id))
+        self._run_state.held.pop(message_id, None)
+        await self._emit_queue()
+        return queued.text
+
+    async def send_queued_now(self, message_id: str) -> None:
+        """Send a held message at once: stop the running turn, then send it (`chat.send_now`).
+
+        This is what the user's stop followed by sending the message does (D283). The message
+        moves to the front of the held ones and the turn is interrupted (`interrupt`); the end
+        of the turn writes the held messages to Claude Code (`_release_held`), this one first.
+        If no turn runs any more, they are written at once.
+
+        Side effects: sends `chat.queue`; interrupts the turn.
+
+        Args:
+            message_id: The `QueuedMessage.id`.
+
+        Raises:
+            SessionError: As `_held_index`, or if no session runs.
+        """
+        self._require_running()
+        entry = self._run_state.queue.pop(self._held_index(message_id))
+        first = next((i for i, (q, _) in enumerate(self._run_state.queue) if q.held), None)
+        self._run_state.queue.insert(len(self._run_state.queue) if first is None else first, entry)
+        await self._emit_queue()
+        if not self._run_state.busy:
+            await self._release_held()
+            return
+        await self.interrupt()
+
+    async def _release_held(self) -> None:
+        """Write the held messages to Claude Code, oldest first, once a turn has ended (D283).
+
+        They go as "later" messages, so Claude reads them as it would have at the end of the
+        turn; they stay in the queue, no longer held, until Claude takes them in. Does nothing
+        without held messages or without a running session. A failed write is reported as a
+        `log` error, and the message is dropped from the queue.
+
+        Side effects: writes to the runner; sends `chat.queue`; marks the session busy.
+        """
+        if not self._run_state.held or self.runner is None or self._run_state.run_done.is_set():
+            return
+        runner = self.runner
+        for queued, text in list(self._run_state.queue):
+            images = self._run_state.held.pop(queued.id, None)
+            if images is None:
+                continue
+            index = next(j for j, (q, _) in enumerate(self._run_state.queue) if q.id == queued.id)
+            try:
+                await runner.send(text, "later", images)
+            except Exception as exc:
+                log.exception("sending a held message failed")
+                del self._run_state.queue[index]
+                await self._emit_safely(
+                    Log(
+                        level="error",
+                        message=f"A queued message could not be sent ({one_line(str(exc))}): "
+                        f"{one_line(queued.text, 200)}",
+                    )
+                )
+                continue
+            self._run_state.queue[index] = (queued.model_copy(update={"held": False}), text)
+        await self._emit_queue()
+        await self._mark_busy()
 
     async def _take_from_queue(self, text: str) -> QueuedMessage | None:
         """Remove the oldest queued message whose sent text is `text`, then send `chat.queue`.
@@ -3951,14 +4105,127 @@ class Session:
         """
         if self._run_state.tg is not None:
             # Not a tracked background task: `stop` waits for those, and this one calls it.
-            self._run_state.tg.start_soon(self._stop_after_timeout)
+            self._run_state.tg.start_soon(self._stop_quietly)
 
-    async def _stop_after_timeout(self) -> None:
-        """Stop the session after an escalation timed out; never raises."""
+    async def _stop_quietly(self) -> None:
+        """Stop the session (too many failed store writes, `calu.recorder`); never raises."""
+        try:
+            await self.stop()
+        except Exception:
+            log.exception("stopping the session failed")
+
+    def _stop_after_timeout_soon(self) -> None:
+        """Start stopping the session after an escalation timeout, in a task of its own.
+
+        For the desk, which calls this inside the tool call that is being held. With
+        `auto_resume` the task resumes the conversation after the stop
+        (`_stop_after_timeout`).
+        """
+        tg = self._run_state.tg
+        if tg is not None:
+            # Not a tracked background task: `stop` waits for those, and this one calls it.
+            tg.start_soon(self._stop_after_timeout, tg)
+
+    async def _stop_after_timeout(self, tg: TaskGroup) -> None:
+        """Stop the session after an escalation timed out, then resume it if so configured.
+
+        The stop ends the turn and Claude Code's process (D27). With `auto_resume` the same
+        conversation is started again at once (`_resume_now`). Never raises: a failure is
+        logged.
+
+        Side effects: those of `stop` and of `_resume_now`.
+
+        Args:
+            tg: The task group of the run that timed out; it outlives the run and runs the
+                resumed one.
+        """
         try:
             await self.stop()
         except Exception:
             log.exception("stopping the session after an escalation timeout failed")
+            return
+        if self.auto_resume:
+            await self._resume_now(
+                tg,
+                "The session was stopped by the escalation timeout: nobody decided the step in "
+                "time, so it was denied and the turn ended.",
+            )
+
+    async def _resume_after_end(self, tg: TaskGroup, stops: int, why: str) -> None:
+        """Resume a conversation whose run Claude Code ended on its own (D282).
+
+        Called by `_run` in a task of its own for a run that ended without `stop`. Nothing is
+        resumed if `stop` was called since (a client or the end of `calu run` stopped the
+        session in the meantime), if a run already started again, or if this would be the
+        `AUTO_RESUME_LIMIT`+1-th automatic resume within `AUTO_RESUME_WINDOW_S`; in that last
+        case a `log` error says so and names how to resume by hand. Never raises.
+
+        Side effects: those of `_resume_now`; notes the time of the resume.
+
+        Args:
+            tg: The task group of the run that ended; it runs the resumed one.
+            stops: The number of `stop` calls when the run began (`Session._stops`).
+            why: What ended the run: the runner's error, or that Claude Code ended it.
+        """
+        claude_id = self.session_id
+        if self._stops != stops or self.state not in ("stopped", "failed") or claude_id is None:
+            return
+        now = anyio.current_time()
+        self._auto_resumed = [t for t in self._auto_resumed if now - t < AUTO_RESUME_WINDOW_S]
+        if len(self._auto_resumed) >= AUTO_RESUME_LIMIT:
+            await self._emit_safely(
+                Log(
+                    level="error",
+                    message=f"Claude Code ended the session again ({one_line(why)}); it was "
+                    f"resumed {AUTO_RESUME_LIMIT} times within "
+                    f"{AUTO_RESUME_WINDOW_S / 60:.0f} minutes, so it stays stopped. "
+                    f"`/start {claude_id}` in a client or `calu run --resume {claude_id}` takes "
+                    "the conversation up again.",
+                )
+            )
+            return
+        self._auto_resumed.append(now)
+        await self._resume_now(tg, f"Claude Code ended the session ({one_line(why)}).")
+
+    async def _resume_now(self, tg: TaskGroup, cause: str) -> None:
+        """Start the stopped session's conversation again at once, waiting for the user (D282).
+
+        `start` with the Claude session id and the model and effort of the last run: a new
+        `sessions` row that reads the turns of the earlier ones (D65), in state "idle". The
+        session counts as stopped by `cause`: nothing is sent to Claude, so it waits for the
+        user's next message. Never raises.
+
+        Side effects: those of `start`; emits a `log` warning that names `cause` and says that
+        the conversation was resumed, or a `log` error if the start failed, naming how to
+        resume by hand. Nothing happens without a Claude session id.
+
+        Args:
+            tg: The task group that runs the resumed session.
+            cause: Why the session stopped, one or two sentences for the user.
+        """
+        claude_id = self.session_id
+        if claude_id is None:
+            return
+        try:
+            await self.start(tg, resume_id=claude_id)
+        except Exception as exc:
+            log.exception("resuming the session failed")
+            await self._emit_safely(
+                Log(
+                    level="error",
+                    message=f"{cause} It could not be resumed ({one_line(str(exc))}); "
+                    f"`/start {claude_id}` in a client or `calu run --resume {claude_id}` takes "
+                    "the conversation up again.",
+                )
+            )
+            return
+        await self._emit_safely(
+            Log(
+                level="warning",
+                message=f"{cause} The conversation is resumed and waits for you; send a "
+                'message (for example "continue") to go on from where it stopped.',
+            )
+        )
 
     async def review_subagent_result(self, result: SubagentResult) -> str:
         """Review a subagent's final result against the conversation (ToolGate).
@@ -4438,7 +4705,9 @@ class Session:
         The session's state does not depend on the display: the event is forwarded, and the
         busy flag and the state are brought up to date, also when the handling of the event
         raised, and a client sink that raises is logged and changes nothing. After a
-        `turn.result` the session is therefore never left "running" with a finished Claude.
+        `turn.result` the session is therefore never left "running" with a finished Claude,
+        and the messages calu held during the turn are written to Claude Code then
+        (`_release_held`, D283).
 
         Args:
             event: The event from the runner.
@@ -4557,6 +4826,8 @@ class Session:
                 if isinstance(event, TurnResult):
                     self._run_state.busy = False
                     await self._refresh_state()
+                    # The turn is over: what the user queued meanwhile goes to Claude now (D283).
+                    await self._release_held()
                 elif not isinstance(event, (UsageUpdate, Log)):
                     # A report about the account's limits is no work of Claude, nor is a
                     # diagnostic line: the one that follows a switch of the permission mode
@@ -4906,7 +5177,7 @@ class Session:
         """
         return SessionIdentity(
             hostname=socket.gethostname(),
-            os_user=_os_user(),
+            os_user=session_os_user(),
             directory=str(self.workspace),
             pid=os.getpid(),
             os=f"{platform.system()} {platform.release()}".strip(),
@@ -5122,7 +5393,7 @@ class Session:
                     timeout_s=cfg.redactor_timeout_s,
                 )
             started = datetime.now(UTC)
-            user = _os_user()
+            user = session_os_user()
             if resume_id is not None and not forked:
                 claude_session = resume_id
             header = Header(

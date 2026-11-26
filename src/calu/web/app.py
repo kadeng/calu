@@ -182,6 +182,8 @@ LIVE_METHODS = frozenset(
         "session.stop",
         "interrupt",
         "chat.send",
+        "chat.retract",
+        "chat.send_now",
         "escalation.decide",
         "escalation.context",
         "context.get",

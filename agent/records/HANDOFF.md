@@ -6,7 +6,30 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
 
 ## Pick up here
 
-### Newest: the security pass (D279, 2026-11-25), done
+### Newest (2026-11-26, not committed)
+
+- D282: an escalation timeout, and any other end of a run that calu did not ask for, is
+  followed at once by a resume of the conversation in a session of `calu serve` or of `calu
+  run` in a terminal (`Session.auto_resume`, `_resume_after_end`, `_resume_now`; at most 3 in
+  10 minutes); tests in `tests/unit/test_session.py`. Not yet tried with the real CLI.
+- D281: a test that is really a launcher is dishonest (`honesty-rules.md`, three evaluation
+  cases); not yet measured with a real model.
+- D283: queued messages are held by calu during a turn; "Send now" and "Retract" in the VSCode
+  chat and the web chat pane (`chat.send_now`, `chat.retract`); the pane is rebuilt. Not in the
+  full-screen terminal client or the PyCharm plugin yet; not tried in a real browser yet.
+
+### Dormant sessions come back on attach (D280, 2026-11-25), done, not committed
+
+A stopped `calu serve` or `calu run` leaves its sessions dormant; `calu attach` in a directory
+where nothing runs resumes the newest session there through the user's `calu serve` (Claude
+Code starts only then), and `calu run --continue` does the same in a terminal. Code:
+`herd.dormant_session`, `cli._wake_dormant` and `cli._served_session` (shared with `calu
+start`), `run._continued`. Tests: `tests/unit/test_endpoint.py`, `tests/unit/test_run.py`,
+`tests/db/test_herd.py`, and the end-to-end stop-restart-attach test in `tests/db/test_serve.py`.
+Open: the IDE bridge and the web interface do not resume a dormant session by themselves;
+the model and effort of the earlier run are not carried over.
+
+### The security pass (D279, 2026-11-25), done
 
 Two adversarial reviews (an external attacker; the web interface) and the owner's decisions are
 in PLAN D279. Order of work: the quick wins Q1-Q7, then S1 (warnings), S2 (the place file
@@ -1255,7 +1278,7 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
 **2713 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. about 470 commits, ~83k lines of Python in `src` (~88k with the SQL, templates and
 default instructions), ~66k of tests, 1 migration file (the baseline of D266), 29 CLI commands (28 in `calu --help` and the hidden easter egg
-`calu lightcycles`), 26 protocol requests,
+`calu lightcycles`), 28 protocol requests,
 21 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
 there.

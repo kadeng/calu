@@ -51,6 +51,16 @@ export type WebviewMessage =
    */
   | { type: 'send'; text: string; delivery: 'queued' | 'inject'; to: string; images: OutgoingImage[] }
   /**
+   * "Send now" on a queued message that calu still holds (`QueuedView.held`): stop the running
+   * turn, then send it (`chat.send_now`, D283).
+   */
+  | { type: 'sendQueuedNow'; id: string }
+  /**
+   * "Retract" on a queued message that calu still holds: take it out of the queue
+   * (`chat.retract`); the host answers with `retracted`.
+   */
+  | { type: 'retractQueued'; id: string }
+  /**
    * The user's decision on an open escalation (`escalationId` is `EscalationView.key`). With
    * `answer` (questions of the agent) the decision is ignored by calu and may be "allow".
    */
@@ -165,7 +175,13 @@ export type HostMessage =
   /** A new escalation arrived: play the chime (sent only when `escalationSound` is on). */
   | { type: 'bell' }
   /** Put text into the input field (e.g. after a failed send, so nothing typed is lost). */
-  | { type: 'restoreInput'; text: string };
+  | { type: 'restoreInput'; text: string }
+  /**
+   * A queued message was retracted (`retractQueued`): its text goes into the input field if
+   * the field is empty, and is discarded otherwise, so that nothing the user typed since is
+   * overwritten or mixed with it.
+   */
+  | { type: 'retracted'; text: string };
 
 /** Display settings of the chat view (from the `calu.chat.*` settings). */
 export interface ChatSettings {
@@ -287,6 +303,9 @@ export function parseWebviewMessage(raw: unknown): WebviewMessage | undefined {
         ...(answer !== undefined ? { answer } : {}),
       };
     }
+    case 'sendQueuedNow':
+    case 'retractQueued':
+      return text(m.id) ? { type: m.type, id: m.id } : undefined;
     case 'why':
       return text(m.escalationId) ? { type: 'why', escalationId: m.escalationId } : undefined;
     case 'sideAsk':

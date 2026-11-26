@@ -356,3 +356,68 @@ async def test_a_background_timeout_ends_the_wait_for_tasks_that_never_finish():
     await watched.to("idle")
     with anyio.fail_after(3):
         await watched.idle.wait()
+
+
+async def test_continue_resumes_the_newest_conversation_of_the_directory(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """D280: `calu run --continue` after a stopped `calu run` or `calu serve`."""
+    import dataclasses
+    import socket
+    from datetime import UTC, datetime
+
+    from calu import herd, run
+    from calu.herd import STALE_AFTER_S, SessionRow
+    from calu.run import RunOptions
+
+    when = datetime(2026, 11, 25, 9, 0, tzinfo=UTC)
+    newest = SessionRow(
+        id="dddddddd-0000-0000-0000-000000000000",
+        hostname=socket.gethostname(),
+        os_user="me",
+        directory=str(tmp_path),
+        state="stopped",
+        state_since=when,
+        started_at=when,
+        ended_at=when,
+        claude_session_id="cccccccc-1111-1111-1111-111111111111",
+        open_escalations=0,
+    )
+    found: list[SessionRow | None] = [newest]
+    asked: list[tuple] = []
+
+    async def lookup(db, hostname, os_user, directories, hint=None):
+        asked.append((hostname, directories, hint))
+        return found[0]
+
+    monkeypatch.setattr(herd, "dormant_session", lookup)
+    said: list[Event] = []
+
+    async def console(event: Event) -> None:
+        said.append(event)
+
+    options = RunOptions(workspace=tmp_path, continue_last=True)
+    continued = await run._continued(None, options, console)  # type: ignore[arg-type]
+    assert continued is not None and continued.resume_id == newest.claude_session_id
+    assert not continued.continue_last
+    assert asked == [(socket.gethostname(), [str(tmp_path)], None)], "this directory only"
+
+    # Its process gone without ending the row (a killed server): still continued.
+    found[0] = dataclasses.replace(newest, ended_at=None, silent_for_s=STALE_AFTER_S + 1)
+    continued = await run._continued(None, options, console)  # type: ignore[arg-type]
+    assert continued is not None and continued.resume_id == newest.claude_session_id
+
+    # Still running: not a second time.
+    found[0] = dataclasses.replace(newest, ended_at=None, silent_for_s=1.0)
+    assert await run._continued(None, options, console) is None  # type: ignore[arg-type]
+    assert isinstance(said[-1], Log) and said[-1].level == "error"
+
+    # Nothing to continue: a new conversation.
+    found[0] = None
+    continued = await run._continued(None, options, console)  # type: ignore[arg-type]
+    assert continued is not None and continued.resume_id is None
+    assert "new conversation" in said[-1].message  # type: ignore[union-attr]
+
+    # Together with a named conversation: refused.
+    both = dataclasses.replace(options, resume_id=newest.claude_session_id)
+    assert await run._continued(None, both, console) is None  # type: ignore[arg-type]

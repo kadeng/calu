@@ -77,6 +77,8 @@ from calu.protocol.messages import (
     REQUESTS,
     AutoEscalate,
     AutoEscalateSetParams,
+    ChatQueuedParams,
+    ChatRetractResult,
     ChatSendParams,
     CommentAddParams,
     CommentAddResult,
@@ -1304,6 +1306,13 @@ class Client:
             case "chat.send":
                 assert isinstance(params, ChatSendParams)
                 await session.send_chat(params)
+                return {}
+            case "chat.retract":
+                assert isinstance(params, ChatQueuedParams)
+                return ChatRetractResult(text=await session.retract_queued(params.id))
+            case "chat.send_now":
+                assert isinstance(params, ChatQueuedParams)
+                await session.send_queued_now(params.id)
                 return {}
             case "comment.add":
                 assert isinstance(params, CommentAddParams)

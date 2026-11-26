@@ -1,8 +1,11 @@
 """The session orchestrator: turns, checked tool calls, escalations, state and store records."""
 
+import functools
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import anyio
 import pytest
@@ -24,6 +27,7 @@ from calu.context.turns import TurnRecord
 from calu.protocol.messages import (
     AgentsUpdate,
     AutoEscalateChanged,
+    ChatQueue,
     ChatSendParams,
     CheckResult,
     CommentAddParams,
@@ -31,6 +35,7 @@ from calu.protocol.messages import (
     EscalationRequest,
     EscalationResolved,
     Log,
+    QueuedMessage,
     SessionState,
     ToolResult,
     TurnResult,
@@ -200,6 +205,92 @@ async def test_a_denial_in_the_database_is_noticed_by_the_poll(tmp_path: Path):
         await session.stop()
     (result,) = rec.of(ToolResult)
     assert result.is_error and "too risky" in result.content
+
+
+def _queue_now(rec: Recorder) -> list[QueuedMessage]:
+    """Return the messages of the newest `chat.queue` event (none yet: an empty list)."""
+    events = rec.of(ChatQueue)
+    return list(events[-1].messages) if events else []
+
+
+async def test_a_message_queued_during_a_turn_is_held_and_can_be_withdrawn(tmp_path: Path):
+    """D283: calu keeps it until the turn ends; withdrawn, Claude never sees it."""
+    session, rec, _ = make_session(
+        tmp_path, [[{"sleep": 0.5}, {"text": "first done"}], [{"text": "second done"}]]
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="first"))
+        await rec.wait_for(UserInput)
+        await session.send_chat(ChatSendParams(text="oops, not this"))
+        (held,) = _queue_now(rec)
+        assert held.held and held.text == "oops, not this"
+        assert await session.retract_queued(held.id) == "oops, not this"
+        assert _queue_now(rec) == [] and session.snapshot().queue == []
+        with pytest.raises(SessionError, match="no queued message"):
+            await session.retract_queued(held.id)
+        await rec.wait_for(TurnResult)
+        await anyio.sleep(0.2)
+        await session.stop()
+    assert [e.text for e in rec.of(UserInput)] == ["first"], "Claude never saw it"
+
+
+async def test_a_held_message_goes_to_claude_when_the_turn_ends(tmp_path: Path):
+    session, rec, _ = make_session(
+        tmp_path, [[{"sleep": 0.3}, {"text": "first done"}], [{"text": "second done"}]]
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="first"))
+        await rec.wait_for(UserInput)
+        await session.send_chat(ChatSendParams(text="then this"))
+        (held,) = _queue_now(rec)
+        assert held.held
+        with anyio.fail_after(10):
+            while [e.text for e in rec.of(UserInput)] != ["first", "then this"]:
+                await anyio.sleep(0.02)
+        # Handed over: Claude Code has it, so it can no longer be withdrawn.
+        with pytest.raises(SessionError):
+            await session.retract_queued(held.id)
+        with anyio.fail_after(10):
+            while len(rec.of(TurnResult)) < 2:
+                await anyio.sleep(0.02)
+        await session.stop()
+    assert _queue_now(rec) == []
+
+
+async def test_a_held_message_sent_now_interrupts_the_turn(tmp_path: Path):
+    """D283: the same as pressing stop and sending the message afterwards."""
+    session, rec, _ = make_session(
+        tmp_path, [[{"sleep": 5}, {"text": "never said"}], [{"text": "right away"}]]
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="a long task"))
+        await rec.wait_for(UserInput)
+        await session.send_chat(ChatSendParams(text="stop, do this instead"))
+        (held,) = _queue_now(rec)
+        with anyio.fail_after(4):
+            await session.send_queued_now(held.id)
+            while [e.text for e in rec.of(UserInput)] != ["a long task", "stop, do this instead"]:
+                await anyio.sleep(0.02)
+        await session.stop()
+
+
+async def test_messages_outside_a_turn_or_injected_are_not_held(tmp_path: Path):
+    session, rec, _ = make_session(tmp_path, [[{"sleep": 0.3}, {"text": "done"}]])
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))  # no turn ran yet: written at once
+        assert not [m for m in _queue_now(rec) if m.held]
+        await rec.wait_for(UserInput)
+        await session.send_chat(ChatSendParams(text="also this", delivery="inject"))
+        injected = [m for m in _queue_now(rec) if m.text == "also this"]
+        assert injected and not injected[0].held, "an injected message goes to Claude at once"
+        with pytest.raises(SessionError, match="already"):
+            await session.retract_queued(injected[0].id)
+        await rec.wait_for(TurnResult)
+        await session.stop()
 
 
 async def test_the_input_of_a_turn_is_stored_when_the_turn_starts(tmp_path: Path):
@@ -517,6 +608,149 @@ async def test_an_escalation_nobody_answers_stops_the_session(tmp_path: Path):
     assert [e.message for e in rec.of(Log) if "No decision" in e.message]
     assert "No decision within 0 s." in result.content, "not rounded to 0.0 h"
     assert store.ended == "stopped"
+
+
+async def test_after_an_escalation_timeout_the_session_is_resumed_and_waits_for_the_user(
+    tmp_path: Path,
+):
+    """D282: the turn and Claude Code end, the same conversation is started again at once,
+    and the user's "continue" goes on from there -- no restart by hand."""
+    session, rec, store = make_session(
+        tmp_path,
+        [[{"tool": "Bash", "input": {"command": "deploy # calu:escalate"}, "result": "never"}]],
+        Config(escalation_timeout_s=0.3),
+    )
+    session.auto_resume = True
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="ship it"))
+        request = (await rec.wait_for(EscalationRequest))[0]
+        # A fake runner plays its script from the beginning; the resumed one gets the turn
+        # that follows.
+        later = FakeScript(turns=[[{"text": "going on"}]])
+        session.runner_factory = lambda: FakeRunner(later, tmp_path)
+
+        def resumed() -> list[Log]:
+            """The session's notice after the resume (the desk's message comes before it)."""
+            return [e for e in rec.of(Log) if "The conversation is resumed" in e.message]
+
+        with anyio.fail_after(10):
+            while not resumed():
+                await anyio.sleep(0.02)
+        # Resumed: the same conversation, idle, ready for a message.
+        said = [e.message for e in rec.of(Log)]
+        assert session.state == "idle" and session.session_id == "fake-session", said
+        assert store.escalations[int(request.escalation_id)].state == "cancelled"
+        (result,) = rec.of(ToolResult)
+        assert result.is_error and "resumed at once" in result.content
+        assert "calu run --resume" not in result.content, "nothing to do by hand"
+        (notice,) = resumed()
+        assert notice.level == "warning" and "continue" in notice.message
+        assert "stopped by the escalation timeout" in notice.message
+
+        ended = len(rec.of(TurnResult))
+        await session.send_chat(ChatSendParams(text="continue"))
+        with anyio.fail_after(10):
+            while len(rec.of(TurnResult)) == ended:
+                await anyio.sleep(0.02)
+        await session.stop()
+    assert [turn.answer for turn in store.turns.values() if turn.user_inputs == ["continue"]] == [
+        "going on"
+    ], "the next turn of the script ran in the resumed conversation"
+
+
+class _DyingRunner(FakeRunner):
+    """A runner whose Claude Code fails on its own shortly after it is ready (a crash)."""
+
+    async def run(self, *args: Any, **kwargs: Any) -> None:
+        """Run as the fake runner does, then fail 50 ms after the runner is ready.
+
+        Args:
+            *args: Those of `FakeRunner.run`.
+            **kwargs: Those of `FakeRunner.run`.
+
+        Raises:
+            RuntimeError: Always, as a Claude Code process that exited with an error.
+        """
+        run = super().run
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(functools.partial(run, *args, **kwargs))
+            await self.wait_ready()
+            await anyio.sleep(0.05)
+            tg.cancel_scope.cancel()
+        raise RuntimeError("claude exited with code 1")
+
+
+def _runners(tmp_path: Path, dying: int) -> tuple[Callable[[], FakeRunner], list[FakeRunner]]:
+    """Make a runner factory whose first `dying` runners fail on their own.
+
+    Args:
+        tmp_path: The workspace.
+        dying: How many of the first runners are `_DyingRunner`s; the later ones run an
+            empty script.
+
+    Returns:
+        The factory, and the list of the runners it made so far.
+    """
+    made: list[FakeRunner] = []
+
+    def factory() -> FakeRunner:
+        script = FakeScript(turns=[])
+        runner = (
+            _DyingRunner(script, tmp_path) if len(made) < dying else FakeRunner(script, tmp_path)
+        )
+        made.append(runner)
+        return runner
+
+    return factory, made
+
+
+async def test_a_session_claude_code_ended_on_its_own_is_resumed_and_waits(tmp_path: Path):
+    """D282: not only after a timeout -- a run calu did not end is picked up at once."""
+    session, rec, store = make_session(tmp_path, [])
+    session.runner_factory, made = _runners(tmp_path, dying=1)
+    session.auto_resume = True
+    async with anyio.create_task_group() as tg:
+        await session.start(tg, session_id="conv-1")
+        with anyio.fail_after(10):
+            while len(made) < 2 or session.state != "idle":
+                await anyio.sleep(0.02)
+        assert session.session_id == "conv-1", "the same conversation"
+        (notice,) = [e for e in rec.of(Log) if "The conversation is resumed" in e.message]
+        assert notice.level == "warning" and "claude exited with code 1" in notice.message
+        assert store.ended == "failed", "the first run's row ended as failed"
+        await session.stop()
+    assert session.state == "stopped" and len(made) == 2, "a stop of calu's is not resumed"
+
+
+async def test_a_claude_code_that_keeps_ending_is_left_stopped(tmp_path: Path):
+    session, rec, _ = make_session(tmp_path, [])
+    session.runner_factory, made = _runners(tmp_path, dying=99)
+    session.auto_resume = True
+    async with anyio.create_task_group() as tg:
+        await session.start(tg, session_id="conv-1")
+        with anyio.fail_after(20):
+            while not [e for e in rec.of(Log) if "stays stopped" in e.message]:
+                await anyio.sleep(0.02)
+        await anyio.sleep(0.3)
+        await session.stop()
+    from calu.session import AUTO_RESUME_LIMIT
+
+    assert len(made) == 1 + AUTO_RESUME_LIMIT, "the first run and the resumes, then no more"
+    (given_up,) = [e for e in rec.of(Log) if "stays stopped" in e.message]
+    assert given_up.level == "error" and "calu run --resume conv-1" in given_up.message
+
+
+async def test_a_session_calu_stopped_is_not_resumed(tmp_path: Path):
+    session, rec, _ = make_session(tmp_path, [])
+    session.runner_factory, made = _runners(tmp_path, dying=0)
+    session.auto_resume = True
+    async with anyio.create_task_group() as tg:
+        await session.start(tg, session_id="conv-1")
+        await session.stop()
+        await anyio.sleep(0.3)
+    assert session.state == "stopped" and len(made) == 1
+    assert not [e for e in rec.of(Log) if "resumed" in e.message]
 
 
 def test_the_timeout_is_named_in_a_readable_unit():

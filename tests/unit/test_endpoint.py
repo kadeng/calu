@@ -1,15 +1,18 @@
 """Finding the session a client means when it is given no address (agent/records/PLAN.md D105)."""
 
+import asyncio
 import dataclasses
 import io
 import socket
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from calu import cli, logins
 from calu.cli import CliError, _pick_session
+from calu.db import Db
 from calu.herd import STALE_AFTER_S, SessionRow
 from calu.protocol.client import RequestFailed
 
@@ -74,7 +77,8 @@ def test_sessions_that_cannot_be_reached_are_left_out(
     silent = row(str(tmp_path), silent_for_s=STALE_AFTER_S + 1)
     clientless = row(str(tmp_path), address="")
     for unusable in (elsewhere, silent, clientless):
-        with pytest.raises(CliError) as raised:
+        # The one error after which a dormant session may be resumed instead (D280).
+        with pytest.raises(cli.NoRunningSession) as raised:
             _pick_session([unusable], None)
         assert "no running session of" in str(raised.value)
         # The message has to say what to do instead, in both directions.
@@ -104,6 +108,8 @@ def test_two_sessions_of_one_directory_have_to_be_named(
     second = row(str(tmp_path), id="bbbbbbbb-0000-0000-0000-000000000000", minute=2)
     with pytest.raises(CliError) as raised:
         _pick_session([first, second], None)
+    # Two running sessions are a question for the user, never a reason to resume a third.
+    assert not isinstance(raised.value, cli.NoRunningSession)
     message = str(raised.value)
     assert "2 sessions" in message
     assert first.id in message and second.id in message, "a choice needs the ids to choose from"
@@ -119,7 +125,7 @@ def test_two_sessions_of_one_directory_have_to_be_named(
 
     # The beginning of an id is enough, and an ambiguous or unknown one is an error.
     assert _pick_session([first, second], "bbbb").id == second.id
-    with pytest.raises(CliError) as unknown:
+    with pytest.raises(cli.NoRunningSession) as unknown:
         _pick_session([first, second], "cccc")
     assert "no session on this host whose id starts with" in str(unknown.value)
 
@@ -311,3 +317,119 @@ def test_a_token_can_come_from_a_file_instead_of_the_command_line(tmp_path: Path
         args = parser.parse_args(["acp", "ws://127.0.0.1:8765", "--token-file", str(missing)])
         with pytest.raises(CliError, match="token-file"):
             cli._token_from_file(args)
+
+
+NO_DB = cast("Db", object())
+"""Stands in for the connection: the lookup and the request that would use it are replaced."""
+DORMANT_ID = "dddddddd-0000-0000-0000-000000000000"
+CLAUDE_ID = "cccccccc-1111-1111-1111-111111111111"
+
+
+def dormant_lookup(monkeypatch: pytest.MonkeyPatch, found: SessionRow | None) -> list[tuple]:
+    """Replace the database lookup and the server request of `_wake_dormant`.
+
+    Args:
+        monkeypatch: The test's patcher.
+        found: What the lookup of the newest session returns.
+
+    Returns:
+        A list that collects `("lookup", user, directories, hint)` and `("request", request)`.
+    """
+    calls: list[tuple] = []
+
+    async def lookup(db, hostname, os_user, directories, hint=None):
+        assert hostname == socket.gethostname()
+        calls.append(("lookup", os_user, directories, hint))
+        return found
+
+    async def served(db, wanted, no_server):
+        calls.append(("request", wanted))
+        assert "calu serve" in no_server and f"calu run --resume {CLAUDE_ID}" in no_server
+        return "eeeeeeee-0000-0000-0000-000000000000"
+
+    monkeypatch.setattr(cli.herd, "dormant_session", lookup)
+    monkeypatch.setattr(cli, "_served_session", served)
+    monkeypatch.setattr(cli, "serve_os_user", lambda: "me")
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 1000)
+    return calls
+
+
+def test_a_dormant_session_of_this_directory_is_resumed_through_the_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """D280: nothing runs here, so the newest session of the directory is asked back."""
+    inner = tmp_path / "project" / "src"
+    inner.mkdir(parents=True)
+    monkeypatch.chdir(inner)
+    ended = dataclasses.replace(
+        row(str(tmp_path / "project"), id=DORMANT_ID, address=""),
+        claude_session_id=CLAUDE_ID,
+        ended_at=datetime(2026, 11, 10, 13, 0, tzinfo=UTC),
+        state="stopped",
+    )
+    calls = dormant_lookup(monkeypatch, ended)
+    missing = cli.NoRunningSession("no running session")
+
+    resumed = asyncio.run(cli._wake_dormant(NO_DB, None, missing, "calu attach"))
+
+    assert resumed == "eeeeeeee-0000-0000-0000-000000000000"
+    (_, user, directories, hint), (_, wanted) = calls
+    # The directory and every one above it, nearest first: a session of the project is found
+    # from a subdirectory of it, as a running one is.
+    assert user == "me" and hint is None
+    assert directories[:2] == [str(inner), str(inner.parent)] and directories[-1] == "/"
+    assert (wanted.kind, wanted.claude_session_id) == ("resume", CLAUDE_ID)
+    assert wanted.directory == str(tmp_path / "project"), "the session's directory, not here"
+    assert (wanted.hostname, wanted.os_user) == (socket.gethostname(), "me")
+    assert DORMANT_ID in capsys.readouterr().err, "the user is told what is being resumed"
+
+
+def test_a_named_dormant_session_is_looked_up_by_its_id_in_any_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    gone = dataclasses.replace(
+        row("/srv/other", id=DORMANT_ID, silent_for_s=STALE_AFTER_S + 1),
+        claude_session_id=CLAUDE_ID,
+    )
+    calls = dormant_lookup(monkeypatch, gone)
+    asyncio.run(cli._wake_dormant(NO_DB, "dddd", cli.NoRunningSession("x"), "calu attach"))
+    assert calls[0] == ("lookup", "me", None, "dddd")
+    assert calls[1][1].directory == "/srv/other", "a stale row's process is gone: resumed"
+
+
+def test_nothing_is_resumed_without_a_dormant_session_or_for_a_running_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    missing = cli.NoRunningSession("no running session of here")
+    calls = dormant_lookup(monkeypatch, None)
+    with pytest.raises(cli.NoRunningSession) as raised:
+        asyncio.run(cli._wake_dormant(NO_DB, None, missing, "calu attach"))
+    assert raised.value is missing, "the message of the lookup of running sessions stays"
+
+    # The newest session still runs, without clients (`calu run --batch`): a second process
+    # on the same conversation would write the same transcript.
+    busy = dataclasses.replace(
+        row(str(tmp_path), id=DORMANT_ID, address=""), claude_session_id=CLAUDE_ID
+    )
+    calls = dormant_lookup(monkeypatch, busy)
+    with pytest.raises(CliError, match="serves no clients") as raised:
+        asyncio.run(cli._wake_dormant(NO_DB, None, missing, "calu attach"))
+    assert not isinstance(raised.value, cli.NoRunningSession)
+    assert [call[0] for call in calls] == ["lookup"], "no request was filed"
+
+    # Root's sessions are `calu run` processes; no `calu serve` of root resumes them.
+    calls = dormant_lookup(monkeypatch, busy)
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    with pytest.raises(cli.NoRunningSession):
+        asyncio.run(cli._wake_dormant(NO_DB, None, missing, "calu attach"))
+    assert calls == []
+
+
+def test_run_continue_excludes_resume_and_fork(tmp_path: Path) -> None:
+    parser = cli.build_parser()
+    for extra in (["--resume", CLAUDE_ID], ["--fork", CLAUDE_ID]):
+        args = parser.parse_args(["run", str(tmp_path), "--continue", *extra])
+        with pytest.raises(CliError, match="--continue"):
+            cli.cmd_run(args, None)  # type: ignore[arg-type]  # refused before the store is used

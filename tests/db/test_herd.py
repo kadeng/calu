@@ -1074,3 +1074,64 @@ async def test_sessions_are_listed_on_a_schema_from_before_session_names(db_url:
         assert await Db(owner).scalar("SELECT 1") == 1
     finally:
         await owner.close()
+
+
+async def test_the_dormant_session_is_the_newest_of_the_nearest_directory(db_url: str) -> None:
+    """D280: what `calu attach` resumes when nothing runs, and `calu run --continue`."""
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+
+        async def run(
+            directory: str,
+            claude_id: str | None,
+            hours_ago: int,
+            host: str = "box",
+            user: str = "u",
+        ) -> str:
+            """Store one ended `calu run` that started `hours_ago` hours ago."""
+            store = DatabaseSessionStore(db)
+            session_id = await store.start(
+                SessionIdentity(hostname=host, os_user=user, directory=directory, pid=7)
+            )
+            if claude_id is not None:
+                await store.set_claude_session(claude_id)
+            await store.end("stopped")
+            await db.execute(
+                "UPDATE sessions SET started_at = now() - make_interval(hours => %s)"
+                " WHERE id = %s::uuid",
+                (hours_ago, session_id),
+            )
+            return session_id
+
+        await run("/w", "conv-old", 5)
+        newest = await run("/w", "conv-new", 1)
+        inner = await run("/w/sub", "conv-sub", 3)
+        # Never candidates: no Claude id, another host, another user, an unrelated directory.
+        await run("/w", None, 0)
+        await run("/w", "conv-other-host", 0, host="other-box")
+        await run("/w", "conv-other-user", 0, user="v")
+        elsewhere = await run("/x", "conv-x", 0)
+
+        async def found(directories: list[str] | None, hint: str | None = None) -> str | None:
+            """The id of the session that is found for user `u` on host `box`."""
+            row = await herd.dormant_session(db, "box", "u", directories, hint)
+            return None if row is None else row.id
+
+        assert await found(["/w"]) == newest, "the newest of the directory"
+        # From /w/sub/deep: /w/sub has a session of its own, which is nearer than the newer
+        # one of /w.
+        assert await found(["/w/sub/deep", "/w/sub", "/w", "/"]) == inner
+        assert await found(["/w/other", "/w", "/"]) == newest
+        assert await found(["/nowhere", "/"]) is None
+        # A hint names a session by the beginning of its id, in any directory of this host.
+        assert await found(None, elsewhere[:8]) == elsewhere
+        assert await found(None, "_") is None, "`_` and `%` are no LIKE wildcards here"
+        assert await found(["/w"], elsewhere[:8]) is None, "the hint and the directory both"
+
+        row = await herd.dormant_session(db, "box", "u", ["/w"])
+        assert row is not None and row.claude_session_id == "conv-new"
+        assert row.ended_at is not None and not row.stale
+    finally:
+        await owner.close()

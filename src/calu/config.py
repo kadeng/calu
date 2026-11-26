@@ -1004,12 +1004,15 @@ class Config(ConfigModel):
     escalation_timeout_s: float = Field(default=8 * 3600, ge=0)
     """How long an escalation waits for a human before the session stops.
 
-    See agent/records/PLAN.md D27.
+    See agent/records/PLAN.md D27, D282.
 
     An unsupervised run can sit in front of an escalation for a long time; at some point the
-    session should give the machine and the Claude session back instead of waiting for ever. On
-    the timeout the step is denied and the session stops, with Claude's session id recorded, so
-    that `calu run --resume <id>` takes the conversation up again. 0 waits without a limit.
+    session should end the turn and Claude Code instead of waiting for ever. On the timeout
+    the step is denied and the session stops. A session of `calu serve`, or of `calu run` in a
+    terminal, then resumes the same conversation at once and waits for the user's next message
+    ("continue" goes on from there). An unattended run stays stopped, with Claude's session id
+    recorded, so that `calu run --resume <id>` takes the conversation up again. 0 waits
+    without a limit.
     """
     store_failures_before_stop: int = Field(default=10, ge=0)
     """How many database writes may fail in a row before the session stops.

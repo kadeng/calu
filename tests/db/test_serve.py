@@ -1,5 +1,6 @@
 """`calu serve` against the test database: requests, sessions as tasks, refusals (D208)."""
 
+import dataclasses
 import os
 import signal
 import socket
@@ -252,6 +253,71 @@ async def test_calu_start_as_a_process_gets_a_session_and_attaches(db_url: str, 
                 process.terminate()
                 with anyio.move_on_after(10):
                     await process.wait()
+
+
+@pytest.mark.slow
+async def test_a_session_survives_a_restart_of_the_server_and_comes_back_on_attach(
+    db_url: str, tmp_path: Path
+):
+    """D280: the server stops, its session is dormant; `calu attach` there resumes it."""
+    session_url = await prepare(db_url, tmp_path)
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    config = tmp_path / "config"
+    CredentialStore(config / "calu" / "credentials.json").save("user", session_url, None)
+    environment = dict(os.environ) | {"PYTHONUNBUFFERED": "1", "XDG_CONFIG_HOME": str(config)}
+    here, user = socket.gethostname(), os_user()
+    wanted = SessionRequest(hostname=here, os_user=user, directory=str(workspace))
+    async with owner_db(db_url) as db:
+        async with serving(session_url, hostname=here, user=user):
+            first = await ask(db, dataclasses.replace(wanted, prompt="have a look"))
+            assert first.state == "started" and first.session_id
+        # The server is gone, and so is its session's process; the conversation is not.
+        (before,) = [row for row in await herd.sessions(db, False) if row.id == first.session_id]
+        assert before.ended_at is not None and before.claude_session_id
+        assert [row.id for row in await herd.sessions(db, True)] == []
+
+        errors = tmp_path / "attach-stderr.log"
+        async with serving(session_url, hostname=here, user=user) as server:
+            with errors.open("wb") as log:
+                process = await anyio.open_process(
+                    [sys.executable, "-m", "calu", "attach", "--plain"],
+                    env=environment,
+                    cwd=str(workspace),
+                    stderr=log.fileno(),
+                )
+            seen: list[str] = []
+            try:
+                with anyio.fail_after(60):
+                    await _read_until(process, "[attached]", seen, errors)
+                    assert process.stdin is not None
+                    await process.stdin.send(b"/shutdown\n")
+                    await process.stdin.aclose()
+                    await process.wait()
+                said = errors.read_text(encoding="utf-8", errors="replace")
+                assert process.returncode == 0, said
+                assert f"resuming the dormant session {first.session_id}" in said
+                with anyio.fail_after(20):
+                    while server.sessions:
+                        await anyio.sleep(0.05)
+            finally:
+                if process.returncode is None:
+                    process.terminate()
+                    with anyio.move_on_after(10):
+                        await process.wait()
+        rows = [
+            row
+            for row in await herd.sessions(db, False)
+            if row.claude_session_id == before.claude_session_id
+        ]
+        # The same conversation in a new run of it: Claude Code continues the transcript, and
+        # the new session reads the turns of the earlier one (D65).
+        assert len(rows) == 2 and rows[0].id != first.session_id
+        assert rows[0].directory == str(workspace)
+        turns = await db.all(
+            "SELECT number FROM turns WHERE session_id = %s::uuid", (first.session_id,)
+        )
+        assert turns, "the first run's turn is kept as the conversation's history"
 
 
 @pytest.mark.slow

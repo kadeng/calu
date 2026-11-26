@@ -158,9 +158,28 @@ export interface ChatQueue {
  */
 export interface QueuedMessage {
   delivery: "queued" | "inject";
+  held?: boolean;
   id: string;
   text: string;
   to?: string;
+}
+/**
+ * `chat.retract` and `chat.send_now`: one queued message that calu still holds (D283).
+ *
+ * `chat.retract` takes the message out of the queue; Claude never sees it. Result:
+ * `ChatRetractResult`, with the text, so that a client can put it back into its input.
+ * `chat.send_now` interrupts the running turn, as the user's stop does, and the message is
+ * sent as soon as the turn has ended. Result: `{}`. Both refuse a message that calu no
+ * longer holds (`QueuedMessage.held` false: it was handed to Claude Code or taken in).
+ */
+export interface ChatQueuedParams {
+  id: string;
+}
+/**
+ * Result of `chat.retract`: the withdrawn message.
+ */
+export interface ChatRetractResult {
+  text: string;
 }
 /**
  * A user chat message.
@@ -1294,7 +1313,9 @@ export interface UserInput {
 /** Request method -> type of its `params`. */
 export interface RequestParams {
   'auto_escalate.set': AutoEscalateSetParams;
+  'chat.retract': ChatQueuedParams;
   'chat.send': ChatSendParams;
+  'chat.send_now': ChatQueuedParams;
   'checkers.get': EmptyParams;
   'comment.add': CommentAddParams;
   'context.get': EmptyParams;
@@ -1323,6 +1344,7 @@ export interface RequestParams {
 
 /** Request method -> type of its `result` (requests not listed here return `{}` or a small object). */
 export interface RequestResults {
+  'chat.retract': ChatRetractResult;
   'checkers.get': CheckerListResult;
   'comment.add': CommentAddResult;
   'context.get': CheckerContextResult;

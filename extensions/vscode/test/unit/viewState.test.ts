@@ -275,11 +275,19 @@ describe('user input', () => {
 describe('chat.queue', () => {
   it('replaces the queue, validates entries, and clears it when the bridge stops', () => {
     const s = applyEvent(initialViewState(), ev('chat.queue', { messages: [{ id: 'q1', text: 'hi', delivery: 'queued', to: 'main' }, { id: 'q2' }] }));
-    expect(s.queue).toEqual([{ id: 'q1', text: 'hi', delivery: 'queued', to: 'main' }]);
+    expect(s.queue).toEqual([{ id: 'q1', text: 'hi', delivery: 'queued', to: 'main', held: false }]);
     const injected = applyEvent(s, ev('chat.queue', { messages: [{ id: 'q3', text: 'now', delivery: 'inject', to: 'A1' }] }));
-    expect(injected.queue).toEqual([{ id: 'q3', text: 'now', delivery: 'inject', to: 'A1' }]);
+    expect(injected.queue).toEqual([{ id: 'q3', text: 'now', delivery: 'inject', to: 'A1', held: false }]);
     expect(applyEvent(injected, ev('ui.clear')).queue).toEqual([]);
     expect(applyEvent(injected, ev('bridge.status', { status: 'exited' })).queue).toEqual([]);
+  });
+
+  it('marks the messages calu still holds, which the view can send now or retract (D283)', () => {
+    const s = applyEvent(
+      initialViewState(),
+      ev('chat.queue', { messages: [{ id: 'q1', text: 'later', delivery: 'queued', to: 'main', held: true }, { id: 'q2', text: 'x', delivery: 'queued', held: 'yes' }] }),
+    );
+    expect(s.queue.map((m) => [m.id, m.held])).toEqual([['q1', true], ['q2', false]]);
   });
 });
 

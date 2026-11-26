@@ -154,6 +154,11 @@ export interface QueuedView {
   delivery: 'queued' | 'inject';
   /** "main" or the subagent's id. */
   to: string;
+  /**
+   * Whether calu still holds the message (queued while a turn runs, D283): the view offers
+   * "Send now" (`chat.send_now`) and "Retract" (`chat.retract`) for it.
+   */
+  held: boolean;
 }
 
 /** One question of the agent inside an escalation (`AskUserQuestion`). */
@@ -1769,6 +1774,7 @@ function reduce(state: ViewState, method: string, p: Record<string, unknown>): V
           text: m.text,
           delivery: m.delivery === 'inject' ? ('inject' as const) : ('queued' as const),
           to: str(m.to) && m.to ? m.to : 'main',
+          held: m.held === true,
         }));
       return { ...state, queue };
     }

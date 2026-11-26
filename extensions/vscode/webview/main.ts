@@ -1025,6 +1025,10 @@ function agentName(agentId: string): string {
 /**
  * Build the list of chat messages that Claude has not taken in yet.
  *
+ * A message calu still holds (`QueuedView.held`, D283) gets two buttons: "Send now" stops
+ * the running turn and sends it (`sendQueuedNow`), "Retract" takes it out of the queue and
+ * back into an empty input field (`retractQueued`, then `retracted`).
+ *
  * @returns One pending entry per queued message (`data-testid="queue-<id>"`).
  */
 function buildQueue(): HTMLElement[] {
@@ -1033,6 +1037,22 @@ function buildQueue(): HTMLElement[] {
     const to = m.to === MAIN ? '' : ` · to ${agentName(m.to)}`;
     const entry = el('div', `queued ${m.delivery}`, undefined, { 'data-testid': `queue-${m.id}` });
     entry.append(el('span', 'queued-label', `Pending ${when}${to}`), el('span', 'queued-text', oneLine(m.text, 240)));
+    if (m.held) {
+      const actions = el('span', 'queued-actions');
+      actions.append(
+        actionButton('Send now', 'sendQueuedNow', {
+          'data-id': m.id,
+          title: 'Stop the running turn and send this message',
+          'data-testid': `queue-send-now-${m.id}`,
+        }),
+        actionButton('Retract', 'retractQueued', {
+          'data-id': m.id,
+          title: 'Take the message back; it goes into the input field if that is empty',
+          'data-testid': `queue-retract-${m.id}`,
+        }),
+      );
+      entry.append(actions);
+    }
     return entry;
   });
 }
@@ -1932,6 +1952,13 @@ function onClick(event: MouseEvent): void {
     case 'why':
       if (data.key) vscode.postMessage({ type: 'why', escalationId: data.key });
       return;
+    case 'sendQueuedNow':
+    case 'retractQueued':
+      if (data.id) {
+        (actionEl as HTMLButtonElement).disabled = true; // one click is enough; the queue update re-renders
+        vscode.postMessage({ type: data.action === 'sendQueuedNow' ? 'sendQueuedNow' : 'retractQueued', id: data.id });
+      }
+      return;
     case 'escOption':
       chooseOption(actionEl);
       return;
@@ -2194,6 +2221,10 @@ function onHostMessage(message: HostMessage): void {
       return;
     case 'restoreInput':
       setInput(input.value.trim() ? `${message.text}\n${input.value}` : message.text);
+      return;
+    case 'retracted':
+      // Into an empty field only: what the user typed since is neither replaced nor mixed.
+      if (!input.value.trim()) setInput(message.text);
       return;
     case 'reportState': {
       if (renderQueued) render();

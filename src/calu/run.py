@@ -211,6 +211,10 @@ class RunOptions:
     """With `resume_id`: branch the conversation off before this turn instead of continuing it
     (agent/records/PLAN.md D36). The new session gets its own id, so the original stays as it
     was."""
+    continue_last: bool = False
+    """Resume the conversation of the newest session of `workspace` on this host (D280), as
+    `resume_id` would; a new conversation if the directory has none. Not together with
+    `resume_id` or `fork_id`."""
     model: str | None = None
     effort: Literal["low", "medium", "high", "xhigh", "max", "default"] | None = None
     interactive: bool = True
@@ -1112,6 +1116,11 @@ async def _run(
         transcript_inputs=functools.partial(user_inputs, directory=options.workspace),
         # A session trace never holds the values of these variables (D232).
         secret_env=hidden,
+        # Where a person can come back, a run that calu did not end itself (an escalation
+        # timeout, Claude Code ending or failing on its own) is resumed at once and waits for
+        # the user (D282): a session of `calu serve`, or `calu run` that reads a terminal. An
+        # unattended run ends as before.
+        auto_resume=options.stay or (options.interactive and sys.stdin.isatty()),
     )
     session.add_trace_secret(login_password, "password")
 
@@ -1188,6 +1197,11 @@ async def _run(
     # was never announced to this session: look once each time the subscription is in force.
     notifier.on_listening(dirty.hint)
     failed = False
+    if options.continue_last:
+        continued = await _continued(db, options, console)
+        if continued is None:
+            return 1
+        options = continued
     # Before anything starts: a fork that cannot be made must not turn into a plain resume,
     # which would continue the conversation instead of branching it (agent/records/PLAN.md D36).
     fork = await _fork_point(db, options, console)
@@ -1350,6 +1364,64 @@ async def _run(
                 await session.stop()
             tg.cancel_scope.cancel()
     return 1 if failed or idle.unfinished or session.state == "failed" else 0
+
+
+async def _continued(db: Db, options: RunOptions, console: Console) -> RunOptions | None:
+    """Resolve `--continue` into the conversation to resume (D280).
+
+    The newest session of `options.workspace` on this host with a Claude session id is
+    continued, whether it ended or its process is gone; a directory without one starts a new
+    conversation. A newest session that still runs is not continued a second time.
+
+    Side effect: reports the choice, or why it cannot be made, on the console.
+
+    Args:
+        db: The database connection.
+        options: What `calu run` was asked to do, with `continue_last`.
+        console: Where to report.
+
+    Returns:
+        The options with `resume_id` set (or unchanged for a new conversation), or None if
+        the run must not start: `--continue` came with `--resume` or `--fork`, or the newest
+        session still runs.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    if options.resume_id or options.fork_id:
+        await console(
+            Log(level="error", message="--continue takes neither --resume nor --fork with it")
+        )
+        return None
+    from calu.session import session_os_user  # imported late like `Session` (startup time)
+
+    row = await herd.dormant_session(
+        db, socket.gethostname(), session_os_user(), [str(options.workspace)]
+    )
+    if row is None or row.claude_session_id is None:
+        await console(
+            Log(
+                level="info",
+                message=f"no earlier session of {options.workspace}: a new conversation starts",
+            )
+        )
+        return dataclasses.replace(options, continue_last=False)
+    if row.ended_at is None and not row.stale:
+        await console(
+            Log(
+                level="error",
+                message=f"the newest session of {options.workspace}, {row.id}, is still "
+                "running; attach to it with `calu attach`",
+            )
+        )
+        return None
+    await console(
+        Log(
+            level="info",
+            message=f"continuing the conversation {row.claude_session_id} of the session {row.id}",
+        )
+    )
+    return dataclasses.replace(options, continue_last=False, resume_id=row.claude_session_id)
 
 
 async def _fork_point(db: Db, options: RunOptions, console: Console) -> Fork | None:

@@ -552,7 +552,19 @@ run `calu`, or reach Calu's database container without a person being asked.
 ### An escalation holds the session
 
 - The escalated step waits until a person allows or denies it, or until
-  `escalation_timeout_s` (8 hours by default) has passed; then the session stops.
+  `escalation_timeout_s` (8 hours by default) has passed. Then the step is denied, the turn
+  ends and Claude Code stops. A session of `calu serve`, or of `calu run` in a terminal,
+  resumes the same conversation at once and waits for you. The transcript says "The session
+  was stopped by the escalation timeout"; send a message such as `continue` and Claude goes
+  on from where it stopped, with the history the checkers know. An unattended run
+  (`calu run --batch`, or with input from a pipe) stays stopped; `calu run --resume <id>`
+  takes it up again.
+- The same holds whenever Claude Code ends a session that Calu did not stop, for example
+  when its process exits with an error: the conversation is resumed at once and waits for
+  your message, and the transcript names what ended it. A Claude Code that ends again and
+  again is resumed at most three times in ten minutes; after that the session stays stopped,
+  and the message names the command that resumes it. A session you stop yourself is never
+  resumed.
 - While an escalation is open or being opened, Calu approves **no other step that needs a
   check**. Such steps are *held*. Calu also holds them when Claude started several calls at
   once or when subagents work in parallel. Claude therefore cannot retry, rephrase or probe
@@ -834,6 +846,13 @@ subsection of the client you use.
 
 - Send a message for the next turn, or **into the running turn** (Claude reads it after its
   running tool calls finish).
+- Take back a message for the next turn, or send it at once, while the turn still runs. Calu
+  holds such a message until the turn ends. In the VSCode chat and the chat pane of the web
+  interface, its entry in the queue has two buttons. **Send now** stops the running turn, as
+  the stop button does, and sends the message. **Retract** takes it out of the queue; its
+  text goes back into the input field if that is empty and is discarded otherwise. Once
+  Claude Code has the message, neither is possible any more. A message sent into the running
+  turn goes to Claude Code at once.
 - Send a message to a running background **subagent**.
 - Decide escalations and answer Claude's questions ([Deciding a step](#deciding-a-step)).
 - Show a step's command, checks, result and diff.
@@ -979,6 +998,24 @@ calu attach --plain                  # the line client
 
 `calu attach` asks the database which session runs in the directory, mints a client token for
 itself and revokes it when it ends.
+
+**A stopped session comes back when you attach.** When `calu serve` or `calu run` stops, its
+sessions become dormant: their processes end, while the conversation stays in the database
+and in Claude Code's transcript. If no session runs in the directory, `calu attach` takes the
+newest session of the directory (or of the nearest directory above it) and asks your running
+`calu serve` to resume it. Claude Code starts again only then, and the session has its calu
+history: the turns, the chat summary and the checkers' context. `--session ID` names a
+dormant session by the beginning of its id. Without a running `calu serve`, the message names
+the commands that continue the session in a terminal:
+
+```bash
+calu run --continue                  # the newest conversation of this directory
+calu run --resume <claude session id>
+```
+
+A turn that was running when the process stopped is not continued halfway: Claude Code
+continues the conversation from what its transcript holds. An escalation that was open is
+cancelled when its session ends.
 
 **The screen** (see the picture in [The first session](#the-first-session)):
 
@@ -2571,6 +2608,7 @@ off before an earlier turn. Read it when a session has ended or went in a wrong 
 
 | You want to | Command | Result |
 |---|---|---|
+| continue the newest conversation of this directory | `calu attach` (with a running `calu serve`) or `calu run --continue` | the same conversation, with its calu history |
 | continue a conversation | `--resume <session id>` | the same conversation, under the same Claude session id |
 | continue a copy | `--fork <session id>` | a copy under a new id; the original stays as it was |
 | branch off before turn N (the undo) | `--resume <session id> --fork-before-turn N` | a copy that keeps turns 1 to N-1, under a new id |
@@ -2603,6 +2641,7 @@ calu list-sessions 20     # the last 20
 **Continue.**
 
 ```bash
+calu run --continue                                    # the newest one of this directory
 calu run --resume <session id>                         # continue that conversation
 calu run --fork <session id>                           # continue a copy of it
 calu run --resume <session id> --fork-before-turn 7    # a copy that keeps turns 1 to 6
@@ -2618,6 +2657,11 @@ calu start --resume <session id>                       # the same three through 
   kept. If the chat summary already describes a turn that the fork discards, Calu says so at
   the start; correct the summary with `calu summary <session> --edit`.
 - `--resume` and `--fork` take a session id as printed, not a session title.
+- `--continue` takes the newest session of this directory that your user ran on this
+  machine. Without one it starts a new conversation. If that session still runs, it refuses
+  and points to `calu attach`.
+- `calu attach` in a directory where nothing runs does the same through your `calu serve`:
+  it resumes the newest session there ([In a terminal: Calu attach](#in-a-terminal-calu-attach)).
 
 **Rewinding does not change files.** The files keep the content that later turns wrote. Claude
 Code's file checkpointing restores only the changes of its own edit tools, not the changes that
@@ -3295,7 +3339,8 @@ traceback is in the log file that the line names: `~/.local/state/calu/log/run.l
 | Bash and Monitor commands wait for a person mid-session | a sandbox entry appeared in a settings file of Claude Code | remove the entry |
 | A changed `claude.model` or permission mode has no effect | Claude Code reads those at session start | start a new session, or use `/model` and `/mode` in a client |
 | A checker with a `claude:` model ignores "look at the file" instructions | such a checker has no tools | use an API model for that checker |
-| The session stopped after a long wait | an escalation waited longer than `escalation_timeout_s` (8 hours) | resume the conversation |
+| "The session was stopped by the escalation timeout" | an escalation waited longer than `escalation_timeout_s` (8 hours); the session was resumed at once | send a message, e.g. `continue` |
+| An unattended run stopped after a long wait | the same, in `calu run --batch` or with input from a pipe | resume the conversation (`calu run --continue`) |
 | The session stopped with a database error | an error that a retry cannot fix (login refused, role or database removed); or too many failed writes in a row | fix the database, resume. An unreachable database alone does not stop a session: it reconnects with pauses up to 30 seconds, and its steps wait meanwhile |
 
 **Clients**
@@ -4151,7 +4196,7 @@ This section collects the fixed numbers of Calu in one place. Settings with defa
 | The conversation a checker reads | up to `context.max_recent_chars` (100,000 characters) of unfolded turns; more folds the oldest turns into the chat summary at once |
 | A checker's file tools | a file over 2 MB is not read; one search reads at most 20 MB and stops after 10 seconds |
 | A held step | becomes an escalation after 5 minutes |
-| An escalation | waits `escalation_timeout_s` (default 8 hours), then the session stops |
+| An escalation | waits `escalation_timeout_s` (default 8 hours), then the turn and Claude Code stop; the conversation is resumed at once unless the run is unattended |
 | Chat summary | whenever 30 turns are not yet summarised, the oldest 20 are folded into the summary (`context.fold_every`, `context.fold_count`) |
 | Heartbeat | every 10 seconds; "stale" after 1 minute; escalations of a silent session are closed after 24 hours |
 | Configuration | read again every 60 seconds and after every reconnect |

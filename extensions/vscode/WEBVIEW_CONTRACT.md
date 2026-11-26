@@ -130,6 +130,8 @@ or why nobody can. `formatAnswer(questions, choices)` builds the answer text of 
 | `ready` | | sends `reset`, `settings`, a pending `bell` |
 | `send` | `text`, `delivery: queued/inject`, `to` ("main" or an agent id), `images: [{data (base64), mediaType}]` (≤ 4, raster types, at most 5 MiB each as a session accepts, main only; `checkImage` refuses a larger one in the composer and nothing is sent) | `chat.send`; on failure a notice and `restoreInput {text}`. Enter = `queued`, Ctrl/Cmd+Enter = `inject` |
 | `decide` | `escalationId` (= `EscalationView.key`), `decision: allow/deny`, `note?`, `answer?` | marks the card pending, `escalation.decide`; with `answer` (question cards) calu ignores the decision |
+| `sendQueuedNow` | `id` (`QueuedView.id` of a message with `held`) | `chat.send_now`: the running turn is interrupted, as with the stop button, and the message is sent when it has ended (D283); on failure a notice |
+| `retractQueued` | `id` (as above) | `chat.retract`; its result's text comes back as `retracted {text}`. Refused (a notice, nothing back) once Claude Code has the message |
 | `why` | `escalationId` | opens the escalation's stored context as a read-only document |
 | `sideAsk` | `question` | `ui.sideAsk`, `side.ask` with the earlier answers as history, then `ui.sideAnswer` |
 | `attach` | | session QuickPick (attach, new, resume, fork) |
@@ -172,8 +174,9 @@ or why nobody can. `formatAnswer(questions, choices)` builds the answer text of 
 ### Messages host → webview (`HostMessage`)
 
 `reset {state}`, `event {event}`, `settings {settings}`, `bell` (play the escalation chime),
-`restoreInput {text}` (put the text back into the input), `reportState {requestId}` (answer with
-`stateReport`).
+`restoreInput {text}` (put the text back into the input), `retracted {text}` (a retracted queued
+message: into the input if it is empty, otherwise discarded), `reportState {requestId}` (answer
+with `stateReport`).
 
 Events of the extension itself (all handled by `applyEvent`): `bridge.status`, `ui.link`,
 `ui.detached`, `ui.sessions`, `ui.serverHelp`, `ui.hints`, `ui.model`, `ui.usage`, `ui.notice`,

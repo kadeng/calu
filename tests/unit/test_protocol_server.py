@@ -1075,6 +1075,8 @@ def test_every_request_that_is_not_listed_as_read_only_exists():
         "session.start",
         "session.stop",
         "chat.send",
+        "chat.retract",
+        "chat.send_now",
         "comment.add",
         "escalation.decide",
         "auto_escalate.set",

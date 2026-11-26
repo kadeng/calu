@@ -323,6 +323,17 @@ export class ChatHost implements Disposable {
         }
         return;
       }
+      case 'sendQueuedNow':
+        await this.run('Sending the message now', () => this.bridge.session('chat.send_now', { id: message.id }));
+        return;
+      case 'retractQueued': {
+        let text = '';
+        const ok = await this.run('Retracting the message', async () => {
+          text = String((await this.bridge.session('chat.retract', { id: message.id })).text ?? '');
+        });
+        if (ok && text) this.chat.send({ type: 'retracted', text });
+        return;
+      }
       case 'decide':
         await this.decide(message.escalationId, message.decision, message.note, message.answer);
         return;

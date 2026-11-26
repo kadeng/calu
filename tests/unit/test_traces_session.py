@@ -82,7 +82,7 @@ async def test_a_scripted_session_is_traced_as_one_redacted_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """The whole file of a narrated session, compared character by character."""
-    monkeypatch.setattr("calu.session._os_user", lambda: "kai")
+    monkeypatch.setattr("calu.session.session_os_user", lambda: "kai")
     monkeypatch.setenv("SHOP_DEPLOY_TOKEN", "deploy-token-0123456789")
     workspace = tmp_path / "shop"
     workspace.mkdir()
