@@ -6,7 +6,72 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
 
 ## Pick up here
 
-### Newest (2026-11-26, not committed)
+### The session in `~/projects/calu2` (2026-11-26): manual testing with the owner, then features
+
+The owner tested by hand in the VSCode extension and the web interface. This session fixed what
+came up, then built the features the owner asked for. A second session worked in parallel in
+`~/projects/calu`; this one merged `origin/main` after every commit. Everything below is
+committed and pushed with this handoff.
+
+**Next: temporary rules (design with the owner's decisions of 2026-11-26; implementation not
+started).** The design is `agent/records/notes/temporary-rules-design.md`, with the owner's
+decisions in its section 7. The owner chose option B for calu's built-in protections. The limits
+of B in section 6 are Claude's proposal, and the last message asked the owner to confirm them
+before step 1. Start with that question, then follow section 8: six steps, Cua UI tests with
+each UI step, a report after steps 3 and 5.
+
+Built in this session, newest first:
+
+| Commit | What |
+|---|---|
+| `dc0c06f` | `uitest/setup-demo.sh` waits for the fake server's ready line (a fixed 3 s was too short); the Cua desktop works on this machine (see below) |
+| `2137eb6` | Generated files: every tool except shell commands and reading tools escalates when it names a generated file; a shell command gets a "Generated:" line for the command checker. `GeneratedRules` states what is not covered. Style rework of the day's texts |
+| `8a38e66` | The owner's AI-slop rule in the edit checker's default instructions; AGENTS.md: weigh every checker remark, style included |
+| `186eea8`, `30149e0` | D288: generated code by the owner's regex lists `honesty.generated_paths` / `generated_contents` (empty by default): not judged, marks ignored, hand edits escalate |
+| `402a667` | A review that leaves at most `max_open_marks` marks ends "review required" |
+| `d1e3e8c` | D287: `max_open_marks` 6; `notify_after_dishonest_edits` 3 (a notice to the main agent, also under `track`); neutral findings (change the code or the documentation, neither preferred) |
+| `5078732`, `d077289` | D286: the review shows the diff since the content last verified (`VerifiedTexts`), 20 context lines, the whole file on request (`needs_whole_file`), marked large files as diff plus definitions, limits as settings (`review_file_bytes` 600,000) |
+| `1e5695d` | D285: the pause button in the VSCode chat and the web pane (`pause.set`, 10 minutes, held inside the PreToolUse hook) |
+| `5c081bd` | The lock directory's owner is compared with the file-system uid (a root `calu serve --user` refused every step) |
+| `ec79757` | The web sessions page lists the 10 sessions that ended last, greyed, with "resume" |
+| `242d325` | Changeset checker limits doubled (the owner's database was raised with `calu checker set` as well) |
+| `c1fdfe5` | D280 (5): `ide.attach` of a named session that no longer runs resumes it through `calu serve` |
+| `d74ed57` | Two output retries for every checker; the refused answers are logged |
+
+Not tried for real yet: the notice after dishonest steps and `needs_whole_file` with a real
+model; the pause and the resume on attach in the owner's VSCode after a reinstall; generated
+files in a real session. The owner's installation runs from `/usr/local/lib/calu` and needs
+`sudo bash install.sh --source <checkout> --ref main` and a restart of `calu serve` to get any
+of this.
+
+Open items found on the way:
+
+- An empty calu user password made `calu web` ask for a separate password and `calu serve
+  --sudo --web` fail to start (the owner, 2026-11-26). Not investigated.
+- A subagent check failed once with "Exceeded maximum output retries (1)"; ten live repeats did
+  not reproduce it. Two retries and a log of the refused answers are in place; read the log
+  if it happens again.
+- The terminal client and the PyCharm plugin have no pause button yet (they show the notices).
+- `honesty.generated_paths` is not set for this repository; the owner decides whether to list
+  `^src/calu/web/static/pane/`.
+
+The UI test desktop on this machine: image `calu-uitest:latest`, container `calu-uitest`
+running; start with `bash uitest/run.sh` (no execute bit in this checkout); drive with
+`~/.local/bin/uv run --no-project --with cua python uitest/desktop.py ...`. Node is not
+installed on the host: build the extension in a `node:22-slim` container and copy `calu.vsix`
+to `~/.cache/calu-uitest/share/`.
+
+How the owner wants to work, as learned in this session:
+
+- The owner tests by hand first, and the agent fixes what they find.
+- Say so before a long stretch of work without a chance to interact.
+- Keep test runs short until the owner asks for full testing.
+- Merge `origin/main` after every commit.
+- Look at every checker remark, style included, and act on it or say why not.
+- A record names a decision as the owner's only if the owner made it. A proposal they did not
+  object to stays Claude's proposal.
+
+### The other session's work of 2026-11-26 (committed in `78b1bc8`)
 
 - D282: an escalation timeout, and any other end of a run that calu did not ask for, is
   followed at once by a resume of the conversation in a session of `calu serve` or of `calu
@@ -18,7 +83,7 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
   chat and the web chat pane (`chat.send_now`, `chat.retract`); the pane is rebuilt. Not in the
   full-screen terminal client or the PyCharm plugin yet; not tried in a real browser yet.
 
-### Dormant sessions come back on attach (D280, 2026-11-25), done, not committed
+### Dormant sessions come back on attach (D280, 2026-11-25), done, committed in `78b1bc8`
 
 A stopped `calu serve` or `calu run` leaves its sessions dormant; `calu attach` in a directory
 where nothing runs resumes the newest session there through the user's `calu serve` (Claude
@@ -26,8 +91,8 @@ Code starts only then), and `calu run --continue` does the same in a terminal. C
 `herd.dormant_session`, `cli._wake_dormant` and `cli._served_session` (shared with `calu
 start`), `run._continued`. Tests: `tests/unit/test_endpoint.py`, `tests/unit/test_run.py`,
 `tests/db/test_herd.py`, and the end-to-end stop-restart-attach test in `tests/db/test_serve.py`.
-Open: the IDE bridge and the web interface do not resume a dormant session by themselves;
-the model and effort of the earlier run are not carried over.
+Open: the model and effort of the earlier run are not carried over. (The IDE bridge and the
+web chat pane resume a named dormant session since D280 (5), commit `c1fdfe5`.)
 
 ### The security pass (D279, 2026-11-25), done
 
