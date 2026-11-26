@@ -94,6 +94,7 @@ from calu import (
     projects_dir,
     servers,
     session_requests,
+    temp_rules,
 )
 from calu.acp import serve_acp
 from calu.attach import attach, unreachable
@@ -340,6 +341,7 @@ _READ_ONLY_ACTIONS: dict[str, frozenset[str]] = {
     "config": frozenset({"list", "get"}),
     "checker": frozenset({"list", "show", "diff", "stats", "misses"}),
     "rules": frozenset({"list"}),
+    "rule": frozenset({"list"}),
     "project": frozenset({"list"}),
     "honesty": frozenset({"show", "trusted"}),
     "traces": frozenset({"show"}),
@@ -6867,6 +6869,99 @@ def cmd_rules(args: argparse.Namespace, store: CredentialStore) -> None:
     _admin_command(store, work, args)
 
 
+def cmd_rule(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Add, list or remove a temporary rule for the checkers (`calu.temp_rules`).
+
+    `add` stores a rule for a limited time (`--for`, 1m to 7d, default 1d). With `--project
+    NAME` it applies to that project and with `--global` to every project. Otherwise it
+    applies to one session. `--session ID` names it by an id or the start of one, as `calu
+    sessions` shows them. Without an id it is the session running in the current directory.
+    `--lift-builtin` makes the rule lift calu's built-in protections, for one day at most.
+
+    `list` prints the rules that count now, with `--all` also the expired and removed ones.
+    `remove` ends a rule before it expires.
+
+    Side effects: `add` and `remove` write the table `temporary_rules` with the user login;
+    running sessions read the change at once. Prints the report.
+
+    Args:
+        args: Parsed arguments (`action`, `words`, `duration`, `session`, `project`,
+            `everywhere`, `lift_builtin`, `all`).
+        store: The credential store.
+
+    Raises:
+        CliError: If an argument is missing or malformed, the rule is refused, no session
+            matches, the session has no conversation yet, or the rule to remove is not
+            active.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+    words: list[str] = args.words
+    rule_id = 0
+    if args.action == "remove":
+        if len(words) != 1 or not words[0].lstrip("#").isdigit():
+            raise CliError("rule remove needs the rule's id (see `calu rule list`)")
+        rule_id = int(words[0].lstrip("#"))
+    if args.action == "list" and words:
+        raise CliError("rule list takes no text")
+    scopes = [args.session is not None, bool(args.project), args.everywhere]
+    if args.action == "add" and sum(scopes) > 1:
+        raise CliError("rule add takes one of --session, --project and --global")
+    by = f"cli:{_os_user()}"
+
+    async def work(db: Db) -> str:
+        """Run the requested action.
+
+        Args:
+            db: The connection.
+
+        Returns:
+            The report.
+
+        Raises:
+            CliError: As `cmd_rule`.
+        """
+        if args.action == "list":
+            rules = await temp_rules.listed(db, include_ended=args.all)
+            now = await db.scalar("SELECT now()")
+            return "\n".join(rule.line(now=now) for rule in rules) or "no temporary rules"
+        if args.action == "remove":
+            gone = await temp_rules.remove(db, rule_id, by)
+            if gone is None:
+                raise CliError(f"no active temporary rule #{rule_id}")
+            return f"removed {gone.line()}"
+        scope: temp_rules.Scope = "session"
+        conversation: str | None = None
+        if args.project:
+            scope = "project"
+        elif args.everywhere:
+            scope = "global"
+        else:
+            row = _pick_session(await herd.sessions(db, active_only=True), args.session or None)
+            conversation = row.claude_session_id
+            if not conversation:
+                raise CliError(
+                    f"session {row.id} has no conversation yet; send it a message first, or "
+                    "use --project or --global"
+                )
+        try:
+            rule = await temp_rules.add(
+                db,
+                " ".join(words),
+                created_by=by,
+                duration=temp_rules.parse_duration(args.duration),
+                scope=scope,
+                project=args.project,
+                conversation=conversation,
+                lifts_builtin=args.lift_builtin,
+            )
+        except temp_rules.RuleError as exc:
+            raise CliError(str(exc)) from exc
+        return f"added {rule.line()}"
+
+    _admin_command(store, work, args)
+
+
 def cmd_lightcycles(args: argparse.Namespace, store: CredentialStore) -> None:
     """Serve MetaTron for the browser, an easter egg (`calu.lightcycles`).
 
@@ -7694,6 +7789,50 @@ def build_parser() -> argparse.ArgumentParser:
     rules.add_argument("--project", help="the project's rules instead of the global ones")
     rules.add_argument("--position", type=int, help="position in the list (default: append)")
     rules.set_defaults(handler=cmd_rules)
+
+    rule = sub.add_parser(
+        "rule",
+        help="temporary rules for the checkers: add, list, remove",
+        description=(
+            "calu rule add [--for 3d] [--session [ID] | --project NAME | --global] TEXT"
+            " | list [--all] | remove ID. A temporary rule tells the command, edit and"
+            " changeset checkers what to allow or refuse for a limited time (1m to 7d,"
+            " default 1d). It applies to one session unless --project or --global is given."
+        ),
+    )
+    rule.add_argument("action", choices=["add", "list", "remove"])
+    rule.add_argument("words", nargs="*", help="the rule's text (add) or the rule's id (remove)")
+    rule.add_argument(
+        "--for",
+        dest="duration",
+        metavar="DURATION",
+        help="add: how long the rule counts, e.g. 30m, 12h, 3d (1m to 7d; default 1d)",
+    )
+    rule.add_argument(
+        "--session",
+        nargs="?",
+        const="",
+        metavar="ID",
+        help="add: the session the rule is for, by the start of its id (default: the "
+        "session running in the current directory)",
+    )
+    rule.add_argument(
+        "--project", metavar="NAME", help="add: a rule for every session of a project"
+    )
+    rule.add_argument(
+        "--global",
+        dest="everywhere",
+        action="store_true",
+        help="add: a rule for every session of every project",
+    )
+    rule.add_argument(
+        "--lift-builtin",
+        action="store_true",
+        help="add: the rule lifts calu's built-in protections of calu's own commands and "
+        "directories for the sessions it applies to (one day at most; some stay protected)",
+    )
+    rule.add_argument("--all", action="store_true", help="list: also expired and removed rules")
+    rule.set_defaults(handler=cmd_rule)
 
     p = sub.add_parser(
         "uninstall",

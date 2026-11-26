@@ -615,6 +615,42 @@ async def test_the_hook_in_a_worktree_outside_the_project_reads_the_projects_set
     )
 
 
+async def test_temporary_rules_are_added_listed_and_removed(prepared, capsys) -> None:
+    """`calu rule`: a rule is stored with its scope and end, listed, and removed by its id."""
+    assert await run(["rule", "list"]) == 0
+    assert "no temporary rules" in capsys.readouterr().out
+
+    assert await run(["rule", "add", "--for", "2h", "--global", "ask", "before", "pushing"]) == 0
+    said = capsys.readouterr().out
+    assert "added #1  every project  until " in said and "ask before pushing" in said
+    assert await run(["project", "add", ".", "--name", "demo"]) == 0
+    assert await run(["rule", "add", "--project", "demo", "--lift-builtin", "calu may serve"]) == 0
+    assert "#2  project demo" in capsys.readouterr().out
+    assert await run(["rule", "list"]) == 0
+    listed = capsys.readouterr().out.splitlines()
+    assert [line.split()[0] for line in listed] == ["#2", "#1"], "newest first"
+    assert "lifts built-in protections" in listed[0]
+
+    assert await run(["rule", "remove", "#1"]) == 0
+    assert "removed #1" in capsys.readouterr().out
+    assert await run(["rule", "list", "--all"]) == 0
+    assert "removed, was until" in capsys.readouterr().out
+
+    # What is refused, each with its reason on stderr.
+    refused = [
+        (["rule", "remove", "1"], "no active temporary rule #1"),
+        (["rule", "add", "--for", "8d", "--global", "x"], "at most 7 days"),
+        (["rule", "add", "--for", "2d", "--global", "--lift-builtin", "x"], "one day at most"),
+        (["rule", "add", "--global", "--project", "demo", "x"], "takes one of"),
+        (["rule", "add", "--global"], "needs a text"),
+        (["rule", "add", "--project", "nowhere", "x"], "no project 'nowhere'"),
+        (["rule", "add", "--session", "ffff", "x"], "no session on this host"),
+    ]
+    for argv, why in refused:
+        assert await run(argv) != 0, argv
+        assert why in capsys.readouterr().err, argv
+
+
 async def test_config_set_of_human_diffs_hints_at_the_traces(prepared, capsys) -> None:
     """D253: the command line names the command that switches the traces on, and sets nothing."""
     assert await run(["config", "set", "human_diffs.enabled", "true"]) == 0

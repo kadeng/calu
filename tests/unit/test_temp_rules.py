@@ -201,8 +201,36 @@ def test_every_calu_subcommand_is_either_liftable_or_always_asking() -> None:
     commands = set(subparsers.choices)
     assert not ALWAYS_ASKING_SUBCOMMANDS & LIFTABLE_SUBCOMMANDS
     assert commands - ALWAYS_ASKING_SUBCOMMANDS - LIFTABLE_SUBCOMMANDS == set()
-    stale = (ALWAYS_ASKING_SUBCOMMANDS | LIFTABLE_SUBCOMMANDS) - commands - {"rule"}
-    assert stale == set()  # "rule" is the temporary rules' command, which step 3 adds
+    assert (ALWAYS_ASKING_SUBCOMMANDS | LIFTABLE_SUBCOMMANDS) - commands == set()
+    assert "rule" in ALWAYS_ASKING_SUBCOMMANDS  # a lifting rule must not let Claude add rules
+
+
+def test_a_rule_s_line_names_its_scope_its_end_and_what_it_lifts() -> None:
+    now = datetime(2026, 11, 26, 12, 0, tzinfo=UTC)
+    mine = replace(rule("ask  first", now + timedelta(hours=2)), scope="session", conversation="c1")
+    until = (now + timedelta(hours=2)).astimezone().strftime("%Y-%m-%d %H:%M %Z")
+    assert mine.line("c1", now) == f"#1  this session  until {until}  ask first"
+    assert mine.line(None, now).startswith("#1  session c1  until ")
+    assert "  expired " in mine.line("c1", now + timedelta(hours=3))
+    lifting = replace(rule("x", now + timedelta(hours=2)), lifts_builtin=True)
+    assert f"every project  until {until}  lifts built-in protections  x" in lifting.line()
+    assert "removed, was until" in rule("x", now, removed=True).line(now=now)
+    assert mine.as_json()["expires_at"] == (now + timedelta(hours=2)).isoformat()
+
+
+def test_the_rule_command_parses_its_scopes_and_duration() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["rule", "add", "--for", "3d", "--global", "ask", "before", "pushing"])
+    assert (args.duration, args.everywhere, args.session, args.words) == (
+        "3d",
+        True,
+        None,
+        ["ask", "before", "pushing"],
+    )
+    assert parser.parse_args(["rule", "add", "--session", "--", "x"]).session == ""
+    assert parser.parse_args(["rule", "add", "--session", "ab12", "x"]).session == "ab12"
+    assert parser.parse_args(["rule", "list", "--all"]).all
+    assert parser.parse_args(["rule", "remove", "12"]).words == ["12"]
 
 
 def stored(

@@ -99,6 +99,57 @@ class TemporaryRule:
             return f"project {self.project}"
         return "every project"
 
+    def line(self, conversation: str | None = None, now: datetime | None = None) -> str:
+        """Describe the rule in one line for a person: a list entry or an answer.
+
+        Args:
+            conversation: The conversation of the session the reader is attached to, or None
+                for a reader outside a session. A session rule of another conversation is
+                named by the first eight characters of its conversation.
+            now: The present time, with a time zone, for a list that includes ended rules;
+                None for a rule known to count (one just added, or a list of active ones).
+
+        Returns:
+            "#<id>  <scope>  until <local time>  <text>". A rule that lifts the built-in
+            protections has "lifts built-in protections" before the text. A removed rule has
+            "removed, was until <local time>" in place of "until"; a rule that expired
+            before `now` has "expired <local time>".
+        """
+        where = self.where()
+        if self.scope == "session" and self.conversation != conversation:
+            where = f"session {(self.conversation or '')[:8]}"
+        when = self.expires_at.astimezone().strftime("%Y-%m-%d %H:%M %Z")
+        if self.removed_at:
+            until = f"removed, was until {when}"
+        elif now is not None and self.expires_at <= now:
+            until = f"expired {when}"
+        else:
+            until = f"until {when}"
+        lifting = "  lifts built-in protections" if self.lifts_builtin else ""
+        return f"#{self.id}  {where}  {until}{lifting}  {' '.join(self.text.split())}"
+
+    def as_json(self) -> dict[str, object]:
+        """Return the rule for a client that renders it itself (`ide.rules.*`).
+
+        Returns:
+            `id`, `text`, `scope`, `project`, `conversation`, `lifts_builtin`, `created_by`,
+            `origin`, and `created_at`, `expires_at`, `removed_at` as ISO 8601 texts
+            (`removed_at` None for a rule that was not removed).
+        """
+        return {
+            "id": self.id,
+            "text": self.text,
+            "scope": self.scope,
+            "project": self.project,
+            "conversation": self.conversation,
+            "lifts_builtin": self.lifts_builtin,
+            "created_by": self.created_by,
+            "origin": self.origin,
+            "created_at": self.created_at.isoformat(),
+            "expires_at": self.expires_at.isoformat(),
+            "removed_at": self.removed_at.isoformat() if self.removed_at else None,
+        }
+
 
 def parse_duration(text: str | None) -> timedelta:
     """Read a duration as the slash command and the clients write it.
