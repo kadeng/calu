@@ -376,10 +376,11 @@ async def test_attaching_to_a_named_dormant_session_resumes_it_through_the_serve
             old_id = started["session_id"]
             await editor.request("ide.detach")
         async with owner_db(db_url) as db:
-            (conversation,) = await db.one(
+            row = await db.one(
                 "SELECT claude_session_id FROM sessions WHERE id = %s::uuid", (old_id,)
             )
-        assert conversation
+        assert row is not None and row[0]
+        conversation = row[0]
 
         # The server is gone: the dormant session cannot be resumed, and the error says so.
         with pytest.raises(Failed) as nobody:
