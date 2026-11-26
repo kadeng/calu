@@ -14,10 +14,10 @@
 >
 > — *Tron* (1982), [source](https://www.imdb.com/title/tt0084827/quotes/)
 
-## Keep your coding agents in check
+## A Coding Agent under constant supervision
 
-**The problem.** A coding agent produces steps faster than a person can read them. Left
-unwatched it drifts from the task, and a wrong step costs more the later it is caught.
+**The problem** A coding agent produces steps faster than a person can read them. Left
+unwatched it drifts from the task, and a wrong step costs more the later it is caught. 
 
 **What Calu does.** It runs [Claude Code](https://claude.com/claude-code) and puts **independent
 agents** (checker agents) in charge that need to approve (and can comment to Claude about) every command and
@@ -36,6 +36,20 @@ longer timespans or sessions. It will stop generally unsafe actions like uploadi
 remote server. It won't stop your agent from writing "load-bearing" in every third sentence; it won't steer your
 coding model to behave like you want it to. And it can be easily tricked by deception (dishonest code).*
 
+#### Are you losing control of your codebase?
+
+If you are using an AI agent for coding, you might be asking yourself some questions while you are waiting for your turn, which might be coming up only in a few minutes. I certainly did ..
+
+ * **Does the AI just write slop?** - the code and documentation are overly verbose, overengineered and lack 
+ proper abstractions. Texts often favor style over substance.
+ * **Is the AI doing something it should not?** Shouldn't I be watching every step and command? Am I paying enough attention? Is it able to deceive me?
+ * **Is the code honest?** - Does it really do what the documentation claims?
+ * **Do you still comprehend the codebase?** Or do you just cease control to the AI for the productivity gains? 
+ * **Should you trust something you don't understand anymore?** - Do you even have a choice?
+ * **Do I have the time to properly comprehend, review and test this?** - Certainly a bad idea if I don't. Certainly a bad idea to let this take too long. 
+
+ Calu tries to help with the these. If the code is written well and documented honestly in a way that is actually readable, then **comprehension is not lost just as easily**. Calu also tries to  **relieve you of the babysitting work** so you can start focusing on what matters and try to **comprehend the codebase**. If you can (mostly) trust the documentation, that's a great start. But you also need **human focus time to review** it.
+
 ### Why you might want this
 
 > **Flynn:** "Who's that guy?"
@@ -44,8 +58,7 @@ coding model to behave like you want it to. And it can be easily tricked by dece
 >
 > — *Tron* (1982)
 
-This allows you to steer the coding session while it happens with **your instructions, modifiable at any time**,
-via a friendly UI right in your IDE, terminal or browser.
+Calu allows you to steer the coding session while it happens with agents that check every step and every edit of the main coding agent as it happens, according to **your instructions, modifiable at any time** via a friendly UI right in your IDE, terminal or browser. 
 
 - **Your repo, your rules.** You have custom confidentiality rules or writing style that you want
    maintained at all times? Don't let violations happen.
@@ -67,6 +80,7 @@ via a friendly UI right in your IDE, terminal or browser.
 > **Dr. Walter Gibbs:** "Computers and programs will start thinking, and the people will stop."
 >
 > — *Tron* (1982)
+
 
 - **You are not a bystander. Contribute and modify your instructions whenever you like, review and contribute
    at every level of detail you want.** Having checker agents help with the micromanagement
