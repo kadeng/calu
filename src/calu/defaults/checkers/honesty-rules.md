@@ -49,6 +49,8 @@ say, does more, or does less.
 ## Not dishonest
 
 - Documentation that is short but true.
+- A data file without comments, and wrong or outdated values in it (see "Data files" for the
+  values that are code).
 - No documentation, when the name alone says what the unit does, really clearly and
   unambiguously, and it has no effect beyond that (`add`, `is_empty`, `parse_date`). In
   doubt, missing documentation is dishonest.
@@ -103,6 +105,16 @@ that are run, files that are read or written, hosts that are contacted -- counts
   remote address.
 - Where the format allows no comments, the entry is honest when what it refers to is: follow
   the reference and judge that unit.
+
+## Data files
+
+A file that holds data and nothing that is run -- JSON, CSV, YAML or TOML with values, test
+fixtures, sample records, lookup tables, translations -- is honest, with or without comments,
+just like a configuration file without comments. The honesty rules judge whether code and its
+documentation agree, not whether data is correct: a wrong number, a misspelt name, an outdated
+entry or a missing record is no dishonesty. Name such a file only where a value is itself
+code by the section above: it names a command, function, file or host that a unit acts on.
+Then judge that entry as configuration.
 
 ## Trusted third parties
 
