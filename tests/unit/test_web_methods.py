@@ -26,6 +26,7 @@ WITHHELD = {
     "model.set": "the live view chooses the model when it starts a session, not while it runs",
     "files.user_edit": "only `calu ide` writes project files for a user; a browser writes none",
     "human_diffs.add": "only an editor extension saves project files; a browser saves none",
+    "pause.set": "the live page has no pause button; the chat pane pauses through its bridge",
 }
 """Protocol methods a browser deliberately cannot reach, and why."""
 

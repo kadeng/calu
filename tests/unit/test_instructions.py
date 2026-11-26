@@ -87,6 +87,16 @@ OUTSIDE_WORDS = 55
 """Words of the command checker's answer field `writes_outside_worktree`, which decides whether a
 command takes the global lock exclusively (D276; 2026-11-25, the owner's request)."""
 
+GENERATED_WORDS = {"command": 150, "edit": 110}
+"""Allowance for the section on generated, minified or obfuscated code in the command and edit
+checkers' fixed parts (D288; 2026-11-26, the owner's request): its measured length (142 and 102
+words on 2026-11-26) with a margin of about 8 words."""
+
+SLOP_WORDS = 110
+"""Allowance for the owner's rule against AI slop language in the edit checker's default
+instructions (2026-11-26, the owner's text): its measured length (102 words on 2026-11-26) with
+a margin of 8 words."""
+
 
 @pytest.mark.parametrize("name", ["command", "edit", "changeset", "subagent-result"])
 def test_the_shipped_instructions_are_short(name: str) -> None:
@@ -97,7 +107,9 @@ def test_the_shipped_instructions_are_short(name: str) -> None:
     getting around safeguards (`EVASION_PART`) and on what an answer may contain
     (`DISCLOSURE_PART`, 2026-11-23), by the sentence on secrets in the summary
     (`PRIVACY_WORDS`) and by the wording of reminders and suggestions (`SUGGEST_WORDS`), all of
-    which the owner asked for after requirement 38.
+    which the owner asked for after requirement 38. The command and edit checkers' limits are
+    higher by the section on generated code (`GENERATED_WORDS`), the edit checker's also by
+    the owner's rule against AI slop language (`SLOP_WORDS`).
 
     Args:
         name: The checker type.
@@ -106,6 +118,7 @@ def test_the_shipped_instructions_are_short(name: str) -> None:
     words = len(compose_instructions(route, default_instructions(name)).split())
     evasion = sum(len(read_part(p).split()) for p in (EVASION_PART, ROLE_PART, DISCLOSURE_PART))
     tasks = {"subagent-result": TASK_WORDS, "command": FILE_TASK_WORDS + OUTSIDE_WORDS}.get(name, 0)
+    tasks += GENERATED_WORDS.get(name, 0) + (SLOP_WORDS if name == "edit" else 0)
     shared = evasion + PRIVACY_WORDS + SUGGEST_WORDS
     assert words < (410 if name == "command" else 360) + shared + tasks, f"{name}: {words} words"
     assert "auto mode" in system_part(route) or route == "subagent"
