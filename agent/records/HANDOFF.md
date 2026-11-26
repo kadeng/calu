@@ -42,10 +42,37 @@ feature must work end to end in the Cua desktop before the owner tests by hand.
   repository (`uv run pyright`). `honesty.mode` is `enforce` in the owner's session:
   running tests needs a clean honesty state, so settle open marks first. Make code edits
   with the Edit tool; a script edit leaves the file unreviewed.
-- Then step 3: `calu rule add/list/remove` in the terminal, the slash commands in `calu
-  attach` and in the VSCode chat and the web pane (bridge requests `ide.rules.*`), and a Cua
-  test of the VSCode chat. `"rule"` is in `ALWAYS_ASKING_SUBCOMMANDS` already; the
-  subcommand test expects it to exist once step 3 adds it.
+- Step 3 is partly done and pushed:
+  - `calu rule add/list/remove` (`c5a2ac6`, `cli.cmd_rule`, `TemporaryRule.line` and
+    `as_json`);
+  - the bridge's `ide.rules.list/add/remove` (`calu.ide.database.rules_view`, `add_rule`,
+    `remove_rule`) and `/rule`, `/rules`, `/rule-remove` in the chat host shared by the
+    VSCode extension and the web chat pane (`acdf294`). Seen in the Cua desktop's VSCode
+    with the scripted server (test plan, section P).
+  - **Still open in step 3,** the same three commands in three more places:
+    - `calu attach`, full-screen and line client (through `AdminAccess` in
+      `src/calu/tui/adminaccess.py`);
+    - the PyCharm plugin. The owner asked for rules that are "creatable and manageable in
+      the web UI, terminal and IDE extensions alike" (design section 7, item 8);
+    - the web chat pane, which has them from the shared chat host but was not looked at
+      in a browser.
+  - Then the report to the owner that the plan promises after step 3.
+- Steps 4 to 6 as in the design's section 8.
+
+**The owner's list of 2026-11-26 evening, not started:**
+
+- VSCode: after `calu serve` is stopped and restarted, the chat does not pick its session
+  up smoothly. The owner: "it should be able to just pick up again more or less
+  automatically". To be tested in the Cua desktop.
+- Web interface: the owner could resume a session only from the "history" view; "the other
+  ones ( live view, chat, resume button ) did not work for me". Reproduce each in a browser
+  and fix.
+
+**For the owner's installation:** D290 (a PNG in an escalated commit) is fixed in the
+repository only. Until `/usr/local/lib/calu` is reinstalled from `main`, a commit with a
+binary file that the changeset checker escalates is denied with "calu could not record this
+step". For that reason `agent/records/notes/screenshots/vscode-rules-chat.png` (named in the
+test plan's section P) is in the working tree of `calu2` and not committed yet.
 
 Also open from today: the length guard of the checker instructions has allowances for the
 generated-code sections and the owner's AI-slop rule (`tests/unit/test_instructions.py`); a
