@@ -6,6 +6,7 @@
     ide.models.set_all    ──► set_all_models       ──► calu.admin.set_all_models
     ide.models.set        ──► set_role_model
     ide.checker.get/save  ──► checker_view, save_instructions
+    ide.rules.list/add/remove ► rules_view, add_rule, remove_rule ──► calu.temp_rules
     ide.sessions          ──► sessions_view        ──► calu.herd, Claude Code's transcripts
     ide.attach            ──► pick_session         ──► calu.herd.sessions
 
@@ -23,7 +24,7 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from calu import admin, herd
+from calu import admin, herd, temp_rules
 from calu.acp.peer import RpcError
 from calu.config import Config, default_model, merge_settings
 from calu.configdoc import setting_rows
@@ -363,6 +364,164 @@ async def save_instructions(
         )
     row = await admin.set_checker(db, name, instructions_text=text)
     return {"version": row.version}
+
+
+async def _session_scope(db: Db, session_id: str | None) -> tuple[str | None, str | None]:
+    """Find what a session rule and a project rule of one session are bound to.
+
+    Args:
+        db: A connection that may read `sessions` and `projects`.
+        session_id: The attached session's id, or None if none is attached.
+
+    Returns:
+        (the session's conversation, its project's name); None for each one that does not
+        exist yet, and (None, None) without a session.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    if not session_id:
+        return None, None
+    row = await db.one(
+        "SELECT s.claude_session_id, p.name FROM sessions s"
+        " LEFT JOIN projects p ON p.id = s.project_id WHERE s.id = %s::uuid",
+        (session_id,),
+    )
+    return (row[0], row[1]) if row else (None, None)
+
+
+def _rule_json(rule: temp_rules.TemporaryRule, conversation: str | None) -> dict[str, Any]:
+    """Return a temporary rule for the editor.
+
+    Args:
+        rule: The rule.
+        conversation: The attached session's conversation, or None.
+
+    Returns:
+        `TemporaryRule.as_json`, with `line` (`TemporaryRule.line` as the attached session
+        reads it).
+    """
+    return {**rule.as_json(), "line": rule.line(conversation)}
+
+
+async def rules_view(db: Db, session_id: str | None) -> dict[str, Any]:
+    """List the temporary rules that count now (`ide.rules.list`).
+
+    Args:
+        db: A connection that may read `temporary_rules`.
+        session_id: The attached session's id, or None.
+
+    Returns:
+        `{rules, conversation, project}`. `rules` holds every active rule, newest first, as
+        `_rule_json` with `applies`. `applies` is true for a global rule, for a rule of the
+        attached session's project and for a rule of its conversation. It is false for the
+        rules of other projects and sessions. `conversation` and `project` are those of the
+        attached session, or null.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    conversation, project = await _session_scope(db, session_id)
+    rules: list[dict[str, Any]] = []
+    for rule in await temp_rules.listed(db):
+        applies = (
+            rule.scope == "global"
+            or (rule.scope == "project" and project is not None and rule.project == project)
+            or (rule.scope == "session" and temp_rules.applies_to(rule, conversation))
+        )
+        rules.append({**_rule_json(rule, conversation), "applies": applies})
+    return {"rules": rules, "conversation": conversation, "project": project}
+
+
+async def add_rule(
+    db: Db,
+    session_id: str | None,
+    text: str,
+    duration: str | None,
+    scope: str | None,
+    by: str,
+) -> dict[str, Any]:
+    """Store a temporary rule for the attached session, its project or every project.
+
+    A rule from the editor never lifts calu's built-in protections.
+
+    Side effects: inserts a `temporary_rules` row (`temp_rules.add`).
+
+    Args:
+        db: A connection with the user login.
+        session_id: The attached session's id, or None.
+        text: The rule's text.
+        duration: The duration as typed ("3d", "30m"), or None for one day.
+        scope: "session", "project" or "global"; None means "session".
+        by: Who adds it, for the record.
+
+    Returns:
+        `{rule}`: the stored rule (`_rule_json`).
+
+    Raises:
+        RpcError: `INVALID_PARAMS` if the text, the duration or the scope is refused, if the
+            scope needs a conversation or a project that the attached session does not
+            have, or if the text starts with "--". Its first word is then not a rule
+            option here (`--lift-builtin`, for example) and would become part of the rule.
+        psycopg.Error: On database errors.
+    """
+    conversation, project = await _session_scope(db, session_id)
+    chosen = scope or "session"
+    if text.lstrip().startswith("--"):
+        raise RpcError(
+            INVALID_PARAMS,
+            f"{text.split()[0]} is not a rule option here; the options are --session,"
+            " --project and --global. A rule that lifts calu's built-in protections is"
+            " added in the web settings or with `calu rule add --lift-builtin`",
+        )
+    if chosen == "session" and not conversation:
+        raise RpcError(
+            INVALID_PARAMS,
+            "a session rule needs an attached session that has started its conversation; "
+            "send a message first, or use --project or --global",
+        )
+    if chosen == "project" and not project:
+        raise RpcError(
+            INVALID_PARAMS, "a project rule needs an attached session of a registered project"
+        )
+    try:
+        rule = await temp_rules.add(
+            db,
+            text,
+            created_by=by,
+            duration=temp_rules.parse_duration(duration),
+            scope=chosen,  # type: ignore[arg-type]  # `add` refuses any other word
+            project=project,
+            conversation=conversation,
+        )
+    except temp_rules.RuleError as error:
+        raise RpcError(INVALID_PARAMS, str(error)) from error
+    return {"rule": _rule_json(rule, conversation)}
+
+
+async def remove_rule(db: Db, session_id: str | None, rule_id: int, by: str) -> dict[str, Any]:
+    """End a temporary rule before it expires (`ide.rules.remove`).
+
+    Side effects: marks the `temporary_rules` row as removed (`temp_rules.remove`).
+
+    Args:
+        db: A connection with the user login.
+        session_id: The attached session's id, or None; only for the rule's `line`.
+        rule_id: The rule's id.
+        by: Who removes it, for the record.
+
+    Returns:
+        `{rule}`: the removed rule (`_rule_json`).
+
+    Raises:
+        RpcError: `INVALID_PARAMS` if no active rule has that id.
+        psycopg.Error: On database errors.
+    """
+    conversation, _project = await _session_scope(db, session_id)
+    gone = await temp_rules.remove(db, rule_id, by)
+    if gone is None:
+        raise RpcError(INVALID_PARAMS, f"no active temporary rule #{rule_id}")
+    return {"rule": _rule_json(gone, conversation)}
 
 
 def _within(path: Path, directory: str) -> bool:

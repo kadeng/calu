@@ -12,11 +12,13 @@ import psycopg
 import pytest
 
 from calu import admin, herd, servers
+from calu.acp.peer import RpcError
 from calu.config import BEDROCK_EU_HAIKU
 from calu.credentials import CredentialStore
 from calu.db import Db, connect
 from calu.db.target import PasswordAuth, Target
 from calu.defaults.instructions import default_redaction_instructions
+from calu.ide import database as ide_database
 from calu.store import DatabaseSessionStore, SessionIdentity
 from tests.db.test_run import prepare
 from tests.db.test_serve import owner_db, serving
@@ -617,6 +619,91 @@ async def test_the_status_counts_the_running_servers_and_a_change_needs_no_secon
         ) == {"value": "track"}
     async with owner_db(db_url) as db:
         assert (await admin.settings(db))["honesty"]["mode"] == "track"
+
+
+async def test_temporary_rules_are_added_listed_and_removed_through_the_bridge(
+    db_url: str, tmp_path: Path, store: CredentialStore
+):
+    """`ide.rules.*` without an attached session: global rules work, session rules say why not."""
+    user_url = await prepare(db_url, tmp_path)
+    store.save("user", user_url, None)
+    async with bridged(tmp_path, store) as editor:
+        assert (await editor.request("ide.rules.list"))["rules"] == []
+        added = await editor.request("ide.rules.add", {"command": "2h --global ask  first"})
+        rule = added["rule"]
+        assert (rule["scope"], rule["text"], rule["lifts_builtin"]) == (
+            "global",
+            "ask  first",
+            False,
+        )
+        assert rule["line"].startswith(f"#{rule['id']}  every project  until ")
+        assert rule["created_by"].startswith("calu ide:")
+        typed = await editor.request(
+            "ide.rules.add", {"text": "no pushes", "duration": "30m", "scope": "global"}
+        )
+        view = await editor.request("ide.rules.list")
+        assert [r["id"] for r in view["rules"]] == [typed["rule"]["id"], rule["id"]]
+        assert all(r["applies"] for r in view["rules"])
+        assert (view["conversation"], view["project"]) == (None, None)
+
+        gone = await editor.request("ide.rules.remove", {"id": f"#{rule['id']}"})
+        assert gone["rule"]["removed_at"]
+        refused = [
+            ("ide.rules.remove", {"id": rule["id"]}, "no active temporary rule"),
+            ("ide.rules.remove", {"id": "soon"}, "must be a rule's number"),
+            ("ide.rules.add", {"command": "ask first"}, "needs an attached session"),
+            ("ide.rules.add", {"command": "--project ask"}, "registered project"),
+            ("ide.rules.add", {"command": "9d --global ask"}, "at most 7 days"),
+            ("ide.rules.add", {"command": "--global"}, "needs a text"),
+            # The editor never adds a rule that lifts the built-in protections.
+            ("ide.rules.add", {"command": "--global --lift-builtin x"}, "not a rule option"),
+            ("ide.rules.add", {}, "'text' is missing"),
+        ]
+        for method, params, why in refused:
+            with pytest.raises(Failed) as failed:
+                await editor.request(method, params)
+            assert failed.value.code == -32602 and why in failed.value.message, params
+
+
+async def test_a_rule_from_the_editor_is_bound_to_the_attached_session(db_url: str, tmp_path: Path):
+    """The scope "session" is the session's conversation, "project" its project."""
+    user_url = await prepare(db_url, tmp_path)
+    async with owner_db(db_url) as db:
+        await admin.add_project(db, "demo")
+        host = await db.scalar("INSERT INTO hosts (hostname) VALUES ('box') RETURNING id")
+        ids = [
+            str(
+                await db.scalar(
+                    "INSERT INTO sessions (project_id, host_id, os_user, directory, pid, state,"
+                    " claude_session_id) VALUES ((SELECT id FROM projects WHERE name = %s),"
+                    " %s, 'u', '/w', 1, 'idle', %s) RETURNING id::text",
+                    (project, host, conversation),
+                )
+            )
+            for project, conversation in (("demo", "c1"), (None, None))
+        ]
+    user = await connect(user_url)
+    try:
+        db = Db(user)
+        mine = await ide_database.add_rule(db, ids[0], "ask first", "1h", None, "t")
+        assert (mine["rule"]["scope"], mine["rule"]["conversation"]) == ("session", "c1")
+        assert "this session" in mine["rule"]["line"]
+        ours = await ide_database.add_rule(db, ids[0], "no pushes", None, "project", "t")
+        assert ours["rule"]["project"] == "demo"
+        view = await ide_database.rules_view(db, ids[0])
+        assert (view["conversation"], view["project"]) == ("c1", "demo")
+        assert [r["applies"] for r in view["rules"]] == [True, True]
+        # Another session, without a conversation or a project, sees them as someone else's.
+        other = await ide_database.rules_view(db, ids[1])
+        assert [r["applies"] for r in other["rules"]] == [False, False]
+        assert "session c1" in other["rules"][1]["line"]
+        for scope in ("session", "project"):
+            with pytest.raises(RpcError, match="needs an attached session"):
+                await ide_database.add_rule(db, ids[1], "x", None, scope, "t")
+        removed = await ide_database.remove_rule(db, ids[1], mine["rule"]["id"], "t")
+        assert removed["rule"]["id"] == mine["rule"]["id"]
+    finally:
+        await user.close()
 
 
 async def test_the_user_login_names_a_session(db_url: str, tmp_path: Path):

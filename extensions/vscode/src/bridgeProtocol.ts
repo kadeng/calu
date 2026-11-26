@@ -290,6 +290,28 @@ export interface IdeCheckerResult {
   instructions: string;
 }
 
+/** One temporary rule for the checkers, as `ide.rules.*` return it. */
+export interface IdeTemporaryRule {
+  id: number;
+  text: string;
+  scope: 'session' | 'project' | 'global';
+  /** The project's name for scope "project". */
+  project: string | null;
+  /** Claude's session id for scope "session". */
+  conversation: string | null;
+  lifts_builtin: boolean;
+  created_by: string;
+  origin: string;
+  /** ISO 8601. */
+  created_at: string;
+  expires_at: string;
+  removed_at: string | null;
+  /** The rule in one line for a person: id, scope, end, text. */
+  line: string;
+  /** `ide.rules.list` only: whether the rule applies to the attached session. */
+  applies?: boolean;
+}
+
 /**
  * A parameter that requests using stored data accept. Other clients send it; the extension
  * does not: it sends `ide.unlock` once instead (see `BridgeError.NEEDS_PASSWORD`).
@@ -320,6 +342,10 @@ export interface BridgeRequestParams {
   'ide.models.set': { role: string; model: string; project?: string | null } & WithPassword;
   'ide.checker.get': { name: string } & WithPassword;
   'ide.checker.save': { name: string; instructions: string; base_version: number } & WithPassword;
+  'ide.rules.list': WithPassword;
+  /** `command`: the arguments of `/rule` as typed; or `text` with `duration` and `scope`. */
+  'ide.rules.add': ({ command: string } | { text: string; duration?: string; scope?: 'session' | 'project' | 'global' }) & WithPassword;
+  'ide.rules.remove': { id: number | string } & WithPassword;
   /** A piece of a project file (the file view of the browser pane); `path` relative to the workspace. */
   'ide.fs.read': { path: string; offset?: number; length?: number };
   'ide.shutdown': Record<string, never>;
@@ -347,6 +373,10 @@ export interface BridgeRequestResults {
   'ide.models.set': Record<string, never>;
   'ide.checker.get': IdeCheckerResult;
   'ide.checker.save': { version: number };
+  /** Every active temporary rule, newest first; `conversation` and `project` of the attached session. */
+  'ide.rules.list': { rules: IdeTemporaryRule[]; conversation: string | null; project: string | null };
+  'ide.rules.add': { rule: IdeTemporaryRule };
+  'ide.rules.remove': { rule: IdeTemporaryRule };
   /** `content_b64`: the bytes read; `size`: of the whole file; `eof`: the read reached its end. */
   'ide.fs.read': { content_b64: string; sha256: string; size: number; mode: number; eof: boolean };
   'ide.shutdown': Record<string, never>;

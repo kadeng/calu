@@ -50,6 +50,7 @@ from calu import (
     localsocket,
     servers,
     session_requests,
+    temp_rules,
 )
 from calu.acp.peer import Peer, ReadLine, RpcError, WriteLine
 from calu.acp.serve import DRAIN_S, RECONNECT_WAIT_S
@@ -305,6 +306,9 @@ class Bridge:
             "ide.models.set": self._models_set,
             "ide.checker.get": self._checker_get,
             "ide.checker.save": self._checker_save,
+            "ide.rules.list": self._rules_list,
+            "ide.rules.add": self._rules_add,
+            "ide.rules.remove": self._rules_remove,
             "ide.shutdown": self._shutdown,
         }
 
@@ -1246,6 +1250,119 @@ class Bridge:
             """
             await admin.unset_setting(db, key, project)
             return {}
+
+        return await self.access.change(work, _password(params))
+
+    def _attached_id(self) -> str | None:
+        """Return the id of the attached session, for the temporary rules' scope.
+
+        Returns:
+            The session's id; None if no session is attached or its id is not known yet.
+        """
+        return (self._link.session_id or None) if self._link is not None else None
+
+    async def _rules_list(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Answer `ide.rules.list`: the temporary rules that count now (`calu.temp_rules`).
+
+        Args:
+            params: `password`.
+
+        Returns:
+            `{rules, conversation, project}` (`database.rules_view`): every active rule,
+            each with `applies` for the attached session.
+
+        Raises:
+            RpcError: `NEEDS_PASSWORD` or `NO_DATABASE`.
+        """
+        session_id = self._attached_id()
+
+        async def work(db: Db) -> dict[str, Any]:
+            """Read the rules.
+
+            Args:
+                db: The connection.
+
+            Returns:
+                The view.
+            """
+            return await database.rules_view(db, session_id)
+
+        return await self.access.read(work, _password(params))
+
+    async def _rules_add(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Answer `ide.rules.add`: store a temporary rule for the checkers.
+
+        The rule is given either as `command`, the arguments of the chat's `/rule` as typed
+        (`[duration] [--session | --project | --global] text`, `temp_rules.split_command`),
+        or as `text` with `duration` and `scope`. The scope "session" (the default) binds it
+        to the attached session's conversation and "project" to its project. A rule added
+        here never lifts calu's built-in protections.
+
+        Side effects: writes `temporary_rules` with the user login; running sessions read
+        the change at once.
+
+        Args:
+            params: `command`, or `text` with optional `duration` and `scope`; `password`.
+
+        Returns:
+            `{rule}`: the stored rule with its `line`.
+
+        Raises:
+            RpcError: `INVALID_PARAMS` if neither `command` nor `text` is given or the rule
+                is refused (the message says why); `NEEDS_PASSWORD` or `NO_DATABASE`.
+        """
+        command = _text(params, "command")
+        if command is not None:
+            duration, scope, text = temp_rules.split_command(command)
+        else:
+            text = _text(params, "text", required=True) or ""
+            duration, scope = _text(params, "duration"), _text(params, "scope")
+        session_id, by = self._attached_id(), f"calu ide:{_os_user()}"
+
+        async def work(db: Db) -> dict[str, Any]:
+            """Store the rule.
+
+            Args:
+                db: The connection.
+
+            Returns:
+                `{rule}`.
+            """
+            return await database.add_rule(db, session_id, text, duration, scope, by)
+
+        return await self.access.change(work, _password(params))
+
+    async def _rules_remove(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Answer `ide.rules.remove`: end a temporary rule before it expires.
+
+        Side effects: marks the rule as removed with the user login; running sessions read
+        the change at once.
+
+        Args:
+            params: `id` (the rule's number, or text like "12" or "#12"), `password`.
+
+        Returns:
+            `{rule}`: the removed rule with its `line`.
+
+        Raises:
+            RpcError: `INVALID_PARAMS` if `id` is no rule number or no active rule has it;
+                `NEEDS_PASSWORD` or `NO_DATABASE`.
+        """
+        raw = str(params.get("id", "")).strip().lstrip("#")
+        if isinstance(params.get("id"), bool) or not raw.isdigit():
+            raise RpcError(INVALID_PARAMS, "the parameter 'id' must be a rule's number")
+        rule_id, session_id, by = int(raw), self._attached_id(), f"calu ide:{_os_user()}"
+
+        async def work(db: Db) -> dict[str, Any]:
+            """Remove the rule.
+
+            Args:
+                db: The connection.
+
+            Returns:
+                `{rule}`.
+            """
+            return await database.remove_rule(db, session_id, rule_id, by)
 
         return await self.access.change(work, _password(params))
 

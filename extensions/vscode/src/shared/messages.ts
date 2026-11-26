@@ -69,6 +69,15 @@ export type WebviewMessage =
   | { type: 'why'; escalationId: string }
   /** A question beside the running work (`side.ask`); the answer arrives as `ui.sideAnswer`. */
   | { type: 'sideAsk'; question: string }
+  /**
+   * `/rule`: add a temporary rule for the checkers (`ide.rules.add`). `command` holds the
+   * arguments as typed: `[duration] [--session | --project | --global] text`.
+   */
+  | { type: 'ruleAdd'; command: string }
+  /** `/rules`: list the active temporary rules in the chat (`ide.rules.list`). */
+  | { type: 'rulesList' }
+  /** `/rule-remove <id>`: end a temporary rule before it expires (`ide.rules.remove`). */
+  | { type: 'ruleRemove'; id: number }
   /** Open the session QuickPick (attach, new, resume, fork). */
   | { type: 'attach' }
   /** Start a new session at once; nothing is asked. */
@@ -312,6 +321,13 @@ export function parseWebviewMessage(raw: unknown): WebviewMessage | undefined {
       return text(m.escalationId) ? { type: 'why', escalationId: m.escalationId } : undefined;
     case 'sideAsk':
       return text(m.question) ? { type: 'sideAsk', question: m.question.trim() } : undefined;
+    case 'ruleAdd':
+      return text(m.command) ? { type: 'ruleAdd', command: m.command } : undefined;
+    case 'rulesList':
+      return { type: 'rulesList' };
+    case 'ruleRemove':
+      if (!Number.isSafeInteger(m.id) || (m.id as number) < 1) return undefined;
+      return { type: 'ruleRemove', id: m.id as number };
     case 'switchSession':
     case 'renameSession':
       return text(m.sessionId) ? { type: m.type, sessionId: m.sessionId } : undefined;

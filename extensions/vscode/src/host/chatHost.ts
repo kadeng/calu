@@ -24,7 +24,7 @@ import { buildHints } from '../shared/hints';
 import { flagsForLevel } from '../shared/levels';
 import type { HostMessage, WebviewMessage } from '../shared/messages';
 import { lostCause, serverCheck, serverStoppedAfterLoss } from '../shared/serverLoss';
-import { trustArgs } from '../shared/slashCommands';
+import { rulesNotice, trustArgs } from '../shared/slashCommands';
 import { isAttached, own, sessionTitle, sideHistory, type ViewEvent, type ViewState } from '../shared/viewState';
 import { errorText, type BridgeCore } from './bridgeCore';
 import type { Disposable } from './emitter';
@@ -336,6 +336,24 @@ export class ChatHost implements Disposable {
       }
       case 'decide':
         await this.decide(message.escalationId, message.decision, message.note, message.answer);
+        return;
+      case 'ruleAdd':
+        await this.run('Adding the temporary rule', async () => {
+          const { rule } = await this.bridge.request('ide.rules.add', { command: message.command });
+          this.notice('info', `Temporary rule added: ${rule.line}`);
+        });
+        return;
+      case 'rulesList':
+        await this.run('Listing the temporary rules', async () => {
+          const { rules } = await this.bridge.request('ide.rules.list', {});
+          this.notice('info', rulesNotice(rules));
+        });
+        return;
+      case 'ruleRemove':
+        await this.run('Removing the temporary rule', async () => {
+          const { rule } = await this.bridge.request('ide.rules.remove', { id: message.id });
+          this.notice('info', `Temporary rule removed: ${rule.line}`);
+        });
         return;
       case 'sideAsk': {
         const id = this.nextSideId++;

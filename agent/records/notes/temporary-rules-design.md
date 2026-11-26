@@ -199,6 +199,12 @@ The limits below are Claude's proposal for B; the owner chose B, not these detai
 7. Every UI part is tested in the Cua desktop as it is added, not only at the end. The whole
    feature works end to end in the Cua desktop before the owner tests it by hand.
 
+8. Later on 2026-11-26, while step 3 was built: "temporary rules should be creatable and
+   manageable in the web UI, terminal and IDE extensions alike." So the PyCharm plugin gets
+   the commands too, which the plan below did not list. Whether this also covers rules that
+   lift the built-in protections (section 6 limits those to the web settings and `calu rule
+   add --lift-builtin`) was not asked.
+
 ## 8. Plan of work
 
 | Step | Content | Size |

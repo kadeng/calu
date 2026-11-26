@@ -56,6 +56,9 @@ Requests of the extension (all results are JSON objects):
 | `ide.models.set` | `role` (a `roles[].key`), `model`, `password?` | `{}` |
 | `ide.checker.get` | `name` | `{name, route, model, version, enabled, instructions}` from the database |
 | `ide.checker.save` | `name`, `instructions`, `base_version`, `password?` | `{version}`; error -32016 if the stored version differs from `base_version` (`data.version`, `data.instructions`) |
+| `ide.rules.list` | `password?` | `{rules, conversation, project}`: every active temporary rule (`temporary-rules-design.md`), newest first. Each is `{id, text, scope, project, conversation, lifts_builtin, created_by, origin, created_at, expires_at, removed_at, line, applies}`. `line` is the rule in one line for a person; `applies` says whether it applies to the attached session |
+| `ide.rules.add` | `command` (the arguments of `/rule` as typed: `[duration] [--session \| --project \| --global] text`), or `text` with `duration?` and `scope?`; `password?` | `{rule}`. The default scope "session" binds the rule to the attached session's conversation, "project" to its project. Never lifts the built-in protections. Error -32602 with the reason if the rule is refused |
+| `ide.rules.remove` | `id`, `password?` | `{rule}`: the removed rule; error -32602 if no active rule has the id |
 | `ide.shutdown` | - | `{}`; the bridge detaches and exits |
 
 Notifications from the bridge:

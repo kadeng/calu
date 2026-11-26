@@ -85,6 +85,9 @@ export const CALU_COMMANDS: readonly SlashCommand[] = [
   command('settings', 'calu', "Open calu's settings"),
   command('interrupt', 'calu', "Interrupt Claude's running turn"),
   command('btw', 'calu', 'Ask a side question beside the running work: /btw [question]'),
+  command('rule', 'calu', 'Add a temporary rule for the checkers: /rule [3d] [--project | --global] text (1m to 7d, default 1d, this session)'),
+  command('rules', 'calu', 'List the active temporary rules'),
+  command('rule-remove', 'calu', 'Remove a temporary rule: /rule-remove <id>'),
 ];
 
 /**
@@ -244,6 +247,20 @@ export function resolveSlash(text: string, attachedId: string | null): SlashResu
       // Never chat text: as a chat message it would wait in the queue until the turn ends.
       if (!arg) return { kind: 'ui', action: 'side' };
       return needsSession({ type: 'sideAsk', question: arg });
+    case 'rule':
+      // Never chat text: the chat host stores the rule through the bridge (`ruleAdd` in
+      // chatHost.ts, `ide.rules.add`). No attached session is required here, because a rule
+      // for a project or for every project needs none; the bridge refuses a session rule
+      // without one.
+      if (!arg) return { kind: 'error', text: '/rule needs a text: /rule [3d] [--session | --project | --global] text' };
+      return { kind: 'message', message: { type: 'ruleAdd', command: arg } };
+    case 'rules':
+      return { kind: 'message', message: { type: 'rulesList' } };
+    case 'rule-remove': {
+      const id = /^#?(\d{1,15})$/.exec(arg);
+      if (!id || Number(id[1]) < 1) return { kind: 'error', text: '/rule-remove needs the id of a rule; /rules lists them.' };
+      return { kind: 'message', message: { type: 'ruleRemove', id: Number(id[1]) } };
+    }
     default:
       return { kind: 'chat' };
   }
@@ -262,4 +279,24 @@ export function trustArgs(text: string): { rev?: string; checkout?: string } | u
   if (words.length > 2) return undefined;
   if (words.length === 2) return { checkout: words[0], rev: words[1] };
   return words.length === 1 ? { rev: words[0] } : {};
+}
+
+/**
+ * Build the chat notice that answers `/rules`.
+ *
+ * @param rules The active temporary rules as `ide.rules.list` returns them: `line` is the rule
+ *   in one line, `applies` whether it applies to the attached session.
+ * @returns "No temporary rules are active." without rules. Otherwise one line per rule: first
+ *   the rules that apply to the attached session, then, under their own heading, the rules of
+ *   other sessions and projects.
+ */
+export function rulesNotice(rules: readonly { line: string; applies?: boolean }[]): string {
+  if (rules.length === 0) return 'No temporary rules are active.';
+  const mine = rules.filter((r) => r.applies !== false);
+  const others = rules.filter((r) => r.applies === false);
+  const lines: string[] = [];
+  if (mine.length > 0) lines.push('Temporary rules that apply to this session:', ...mine.map((r) => r.line));
+  if (others.length > 0) lines.push('Temporary rules of other sessions and projects:', ...others.map((r) => r.line));
+  lines.push('/rule-remove <id> removes one.');
+  return lines.join('\n');
 }

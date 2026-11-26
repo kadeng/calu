@@ -1,7 +1,7 @@
 // Slash commands of the composer: the table, the completion list, and what a submitted command does.
 import { describe, expect, it } from 'vitest';
 import { parseWebviewMessage } from '../../src/shared/messages';
-import { CALU_COMMANDS, CLAUDE_COMMANDS, allCommands, completions, resolveSlash } from '../../src/shared/slashCommands';
+import { CALU_COMMANDS, CLAUDE_COMMANDS, allCommands, completions, resolveSlash, rulesNotice } from '../../src/shared/slashCommands';
 import { renderMarkdownHtml } from '../../webview/markdown';
 
 const table = allCommands();
@@ -9,7 +9,7 @@ const table = allCommands();
 describe('command table', () => {
   it('holds the extension commands and the built-in Claude Code commands, sorted', () => {
     expect(CALU_COMMANDS.map((c) => c.name)).toEqual([
-      'model', 'effort', 'level', 'mode', 'honesty', 'trust', 'trust-file', 'honesty-review', 'checkers', 'checker-context', 'sessions', 'new', 'fork', 'rename', 'settings', 'interrupt', 'btw',
+      'model', 'effort', 'level', 'mode', 'honesty', 'trust', 'trust-file', 'honesty-review', 'checkers', 'checker-context', 'sessions', 'new', 'fork', 'rename', 'settings', 'interrupt', 'btw', 'rule', 'rules', 'rule-remove',
     ]);
     // No /help: a session without a terminal answers that it is not available.
     expect(CLAUDE_COMMANDS.map((c) => c.name)).toEqual(['compact', 'clear', 'usage', 'context', 'cost']);
@@ -81,6 +81,10 @@ describe('resolveSlash', () => {
       ['  /interrupt  ', { type: 'interrupt' }],
       // A side question, never chat text: as a chat message it would wait in the queue.
       ['/btw  what are you\ndoing? ', { type: 'sideAsk', question: 'what are you\ndoing?' }],
+      // The temporary rules: the arguments go to the bridge as typed.
+      ['/rule 3d --project Claude may run\nthe tests', { type: 'ruleAdd', command: '3d --project Claude may run\nthe tests' }],
+      ['/rules', { type: 'rulesList' }],
+      ['/rule-remove #12', { type: 'ruleRemove', id: 12 }],
     ];
     for (const [text, message] of cases) {
       expect(resolveSlash(text, 's1'), text).toEqual({ kind: 'message', message });
@@ -105,6 +109,32 @@ describe('resolveSlash', () => {
       expect(resolveSlash(text, null), text).toMatchObject({ kind: 'error', text: expect.stringContaining('needs an attached session') });
     }
     expect(resolveSlash('/settings', null).kind).toBe('message');
+  });
+
+  it('the rule commands need a text or an id, and no attached session', () => {
+    expect(resolveSlash('/rule', 's1')).toMatchObject({ kind: 'error', text: expect.stringContaining('needs a text') });
+    for (const text of ['/rule-remove', '/rule-remove soon', '/rule-remove 0', '/rule-remove 1 2']) {
+      expect(resolveSlash(text, 's1'), text).toMatchObject({ kind: 'error', text: expect.stringContaining('needs the id') });
+    }
+    expect(resolveSlash('/rule --global ask first', null)).toEqual({ kind: 'message', message: { type: 'ruleAdd', command: '--global ask first' } });
+    expect(resolveSlash('/rules', null).kind).toBe('message');
+    expect(parseWebviewMessage({ type: 'ruleRemove', id: 0 })).toBeUndefined();
+    expect(parseWebviewMessage({ type: 'ruleAdd', command: ' ' })).toBeUndefined();
+  });
+
+  it('the answer to /rules lists the rules of this session first', () => {
+    expect(rulesNotice([])).toBe('No temporary rules are active.');
+    const text = rulesNotice([
+      { line: '#3  session 5ff11351  until …  theirs', applies: false },
+      { line: '#2  this session  until …  mine', applies: true },
+    ]);
+    expect(text.split('\n')).toEqual([
+      'Temporary rules that apply to this session:',
+      '#2  this session  until …  mine',
+      'Temporary rules of other sessions and projects:',
+      '#3  session 5ff11351  until …  theirs',
+      '/rule-remove <id> removes one.',
+    ]);
   });
 });
 

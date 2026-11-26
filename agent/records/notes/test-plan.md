@@ -1301,3 +1301,17 @@ Cua desktop, the working tree after `e8f458f` with the one-message-per-turn rele
 | "Send now" on "third" while the turn of "second" runs | ok: the turn is interrupted at its running command and "third" is the next message (read back with `calu attach --plain`) |
 | "Send now" on one of several held messages in the same turn: the others stay held | only in the unit test (`test_sending_one_held_message_now_keeps_the_others_held`); the click in the desktop came after the turn had ended |
 | The web chat pane | open: rebuilt from the same sources, not looked at in a browser |
+
+### P. Temporary rules (`temporary-rules-design.md`), by step
+
+Cua desktop, scripted backend, VSCode extension built from the working tree after `b647fe0`.
+
+| Case | Result |
+|---|---|
+| Step 3, VSCode chat: `/rule 2h Claude may run make without asking` in an attached session | ok: "Temporary rule added: #1 this session until …" as a notice; nothing is sent to Claude. Screenshot: `screenshots/vscode-rules-chat.png` |
+| `/rule 30m --global Never push to a remote`, then `/rules` | ok: both listed under "Temporary rules that apply to this session", newest first |
+| `/rule-remove 1`, `/rule-remove 2`, `/rules` | ok: each removal is answered with the rule, then "No temporary rules are active." |
+| `/rule 9d too long` | ok: refused, "a rule lasts at most 7 days; a rule for longer belongs in the checker instructions" |
+| `/rule --lift-builtin calu may serve` | ok: refused; the message names the web settings and `calu rule add --lift-builtin` |
+| That a checker's prompt holds the rule | only in the unit tests: the scripted checkers do not read instructions |
+| The web chat pane, `calu attach`, the PyCharm plugin | open |
