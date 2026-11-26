@@ -361,8 +361,34 @@ def _flock(fd: int, deadline: float) -> None:
         raise failed[0]
 
 
+def _file_uid(status: Path = Path("/proc/thread-self/status")) -> int:
+    """Return the uid the calling thread's file access uses (its file-system uid).
+
+    Usually the effective uid. A root `calu serve` that works for a user (`calu.asuser.enter`)
+    keeps the effective uid 0 and sets the file-system uid to the user's: the directories it
+    creates belong to the user, and the lock directory is to be compared with that uid.
+
+    Args:
+        status: The thread's status file (Linux), whose `Uid:` line lists the real,
+            effective, saved and file-system uid.
+
+    Returns:
+        The file-system uid from `status`; the effective uid where it cannot be read.
+    """
+    try:
+        for line in status.read_text().splitlines():
+            if line.startswith("Uid:"):
+                return int(line.split()[4])
+    except (OSError, ValueError, IndexError):
+        pass
+    return os.geteuid()
+
+
 def _check_private(directory: Path) -> None:
     """Refuse a lock directory that another user could change.
+
+    The directory must belong to the uid this thread's file access uses (`_file_uid`): the
+    user's under a root `calu serve` that works for that user, else this process's.
 
     Args:
         directory: The directory, resolved.
@@ -374,7 +400,7 @@ def _check_private(directory: Path) -> None:
     info = os.lstat(directory)
     if not stat.S_ISDIR(info.st_mode):
         raise OSError(errno.ENOTDIR, f"the lock directory {directory} is not a directory")
-    if info.st_uid != os.geteuid():
+    if info.st_uid != _file_uid():
         raise OSError(errno.EPERM, f"the lock directory {directory} belongs to another user")
     if info.st_mode & 0o022:
         raise OSError(

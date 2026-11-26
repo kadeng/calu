@@ -325,6 +325,25 @@ def test_a_directory_that_others_can_write_is_refused(tmp_path: Path) -> None:
         FileLockSpace(directory)
 
 
+def test_the_owner_is_compared_with_the_file_system_uid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The owner, 2026-11-26: every step of a root `calu serve --user` session was refused
+    with "the lock directory ... belongs to another user". After `asuser.enter` the process
+    keeps euid 0 while its file access, and the directory it creates, are the user's."""
+    status = tmp_path / "status"
+    status.write_text("Name:\tpython\nUid:\t0\t0\t0\t1000\nGid:\t0\t0\t0\t1000\n")
+    assert filelocks._file_uid(status) == 1000
+    assert filelocks._file_uid(tmp_path / "missing") == os.geteuid()
+    assert filelocks._file_uid() == os.geteuid()  # this test process switched nothing
+
+    directory = tmp_path / "locks"
+    FileLockSpace(directory)  # created and owned by this process's file uid: accepted
+    monkeypatch.setattr(filelocks, "_file_uid", lambda: os.geteuid() + 1)
+    with pytest.raises(OSError, match="belongs to another user"):
+        FileLockSpace(directory)
+
+
 def test_a_file_left_at_the_temporary_name_is_replaced_not_followed(tmp_path: Path) -> None:
     space = FileLockSpace(tmp_path / "locks")
     victim = tmp_path / "victim.txt"
