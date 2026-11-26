@@ -63,7 +63,9 @@ to `~/.cache/calu-uitest/share/`.
 
 How the owner wants to work, as learned in this session:
 
-- The owner tests by hand first, and the agent fixes what they find.
+- For the fixes of this session, the owner tested by hand first and the agent fixed what they
+  found. From the temporary rules on, this is reversed: the agent runs the UI tests in the Cua
+  desktop and makes sure everything works end to end before the owner tests by hand.
 - Say so before a long stretch of work without a chance to interact.
 - Keep test runs short until the owner asks for full testing.
 - Merge `origin/main` after every commit.

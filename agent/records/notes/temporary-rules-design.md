@@ -195,7 +195,8 @@ The limits below are Claude's proposal for B; the owner chose B, not these detai
 5. Claude is not told which rules are active ("it might be too easy to exploit if it definitely
    knows which rules apply to it").
 6. The changeset checker reads the rules too.
-7. Every UI part is tested in the Cua desktop as it is added, not only at the end.
+7. Every UI part is tested in the Cua desktop as it is added, not only at the end. The whole
+   feature works end to end in the Cua desktop before the owner tests it by hand.
 
 ## 8. Plan of work
 
