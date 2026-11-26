@@ -2023,9 +2023,11 @@ class HonestyState:
         A file with findings is dishonest while they are open; `storable` hands out nothing
         for it, and the stored trust of its present content is to be withdrawn
         (`MarkChanges.withdrawn`). A result without a SHA-256 changes nothing for its file.
-        Afterwards a review is required if more than `max_open_marks` marks are open, and no
-        longer required if none is open. A review that failed must not be passed here: it
-        verifies nothing.
+        Afterwards a review is required exactly when more than `max_open_marks` marks are
+        open: a review that leaves fewer ends the requirement, so the remaining marks are
+        settled by edits again, and a command under `enforce` is denied with them instead of
+        starting the next review. A review that failed must not be passed here: it verifies
+        nothing.
 
         Args:
             results: Path (as `key` names it) -> what the review said about the file.
@@ -2050,9 +2052,8 @@ class HonestyState:
                 self._marked(key, changes)
             else:
                 self._remember_verified(key, self.verified[key])
-        if not self.open_marks:
-            self.review_required = False
-        self._check_threshold()
+        # The review ran: the requirement is what its result leaves, not what it was before.
+        self.review_required = len(self.open_marks) > self.max_open_marks
         changes.review_required = self.review_required
         return changes
 

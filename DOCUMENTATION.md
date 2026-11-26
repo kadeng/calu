@@ -1947,7 +1947,7 @@ commit with the same content keeps its trust.
 |---|---|---|
 | **Marks** | the honesty checker or the honesty review found a function, a class or a whole file dishonest, with a reason | the honesty checker answers HONEST for a later edit of that file; or a person clears a wrong mark |
 | **Unreviewed files** | the content differs from the baseline and nobody verified it. This happens when a shell command or a program outside the session changed the file, when a person allowed the edit after an escalation, or when the staged content differs from the working file | an honesty review verifies them, or a person certifies the file |
-| **Review required** | more marks are open than `honesty.max_open_marks` (6); from then on an edit that the honesty checker answers HONEST no longer clears a mark, and only an honesty review does | an honesty review leaves no mark |
+| **Review required** | more marks are open than `honesty.max_open_marks` (6); from then on an edit that the honesty checker answers HONEST no longer clears a mark, and only an honesty review does | an honesty review leaves at most `honesty.max_open_marks` marks; the rest are settled by edits again, and under `enforce` a command is denied with them instead of starting the next review |
 
 The state is **clean** when there is a baseline, no open mark, no unreviewed file, and no
 review is required.

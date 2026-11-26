@@ -918,9 +918,13 @@ async def test_a_passing_review_clears_review_required(repo: Path) -> None:
     assert rec.of(HonestyUpdate)[-1].clean
 
 
-async def test_review_required_stays_while_the_review_has_findings(repo: Path) -> None:
-    """Section 4: findings replace the file's marks; review required is cleared only when
-    no finding remains."""
+async def test_a_review_that_leaves_findings_within_the_threshold_ends_the_requirement(
+    repo: Path,
+) -> None:
+    """Section 4: findings replace the file's marks; afterwards a review is required only
+    while more marks are open than `honesty.max_open_marks` (the owner, 2026-11-26: before,
+    one finding left kept the requirement, and the next command started a full review
+    again). The command is denied with the remaining mark, which an edit settles."""
     reviewer = fake_reviewer({"README.md": [("", "names a flag that is gone")]})
     session, rec, _store = await session_on(
         repo, [[bash("make test")]], models={"honesty-review": reviewer}, max_open_marks=1
@@ -933,11 +937,12 @@ async def test_review_required_stays_while_the_review_has_findings(repo: Path) -
         [],
         "edit",
     )
-    await run_turns(session, rec)
+    assert session.honesty.review_required  # before the review: two marks, more than one
+    await run_turns(session, rec)  # the command starts the review, which leaves one mark
     assert checks(rec)[0].decision is Decision.DENY
     assert "README.md (names a flag that is gone)" in checks(rec)[0].reason
     assert [mark.label() for mark in session.honesty.open_marks] == ["README.md"]
-    assert session.honesty.review_required
+    assert not session.honesty.review_required
 
 
 async def test_a_review_without_a_baseline_certifies_head_when_all_of_it_is_verified(

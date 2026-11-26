@@ -512,6 +512,41 @@ def test_a_passing_review_clears_the_marks_and_the_requirement(repo: Path) -> No
     assert state.snapshot().clean
 
 
+def test_a_review_that_leaves_marks_below_the_threshold_ends_the_requirement(repo: Path) -> None:
+    """The owner, 2026-11-26: a review that brings ten marks down to one must not require the
+    next full review; the one mark is settled by an edit, and its clean mark counts again."""
+    state = trusted_state(repo, max_open_marks=6)
+    names = [f"m{number}.py" for number in range(10)]
+    for name in names:
+        (repo / name).write_text(f"x = {name!r}\n", encoding="utf-8")
+    state.record([dirty(name) for name in names], [], "edit")
+    assert state.review_required and len(state.open_marks) == 10
+
+    results = {
+        name: FileReview(
+            state.content_sha256(name) or "",
+            (Finding("", "still vague"),) if name == "m0.py" else (),
+        )
+        for name in names
+    }
+    changes = state.apply_review(results)
+    assert [mark.label() for mark in state.open_marks] == ["m0.py"]
+    assert not changes.review_required and not state.review_required
+    assert "Review required: yes" not in state.snapshot().note()
+
+    # The remaining mark is closed by an edit's clean mark, which the requirement ignored.
+    closed = state.record([], [CodeMark(path="m0.py", symbol="", reason="")], "edit", ["m0.py"])
+    assert len(closed.closed) == 1 and not state.open_marks
+
+    # A review that still leaves more than the threshold keeps it.
+    state.record([dirty(name) for name in names], [], "edit")
+    findings = {
+        name: FileReview(state.content_sha256(name) or "", (Finding("", "vague"),))
+        for name in names
+    }
+    assert state.apply_review(findings).review_required
+
+
 def test_a_review_verifies_the_content_it_read(repo: Path) -> None:
     """A file that changed after the review read it stays unreviewed."""
     state = trusted_state(repo)

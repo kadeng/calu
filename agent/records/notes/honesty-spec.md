@@ -48,7 +48,10 @@ working tree and the baseline, never persisted):
   the baseline, ignoring what git ignores) and the verified map. Without a baseline every file
   counts as unreviewed; represent that as a flag, not as a list of every file.
 - **Review required**: set when the number of open marks exceeds `honesty.max_open_marks`
-  (default 3, counted over all files). It stays set until an honesty review passes.
+  (default 6, counted over all files). It stays set until an honesty review ran; after the
+  review it is set exactly when more marks are open than that (2026-11-26; before, it was
+  cleared only by a review that left no mark, so one remaining finding started the next full
+  review at the next command).
 
 The state is **clean** when there is a baseline, no open mark, no unreviewed file and no
 review is required.
