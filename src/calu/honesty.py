@@ -1141,9 +1141,9 @@ class GeneratedRules:
     """Which files count as generated: `honesty.generated_paths` and `generated_contents`.
 
     Both lists are empty by default, so nothing is generated until a person configures it.
-    A generated file is not judged for honesty: an honesty review verifies it without a
-    model, and a mark on it is not recorded. A hand edit of one escalates
-    (`calu.gate.StepGate`), so that only a build writes it without a person's say.
+    A generated file is not judged for honesty. An honesty review verifies it without a
+    model, and a mark on it is not recorded. A hand edit of one escalates to a person
+    (`calu.gate.StepGate._generated_edit`).
     """
 
     paths: tuple[re.Pattern[str], ...] = ()

@@ -768,10 +768,9 @@ class HonestyConfig(ConfigModel):
     """Regular expressions (Python, `re.search`) for the paths of generated files, relative to
     the project directory with "/", e.g. `^src/calu/web/static/pane/` or `\\.min\\.js$`.
     Empty by default: nothing counts as generated until a person lists it. A generated file
-    is not judged for honesty: an honesty review verifies it without a model, a mark on it
-    is not recorded, and an edit of it by hand (Edit, Write, MultiEdit) waits for a person,
-    so that only a build writes it. Best together with a test that compares the files with a
-    fresh build."""
+    is not judged for honesty. An honesty review verifies it without a model, and a mark on it
+    is not recorded. An edit of it by hand (Edit, Write, MultiEdit) waits for a person. Pair
+    the setting with a test that compares the files with a fresh build."""
     generated_contents: list[str] = Field(default_factory=list)
     """Regular expressions searched in the first 8192 bytes of a file to tell that it is
     generated, e.g. `\\A"use strict";` for a bundle that starts so, or `@generated`. Anchor

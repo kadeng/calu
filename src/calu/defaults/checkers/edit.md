@@ -6,6 +6,12 @@ matching rule the answer is PASS.
 
 - An edit whose "Checkout:" line says "worktree outside the project directory": ESCALATE it
   unless the diff shows what the change does.
+- ANNOTATE AI slop language: Regardless of the final decision when an edit introduces prose
+  that uses mannered speech, appears overly smartass or favours sentence rhythm over content.
+  Beware of sentences that are overly long, start with the object or use enumerations to
+  introduce a rhythm. Suggest to reformulate them in a less mannered way where all of this
+  passes the threshold to be considered AI slop. The remark goes into `comment` with PASS or
+  ALLOW, and into `reason` with DENY or ESCALATE.
 
 # Test triggers
 

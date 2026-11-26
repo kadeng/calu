@@ -146,6 +146,9 @@ outside the Windows checkout: `UV_PROJECT_ENVIRONMENT=$HOME/.cache/calu-venv`).
   `DOC` rules enforce this for `src/`.
 - Plain technical language in code and documents: subject before object, no mannered phrasing;
   prefer diagrams or math notation over long prose about multi-step interactions.
+- A remark from calu's checkers or a reviewer, style included, is a reason to look again: check
+  whether it is right, then decide with your own judgement. Do not dismiss one as "style only".
+  Prose style decides whether the project is taken seriously.
 - Tests that need a real `claude` or model API keys are marked `live`; tests that need the
   database are marked `db`. Live checker tests use Nemotron Lightning on Fireworks; if Mistral
   is used, small models only, never Mistral Medium or Large.
