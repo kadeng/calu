@@ -35,6 +35,7 @@ checker's marks and verifications to the state after the tool call succeeded, an
 
 from __future__ import annotations
 
+import ast
 import difflib
 import functools
 import hashlib
@@ -197,13 +198,18 @@ SETTLE_NS = 2_000_000_000
 """A file's hashes are remembered with its size and times only when its last change is at
 least this old, so that two writes within the clock's resolution are both seen."""
 
-REVIEW_FILE_BYTES = 200_000
-"""The largest text, in bytes of UTF-8, that an honesty review hands to its reviewer for one
-file: the file's diff against the baseline's content where the baseline holds the file, the
-whole file otherwise. A file with a longer text is skipped and stays unreviewed, so a person
-decides about it (`calu honesty trust --file`)."""
+REVIEW_FILE_BYTES = 600_000
+"""The default of `honesty.review_file_bytes`: the largest text, in bytes of UTF-8, that an
+honesty review hands to its reviewer for one file (about 150,000 tokens): its diff, the whole
+file, or a marked file's diff with its marked definitions. A file with a longer text is
+skipped and stays unreviewed, so a person decides about it (`calu honesty trust --file`)."""
 
-REVIEW_READ_BYTES = 2_000_000
+SMALL_FILE_BYTES = 30_000
+"""A file with an open mark up to this size is shown whole; `HonestyState.review_plan` shows a
+larger one as its diff with the present source of its marked definitions, where
+`marked_excerpts` can cut them out."""
+
+REVIEW_READ_BYTES = 8_000_000
 """The largest file, in bytes, that an honesty review reads to hash and to compare with the
 baseline's content, and the largest baseline content it reads. A larger file is skipped like
 one whose text for the reviewer is over `REVIEW_FILE_BYTES`."""
@@ -421,6 +427,12 @@ class ReviewFile:
     against: Literal["baseline", "verified"] = "baseline"
     """For a diff: whether it is the change since the baseline's content, or since the content
     last verified in this session (`VerifiedTexts`)."""
+    excerpts: str = ""
+    """For a diff of a file with open marks: the present source of the marked definitions
+    (`marked_excerpts`), shown after the diff."""
+    content: str = ""
+    """For a diff: the whole present content, which a second round shows when the reviewer
+    asks for it (`FileVerdict.needs_whole_file`); "" when `whole`."""
 
 
 @dataclass(frozen=True)
@@ -1117,6 +1129,58 @@ def change_diff(before: str, after: str, path: str, context: int = 3) -> str:
     return "\n".join(lines)
 
 
+def marked_excerpts(text: str, path: str, symbols: Sequence[str]) -> str | None:
+    """Cut the present source of a file's marked definitions out of it, for the reviewer.
+
+    Only Python is understood: the file must parse, and every symbol must name a function or
+    class by its dotted name (`Parser.fields`; a trailing "()" is ignored). Each excerpt is
+    the definition with its decorators, headed by its line numbers.
+
+    Args:
+        text: The file's present content.
+        path: Its path; only a `.py` file gives excerpts.
+        symbols: The symbols of the file's open marks; "" stands for the whole file.
+
+    Returns:
+        The excerpts, one after the other; None if the file is not Python, does not parse, a
+        mark is on the whole file, or a symbol names no definition (then the whole file is to
+        be shown).
+    """
+    if not path.endswith(".py") or not symbols:
+        return None
+    try:
+        tree = ast.parse(text)
+    except SyntaxError, ValueError:
+        return None
+    found: dict[str, ast.AST] = {}
+
+    def visit(node: ast.AST, prefix: str) -> None:
+        """Collect the functions and classes below `node` by their dotted names.
+
+        Args:
+            node: A module, class or function node.
+            prefix: The dotted name of `node`, "" for the module.
+        """
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                name = f"{prefix}.{child.name}" if prefix else child.name
+                found.setdefault(name, child)
+                visit(child, name)
+
+    visit(tree, "")
+    lines = text.splitlines()
+    parts: list[str] = []
+    for symbol in dict.fromkeys(normal_symbol(one) for one in symbols):
+        node = found.get(symbol)
+        if not symbol or node is None:
+            return None
+        decorators = getattr(node, "decorator_list", [])
+        first = min([node.lineno, *(one.lineno for one in decorators)])  # type: ignore[attr-defined]
+        last = node.end_lineno or node.lineno  # type: ignore[attr-defined]
+        parts.append(f"# lines {first}-{last}: {symbol}\n" + "\n".join(lines[first - 1 : last]))
+    return "\n\n".join(parts)
+
+
 def normal_symbol(symbol: str) -> str:
     """Normalise a symbol as a checker wrote it.
 
@@ -1464,6 +1528,9 @@ class HonestyState:
         no honesty review reads: calu's own output inside the project (the session traces,
         agent/records/PLAN.md D232). The session sets it when the configuration changes."""
         self.review_required = False
+        self.file_bytes = REVIEW_FILE_BYTES
+        """The largest text for the reviewer of one file (`review_plan`).
+        `Session._refresh_trust` copies `honesty.review_file_bytes` into it."""
         self.context_lines = DIFF_CONTEXT_LINES
         """Lines of context around each change of a diff for the reviewer (`review_plan`).
         `Session._refresh_trust` copies `honesty.review_context_lines` into it before each
@@ -2122,7 +2189,13 @@ class HonestyState:
             comes before the rules above                    -> verified without a model
             no open mark, the baseline holds the path as
             a file, and the change is whitespace only       -> verified without a model
-            an open mark                                    -> the reviewer gets the whole file
+            an open mark, a file larger than
+            `SMALL_FILE_BYTES` with an earlier content to
+            compare with (below), and every marked symbol
+            names a definition (`marked_excerpts`)          -> the reviewer gets the diff and
+                                                               the present source of the
+                                                               marked definitions
+            another open mark                               -> the reviewer gets the whole file
             the content this session verified last for
             the file is another one, and its text is kept
             (`VerifiedTexts`)                               -> the reviewer gets the diff
@@ -2135,9 +2208,12 @@ class HonestyState:
 
         The diffs have `context_lines` lines of context around each change. The text of every
         content read here is kept in `HonestyShared.texts`, so that the next review of the file,
-        once this content is verified, shows only the change since it. A file whose text for
-        the reviewer (the diff, or the whole file) is larger than `REVIEW_FILE_BYTES` is
-        skipped. So a small change of a large file is reviewed, and a large new file is not.
+        once this content is verified, shows only the change since it. A diff carries the
+        whole present content too (`ReviewFile.content`), for a second round in which the
+        reviewer reads the whole file (`calu.checkers.honesty_review`). A file whose text for
+        the reviewer (the diff with its excerpts, or the whole file) is larger than
+        `file_bytes` is skipped. So a small change of a large file is reviewed, and a large new
+        file is not.
 
         Args:
             max_files: `honesty.review_max_files`. With more files to judge the plan has only
@@ -2228,16 +2304,16 @@ class HonestyState:
                 against = "verified"
             elif top is not None:
                 before = self._baseline_text(top, tree, key)
-            whole = before is None or bool(marks)
+            excerpts = ""
+            if marks and before is not None and len(data) > SMALL_FILE_BYTES:
+                # A large marked file: its change, and the marked definitions as they are now.
+                excerpts = marked_excerpts(text, key, [mark.symbol for mark in marks]) or ""
+            whole = before is None or (bool(marks) and not excerpts)
             if before is not None and not marks and whitespace_only(before, text):
                 shortcuts[key] = FileReview(ids.sha256, marks=())
                 continue
-            shown_text = (
-                text
-                if before is None or marks
-                else change_diff(before, text, key, self.context_lines)
-            )
-            if len(shown_text.encode("utf-8")) > REVIEW_FILE_BYTES:
+            shown_text = text if whole else change_diff(before or "", text, key, self.context_lines)
+            if len(shown_text.encode("utf-8")) + len(excerpts.encode("utf-8")) > self.file_bytes:
                 what = (
                     "the file"
                     if whole
@@ -2245,10 +2321,19 @@ class HonestyState:
                     if against == "baseline"
                     else "its change since the content last verified"
                 )
-                skipped.append((key, f"{what} is larger than {REVIEW_FILE_BYTES} bytes"))
+                skipped.append((key, f"{what} is larger than {self.file_bytes} bytes"))
                 continue
             files.append(
-                ReviewFile(key, ids.sha256, shown_text, whole=whole, marks=marks, against=against)
+                ReviewFile(
+                    key,
+                    ids.sha256,
+                    shown_text,
+                    whole=whole,
+                    marks=marks,
+                    against=against,
+                    excerpts=excerpts,
+                    content="" if whole else text,
+                )
             )
         return ReviewPlan(
             base,

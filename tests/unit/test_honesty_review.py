@@ -35,6 +35,7 @@ from calu.defaults.instructions import honesty_rules, review_instructions
 from calu.honesty import (
     REVIEW_FILE_BYTES,
     REVIEW_READ_BYTES,
+    SMALL_FILE_BYTES,
     Baseline,
     FileReview,
     Finding,
@@ -179,13 +180,15 @@ def test_files_without_code_are_verified_without_a_model(repo: Path) -> None:
 
 def test_a_small_change_of_a_large_file_is_reviewed_as_its_diff(repo: Path) -> None:
     """The size limit is for the text the reviewer gets: a lock file of 240 kB with one new
-    line is reviewed; the same file rewritten in every line is skipped."""
+    line is reviewed; the same file rewritten in every line is skipped (with a limit of 200 kB;
+    the default, `REVIEW_FILE_BYTES`, takes the whole file)."""
     lock = "".join(f'name = "package-{number}"\n' for number in range(10_000))
-    assert len(lock) > REVIEW_FILE_BYTES
+    assert 200_000 < len(lock) < REVIEW_FILE_BYTES
     (repo / "uv.lock").write_text(lock, encoding="utf-8")
     git(repo, "add", "uv.lock")
     git(repo, "commit", "-q", "-m", "lock")
     state = trusted_state(repo)
+    state.file_bytes = 200_000
 
     (repo / "uv.lock").write_text(lock + 'name = "one-more"\n', encoding="utf-8")
     plan = state.review_plan(300)
@@ -197,8 +200,11 @@ def test_a_small_change_of_a_large_file_is_reviewed_as_its_diff(repo: Path) -> N
     (repo / "uv.lock").write_text(lock.replace("package", "module"), encoding="utf-8")
     plan = state.review_plan(300)
     assert plan.files == () and plan.skipped == (
-        ("uv.lock", f"its change against the baseline is larger than {REVIEW_FILE_BYTES} bytes"),
+        ("uv.lock", "its change against the baseline is larger than 200000 bytes"),
     )
+    state.file_bytes = REVIEW_FILE_BYTES
+    (only,) = state.review_plan(300).files
+    assert only.whole is False and only.content.startswith('name = "module-0"')
 
 
 def test_a_change_after_a_verified_edit_is_shown_since_that_content(repo: Path) -> None:
@@ -229,10 +235,8 @@ def test_a_change_after_a_verified_edit_is_shown_since_that_content(repo: Path) 
     assert narrow.text.count("\n ") == 2
 
     restarted = trusted_state(repo)  # a new session: no texts, nothing verified
-    plan = restarted.review_plan(300)
-    assert plan.files == () and plan.skipped == (
-        ("uv.lock", f"its change against the baseline is larger than {REVIEW_FILE_BYTES} bytes"),
-    )
+    (again,) = restarted.review_plan(300).files
+    assert again.against == "baseline" and len(again.text) > 200_000
 
 
 def test_a_file_in_the_place_of_a_symbolic_link_is_reviewed_whole(repo: Path) -> None:
@@ -407,12 +411,15 @@ def test_a_commit_is_certified_without_a_baseline_only_when_all_of_it_is_verifie
 # ------------------------------------------------------------------ the reviewer
 
 
-def test_batches_are_bounded_by_files_and_by_characters() -> None:
-    """A batch closes at `batch_files` files or `batch_chars` characters."""
+def test_batches_are_bounded_by_files_and_by_bytes() -> None:
+    """A batch closes at `batch_files` files or `batch_bytes` bytes of text and excerpts."""
     files = [file(f"f{number}.py", "x" * 40) for number in range(5)]
     assert [len(batch) for batch in batches(files, 2)] == [2, 2, 1]
-    assert [len(batch) for batch in batches(files, 8, batch_chars=100)] == [2, 2, 1]
-    assert [len(batch) for batch in batches(files, 8, batch_chars=10)] == [1, 1, 1, 1, 1]
+    assert [len(batch) for batch in batches(files, 8, batch_bytes=100)] == [2, 2, 1]
+    assert [len(batch) for batch in batches(files, 8, batch_bytes=10)] == [1, 1, 1, 1, 1]
+    assert [len(batch) for batch in batches([file("u.py", "ü" * 30)] * 2, 8, 100)] == [1, 1]
+    excerpted = ReviewFile("e.py", "0" * 64, "x" * 40, whole=False, excerpts="y" * 40)
+    assert [len(batch) for batch in batches([excerpted] * 2, 8, 100)] == [1, 1]
     assert batches([], 8) == []
 
 
@@ -450,10 +457,13 @@ def test_an_answer_must_name_every_file_once_and_agree_with_itself() -> None:
             FileVerdict(file=1, honest=True),
         ]
     )
-    assert verdicts(batch, good) == {
-        "a.py": FileReview("0" * 64, marks=()),
-        "b.py": FileReview("0" * 64, (Finding("f", "r"),), marks=()),
-    }
+    assert verdicts(batch, good) == (
+        {
+            "a.py": FileReview("0" * 64, marks=()),
+            "b.py": FileReview("0" * 64, (Finding("f", "r"),), marks=()),
+        },
+        [],
+    )
     one = FileVerdict(file=1, honest=True)
     for bad in (
         [one],
@@ -544,6 +554,92 @@ async def test_one_failed_batch_fails_the_whole_review(tmp_path: Path) -> None:
     assert outcome.results == {}
     assert outcome.problem.startswith("The honesty review failed: batch 4 of 5 failed (")
     assert "the model is down" in outcome.problem
+
+
+def whole_file_asking_reviewer(requests: list[str]) -> Model:
+    """Create a reviewer model that asks to read every diff whole, and judges whole files.
+
+    Args:
+        requests: Gets the text of each request.
+
+    Returns:
+        A model that answers `needs_whole_file` for a file shown as a diff and "honest" for a
+        file shown whole.
+    """
+
+    async def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        """Answer per file of the request, by how it is shown.
+
+        Args:
+            messages: The message history.
+            info: Agent information; its first output tool receives the answer.
+
+        Returns:
+            A response that calls the output tool.
+        """
+        prompt = str(messages[-1])
+        requests.append(prompt)
+        shown = prompt.split("## File ")[1:]
+        files = [
+            {"file": number, "honest": True, "needs_whole_file": "as a unified diff" in part}
+            for number, part in enumerate(shown, start=1)
+        ]
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"files": files})])
+
+    return FunctionModel(answer, model_name="whole-file-asking-reviewer")
+
+
+async def test_a_diff_that_is_not_enough_is_reviewed_whole_in_a_second_round(
+    tmp_path: Path,
+) -> None:
+    """The owner, 2026-11-26: a diff with context is often enough; where it is not, the
+    reviewer reads the whole file, and only a whole file too large for it is not judged."""
+    requests: list[str] = []
+    reviewer = HonestyReviewer(
+        "judge", whole_file_asking_reviewer(requests), tmp_path, file_bytes=1_000
+    )
+    small = ReviewFile("a.py", "1" * 64, "@@ -1 +1 @@\n-x\n+y\n", False, content="y = 1\n")
+    large = ReviewFile("b.py", "2" * 64, "@@ -1 +1 @@\n-x\n+z\n", False, content="z" * 2_000)
+    shown_whole = file("c.py")
+    outcome = await reviewer.review([small, large, shown_whole], "abc")
+    assert not outcome.problem
+    assert sorted(outcome.results) == ["a.py", "c.py"]
+    assert outcome.results["a.py"] == FileReview("1" * 64, marks=())
+    assert outcome.unjudged == {
+        "b.py": "the reviewer needed the whole file, which is larger than 1000 bytes"
+    }
+    assert len(requests) == 2
+    second = requests[1]  # the request's repr: line breaks are written as \n
+    assert "## File 1: a.py" in second and "The whole file:" in second and "y = 1" in second
+    assert "b.py" not in second and "c.py" not in second
+
+
+def test_a_large_marked_file_is_shown_as_its_diff_with_the_marked_definitions(
+    repo: Path,
+) -> None:
+    """A mark on one function of a large file: the change and that function, not the file."""
+    body = "".join(f"def helper_{number}():\n    return {number}\n\n\n" for number in range(1500))
+    marked = 'class Parser:\n    def fields(self):\n        """Sorted."""\n        return []\n'
+    source = body + marked
+    assert len(source) > SMALL_FILE_BYTES
+    (repo / "big.py").write_text(source, encoding="utf-8")
+    git(repo, "add", "big.py")
+    git(repo, "commit", "-q", "-m", "big")
+    state = trusted_state(repo)
+    (repo / "big.py").write_text(source.replace("return []", "return [1]"), encoding="utf-8")
+    state.record(
+        [CodeMark(path="big.py", symbol="Parser.fields()", reason="not sorted")], [], "edit"
+    )
+    (only,) = state.review_plan(300).files
+    assert only.whole is False and "+        return [1]" in only.text
+    assert only.excerpts.startswith("# lines ") and "def fields(self):" in only.excerpts
+    assert "def helper_" not in only.excerpts
+    assert "The marked definitions as they are now:" in batch_prompt([only], "abc")
+
+    # A mark that names no definition, or one on the whole file: the whole file.
+    state.record([CodeMark(path="big.py", symbol="", reason="all of it")], [], "edit")
+    (whole,) = state.review_plan(300).files
+    assert whole.whole and whole.excerpts == ""
 
 
 async def test_a_review_over_its_time_fails(tmp_path: Path) -> None:

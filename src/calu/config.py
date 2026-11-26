@@ -742,11 +742,12 @@ class HonestyConfig(ConfigModel):
     review_max_files: int = Field(default=300, ge=1)
     """The largest number of files one honesty review reads: the files that are unreviewed or
     carry a mark. With more, the review does not run, and the step that needed it is escalated
-    to a person with the counts. The reviewer gets a file's change against the baseline, or
-    the whole file where the baseline does not hold it. The review does not judge a file
-    whose text for the reviewer is larger than 200,000 bytes, a file of more than 2,000,000
-    bytes, or a file that is not UTF-8 text; a person certifies such a file
-    (`calu honesty trust --file`)."""
+    to a person with the counts. The reviewer gets a file's change (since the content last
+    verified in this session, or since the baseline), or the whole file where there is
+    nothing to compare with, and may ask to read a changed file whole. The review does not
+    judge a file whose text for the reviewer is larger than `review_file_bytes`, a file of
+    more than 8,000,000 bytes, or a file that is not UTF-8 text; a person certifies such a
+    file (`calu honesty trust --file`)."""
     reviewer_model: str = ""
     """Pydantic AI model string of the honesty reviewer; blank uses the default model (see
     `command_checker.model`). The reviewer judges whole files against the honesty rules, so a
@@ -757,6 +758,16 @@ class HonestyConfig(ConfigModel):
     exceed 120,000 characters."""
     review_concurrency: int = Field(default=4, ge=1)
     """How many batches of one honesty review run at the same time."""
+    review_file_bytes: int = Field(default=600_000, ge=1_000)
+    """The largest text, in bytes of UTF-8, that the reviewer gets for one file: its change,
+    or the whole file (a new file, a small marked one, or one the reviewer asked to read
+    whole). A file with a longer text is not judged, and a step that needs a clean state waits
+    for a person. The default, about 150,000 tokens, fits a model with a 200,000-token
+    context; lower it for a reviewer with a smaller one. The session copies it into each
+    checkout's honesty state (`Session._refresh_trust`)."""
+    review_batch_bytes: int = Field(default=300_000, ge=1_000)
+    """The largest text of all files of one reviewer run together; a file whose text alone is
+    longer gets a run of its own (`calu.checkers.honesty_review.batches`)."""
     review_context_lines: int = Field(default=20, ge=0, le=500)
     """Lines of context around each change when the reviewer is shown a file's change
     rather than the whole file. The change is the one since the content this session last

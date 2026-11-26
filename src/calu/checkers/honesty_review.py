@@ -5,9 +5,12 @@ files that are unreviewed or carry marks. calu computes which files those are an
 reviewer is shown (`calu.honesty.HonestyState.review_plan`); this module only asks the model:
 
     files of the plan
-      -> batches (`batches`: at most `batch_files` files and `BATCH_CHARS` characters each)
+      -> batches (`batches`: at most `batch_files` files and `batch_bytes` bytes each)
       -> one agent run per batch, at most `concurrency` at a time, each with `usage_limits`
-      -> one `FileReview` per file: honest, or findings (symbol, reason)
+      -> one `FileReview` per file: honest, or findings (symbol, reason); or, for a file shown
+         as a diff, "needs the whole file" (`FileVerdict.needs_whole_file`)
+      -> a second round of batches for those files, each whole if it fits `file_bytes`
+         (`whole_files`); a longer one is not judged (`ReviewOutcome.unjudged`)
 
 The agent has the instructions `system/honesty-review.md` followed by the honesty rules, and
 the read-only tools of `calu.checkers.tools`. The files' texts are untrusted data and are put
@@ -38,6 +41,7 @@ from calu.checkers.tools import CodeTools
 from calu.honesty import (
     NOTE_PATH_CHARS,
     NOTE_REASON_CHARS,
+    REVIEW_FILE_BYTES,
     FileReview,
     Finding,
     ReviewFile,
@@ -48,9 +52,10 @@ from calu.models import MAX_ANSWER_TOKENS, cache_settings, run_bounded
 
 log = logging.getLogger(__name__)
 
-BATCH_CHARS = 120_000
-"""The largest number of characters of file texts in one batch. A file whose text alone is
-longer gets a batch of its own (`calu.honesty.REVIEW_FILE_BYTES` bounds the text of one file)."""
+BATCH_BYTES = 300_000
+"""The default of `honesty.review_batch_bytes`: the largest number of bytes (UTF-8) of file
+texts in one batch. A file whose text alone is longer gets a batch of its own
+(`honesty.review_file_bytes` bounds the text of one file)."""
 
 
 class ReviewFinding(BaseModel):
@@ -81,6 +86,15 @@ class FileVerdict(BaseModel):
     findings: list[ReviewFinding] = Field(
         default_factory=list[ReviewFinding], description="Empty for an honest file."
     )
+    needs_whole_file: bool = Field(
+        default=False,
+        description=(
+            "Only for a file shown as a diff: true if the change cannot be judged from the "
+            "shown lines and the file's own tools, e.g. a changed body whose documentation "
+            "lies outside them. The whole file is then reviewed in a second request, and "
+            "`honest` and `findings` of this answer are ignored."
+        ),
+    )
 
 
 class ReviewAnswer(BaseModel):
@@ -98,7 +112,11 @@ class ReviewOutcome:
     """The result of one honesty review by the model."""
 
     results: dict[str, FileReview] = field(default_factory=dict[str, FileReview])
-    """Path -> the verdict, for every file that was handed in. Empty if `problem` is set."""
+    """Path -> the verdict, for every file that was handed in and not in `unjudged`. Empty if
+    `problem` is set."""
+    unjudged: dict[str, str] = field(default_factory=dict[str, str])
+    """Path -> why the review did not judge the file: the reviewer asked for the whole file,
+    and it is too large (`whole_files`). Such a file stays unreviewed."""
     problem: str = ""
     """"" if every batch answered; otherwise one sentence saying why the review failed."""
     input_tokens: int = 0
@@ -106,28 +124,30 @@ class ReviewOutcome:
 
 
 def batches(
-    files: Sequence[ReviewFile], batch_files: int, batch_chars: int = BATCH_CHARS
+    files: Sequence[ReviewFile], batch_files: int, batch_bytes: int = BATCH_BYTES
 ) -> list[list[ReviewFile]]:
     """Split the files of a review into batches, in the given order.
 
     Args:
         files: The files for the reviewer.
         batch_files: The largest number of files in one batch; at least 1.
-        batch_chars: The largest sum of the lengths of the files' texts in one batch.
+        batch_bytes: The largest sum of the sizes (UTF-8 bytes) of the files' texts and
+            excerpts in one batch.
 
     Returns:
         The batches. A batch is closed when the next file would make it larger than either
-        limit; a file whose text alone is longer than `batch_chars` is a batch of its own.
+        limit; a file whose text alone is longer than `batch_bytes` is a batch of its own.
     """
     found: list[list[ReviewFile]] = []
     current: list[ReviewFile] = []
     size = 0
     for file in files:
-        if current and (len(current) >= batch_files or size + len(file.text) > batch_chars):
+        own = len(file.text.encode("utf-8")) + len(file.excerpts.encode("utf-8"))
+        if current and (len(current) >= batch_files or size + own > batch_bytes):
             found.append(current)
             current, size = [], 0
         current.append(file)
-        size += len(file.text)
+        size += own
     if current:
         found.append(current)
     return found
@@ -143,8 +163,10 @@ def batch_prompt(batch: Sequence[ReviewFile], baseline: str) -> str:
     Returns:
         A heading, one line about the baseline, and per file: "## File N: path", the open
         marks on it, whether the whole file follows or its change (since the baseline, or
-        since its content last verified, as `ReviewFile.against` says), and the text in a
-        code fence. Paths, symbols and reasons are rendered on one line (`shown`).
+        since its content last verified, as `ReviewFile.against` says), the text in a code
+        fence, and for a marked file shown as a diff the present source of its marked
+        definitions (`ReviewFile.excerpts`) in a second fence. Paths, symbols and reasons are
+        rendered on one line (`shown`).
     """
     parts = [
         "# Files to review",
@@ -175,11 +197,16 @@ def batch_prompt(batch: Sequence[ReviewFile], baseline: str) -> str:
             )
         )
         lines.append(fence(file.text, "" if file.whole else "diff"))
+        if file.excerpts:
+            lines.append("The marked definitions as they are now:")
+            lines.append(fence(file.excerpts, "python"))
         parts.append("\n".join(lines))
     return "\n\n".join(parts)
 
 
-def verdicts(batch: Sequence[ReviewFile], answer: ReviewAnswer) -> dict[str, FileReview]:
+def verdicts(
+    batch: Sequence[ReviewFile], answer: ReviewAnswer
+) -> tuple[dict[str, FileReview], list[ReviewFile]]:
     """Turn the reviewer's answer about a batch into the result per file.
 
     Args:
@@ -187,12 +214,14 @@ def verdicts(batch: Sequence[ReviewFile], answer: ReviewAnswer) -> dict[str, Fil
         answer: The model's answer.
 
     Returns:
-        Path -> `FileReview` with the SHA-256 and the mark ids of the plan, and the findings.
+        (path -> `FileReview` with the SHA-256 and the mark ids of the plan, and the findings;
+        the files shown as a diff that the reviewer asked to read whole, which have no
+        result yet). `needs_whole_file` on a file shown whole is ignored.
 
     Raises:
         ReviewFailed: If the answer does not name every file of the batch exactly once, calls
             a file honest and names findings for it, calls it dishonest without a finding, or
-            has a finding without a reason.
+            has a finding without a reason (checked only for the files that get a result).
     """
     numbers = sorted(verdict.file for verdict in answer.files)
     if numbers != list(range(1, len(batch) + 1)):
@@ -200,8 +229,12 @@ def verdicts(batch: Sequence[ReviewFile], answer: ReviewAnswer) -> dict[str, Fil
             f"the answer names the files {numbers} of a batch of {len(batch)} file(s)"
         )
     found: dict[str, FileReview] = {}
+    wanted: list[ReviewFile] = []
     for verdict in answer.files:
         file = batch[verdict.file - 1]
+        if verdict.needs_whole_file and not file.whole:
+            wanted.append(file)
+            continue
         if verdict.honest == bool(verdict.findings):
             raise ReviewFailed(
                 f"the answer about file {verdict.file} says honest={verdict.honest} with "
@@ -217,7 +250,34 @@ def verdicts(batch: Sequence[ReviewFile], answer: ReviewAnswer) -> dict[str, Fil
             ),
             marks=tuple(mark.id for mark in file.marks),
         )
-    return found
+    return found, wanted
+
+
+def whole_files(
+    wanted: Sequence[ReviewFile], file_bytes: int
+) -> tuple[list[ReviewFile], dict[str, str]]:
+    """Turn the files the reviewer asked to read whole into the files of a second round.
+
+    Args:
+        wanted: Files shown as a diff whose verdict asked for the whole file.
+        file_bytes: `honesty.review_file_bytes`: the largest text for one file.
+
+    Returns:
+        (the files shown whole, with their present content and their marks; path -> why a
+        file is not judged, for each whole content longer than `file_bytes`).
+    """
+    second: list[ReviewFile] = []
+    unjudged: dict[str, str] = {}
+    for file in wanted:
+        if len(file.content.encode("utf-8")) > file_bytes:
+            unjudged[file.path] = (
+                f"the reviewer needed the whole file, which is larger than {file_bytes} bytes"
+            )
+            continue
+        second.append(
+            ReviewFile(file.path, file.sha256, file.content, whole=True, marks=file.marks)
+        )
+    return second, unjudged
 
 
 @dataclass
@@ -241,6 +301,10 @@ class HonestyReviewer:
     max_tokens: int = MAX_ANSWER_TOKENS
     """Cap on the output tokens of one answer."""
     batch_files: int = 8
+    batch_bytes: int = BATCH_BYTES
+    """`honesty.review_batch_bytes`: the largest text of one batch (`batches`)."""
+    file_bytes: int = REVIEW_FILE_BYTES
+    """`honesty.review_file_bytes`: the largest whole file of the second round."""
     concurrency: int = 4
     timeout_s: float = 600.0
     cache_key: str = field(default_factory=lambda: f"calu-{secrets.token_hex(6)}")
@@ -267,7 +331,12 @@ class HonestyReviewer:
         baseline: str = "",
         progress: Callable[[int, int], Awaitable[None]] | None = None,
     ) -> ReviewOutcome:
-        """Judge the files, in batches that run at the same time.
+        """Judge the files, in batches that run at the same time, in at most two rounds.
+
+            round 1   every file as the plan shows it (a diff, or whole)
+            round 2   the files shown as a diff whose verdict asked for the whole file
+                      (`FileVerdict.needs_whole_file`), each whole if it is at most
+                      `file_bytes` (`whole_files`); a longer one is not judged
 
         Side effects: model calls; the model's tool calls read files of the workspace.
 
@@ -275,31 +344,36 @@ class HonestyReviewer:
             files: The files of the plan that need the model. Empty returns at once.
             baseline: The short id of the baseline commit, or "".
             progress: Called after each batch that answered, with the number of finished
-                batches and the number of batches. An exception it raises fails the review.
+                batches and the number of batches known so far (the second round adds its
+                batches). An exception it raises fails the review.
 
         Returns:
-            With `problem` "": one result for every file. Otherwise no result at all and the
-            reason: a batch failed (the other batches are cancelled) or the review took
-            longer than `timeout_s`. Never raises, except for cancellation from outside.
+            With `problem` "": one result for every file, except those in `unjudged`.
+            Otherwise no result at all and the reason: a batch failed (the other batches
+            are cancelled) or the review took longer than `timeout_s`. Never raises, except
+            for cancellation from outside.
         """
-        groups = batches(files, self.batch_files)
+        groups = batches(files, self.batch_files, self.batch_bytes)
         if not groups:
             return ReviewOutcome()
         agent = self.agent()
         settings = cache_settings(self.model, f"{self.cache_key}-honesty-review")
         results: dict[str, FileReview] = {}
+        wanted: list[ReviewFile] = []
+        unjudged: dict[str, str] = {}
         problems: list[str] = []
         tokens = [0, 0]
         done = 0
+        total = len(groups)
         limiter = anyio.Semaphore(max(1, self.concurrency))
 
         async def run(number: int, batch: Sequence[ReviewFile], scope: anyio.CancelScope) -> None:
             """Review one batch and keep its result; on a failure stop the other batches.
 
             Args:
-                number: The batch's number, from 1, for the problem text.
+                number: The batch's number, from 1 over both rounds, for the problem text.
                 batch: Its files.
-                scope: The scope around all batches.
+                scope: The scope around all batches of the round.
             """
             nonlocal done
             async with limiter:
@@ -312,16 +386,18 @@ class HonestyReviewer:
                         model_settings=settings,
                         max_tokens=self.max_tokens,
                     )
-                    results.update(verdicts(batch, result.output))
+                    found, whole = verdicts(batch, result.output)
+                    results.update(found)
+                    wanted.extend(whole)
                     tokens[0] += result.usage.input_tokens
                     tokens[1] += result.usage.output_tokens
                     done += 1
                     if progress is not None:
-                        await progress(done, len(groups))
+                        await progress(done, total)
                 except Exception as exc:
                     log.warning("honesty review: batch %d failed", number, exc_info=True)
                     problems.append(
-                        f"batch {number} of {len(groups)} failed ({type(exc).__name__}: {exc})"
+                        f"batch {number} of {total} failed ({type(exc).__name__}: {exc})"
                     )
                     scope.cancel()
 
@@ -329,13 +405,27 @@ class HonestyReviewer:
             async with anyio.create_task_group() as group:
                 for number, batch in enumerate(groups, start=1):
                     group.start_soon(run, number, batch, group.cancel_scope)
+            if not problems and wanted:
+                # The second round: the files whose diff was not enough, each read whole.
+                second, unjudged = whole_files(wanted, self.file_bytes)
+                wanted.clear()
+                later = batches(second, self.batch_files, self.batch_bytes)
+                total += len(later)
+                async with anyio.create_task_group() as group:
+                    for number, batch in enumerate(later, start=len(groups) + 1):
+                        group.start_soon(run, number, batch, group.cancel_scope)
         if problems:
             return ReviewOutcome(problem=f"The honesty review failed: {problems[0]}.")
-        if timeout.cancelled_caught or len(results) != len(files):
+        if timeout.cancelled_caught or wanted or len(results) + len(unjudged) != len(files):
             return ReviewOutcome(
                 problem=(
                     f"The honesty review failed: it took longer than {self.timeout_s:g} "
                     "seconds (honesty.review_timeout_s)."
                 )
             )
-        return ReviewOutcome(results=results, input_tokens=tokens[0], output_tokens=tokens[1])
+        return ReviewOutcome(
+            results=results,
+            unjudged=unjudged,
+            input_tokens=tokens[0],
+            output_tokens=tokens[1],
+        )

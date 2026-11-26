@@ -1577,7 +1577,8 @@ class Session:
                 message=(
                     f"honesty: review started: {plan.count} file(s) to judge "
                     f"({len(plan.files)} by the reviewer in "
-                    f"{len(batches(plan.files, cfg.review_batch_files))} batch(es), "
+                    f"{len(batches(plan.files, cfg.review_batch_files, cfg.review_batch_bytes))} "
+                    "batch(es), "
                     f"{len(plan.shortcuts) - len(plan.no_code)} with a whitespace-only change, "
                     f"{len(plan.no_code)} without code (plain text, data, media), "
                     f"{len(plan.skipped)} that the review cannot judge)"
@@ -1621,7 +1622,11 @@ class Session:
             if base is None and fresh:
                 await self._certify_reviewed()
         await self._report_marks(changes)
-        left = [*(f"{path} ({why})" for path, why in plan.skipped), *changes.ignored]
+        left = [
+            *(f"{path} ({why})" for path, why in plan.skipped),
+            *(f"{path} ({why})" for path, why in outcome.unjudged.items()),
+            *changes.ignored,
+        ]
         parts: list[str] = [outside] if outside else []
         if left:
             parts.append(
@@ -1640,7 +1645,11 @@ class Session:
             Reviewed(
                 baseline=base.commit_id if base else "",
                 review_required=changes.review_required,
-                seen={**{path: plan.seen[path] for path, _why in plan.skipped}, **seen},
+                seen={
+                    **{path: plan.seen[path] for path, _why in plan.skipped},
+                    **{path: plan.seen[path] for path in outcome.unjudged if path in plan.seen},
+                    **seen,
+                },
             ),
             result,
         )
@@ -1682,6 +1691,8 @@ class Session:
                 output_tokens_limit=cfg.reviewer_output_tokens_limit,
             ),
             batch_files=cfg.review_batch_files,
+            batch_bytes=cfg.review_batch_bytes,
+            file_bytes=cfg.review_file_bytes,
             concurrency=cfg.review_concurrency,
             timeout_s=cfg.review_timeout_s,
         )
@@ -2031,6 +2042,7 @@ class Session:
         for root, state in self._states.items():
             state.max_open_marks = cfg.max_open_marks
             state.context_lines = cfg.review_context_lines
+            state.file_bytes = cfg.review_file_bytes
             wanted = self._trust_needed(known[root]) if root in known else cfg.sufficient_trust
             if state.sufficient_trust != wanted:
                 state.sufficient_trust = wanted

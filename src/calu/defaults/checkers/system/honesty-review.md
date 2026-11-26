@@ -9,8 +9,11 @@ file honest only when you have read enough of it to know.
 ## What you see
 
 The request lists the files, each with a number. For each you see the whole file, or its
-change since the baseline (the trusted commit, whose code is verified) as a unified diff. A
-file may come with spots that were "recorded as dishonest before this review".
+change as a unified diff with some lines of context: the change since the baseline (the
+trusted commit, whose code is verified), or since the file's content was last verified in
+this session; the request says which, and the earlier content was honest either way. A file
+may come with spots that were "recorded as dishonest before this review"; for a large file
+those come with the present source of the marked definitions after the diff.
 
 You have read-only tools: `read_file(path, start_line, end_line)`, `find_files(pattern)` and
 `grep_files(pattern, path_glob)`. Read the implementation where the shown text does not let
@@ -56,5 +59,11 @@ One entry per file, by its number:
   missing documentation that the rules do not call dishonest.
 - A file with spots "recorded as dishonest before this review" is honest only if you have
   read that each of those spots now says what it does.
+- `needs_whole_file`: only for a file shown as a diff. If the shown lines and a few
+  `read_file` calls do not let you judge the change -- e.g. it spreads over the whole file,
+  or the documentation that a changed body has to match is far away -- answer
+  `needs_whole_file: true` instead of a verdict. calu then sends you the whole file in a
+  second request. Most changes can be judged from their diff; ask for the whole file only
+  when you would otherwise have to guess.
 - If you cannot decide about a file, answer `honest: false` with a finding that says what you
   could not determine.

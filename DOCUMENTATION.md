@@ -2001,10 +2001,26 @@ concerned.
 
 ### The honesty review
 
-A reviewer agent judges the files that are unreviewed or carry marks. For each file it gets the
-change against the baseline (the whole file when the baseline does not contain it), and it may
-read other files. A file that the reviewer finds honest counts as verified with the content the
-reviewer was shown. Calu records the reviewer's findings about a file as that file's marks.
+A reviewer agent judges the files that are unreviewed or carry marks. Several runs of it work
+at the same time, each on a batch of files. A file that the reviewer finds honest counts as
+verified with the content the reviewer was shown. Calu records the reviewer's findings about a
+file as that file's marks.
+
+What the reviewer gets for one file:
+
+| The file | The reviewer gets |
+|---|---|
+| verified earlier in this session (by a checked edit or a review), changed since | the change since that content, with 20 lines of context (`honesty.review_context_lines`) |
+| otherwise, the baseline holds it | the change against the baseline, with the same context |
+| new, or nothing to compare with | the whole file |
+| with marks, larger than 30,000 bytes, a Python file whose marks name its functions or classes | the change, and the present source of the marked definitions |
+| with other marks | the whole file |
+
+Where a change is not enough to judge, the reviewer asks for the whole file, and gets it in a
+second round. A small change of a large file is therefore judged from its diff, and a file is
+read whole only when that is needed. The texts of verified contents are kept in memory only;
+after a restart the change against the baseline is shown.
+
 Two types of file are verified without a model:
 
 - A file whose change against the baseline is only trailing whitespace, line endings or blank
@@ -2027,7 +2043,7 @@ serialised object can run code.
 | Frequency | One review at a time. Calu starts none by itself while nothing changed since the last, and none within 60 seconds after a failed one. `/honesty-review` always runs one |
 | A step's waiting time | A step waits for the review for at most about seven minutes minus the time its checkers took. A review that takes longer continues to run. The step then waits for a person, and the review's result is available when Claude tries the step again |
 | The step goes to a person | The review fails; more files than `honesty.review_max_files` (300); files the review cannot judge |
-| Files it cannot judge | A file over 2,000,000 bytes; a file whose text for the reviewer is over 200,000 bytes; a file that is not UTF-8 text; a symbolic link; a submodule (a file without code is verified at any size and in any encoding). A person certifies those |
+| Files it cannot judge | A file over 8,000,000 bytes; a file whose text for the reviewer (its change, or the whole file when it is new or the reviewer asked for it) is over `honesty.review_file_bytes` (600,000 bytes, about 150,000 tokens; lower it for a reviewer model with a smaller context); a file that is not UTF-8 text; a symbolic link; a submodule (a file without code is verified at any size and in any encoding). A person certifies those |
 | Model | `honesty.reviewer_model` (blank: the checkers' default). The other limits are the `honesty.review*` settings ([configuration reference](docs/CONFIGURATION.md)) |
 
 **A repository without a trusted commit.** A review that a person asks for judges every file
