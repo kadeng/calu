@@ -201,6 +201,40 @@ def test_a_small_change_of_a_large_file_is_reviewed_as_its_diff(repo: Path) -> N
     )
 
 
+def test_a_change_after_a_verified_edit_is_shown_since_that_content(repo: Path) -> None:
+    """The owner, 2026-11-26: reviewing a small change of a large file should not mean reading
+    every change since the last trusted commit again. After a checked edit verified a
+    content, the next review shows only the change since it; a new session (texts in memory
+    only) falls back to the baseline."""
+    lock = "".join(f'name = "package-{number}"\n' for number in range(10_000))
+    (repo / "uv.lock").write_text(lock, encoding="utf-8")
+    git(repo, "add", "uv.lock")
+    git(repo, "commit", "-q", "-m", "lock")
+    state = trusted_state(repo)
+
+    rewritten = lock.replace("package", "module")  # every line changed since the baseline
+    expected = state.expect_edit("uv.lock", "Write", {"content": rewritten})
+    (repo / "uv.lock").write_text(rewritten, encoding="utf-8")
+    assert state.record_edit("uv.lock", expected) is not None
+
+    (repo / "uv.lock").write_text(rewritten + 'name = "one-more"\n', encoding="utf-8")
+    (only,) = state.review_plan(300).files
+    assert (only.whole, only.against) == (False, "verified")
+    assert '+name = "one-more"' in only.text and len(only.text) < 2000
+    assert only.text.count("\n ") == 20  # `context_lines` lines of context before the change
+    assert "since its content was last verified" in batch_prompt([only], "abc")
+
+    state.context_lines = 2
+    (narrow,) = state.review_plan(300).files
+    assert narrow.text.count("\n ") == 2
+
+    restarted = trusted_state(repo)  # a new session: no texts, nothing verified
+    plan = restarted.review_plan(300)
+    assert plan.files == () and plan.skipped == (
+        ("uv.lock", f"its change against the baseline is larger than {REVIEW_FILE_BYTES} bytes"),
+    )
+
+
 def test_a_file_in_the_place_of_a_symbolic_link_is_reviewed_whole(repo: Path) -> None:
     """The baseline records a link's target, not a text: no diff and no shortcut apply."""
     (repo / "link.py").symlink_to("src/parser.py")

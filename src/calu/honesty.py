@@ -44,12 +44,13 @@ import stat
 import subprocess
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Concatenate
+from typing import Any, Concatenate, Literal
 
 import anyio.to_thread
 
@@ -206,6 +207,14 @@ REVIEW_READ_BYTES = 2_000_000
 """The largest file, in bytes, that an honesty review reads to hash and to compare with the
 baseline's content, and the largest baseline content it reads. A larger file is skipped like
 one whose text for the reviewer is over `REVIEW_FILE_BYTES`."""
+
+VERIFIED_TEXTS_BYTES = 64_000_000
+"""The most bytes of file texts a session keeps for the diffs of later reviews
+(`VerifiedTexts`)."""
+
+DIFF_CONTEXT_LINES = 20
+"""Lines of context around each change in a diff for the reviewer; `honesty.review_context_lines`
+sets it per session."""
 
 NO_CODE_EXTENSIONS = frozenset(
     {
@@ -404,10 +413,14 @@ class ReviewFile:
     sha256: str
     """SHA-256 of the content `text` was computed from."""
     text: str
-    """The whole file if `whole`, else its unified diff against the baseline's content."""
+    """The whole file if `whole`, else its unified diff against the earlier content `against`
+    names."""
     whole: bool
     marks: tuple[HonestyMark, ...] = ()
     """The open marks on the file when the plan was made."""
+    against: Literal["baseline", "verified"] = "baseline"
+    """For a diff: whether it is the change since the baseline's content, or since the content
+    last verified in this session (`VerifiedTexts`)."""
 
 
 @dataclass(frozen=True)
@@ -1080,20 +1093,26 @@ def whitespace_only(before: str, after: str) -> bool:
     return kept(before) == kept(after)
 
 
-def change_diff(before: str, after: str, path: str) -> str:
-    """Render the change of one file as a unified diff with three lines of context.
+def change_diff(before: str, after: str, path: str, context: int = 3) -> str:
+    """Render the change of one file as a unified diff.
 
     Args:
-        before: The content the baseline records.
+        before: The earlier content: the one last verified, or the one the baseline records.
         after: The present content.
         path: The file's name for the two header lines.
+        context: Lines of context around each change.
 
     Returns:
         The diff as text; "" if the two contents have the same lines.
     """
     name = shown(path, NOTE_PATH_CHARS)
     lines = difflib.unified_diff(
-        before.splitlines(), after.splitlines(), f"a/{name}", f"b/{name}", lineterm=""
+        before.splitlines(),
+        after.splitlines(),
+        f"a/{name}",
+        f"b/{name}",
+        lineterm="",
+        n=max(context, 0),
     )
     return "\n".join(lines)
 
@@ -1150,6 +1169,8 @@ class HonestyShared:
         trusted_hashes  SHA-256 -> source, the stored trust of contents (`trusted_files`) and
                         what this session verified since
         verified_blobs  git blob id -> source, for every content verified in this session
+        texts           SHA-256 -> text of contents this session read, so that a review can
+                        show the change since the content last verified (`VerifiedTexts`)
         next_id         the id the next mark gets, unique over all states
     """
 
@@ -1158,7 +1179,69 @@ class HonestyShared:
         self.lock = threading.RLock()
         self.trusted_hashes: Mapping[str, TrustSource] = {}
         self.verified_blobs: dict[str, TrustSource] = {}
+        self.texts = VerifiedTexts()
         self.next_id = 1
+
+
+class VerifiedTexts:
+    """The texts of file contents a session read, by SHA-256, the oldest dropped first.
+
+    An honesty review shows the reviewer a file's change since the content last verified in
+    this session, when that content's text is here; otherwise the change since the baseline
+    (`HonestyState.review_plan`). Without it, every review after a small edit of a large file
+    would show all of the file's changes since the last trusted commit again. The texts are in
+    memory only: after a restart the baseline is used.
+
+    The texts are put in when a checked edit is recorded (`record_edit`) and when a review
+    plan reads a file; a text counts only when it is looked up by the SHA-256 of a content that
+    was verified, so a text kept for a content nobody verified is never used.
+    """
+
+    def __init__(self, max_bytes: int = VERIFIED_TEXTS_BYTES) -> None:
+        """Create an empty store.
+
+        Args:
+            max_bytes: The most UTF-8 bytes of text kept together; the texts used least
+                recently are dropped beyond it, and a single text longer than it is not kept.
+        """
+        self.max_bytes = max_bytes
+        self._texts: OrderedDict[str, str] = OrderedDict()
+        self._sizes: dict[str, int] = {}
+        self._total = 0
+
+    def put(self, sha256: str, text: str) -> None:
+        """Keep the text of a content.
+
+        Args:
+            sha256: The SHA-256 of the content (of its bytes as read, `hash_bytes`).
+            text: The content, decoded as UTF-8.
+        """
+        size = len(text.encode("utf-8"))
+        if size > self.max_bytes:
+            return
+        if sha256 in self._texts:
+            self._texts.move_to_end(sha256)
+            return
+        self._texts[sha256] = text
+        self._sizes[sha256] = size
+        self._total += size
+        while self._total > self.max_bytes:
+            oldest, _ = self._texts.popitem(last=False)
+            self._total -= self._sizes.pop(oldest)
+
+    def get(self, sha256: str) -> str | None:
+        """Return the text of a content, if it is kept.
+
+        Args:
+            sha256: The SHA-256 of the content.
+
+        Returns:
+            The text; None if it was never put in or has been dropped.
+        """
+        text = self._texts.get(sha256)
+        if text is not None:
+            self._texts.move_to_end(sha256)
+        return text
 
 
 def combine_snapshots(
@@ -1381,6 +1464,10 @@ class HonestyState:
         no honesty review reads: calu's own output inside the project (the session traces,
         agent/records/PLAN.md D232). The session sets it when the configuration changes."""
         self.review_required = False
+        self.context_lines = DIFF_CONTEXT_LINES
+        """Lines of context around each change of a diff for the reviewer (`review_plan`).
+        `Session._refresh_trust` copies `honesty.review_context_lines` into it before each
+        look at the honesty state; `DIFF_CONTEXT_LINES` until then."""
         self._lock = self.shared.lock
         self._top: Path | None = None
         self._object_format: str | None = None
@@ -1782,9 +1869,10 @@ class HonestyState:
 
         The file is watched from now on. If its present content has the hash `expect_edit`
         computed at the gate, the file is recorded as verified at that content by the source
-        "check". Otherwise what was recorded for the path is dropped, so the file is
-        unreviewed until an honesty review reads it. If the path is a symbolic link, the file
-        it points at is watched too and nothing is verified.
+        "check", and its text is kept for the diffs of later reviews (`_keep_text`, which
+        reads the file once more). Otherwise what was recorded for the path is dropped, so the
+        file is unreviewed until an honesty review reads it. If the path is a symbolic link,
+        the file it points at is watched too and nothing is verified.
 
         A mark the checkers left on the file is separate: a file with an open mark is
         dishonest whatever is recorded here (`record`), and `storable` hands out nothing for
@@ -1814,7 +1902,27 @@ class HonestyState:
         record = Verified(ids.sha256, "check")
         self.verified[key] = record
         self._remember_verified(key, record)
+        self._keep_text(key, ids.sha256)
         return record
+
+    def _keep_text(self, key: str, sha256: str) -> None:
+        """Keep the text of a file's present content for the diffs of later reviews.
+
+        Side effect: reads the file (at most `REVIEW_READ_BYTES`); puts its text into
+        `HonestyShared.texts` if it is UTF-8 and still has the content `sha256` names, else
+        keeps nothing (the file changed meanwhile, or it is not text).
+
+        Args:
+            key: The file.
+            sha256: The SHA-256 of the content that was just verified.
+        """
+        data = read_regular(self.workspace / key, REVIEW_READ_BYTES)
+        if data is None or hash_bytes(data, self._format()).sha256 != sha256:
+            return
+        try:
+            self.shared.texts.put(sha256, data.decode("utf-8"))
+        except UnicodeDecodeError:
+            return
 
     @_locked
     def storable(self, path: str | Path) -> Verified | None:
@@ -2014,15 +2122,22 @@ class HonestyState:
             comes before the rules above                    -> verified without a model
             no open mark, the baseline holds the path as
             a file, and the change is whitespace only       -> verified without a model
-            an open mark, a path the baseline does not
-            hold as a file of at most `REVIEW_READ_BYTES`
-            of UTF-8 text, or no baseline                   -> the reviewer gets the whole file
+            an open mark                                    -> the reviewer gets the whole file
+            the content this session verified last for
+            the file is another one, and its text is kept
+            (`VerifiedTexts`)                               -> the reviewer gets the diff
+                                                               since that content
+            a path the baseline does not hold as a file
+            of at most `REVIEW_READ_BYTES` of UTF-8 text,
+            or no baseline                                  -> the reviewer gets the whole file
             otherwise                                       -> the reviewer gets the diff
                                                                against the baseline's content
 
-        A file whose text for the reviewer (the diff, or the whole file) is larger than
-        `REVIEW_FILE_BYTES` is skipped. So a small change of a large file is reviewed, and a
-        large new file is not.
+        The diffs have `context_lines` lines of context around each change. The text of every
+        content read here is kept in `HonestyShared.texts`, so that the next review of the file,
+        once this content is verified, shows only the change since it. A file whose text for
+        the reviewer (the diff, or the whole file) is larger than `REVIEW_FILE_BYTES` is
+        skipped. So a small change of a large file is reviewed, and a large new file is not.
 
         Args:
             max_files: `honesty.review_max_files`. With more files to judge the plan has only
@@ -2106,17 +2221,35 @@ class HonestyState:
                 shortcuts[key] = FileReview(ids.sha256, marks=())
                 no_code.append(key)
                 continue
-            before = self._baseline_text(top, tree, key) if top is not None else None
+            self.shared.texts.put(ids.sha256, text)
+            against: Literal["baseline", "verified"] = "baseline"
+            before = self._last_verified_text(key, ids.sha256)
+            if before is not None:
+                against = "verified"
+            elif top is not None:
+                before = self._baseline_text(top, tree, key)
             whole = before is None or bool(marks)
             if before is not None and not marks and whitespace_only(before, text):
                 shortcuts[key] = FileReview(ids.sha256, marks=())
                 continue
-            shown_text = text if before is None or marks else change_diff(before, text, key)
+            shown_text = (
+                text
+                if before is None or marks
+                else change_diff(before, text, key, self.context_lines)
+            )
             if len(shown_text.encode("utf-8")) > REVIEW_FILE_BYTES:
-                what = "the file" if whole else "its change against the baseline"
+                what = (
+                    "the file"
+                    if whole
+                    else "its change against the baseline"
+                    if against == "baseline"
+                    else "its change since the content last verified"
+                )
                 skipped.append((key, f"{what} is larger than {REVIEW_FILE_BYTES} bytes"))
                 continue
-            files.append(ReviewFile(key, ids.sha256, shown_text, whole=whole, marks=marks))
+            files.append(
+                ReviewFile(key, ids.sha256, shown_text, whole=whole, marks=marks, against=against)
+            )
         return ReviewPlan(
             base,
             count=len(candidates) - already,
@@ -2128,6 +2261,22 @@ class HonestyState:
             seen=seen,
             review_required=self.review_required,
         )
+
+    def _last_verified_text(self, key: str, present: str) -> str | None:
+        """Return the text of the content of a file that this session verified last.
+
+        Args:
+            key: The file.
+            present: The SHA-256 of its present content.
+
+        Returns:
+            The text of the content `verified` records for the file, if it is another content
+            than the present one and its text is kept (`VerifiedTexts`); else None.
+        """
+        record = self.verified.get(key)
+        if record is None or record.sha256 == present:
+            return None
+        return self.shared.texts.get(record.sha256)
 
     def _baseline_text(
         self, top: Path, tree: Mapping[str, tuple[str, str]], key: str

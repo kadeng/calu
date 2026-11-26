@@ -757,6 +757,13 @@ class HonestyConfig(ConfigModel):
     exceed 120,000 characters."""
     review_concurrency: int = Field(default=4, ge=1)
     """How many batches of one honesty review run at the same time."""
+    review_context_lines: int = Field(default=20, ge=0, le=500)
+    """Lines of context around each change when the reviewer is shown a file's change
+    rather than the whole file. The change is the one since the content this session last
+    verified, if its text is still in memory, else the one since the baseline. More context
+    lets a small change of a large file be judged from its diff. The session copies it into
+    each checkout's honesty state (`Session._refresh_trust`), and `HonestyState.review_plan`
+    renders the diffs with it."""
     reviewer_request_limit: int = Field(default=30, ge=1)
     """Maximum model requests for one batch, including the reviewer's tool calls. A batch that
     runs out fails, and a failed review verifies nothing."""

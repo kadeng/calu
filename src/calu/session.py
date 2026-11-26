@@ -2030,6 +2030,7 @@ class Session:
         known = {checkout.root: checkout for checkout in self.checkouts.all()}
         for root, state in self._states.items():
             state.max_open_marks = cfg.max_open_marks
+            state.context_lines = cfg.review_context_lines
             wanted = self._trust_needed(known[root]) if root in known else cfg.sufficient_trust
             if state.sufficient_trust != wanted:
                 state.sufficient_trust = wanted

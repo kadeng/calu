@@ -141,9 +141,10 @@ def batch_prompt(batch: Sequence[ReviewFile], baseline: str) -> str:
         baseline: The short id of the baseline commit, or "" without a baseline.
 
     Returns:
-        A heading, one line about the baseline, and per file: "## File N: path", whether the
-        whole file or its change since the baseline follows, the open marks on it, and the
-        text in a code fence. Paths, symbols and reasons are rendered on one line (`shown`).
+        A heading, one line about the baseline, and per file: "## File N: path", the open
+        marks on it, whether the whole file follows or its change (since the baseline, or
+        since its content last verified, as `ReviewFile.against` says), and the text in a
+        code fence. Paths, symbols and reasons are rendered on one line (`shown`).
     """
     parts = [
         "# Files to review",
@@ -167,6 +168,11 @@ def batch_prompt(batch: Sequence[ReviewFile], baseline: str) -> str:
             "The whole file:"
             if file.whole
             else "The change of the file since the baseline, as a unified diff:"
+            if file.against == "baseline"
+            else (
+                "The change of the file since its content was last verified (by a checked "
+                "edit or a review), as a unified diff; that content was honest:"
+            )
         )
         lines.append(fence(file.text, "" if file.whole else "diff"))
         parts.append("\n".join(lines))
