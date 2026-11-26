@@ -455,7 +455,7 @@ def fake_result_checker() -> Model:
 def _fake_narration(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
     """Stand-in for the narrator: "Narrated: " followed by the narrated text on one line.
 
-    The prompt's heading, the "Thinking:"/"Output:" labels and the fences are left out.
+    The prompt's heading, the "Claude:" labels and the fences are left out.
 
     Args:
         messages: The request messages (the last one holds the prompt).
@@ -465,7 +465,7 @@ def _fake_narration(messages: list[ModelMessage], info: AgentInfo) -> ModelRespo
         A response that calls the output tool with the narration.
     """
     prompt = _last_prompt(messages).split("\n", 1)[-1]
-    skip = ("Thinking:", "Output:")
+    skip = ("Claude:",)
     text = " ".join(w for w in prompt.split() if not w.startswith("```") and w not in skip)
     return ModelResponse(
         parts=[ToolCallPart(info.output_tools[0].name, {"narration": f"Narrated: {text}"})]

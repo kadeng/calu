@@ -47,7 +47,7 @@ READMEs). This file stays at the top level, where every agent looks first.
 | `src/calu/setup.py` | `calu setup`: migrations, default checkers and rules, the user login's password |
 | `src/calu/run.py` | `calu run`: credentials, connections, session, protocol server, terminal output |
 | `src/calu/launch.py` | The console script `calu-claude`, which starts Claude Code as another user with an environment built for it (D207); a module of its own outside `calu.claude`, so that the launcher imports little |
-| `src/calu/logfile.py` | The log of `calu run` and `calu serve`: every record with its traceback in `$XDG_STATE_HOME/calu/log/<command>.log`, one line per warning or error on stderr (D225) |
+| `src/calu/logfile.py` | The log of `calu run` and `calu serve`: every record with its traceback in `$XDG_STATE_HOME/calu/log/<command>.log`, one line per warning or error on stderr (D225); the whole request of every refused model call in `<command>.refusals.jsonl` next to it (D289) |
 | `src/calu/localsocket.py` | The root-owned Unix socket of a root session: binding it, checking that it is root's alone, connecting, and asking the kernel for the peer's uid (D215) |
 | `src/calu/asuser.py` | calu as root: its own file access and the programs it starts in the project run as the unprivileged user (`resolve` reads `--user`, `prepare` creates that user's directories, `enter` switches, `child` gives the arguments for a program start) (D206) |
 | `src/calu/serve.py` | `calu serve`: one process that holds the user login and runs many sessions as tasks; it claims requests from the database and runs each as `calu.run` does (D208) |

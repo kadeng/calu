@@ -15,10 +15,11 @@ from calu.credentials import WrongPassword
 def clean_root():
     """Remove the handlers `logfile.setup` adds, after the test."""
     yield
-    root = logging.getLogger()
-    for handler in [h for h in root.handlers if getattr(h, logfile.CALU_HANDLER, False)]:
-        root.removeHandler(handler)
-        handler.close()
+    for logger in (logging.getLogger(), logging.getLogger(logfile.REFUSALS_LOGGER)):
+        for handler in [h for h in logger.handlers if getattr(h, logfile.CALU_HANDLER, False)]:
+            logger.removeHandler(handler)
+            handler.close()
+    logging.getLogger(logfile.REFUSALS_LOGGER).propagate = True
     logging.captureWarnings(False)
 
 
@@ -61,6 +62,8 @@ def test_a_second_setup_replaces_its_own_handlers_and_keeps_others(
         logfile.setup("serve", io.StringIO())
         ours = [h for h in root.handlers if getattr(h, logfile.CALU_HANDLER, False)]
         assert len(ours) == 2
+        refusals = logging.getLogger(logfile.REFUSALS_LOGGER).handlers
+        assert len(refusals) == 1 and logfile.refusals_file() == logfile.refusals_path("serve")
         assert other in root.handlers
     finally:
         root.removeHandler(other)

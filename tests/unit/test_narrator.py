@@ -15,10 +15,14 @@ from tests.unit.helpers import make_session
 pytestmark = pytest.mark.anyio
 
 
-def test_input_labels_thinking_and_output_in_fences():
+def test_input_labels_thinking_and_text_alike_in_fences():
+    """The narrator is not told which block was thinking: a request to retell "thinking" was
+    refused as reasoning extraction (2026-11-26)."""
     prompt = render_input([ClaudeOutput("thinking", "plan it"), ClaudeOutput("text", "I will")])
-    assert prompt.index("Thinking:") < prompt.index("plan it") < prompt.index("Output:")
+    assert prompt.index("Claude:") < prompt.index("plan it") < prompt.rindex("Claude:")
+    assert prompt.index("plan it") < prompt.index("I will")
     assert "```" in prompt
+    assert "thinking" not in prompt.lower() and "Output:" not in prompt
 
 
 def test_long_input_keeps_the_end():

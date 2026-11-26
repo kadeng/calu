@@ -19,21 +19,34 @@ Models are created lazily by Pydantic AI only when called, so resolving needs no
 models: a model that repeats itself without end, or reasons at great length, would otherwise
 cost time and tokens and end the run with `UsageLimitExceeded`. It also gives the model
 `OUTPUT_RETRIES` chances to correct a structured answer that does not validate, and logs the
-rejected answers when it runs out of them, since nothing else keeps them.
+rejected answers when it runs out of them, since nothing else keeps them. A request the
+provider refused (`ContentFilterError`, e.g. Anthropic's `stop_reason: "refusal"`) is written
+whole to the refusal file of `calu.logfile` (`record_refusal`), so that what triggered it can be
+studied later; the log gets one line that names the file.
 
 Importing this module sets `PYDANTIC_AI_NO_BANNER=1` unless the variable is set already:
 Pydantic AI otherwise prints an advertisement for its observability service into the terminal
 at an agent's first run, between the lines of `calu run`.
 """
 
+import dataclasses
+import json
 import logging
 import os
 from collections.abc import Sequence
+from datetime import UTC, datetime
+from typing import Any
 
 from pydantic_ai import Agent, AgentRunResult, CachePoint, UsageLimits, capture_run_messages
-from pydantic_ai.exceptions import IncompleteToolCall, UnexpectedModelBehavior, UsageLimitExceeded
+from pydantic_ai.exceptions import (
+    ContentFilterError,
+    IncompleteToolCall,
+    UnexpectedModelBehavior,
+    UsageLimitExceeded,
+)
 from pydantic_ai.messages import (
     ModelMessage,
+    ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
     RetryPromptPart,
@@ -44,6 +57,8 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
+
+from calu import logfile
 
 BEDROCK_EU_REGION = "eu-central-1"
 """The AWS region an EU inference profile is called in when the environment names none."""
@@ -125,9 +140,11 @@ async def _run_logged[T](
 ) -> AgentRunResult[T]:
     """Run `agent` once with `OUTPUT_RETRIES`; log the model's answers if they never validated.
 
-    Side effects: on `UnexpectedModelBehavior` (e.g. the output retries ran out), one warning
-    with the agent's name, the error and `describe_messages` of the run's answers and of the
-    reasons they were sent back.
+    Side effects: on `ContentFilterError` (the provider refused the request), the whole request
+    goes to the refusal file (`record_refusal`) and the log gets one warning naming it; on any
+    other `UnexpectedModelBehavior` (e.g. the output retries ran out), one warning with the
+    agent's name, the error and `describe_messages` of the run's answers and of the reasons
+    they were sent back.
 
     Args:
         agent: The agent to run.
@@ -140,6 +157,7 @@ async def _run_logged[T](
         The result of the run.
 
     Raises:
+        ContentFilterError: After it was kept and logged, unchanged.
         UnexpectedModelBehavior: After it was logged, unchanged.
         Exception: Any other error of `agent.run`, unchanged and not logged here.
     """
@@ -152,6 +170,18 @@ async def _run_logged[T](
                 model_settings=settings,
                 retries={"output": OUTPUT_RETRIES},
             )
+        except ContentFilterError as exc:
+            where = record_refusal(agent, prompt, model, usage_limits, settings, messages, exc)
+            response = _last_response(messages)
+            details = (response.provider_details or {}) if response is not None else {}
+            log.warning(
+                "%s: the provider refused the request (category %s, response %s); %s",
+                agent.name,
+                details.get("refusal_category", "unknown"),
+                (response.provider_response_id if response is not None else None) or "unknown",
+                f"the whole request is in {where}" if where else "the request was not kept",
+            )
+            raise
         except UnexpectedModelBehavior as exc:
             log.warning(
                 "%s: no valid answer (%s); the model's answers and why they were refused:\n%s",
@@ -160,6 +190,162 @@ async def _run_logged[T](
                 describe_messages(messages),
             )
             raise
+
+
+def _last_response(messages: Sequence[ModelMessage]) -> ModelResponse | None:
+    """Return the last model answer of a run.
+
+    Args:
+        messages: The messages of one run.
+
+    Returns:
+        The last `ModelResponse`, or None if the model gave none.
+    """
+    for message in reversed(messages):
+        if isinstance(message, ModelResponse):
+            return message
+    return None
+
+
+def _model_name(model: str | Model) -> str:
+    """Name a model for the refusal file.
+
+    Args:
+        model: A Pydantic AI model string or model.
+
+    Returns:
+        The string itself, or "<system>:<model name>" of a `Model`.
+    """
+    return model if isinstance(model, str) else f"{model.system}:{model.model_name}"
+
+
+def _tool_definitions(agent: Agent[None, Any]) -> list[dict[str, Any]]:
+    """List the function tools an agent offers the model, as far as they can be read statically.
+
+    Args:
+        agent: The agent.
+
+    Returns:
+        One dict per tool of the agent's function toolsets: name, description and the JSON
+        schema of its parameters. Tools of other toolsets (built per run) are not listed.
+    """
+    tools: list[dict[str, Any]] = []
+    for toolset in agent.toolsets:
+        for name, tool in (getattr(toolset, "tools", None) or {}).items():
+            tools.append(
+                {
+                    "name": name,
+                    "description": getattr(tool, "description", None),
+                    "parameters": getattr(
+                        getattr(tool, "function_schema", None), "json_schema", None
+                    ),
+                }
+            )
+    return tools
+
+
+def refusal_record(
+    agent: Agent[None, Any],
+    prompt: str | Sequence[str | CachePoint],
+    model: str | Model,
+    usage_limits: UsageLimits,
+    settings: ModelSettings,
+    messages: Sequence[ModelMessage],
+    exc: ContentFilterError,
+) -> dict[str, Any]:
+    """Collect everything about a refused request that calu knows, for the refusal file.
+
+    The provider's own wire format is not reproduced; these are its inputs as calu gave them to
+    Pydantic AI: the instructions, the prompt, the output schema and the tools, the settings,
+    and every message of the run with the provider's answer and its details.
+
+    Args:
+        agent: The agent whose request was refused.
+        prompt: Its user prompt.
+        model: The model of the run.
+        usage_limits: The limits of the run.
+        settings: The model settings of the run.
+        messages: The run's messages, as `capture_run_messages` collected them.
+        exc: The refusal.
+
+    Returns:
+        A dict that `json.dumps(..., default=str)` can serialise.
+    """
+    response = _last_response(messages)
+    details = (response.provider_details or {}) if response is not None else {}
+    try:
+        output_schema: Any = agent.output_json_schema()
+    except Exception as schema_error:  # a diagnostic must not fail the record
+        output_schema = f"(not available: {schema_error!r})"
+    return {
+        "time": datetime.now(UTC).isoformat(),
+        "agent": agent.name,
+        "model": _model_name(model),
+        "category": details.get("refusal_category"),
+        "refusal": details.get("refusal"),
+        "response_id": response.provider_response_id if response is not None else None,
+        "error": exc.message,
+        "body": exc.body,
+        "instructions": [
+            m.instructions
+            for m in messages
+            if isinstance(m, ModelRequest) and m.instructions is not None
+        ],
+        "prompt": prompt
+        if isinstance(prompt, str)
+        else [p if isinstance(p, str) else repr(p) for p in prompt],
+        "output_schema": output_schema,
+        "tools": _tool_definitions(agent),
+        "model_settings": dict(settings),
+        "usage_limits": dataclasses.asdict(usage_limits)
+        if dataclasses.is_dataclass(usage_limits)
+        else repr(usage_limits),
+        "output_retries": OUTPUT_RETRIES,
+        "messages": ModelMessagesTypeAdapter.dump_python(list(messages), mode="json"),
+    }
+
+
+def record_refusal(
+    agent: Agent[None, Any],
+    prompt: str | Sequence[str | CachePoint],
+    model: str | Model,
+    usage_limits: UsageLimits,
+    settings: ModelSettings,
+    messages: Sequence[ModelMessage],
+    exc: ContentFilterError,
+) -> str | None:
+    """Append a refused request to the refusal file of `calu.logfile`; never raises.
+
+    Side effects: one line of JSON (`refusal_record`) as a record of
+    `calu.logfile.REFUSALS_LOGGER`, only when `calu.logfile.setup` opened the refusal file; a
+    failure to build or write it is logged as a warning.
+
+    Args:
+        agent: The agent whose request was refused.
+        prompt: Its user prompt.
+        model: The model of the run.
+        usage_limits: The limits of the run.
+        settings: The model settings of the run.
+        messages: The run's messages.
+        exc: The refusal.
+
+    Returns:
+        The refusal file's path as text, or None when the request was not kept.
+    """
+    path = logfile.refusals_file()
+    if path is None:
+        return None
+    try:
+        line = json.dumps(
+            refusal_record(agent, prompt, model, usage_limits, settings, messages, exc),
+            default=str,
+            ensure_ascii=False,
+        )
+        logging.getLogger(logfile.REFUSALS_LOGGER).info("%s", line)
+    except Exception:  # the diagnostic must never hide the refusal itself
+        log.warning("%s: the refused request could not be kept", agent.name, exc_info=True)
+        return None
+    return str(path)
 
 
 def describe_messages(messages: Sequence[ModelMessage]) -> str:

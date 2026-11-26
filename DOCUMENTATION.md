@@ -3371,6 +3371,15 @@ calu doctor --sudo .     # the root arrangement
 traceback is in the log file that the line names: `~/.local/state/calu/log/run.log` or
 `serve.log` (as root: `/var/lib/calu/log/`). The editor bridge logs to `ide.log` there.
 
+When a model provider refuses a request of a checker, the narrator or another of calu's agents
+(Anthropic's classifiers answer with `stop_reason: "refusal"`), the log gets one line with the
+refusal's category and response id, and the whole request is appended to `run.refusals.jsonl`
+or `serve.refusals.jsonl` next to the log: one JSON object per refusal with the instructions,
+the prompt, the output schema, the tools, the settings and the provider's answer. It shows what
+triggered a refusal. It holds what the request held (Claude's texts, file contents, commands,
+possibly secrets), so it is as private as the log (mode 0600, readable by root alone in a root
+installation); delete it when you no longer need it. calu never truncates it.
+
 **Starting**
 
 | Symptom | Cause | Fix |

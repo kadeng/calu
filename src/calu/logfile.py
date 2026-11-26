@@ -6,6 +6,13 @@
 
     $XDG_STATE_HOME/calu/log/<command>.log    (~/.local/state/calu/log/<command>.log, or
                                                /var/lib/calu/log/<command>.log as root)
+    $XDG_STATE_HOME/calu/log/<command>.refusals.jsonl
+                                              one JSON object per request a model provider
+                                              refused (`calu.models`), with the whole request
+
+The refusal file gets only the records of the logger `REFUSALS_LOGGER`, which do not reach the
+log file or stderr. It holds what the refused request held: Claude's thinking and text, file
+contents, commands, possibly secrets; it is kept as private as the log.
 
 The directory is created with mode 0700 and the file with mode 0600. Both lie in calu's state
 directory, which Claude Code's sandbox may not read (`calu.paths.calu_private_dirs`). The file
@@ -27,6 +34,9 @@ from typing import TextIO
 LINE_LIMIT = 300
 """Most characters of the message part of a line on stderr."""
 
+REFUSALS_LOGGER = "calu.refusals"
+"""Logger whose records (one JSON object each, see `calu.models`) go to the refusal file only."""
+
 CALU_HANDLER = "_calu_logfile"
 """Attribute that marks the handlers `setup` added, so that a second call replaces them."""
 
@@ -47,6 +57,52 @@ def log_path(command: str, environ: Mapping[str, str] | None = None) -> Path:
         Path(env["XDG_STATE_HOME"]) if env.get("XDG_STATE_HOME") else Path.home() / ".local/state"
     )
     return Path(os.path.abspath(state / "calu" / "log" / f"{command}.log"))
+
+
+def refusals_path(command: str, environ: Mapping[str, str] | None = None) -> Path:
+    """Return the refusal file of one calu command, next to its log file.
+
+    Args:
+        command: The command's name, for example "run" or "serve".
+        environ: The environment to read `XDG_STATE_HOME` from; None uses `os.environ`.
+
+    Returns:
+        `$XDG_STATE_HOME/calu/log/<command>.refusals.jsonl` (see `log_path`). The path is not
+        created.
+    """
+    return log_path(command, environ).with_name(f"{command}.refusals.jsonl")
+
+
+def refusals_file() -> Path | None:
+    """Return the file that the records of `REFUSALS_LOGGER` reach, if `setup` opened one.
+
+    Returns:
+        The path of the refusal file, or None when no file handler is attached (no `setup`
+        call in this process, or the file could not be opened).
+    """
+    for handler in logging.getLogger(REFUSALS_LOGGER).handlers:
+        if isinstance(handler, logging.FileHandler):
+            return Path(handler.baseFilename)
+    return None
+
+
+def _private_file_handler(path: Path) -> logging.FileHandler:
+    """Open `path` for appending, creating it and its directory privately if they are missing.
+
+    Side effects: creates the directory (mode 0700) and the file (mode 0600) if missing.
+
+    Args:
+        path: The file.
+
+    Returns:
+        A file handler that appends to it.
+
+    Raises:
+        OSError: If the directory or the file cannot be created or opened.
+    """
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600))
+    return logging.FileHandler(path, mode="a", encoding="utf-8")
 
 
 def innermost(exc: BaseException) -> BaseException:
@@ -134,7 +190,11 @@ def setup(command: str, stderr: TextIO | None = None) -> Path | None:
     and one for stderr (replacing those of an earlier call; other handlers stay), sets the
     root logger's level to INFO, and routes Python's warnings into the log
     (`logging.captureWarnings`). If the file cannot be opened, prints one line saying so to
-    stderr; the records then reach stderr only, still as one line each.
+    stderr; the records then reach stderr only, still as one line each. Opens the refusal file
+    (`refusals_path`, mode 0600) the same way for the logger `REFUSALS_LOGGER`, which then
+    stops passing its records on; if it cannot be opened, prints one line saying so, and the
+    refusal records are dropped. Both files are opened here, before `calu.asuser.enter` can
+    switch the file access to another user.
 
     Args:
         command: The command's name; it names the file (`log_path`).
@@ -148,9 +208,7 @@ def setup(command: str, stderr: TextIO | None = None) -> Path | None:
     path: Path | None = None
     handlers: list[logging.Handler] = []
     try:
-        wanted.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.close(os.open(wanted, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600))
-        to_file = logging.FileHandler(wanted, mode="a", encoding="utf-8")
+        to_file = _private_file_handler(wanted)
     except OSError as exc:
         print(f"calu: no log file ({describe(exc)}); errors are shown here only", file=stream)
     else:
@@ -175,4 +233,40 @@ def setup(command: str, stderr: TextIO | None = None) -> Path | None:
         root.addHandler(handler)
     root.setLevel(logging.INFO)
     logging.captureWarnings(True)
+    _setup_refusals(command, stream if path is not None else None)
     return path
+
+
+def _setup_refusals(command: str, stream: TextIO | None) -> None:
+    """Send the records of `REFUSALS_LOGGER` to the command's refusal file, and nowhere else.
+
+    Side effects: replaces the handlers an earlier call added to that logger, opens the file
+    (`_private_file_handler`), sets the logger to INFO and stops it from passing records on to
+    the root logger. If the file cannot be opened, prints one line saying so to `stream`; the
+    logger then has no handler and drops its records (they are INFO, below Python's last-resort
+    handler).
+
+    Args:
+        command: The command's name; it names the file (`refusals_path`).
+        stream: Where the line about a file that cannot be opened goes; None prints nothing
+            (the line about the log file that could not be opened already names the cause).
+    """
+    logger = logging.getLogger(REFUSALS_LOGGER)
+    for old in [h for h in logger.handlers if getattr(h, CALU_HANDLER, False)]:
+        logger.removeHandler(old)
+        old.close()
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+    try:
+        handler = _private_file_handler(refusals_path(command))
+    except OSError as exc:
+        if stream is not None:
+            print(
+                f"calu: no refusal file ({describe(exc)}); refused requests are not kept",
+                file=stream,
+            )
+        return
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    setattr(handler, CALU_HANDLER, True)
+    logger.addHandler(handler)

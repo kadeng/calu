@@ -140,13 +140,14 @@ def test_cutting_the_test_triggers_keeps_what_follows_them() -> None:
 def test_the_narrator_and_the_redaction_instructions_are_untouched() -> None:
     """Requirement 38: the narrator's instructions change only on purpose.
 
-    Changed twice since, both at the owner's request: plans to get around a safeguard are
-    narrated in full (`EVASION_PART`); secrets and personal data become placeholders.
+    Changed three times since, each at the owner's request: plans to get around a safeguard are
+    narrated in full (`EVASION_PART`); secrets and personal data become placeholders; the
+    texts are narrated as texts, without the word "thinking" (D289).
     """
     import hashlib
 
     digests = {
-        "narrator": "90700d2e6b2173cb89c1b43e182edfd9a9c24b4438a8ad062b22da68dd34e238",
+        "narrator": "7ea1dd56cb3156055df6ed1d3b6748d43cf5f0bf7ec0ee58c73313d7f9fa5906",
     }
     for name, digest in digests.items():
         text = default_instructions(name).encode("utf-8")

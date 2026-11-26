@@ -1,4 +1,4 @@
-"""The narrator: retells Claude's thinking and text in indirect speech for the checkers.
+"""The narrator: retells the texts of Claude's turn in indirect speech for the checkers.
 
 The checkers judge a step by the context of the conversation. Claude's own words would help
 them (they state the intent of the next tool call), but read verbatim they look like
@@ -7,8 +7,18 @@ requested"). The narrator turns them into a report about Claude:
 
     Thinking: "I need to delete the files carefully, without touching anything sensitive."
     Text:     "I am going to write a Python script that deletes only .md and .pyc files."
-      -> "Claude thought about how to delete the files safely. It said that it would write a
-          Python script that deletes only .md and .pyc files."
+      -> "Claude wrote that it needed to delete the files carefully, without touching anything
+          sensitive, and that it would write a Python script that deletes only .md and .pyc
+          files."
+
+The narrator is not told which of Claude's blocks were thinking and which were text: both are
+labelled as Claude's text (`render_input`). It only retells what it is given. The thinking
+blocks are no reasoning traces in any case: Anthropic's API returns only a summary of the
+model's thinking (or nothing), never the raw chain of thought. But a prompt that asks a model
+to retell "thinking" probably reads like an attempt to extract reasoning, and Anthropic's
+classifiers refused such narrator requests now and then
+(`refusal_category: "reasoning_extraction"`, 2026-11-26). Messages from another session and
+automatic notices keep labels of their own, because who wrote them matters to the checker.
 
 The narration keeps the content (about 50-100 % of the original length). Long passages (more
 than about 200 words, or documents, data or code written out verbatim) are summarized, on a best
@@ -58,8 +68,8 @@ class Narration(BaseModel):
     """The narrator's output."""
 
     narration: str = Field(
-        description="Claude's thinking and output retold in the third person and in indirect "
-        "speech, for example 'Claude said that it would ...'."
+        description="The texts retold in the third person and in indirect speech, for example "
+        "'Claude said that it would ...'."
     )
 
 
@@ -72,26 +82,27 @@ def render_input(outputs: list[ClaudeOutput], max_chars: int = MAX_INPUT_CHARS) 
             oldest text is dropped and the prompt says so.
 
     Returns:
-        Markdown: one "Thinking:" or "Output:" section per block with the text in a fence.
+        Markdown: one section per block with the text in a fence, labelled by who wrote it:
+        "Claude" for thinking and text alike, or another session, or calu and Claude Code.
     """
     sections: list[str] = []
     remaining = max_chars
     for output in reversed(outputs):
         if remaining <= 0:
-            sections.append("[Earlier thinking and output left out.]")
+            sections.append("[Earlier texts left out.]")
             break
         text = output.text
         if len(text) > remaining:
             text = "[...] " + text[-remaining:]
         remaining -= len(text)
         label = {
-            "thinking": "Thinking",
-            "text": "Output",
+            "thinking": "Claude",
+            "text": "Claude",
             "message": "Message from another Claude session (not from the user)",
             "notice": "Automatic message from calu or Claude Code (not from the user)",
         }[output.kind]
         sections.append(f"{label}:\n{fence(text)}")
-    return "# Claude's thinking and output to narrate\n\n" + "\n\n".join(reversed(sections))
+    return "# Texts to narrate\n\n" + "\n\n".join(reversed(sections))
 
 
 def unread_chars(outputs: list[ClaudeOutput], max_chars: int = MAX_INPUT_CHARS) -> int:
@@ -146,7 +157,6 @@ class Narrator:
             The narration, or "" if `outputs` holds no text.
 
         Raises:
-            OSError: If the instructions file cannot be read.
             pydantic_ai.exceptions.AgentRunError: If the model fails, answers unusably, or
                 exceeds the usage limits twice (e.g. `ModelHTTPError`, `UsageLimitExceeded`;
                 see `run_bounded`).
