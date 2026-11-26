@@ -27,6 +27,20 @@ $D screenshot ~/.cache/calu-uitest/share/run/01.png   # then Read the PNG
 $D click 640 400 ; $D type "text" ; $D key ctrl+shift+p ; $D shell 'cmd' ; $D windows
 ```
 
+On a Linux host with AppArmor (Ubuntu 24.04), bubblewrap starts in the desktop only if the
+container was created with `apparmor=unconfined`. Without bubblewrap, Claude Code's sandbox does
+not start either. `run.sh` passes the option since 2026-11-26. A container created earlier fails
+with "Failed to make / slave"; recreate it (`uitest/stop.sh --remove`, then `uitest/run.sh`).
+A new container lacks bubblewrap and socat. Install them, and check them before a run with a
+real Claude Code:
+
+```bash
+$D shell 'sudo apt-get update -q && sudo apt-get install -y -q bubblewrap socat'
+$D shell 'bwrap --unshare-user --unshare-net --ro-bind / / true && echo "user namespaces work"'
+```
+
+If `uitest/run.sh` is not executable in the checkout, run it with `bash uitest/run.sh`.
+
 1. **Look before every step.** Take a screenshot, read it, take the coordinates of what you
    click from it. Never click from memory of an earlier screenshot: layouts shift.
 2. **One driver at a time.** The desktop has one screen, mouse and keyboard. Two agents driving

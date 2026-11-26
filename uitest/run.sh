@@ -18,8 +18,11 @@
 #
 # `--security-opt seccomp=unconfined` lets bubblewrap create user namespaces, so that
 # Claude Code's sandbox runs inside the desktop (Docker's default seccomp profile blocks
-# them; agent/records/PLAN.md D134). It applies to a newly created container only; README.md
-# ("Claude Code's sandbox in the desktop") says how to move an existing one over.
+# them; agent/records/PLAN.md D134). `--security-opt apparmor=unconfined` is needed as well
+# on a host with AppArmor (Ubuntu 24.04: Docker's default AppArmor profile forbids the
+# mounts bubblewrap makes, "Failed to make / slave"); on WSL2 it has no effect. Both apply
+# to a newly created container only; README.md ("Claude Code's sandbox in the desktop") says
+# how to move an existing one over.
 #
 # Environment:
 #   CALU_UITEST_PORT    host port for cua-spacesd (default 56211)
@@ -57,6 +60,7 @@ case "$state" in
         docker run -d --name "$NAME" --hostname "$NAME" \
             --shm-size=1g --memory="$MEMORY" \
             --security-opt seccomp=unconfined \
+            --security-opt apparmor=unconfined \
             -e CUA_ENV_TOKEN="$(cat "$TOKEN_FILE")" \
             -e DO_NOT_TRACK=1 -e CUA_TELEMETRY=0 \
             -p "127.0.0.1:$PORT:3211" \
