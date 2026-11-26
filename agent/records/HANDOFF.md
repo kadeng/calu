@@ -11,7 +11,7 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
 The owner tested by hand in the VSCode extension and the web interface. This session fixed what
 came up, then built the features the owner asked for. A second session worked in parallel in
 `~/projects/calu`; this one merged `origin/main` after every commit. Everything below is
-committed and pushed with this handoff.
+committed and pushed, except step 2 of the temporary rules, which is in the working tree.
 
 **In progress: temporary rules, step 2 of 6 (uncommitted).** The design is
 `agent/records/notes/temporary-rules-design.md`, with the owner's decisions in its section 7.
