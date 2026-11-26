@@ -24,5 +24,6 @@ extensions/vscode/.vscode-test/
 *.vsix
 .claude/worktrees/
 
-# Temporary session trace files (below the date and user directories too)
+# Session traces (agent/traces/<date>/<user>/session_NNN.md, D232) and temporary trace files
+agent/traces/**/session_*.md
 agent/traces/**/*.tmp.md
