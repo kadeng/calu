@@ -454,6 +454,9 @@ class ReviewPlan:
     no_code: tuple[str, ...] = ()
     """The files of `shortcuts` that are verified because they hold no code unit (plain text,
     data, images: `holds_no_code`), sorted."""
+    generated: tuple[str, ...] = ()
+    """The files of `shortcuts` that are verified because they are generated
+    (`GeneratedRules`), sorted."""
     skipped: tuple[tuple[str, str], ...] = ()
     """(path, why) of each file the review cannot judge; it stays as it is: a file that is
     not readable text within the size limits, and, with a baseline, a file whose working
@@ -1129,6 +1132,88 @@ def change_diff(before: str, after: str, path: str, context: int = 3) -> str:
     return "\n".join(lines)
 
 
+GENERATED_HEAD_BYTES = 8192
+"""How much of a file's start `GeneratedRules.reason` matches the content patterns against."""
+
+
+@dataclass(frozen=True)
+class GeneratedRules:
+    """Which files count as generated: `honesty.generated_paths` and `generated_contents`.
+
+    Both lists are empty by default, so nothing is generated until a person configures it.
+    A generated file is not judged for honesty: an honesty review verifies it without a
+    model, and a mark on it is not recorded. A hand edit of one escalates
+    (`calu.gate.StepGate`), so that only a build writes it without a person's say.
+    """
+
+    paths: tuple[re.Pattern[str], ...] = ()
+    """Patterns searched (`re.search`) in the path relative to the project directory."""
+    contents: tuple[re.Pattern[str], ...] = ()
+    """Patterns searched in the first `GENERATED_HEAD_BYTES` of the file, decoded as UTF-8
+    with replacement characters; anchor with `\\A` for "the file starts with"."""
+
+    @classmethod
+    def of(cls, paths: Sequence[str], contents: Sequence[str]) -> GeneratedRules:
+        """Compile the two settings.
+
+        Args:
+            paths: `honesty.generated_paths`.
+            contents: `honesty.generated_contents`.
+
+        Returns:
+            The rules.
+
+        Raises:
+            re.error: If a pattern does not compile (the configuration checks them first).
+        """
+        return cls(
+            tuple(re.compile(one) for one in paths), tuple(re.compile(one) for one in contents)
+        )
+
+    def reason(self, key: str, head: bytes | str | None) -> str:
+        """Tell whether a file counts as generated, and by which pattern.
+
+        Args:
+            key: The file's path relative to the project directory, with "/".
+            head: The start of its content (only the first `GENERATED_HEAD_BYTES` are
+                looked at), or None when it is not known; then only the paths count.
+
+        Returns:
+            E.g. "honesty.generated_paths `^dist/`"; "" if the file is not generated.
+        """
+        for pattern in self.paths:
+            if pattern.search(key):
+                return f"honesty.generated_paths `{pattern.pattern}`"
+        if head is None or not self.contents:
+            return ""
+        if isinstance(head, bytes):
+            head = head[:GENERATED_HEAD_BYTES].decode("utf-8", errors="replace")
+        text = head[:GENERATED_HEAD_BYTES]
+        for pattern in self.contents:
+            if pattern.search(text):
+                return f"honesty.generated_contents `{pattern.pattern}`"
+        return ""
+
+    def file_reason(self, workspace: Path, key: str) -> str:
+        """Tell whether a file of the workspace counts as generated, reading its start.
+
+        Args:
+            workspace: The project directory.
+            key: The file, relative to it.
+
+        Returns:
+            As `reason`; a file that cannot be read is judged by its path alone.
+        """
+        if not self.paths and not self.contents:
+            return ""
+        head: bytes | None = None
+        if self.contents:
+            with suppress(OSError):
+                with (workspace / key).open("rb") as handle:
+                    head = handle.read(GENERATED_HEAD_BYTES)
+        return self.reason(key, head)
+
+
 def marked_excerpts(text: str, path: str, symbols: Sequence[str]) -> str | None:
     """Cut the present source of a file's marked definitions out of it, for the reviewer.
 
@@ -1390,6 +1475,8 @@ def merge_plans(plans: Sequence[ReviewPlan]) -> ReviewPlan:
         count=count,
         files=tuple(sorted((one for plan in plans for one in plan.files), key=lambda f: f.path)),
         shortcuts={key: value for plan in plans for key, value in plan.shortcuts.items()},
+        no_code=tuple(sorted(one for plan in plans for one in plan.no_code)),
+        generated=tuple(sorted(one for plan in plans for one in plan.generated)),
         skipped=tuple(one for plan in plans for one in plan.skipped),
         verified_already=sum(plan.verified_already for plan in plans),
         seen={key: value for plan in plans for key, value in plan.seen.items()},
@@ -1528,6 +1615,9 @@ class HonestyState:
         no honesty review reads: calu's own output inside the project (the session traces,
         agent/records/PLAN.md D232). The session sets it when the configuration changes."""
         self.review_required = False
+        self.generated = GeneratedRules()
+        """Which files count as generated (`review_plan`, `record`); `Session._refresh_trust`
+        sets it from `honesty.generated_paths` and `honesty.generated_contents`."""
         self.file_bytes = REVIEW_FILE_BYTES
         """The largest text for the reviewer of one file (`review_plan`).
         `Session._refresh_trust` copies `honesty.review_file_bytes` into it."""
@@ -2188,6 +2278,12 @@ class HonestyState:
             header); for a file that is not UTF-8 or
             larger than `REVIEW_READ_BYTES` this rule
             comes before the rules above                    -> verified without a model
+            generated (`generated`: a pattern of
+            `honesty.generated_paths` or
+            `honesty.generated_contents` matches), with or
+            without marks                                   -> verified without a model;
+                                                               its open marks are closed
+                                                               (`ReviewPlan.generated`)
             no open mark, the baseline holds the path as
             a file, and the change is whitespace only       -> verified without a model
             an open mark, a file larger than
@@ -2250,6 +2346,7 @@ class HonestyState:
         skipped: list[tuple[str, str]] = []
         seen: dict[str, FileSeen] = {}
         no_code: list[str] = []
+        generated: list[str] = []
         already = 0
         for key in candidates:
             marks = tuple(mark for mark in self.open_marks if mark.path == key)
@@ -2298,6 +2395,11 @@ class HonestyState:
                 shortcuts[key] = FileReview(ids.sha256, marks=())
                 no_code.append(key)
                 continue
+            if self.generated.reason(key, data):
+                # Generated code is not judged; a mark that is open on it is closed.
+                shortcuts[key] = FileReview(ids.sha256, marks=mark_ids)
+                generated.append(key)
+                continue
             self.shared.texts.put(ids.sha256, text)
             against: Literal["baseline", "verified"] = "baseline"
             before = self._last_verified_text(key, ids.sha256)
@@ -2343,6 +2445,7 @@ class HonestyState:
             shortcuts=shortcuts,
             skipped=tuple(skipped),
             no_code=tuple(no_code),
+            generated=tuple(sorted(generated)),
             verified_already=already,
             seen=seen,
             review_required=self.review_required,
@@ -2487,6 +2590,8 @@ class HonestyState:
         the step edits that file, and path and symbol match (`normal_symbol`, `match_symbol`;
         in a Python file that parses, the symbol is first read as the definition it names).
         A clean mark with the symbol `ALL_SYMBOLS` closes every open mark of its file.
+        A dirty mark on a file that counts as generated (`generated`, `GeneratedRules`) is not
+        recorded, and is listed in `ignored` with the pattern that matched.
         A dirty mark must name an existing file of the workspace (`checked_marks`); for a
         Python file that parses, its symbol is replaced by the definition's dotted name, and a
         symbol that names no definition becomes a mark on the whole file. A dirty mark whose
@@ -2544,6 +2649,13 @@ class HonestyState:
                 changes.ignored.append(
                     f"{shown(entry.path, NOTE_PATH_CHARS)}: the path contains a character "
                     "that is not printable"
+                )
+                continue
+            generated = self.generated.file_reason(self.workspace, entry.path)
+            if generated:
+                changes.ignored.append(
+                    f"{entry.label()}: the file counts as generated ({generated}), so it is "
+                    "not judged for honesty"
                 )
                 continue
             changes.opened.append(self._open(entry.path, entry.symbol, entry.reason, by))

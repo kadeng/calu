@@ -764,6 +764,19 @@ class HonestyConfig(ConfigModel):
     exceed 120,000 characters."""
     review_concurrency: int = Field(default=4, ge=1)
     """How many batches of one honesty review run at the same time."""
+    generated_paths: list[str] = Field(default_factory=list)
+    """Regular expressions (Python, `re.search`) for the paths of generated files, relative to
+    the project directory with "/", e.g. `^src/calu/web/static/pane/` or `\\.min\\.js$`.
+    Empty by default: nothing counts as generated until a person lists it. A generated file
+    is not judged for honesty: an honesty review verifies it without a model, a mark on it
+    is not recorded, and an edit of it by hand (Edit, Write, MultiEdit) waits for a person,
+    so that only a build writes it. Best together with a test that compares the files with a
+    fresh build."""
+    generated_contents: list[str] = Field(default_factory=list)
+    """Regular expressions searched in the first 8192 bytes of a file to tell that it is
+    generated, e.g. `\\A"use strict";` for a bundle that starts so, or `@generated`. Anchor
+    with `\\A` for "the file starts with". Empty by default; otherwise as
+    `generated_paths`."""
     review_file_bytes: int = Field(default=600_000, ge=1_000)
     """The largest text, in bytes of UTF-8, that the reviewer gets for one file: its change,
     or the whole file (a new file, a small marked one, or one the reviewer asked to read
@@ -792,6 +805,29 @@ class HonestyConfig(ConfigModel):
     most as long as the check of one step may take (seven minutes, less the time its checkers
     took); a review that needs longer goes on, the step is escalated meanwhile, and the
     review's result is there when the step is tried again."""
+
+    @field_validator("generated_paths", "generated_contents")
+    @classmethod
+    def _patterns(cls, patterns: list[str]) -> list[str]:
+        """Accept only patterns that compile, so a typo fails at `calu config set`.
+
+        Args:
+            patterns: The configured regular expressions.
+
+        Returns:
+            The patterns, unchanged.
+
+        Raises:
+            ValueError: If a pattern is empty or does not compile.
+        """
+        for pattern in patterns:
+            if not pattern:
+                raise ValueError("an empty pattern would match every file")
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError(f"the pattern {pattern!r} does not compile: {exc}") from None
+        return patterns
 
 
 def project_relative(directory: str, setting: str) -> str:

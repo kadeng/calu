@@ -129,7 +129,7 @@ from calu.checkers.changeset import (
     classify_commit,
 )
 from calu.checkers.checker import HONESTY_CHECKER
-from calu.checkers.policy import SHELL_TOOLS
+from calu.checkers.policy import EDIT_TOOLS, SHELL_TOOLS
 from calu.checkers.rules import (
     OTHER_RULED_TOOLS,
     READ_PATH_TOOLS,
@@ -140,7 +140,14 @@ from calu.checkers.rules import (
 from calu.config import CheckerConfig, Config
 from calu.context import label_for_unchecked
 from calu.context.narrator import ClaudeOutput, unread_chars
-from calu.honesty import NOTE_PATH_CHARS, NOTE_REASON_CHARS, HonestySnapshot, diff_paths, shown
+from calu.honesty import (
+    NOTE_PATH_CHARS,
+    NOTE_REASON_CHARS,
+    GeneratedRules,
+    HonestySnapshot,
+    diff_paths,
+    shown,
+)
 from calu.markdown import fence
 from calu.steps import paths_of_step
 from calu.store import CheckerDefinition
@@ -1285,11 +1292,12 @@ class StepGate:
     def _auto_escalate(self, decided: Decided, held: str = "", step: Step | None = None) -> Decided:
         """Turn an approval into an escalation where an approval must not stand alone.
 
-        Three cases: auto-escalation is on for the step's route; the step was held behind an
+        Four cases: auto-escalation is on for the step's route; the step was held behind an
         escalation until its `HOLD_BUDGET_S` ran out and something still holds it (`_hold`);
-        or the checker could not read all of Claude's thinking and text before the step
-        (`Step.narration_cut`) and `context.escalate_on_cut` is on (D273). A DENY and an ESCALATE
-        are returned unchanged in all three.
+        the checker could not read all of Claude's thinking and text before the step
+        (`Step.narration_cut`) and `context.escalate_on_cut` is on (D273); or the step is an
+        edit of a file that counts as generated (`_generated_edit`). A DENY and an ESCALATE
+        are returned unchanged in all four.
 
         Args:
             decided: The decision of the checker or of the rules.
@@ -1327,6 +1335,22 @@ class StepGate:
             )
             decided.source = "auto"
             return decided
+        generated = self._generated_edit(step) if step is not None else ""
+        if generated and decided.decision.decision.approves:
+            decided.decision = CheckDecision(
+                decision=Decision.ESCALATE,
+                reason=(
+                    f"This edit changes generated code by hand ({generated}). Generated files "
+                    "are not judged for honesty and are meant to be written by their build "
+                    "only, so a person decides whether this edit may run. "
+                    + (f"The {route.value} checker" if source == "checker" else "The rules")
+                    + f" decided {decided.decision.decision.value}"
+                    + (f": {decided.decision.reason}" if decided.decision.reason else ".")
+                ),
+                step_summary=decided.decision.step_summary,
+            )
+            decided.source = "auto"
+            return decided
         # A checker DENY stays a DENY: auto-escalation only turns approvals into questions, so
         # a hasty "allow" can never run a step that the checker blocked.
         if decided.decision.decision.approves and (
@@ -1345,6 +1369,37 @@ class StepGate:
             )
             decided.source = "auto"
         return decided
+
+    def _generated_edit(self, step: Step) -> str:
+        """Tell whether an edit tool writes a file that counts as generated.
+
+        The patterns are `honesty.generated_paths` and `honesty.generated_contents`
+        (`calu.honesty.GeneratedRules`); a content pattern is matched against the file as it
+        is, and for a Write also against the content it writes. Applies whatever
+        `honesty.mode` says, so that the exemption of generated files from the honesty checks
+        never goes along with unchecked hand edits.
+
+        Args:
+            step: The tool call.
+
+        Returns:
+            The pattern that matched, as `GeneratedRules.reason` names it; "" for a tool that
+            is no edit, a file that is not generated, or no patterns configured.
+        """
+        if step.tool_name not in EDIT_TOOLS:
+            return ""
+        cfg = self._config().honesty
+        if not cfg.generated_paths and not cfg.generated_contents:
+            return ""
+        rules = GeneratedRules.of(cfg.generated_paths, cfg.generated_contents)
+        for key in sorted(paths_of_step(step, self._workspace)):
+            found = rules.file_reason(self._workspace, key)
+            written = step.tool_input.get("content")
+            if not found and step.tool_name == "Write" and isinstance(written, str):
+                found = rules.reason(key, written)
+            if found:
+                return f"{key}: {found}"
+        return ""
 
     async def _hold(
         self, step: Step, budget: anyio.CancelScope | None, limit_s: float | None = None

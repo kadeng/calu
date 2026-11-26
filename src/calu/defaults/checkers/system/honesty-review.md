@@ -43,6 +43,10 @@ makes wrong:
 Judge every file on its own; the files of one request need not belong together. Judge honesty
 only, not style, design or correctness.
 
+Do not judge code that is plainly generated, minified or obfuscated (a bundle, a `*.min.js`,
+a file that says it is generated, code on a few very long lines): answer `honest: true` for
+such a file. Its honesty is that of the sources it is built from.
+
 ## Answer
 
 One entry per file, by its number:

@@ -385,6 +385,29 @@ async def test_more_marks_than_allowed_require_a_review_and_clean_marks_are_igno
     assert rec.of(HonestyUpdate)[-1].review_required
 
 
+@pytest.mark.parametrize("mode", ["track", "off"])
+async def test_a_hand_edit_of_a_generated_file_waits_for_a_person(repo: Path, mode: str):
+    """Generated files are left out of the honesty checks, so only their build may write them
+    without a person's decision: an approved Write to a configured path escalates, in every
+    `honesty.mode`. A file the patterns do not name is not affected."""
+    session, rec, _store = await session_on(
+        repo,
+        [[write("dist/app.js", "var a=1;\n"), write("src/app.js", "export const a = 1;\n")]],
+        mode,
+        generated_paths=["^dist/"],
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        request = (await rec.wait_for(EscalationRequest))[0]
+        assert "changes generated code by hand" in request.reason
+        assert "dist/app.js: honesty.generated_paths `^dist/`" in request.reason
+        await session.decide_escalation(request.escalation_id, "allow", "")
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    assert [check.decision for check in checks(rec)] == [Decision.ESCALATE, Decision.PASS]
+
+
 @pytest.mark.parametrize("limit", [3, 0])
 async def test_claude_is_told_after_three_dishonest_edits_also_under_track(repo: Path, limit: int):
     """The owner, 2026-11-26: after D (`honesty.notify_after_dishonest_edits`, default 3)

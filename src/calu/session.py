@@ -225,6 +225,7 @@ from calu.honesty import (
     NOTE_PATH_CHARS,
     FileReview,
     FileSeen,
+    GeneratedRules,
     GitError,
     HonestyMark,
     HonestySnapshot,
@@ -1597,8 +1598,11 @@ class Session:
                     f"({len(plan.files)} by the reviewer in "
                     f"{len(batches(plan.files, cfg.review_batch_files, cfg.review_batch_bytes))} "
                     "batch(es), "
-                    f"{len(plan.shortcuts) - len(plan.no_code)} with a whitespace-only change, "
+                    f"{len(plan.shortcuts) - len(plan.no_code) - len(plan.generated)} with a "
+                    "whitespace-only change, "
                     f"{len(plan.no_code)} without code (plain text, data, media), "
+                    f"{len(plan.generated)} generated (honesty.generated_paths, "
+                    "honesty.generated_contents), "
                     f"{len(plan.skipped)} that the review cannot judge)"
                     + (
                         f"; {plan.verified_already} further file(s) are verified already"
@@ -2061,6 +2065,7 @@ class Session:
             state.max_open_marks = cfg.max_open_marks
             state.context_lines = cfg.review_context_lines
             state.file_bytes = cfg.review_file_bytes
+            state.generated = GeneratedRules.of(cfg.generated_paths, cfg.generated_contents)
             wanted = self._trust_needed(known[root]) if root in known else cfg.sufficient_trust
             if state.sufficient_trust != wanted:
                 state.sufficient_trust = wanted

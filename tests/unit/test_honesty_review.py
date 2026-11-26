@@ -31,6 +31,7 @@ from calu.checkers.honesty_review import (
     batches,
     verdicts,
 )
+from calu.config import HonestyConfig
 from calu.defaults.instructions import honesty_rules, review_instructions
 from calu.honesty import (
     REVIEW_FILE_BYTES,
@@ -39,6 +40,7 @@ from calu.honesty import (
     Baseline,
     FileReview,
     Finding,
+    GeneratedRules,
     HonestyState,
     Reviewed,
     ReviewFile,
@@ -237,6 +239,46 @@ def test_a_change_after_a_verified_edit_is_shown_since_that_content(repo: Path) 
     restarted = trusted_state(repo)  # a new session: no texts, nothing verified
     (again,) = restarted.review_plan(300).files
     assert again.against == "baseline" and len(again.text) > 200_000
+
+
+def test_generated_files_are_found_by_the_configured_patterns_only() -> None:
+    """The owner, 2026-11-26: the patterns are the user's, and empty by default."""
+    assert GeneratedRules().reason("dist/app.js", "x") == ""
+    rules = GeneratedRules.of([r"^dist/", r"\.min\.js$"], [r'\A"use strict";'])
+    assert rules.reason("dist/app.js", None) == "honesty.generated_paths `^dist/`"
+    assert rules.reason("web/x.min.js", b"") == "honesty.generated_paths `\\.min\\.js$`"
+    assert rules.reason("web/bundle.js", b'"use strict";var a=1') == (
+        'honesty.generated_contents `\\A"use strict";`'
+    )
+    assert rules.reason("web/app.js", b'// "use strict";\n') == ""  # not at the start
+    assert rules.reason("web/app.js", None) == ""  # without a content, the paths only
+    with pytest.raises(ValueError, match="does not compile"):
+        HonestyConfig(generated_paths=["("])
+    with pytest.raises(ValueError, match="every file"):
+        HonestyConfig(generated_contents=[""])
+
+
+def test_a_generated_file_is_verified_without_a_model_and_its_marks_are_ignored(
+    repo: Path,
+) -> None:
+    """A generated file is not judged: the review takes it without the reviewer, closes a
+    mark that is open on it, and a checker's new mark on it is not recorded."""
+    (repo / "bundle.js").write_text('"use strict";!function(){}();\n', encoding="utf-8")
+    (repo / "src" / "app.js").write_text("export const a = 1;\n", encoding="utf-8")
+    state = trusted_state(repo)
+    state.record([CodeMark(path="bundle.js", symbol="", reason="obscure")], [], "edit")
+    assert [mark.label() for mark in state.open_marks] == ["bundle.js"]
+    state.generated = GeneratedRules.of([], [r'\A"use strict";'])
+
+    plan = state.review_plan(300)
+    assert plan.generated == ("bundle.js",) and "bundle.js" in plan.shortcuts
+    assert [one.path for one in plan.files] == ["src/app.js"]
+    state.apply_review(plan.shortcuts)
+    assert state.open_marks == []
+
+    changes = state.record([CodeMark(path="bundle.js", symbol="", reason="again")], [], "edit")
+    assert changes.opened == [] and state.open_marks == []
+    assert any("counts as generated" in why for why in changes.ignored)
 
 
 def test_a_file_in_the_place_of_a_symbolic_link_is_reviewed_whole(repo: Path) -> None:

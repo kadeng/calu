@@ -2043,6 +2043,33 @@ images and serialised objects (`.pkl`, `.pt`, `.npy`) stay with the reviewer: co
 configuration, Markdown can hold a unit's documentation, SVG can hold scripts, and loading a
 serialised object can run code.
 
+**Generated code.** A bundle, minified or obfuscated code cannot be judged for honesty: its
+honesty is that of the sources it is built from. You name such files with two lists of
+regular expressions, both empty by default:
+
+| Setting | Matched against | Example |
+|---|---|---|
+| `honesty.generated_paths` | the path relative to the project directory | `^src/calu/web/static/pane/`, `\.min\.js$` |
+| `honesty.generated_contents` | the first 8,192 bytes of the file | `\A"use strict";`, `@generated` |
+
+```bash
+calu config set honesty.generated_paths '["^dist/", "\\.min\\.js$"]'
+```
+
+A file either list matches:
+
+- an honesty review verifies it without the reviewer and closes a mark that is open on it;
+- a mark a checker puts on it is not recorded (the log says so);
+- an edit of it by hand (Edit, Write, MultiEdit) waits for a person, whatever `honesty.mode`
+  says, so that only its build writes it unseen.
+
+Beyond the lists, the checkers' fixed instructions cover code that is *plainly* generated,
+minified or obfuscated: the edit and command checkers escalate a hand edit of it (`sed -i`, a
+heredoc, a patch script; the build command itself is not affected), and the honesty checker
+and the reviewer do not judge it. That judgement is the model's, not a rule's, so list the
+files you know. The real guarantee is a test that compares the generated files with a fresh
+build from the sources, as this repository's `pane.test.ts` does for the chat pane's bundle.
+
 | Aspect | Detail |
 |---|---|
 | Start | Under `enforce`, Calu starts a review by itself when a step needs a clean state and the only problem is unreviewed files or a required review. In `track` and `enforce` mode, you start one with `/honesty-review` or "Review now" |
