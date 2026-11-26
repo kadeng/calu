@@ -33,7 +33,7 @@ the allow or deny lists; it steers the models' judgement as the instructions do.
 |---|---|
 | `id` | A short number, shown in every list and used by `/rule-remove` |
 | `text` | The rule as the user wrote or accepted it, at most 1,000 characters |
-| `scope` | `global`, `project` (one registered project) or `session` (one session) |
+| `scope` | `global`, `project` (one registered project) or `session` (one conversation: Claude's session id, so the rule survives a resume, which creates a new `sessions` row) |
 | `expires_at` | Creation time plus the duration: at least 1 minute, at most 7 days, default 1 day |
 | `lifts_builtin` | Whether the rule also lifts calu's built-in protections, within the limits of section 6 |
 | `created_by`, `created_at` | Who added it (as for escalation decisions: `client:<name>`, `web:<user>`, `cli:<user>`) |
@@ -80,9 +80,10 @@ Only a person, through a login Claude does not have:
 | `calu rule add/list/remove` in a terminal | the user login | for scripts and for a machine without a client |
 
 The database enforces the limits. A check constraint keeps `expires_at - created_at` between 1
-minute and 7 days, and at 1 day at most for a rule that lifts built-in protections. The session
-role can only read the table. Adding and removing go into the
-audit log, as setting changes do (D43).
+minute and 7 days, and at 1 day at most for a rule that lifts built-in protections. No database
+role keeps a session from writing the table: since migration 0043 every calu process uses the
+user login (`calu_admin`). What keeps Claude out is that it has no database login at all, as for
+every other table. Adding and removing go into the audit log, as setting changes do (D43).
 
 ### The slash commands
 
@@ -202,7 +203,7 @@ The limits below are Claude's proposal for B; the owner chose B, not these detai
 
 | Step | Content | Size |
 |---|---|---|
-| 1 | Migration: table `temporary_rules`, check constraints, grants (session role reads only); `calu.temp_rules` with parsing of durations and scopes, add, list, remove, audit | half a day |
+| 1 | Migration: table `temporary_rules`, check constraints, grants, audit trigger; `calu.temp_rules` with parsing of durations and scopes, add, list, remove, audit | half a day |
 | 2 | The checkers' prompt part (command, edit, changeset), the session's reload and the expiry at prompt time; the lifting of built-in protections in the rules engine with its fixed exceptions; tests with fake checkers | half a day |
 | 3 | `calu rule add/list/remove`; the slash commands in `calu attach` (both clients); the bridge's `ide.rules.*` requests and the slash commands of the VSCode chat and the web pane; Cua test of the VSCode chat | half a day |
 | 4 | The settings pane of `calu web`, the card in the VSCode settings dialog; Cua test of both | 3 hours |

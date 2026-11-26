@@ -62,7 +62,7 @@ async def test_a_database_of_the_replaced_migrations_is_refused_until_it_is_rese
         await conn.execute("DROP SCHEMA public CASCADE")
         await conn.execute("CREATE SCHEMA public")
         await conn.execute("GRANT USAGE ON SCHEMA public TO PUBLIC")
-        assert [m.name for m in await migrate(conn)] == ["0001_baseline.sql"]
+        assert [m.name for m in await migrate(conn)] == [m.name for m in migrations()]
         assert await earlier_migrations(conn) == []
     finally:
         await conn.close()

@@ -139,6 +139,21 @@ async def db_url() -> AsyncIterator[str]:
 
 
 @pytest.fixture(autouse=True)
+def _outside_a_calu_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run every test as if outside a calu session, also when the suite runs inside one.
+
+    Claude Code's environment in a calu session carries `CALU_INSIDE_SESSION`
+    (`calu.paths.INSIDE_SESSION_ENV`), and `calu honesty trust | untrust | prune` refuse to run
+    there. A developer who runs the suite from a calu session ("Developing Calu inside Calu")
+    would otherwise see those tests fail. A test about that refusal sets the variable itself.
+
+    Args:
+        monkeypatch: Pytest's fixture; the variable comes back after the test.
+    """
+    monkeypatch.delenv("CALU_INSIDE_SESSION", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _locks_below_the_test(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Give every test its own default lock directory, below its `tmp_path`.
 
