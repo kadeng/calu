@@ -145,10 +145,17 @@ say "6. calu serve (tmux session $TMUX_SESSION)"
 stop_server
 # The user login has no password (setup-demo.sh), so nothing is asked; stdin is /dev/null
 # all the same.
+# The log of an earlier run would pass the check below at once.
+rm -f "$LOG"
 tmux new-session -d -s "$TMUX_SESSION" -c "$HOME" \
     "calu serve --insecure </dev/null 2>&1 | tee $LOG"
-sleep 4
-tmux capture-pane -p -t "$TMUX_SESSION" | grep -v '^$' | tail -5 || {
-    echo "calu serve did not start: see $LOG" >&2
+# The server needs several seconds to import calu and connect; wait for its ready line.
+for _ in $(seq 60); do
+    grep -q "answering session requests" "$LOG" 2>/dev/null && break
+    sleep 0.5
+done
+grep -q "answering session requests" "$LOG" 2>/dev/null || {
+    echo "calu serve did not start within 30 s: see $LOG" >&2
     exit 1
 }
+tail -3 "$LOG"
