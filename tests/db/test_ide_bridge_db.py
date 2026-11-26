@@ -360,6 +360,56 @@ async def test_a_session_is_started_named_listed_renamed_and_attached_again(
             ) == {"value": "sonnet"}
 
 
+async def test_attaching_to_a_named_dormant_session_resumes_it_through_the_server(
+    db_url: str, tmp_path: Path, store: CredentialStore
+):
+    """The owner, 2026-11-26: after a restart of `calu serve` the chat had to pick the session
+    by hand; attaching to a named session that no longer runs resumes it (D280)."""
+    session_url = await prepare(db_url, tmp_path)
+    store.save("user", session_url, None)
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    host = socket.gethostname()
+    async with bridged(workspace, store, user=USER, claim_wait_s=0.3) as editor:
+        async with serving(session_url, hostname=host, user=USER):
+            started = await editor.request("ide.start", {"kind": "new"})
+            old_id = started["session_id"]
+            await editor.request("ide.detach")
+        async with owner_db(db_url) as db:
+            (conversation,) = await db.one(
+                "SELECT claude_session_id FROM sessions WHERE id = %s::uuid", (old_id,)
+            )
+        assert conversation
+
+        # The server is gone: the dormant session cannot be resumed, and the error says so.
+        with pytest.raises(Failed) as nobody:
+            await editor.request("ide.attach", {"session": old_id, "after_seq": 5})
+        assert nobody.value.code == -32013 and "calu serve" in nobody.value.message
+
+        async with serving(session_url, hostname=host, user=USER):
+            resumed = await editor.request("ide.attach", {"session": old_id, "after_seq": 5})
+            new_id = resumed["session_id"]
+            assert new_id != old_id and resumed["attached"] is True
+            assert resumed["events"] == [] or resumed["events"][0]["params"]["seq"] <= 1
+            # Asked again by the old id while the resumed one runs: that one, no second resume.
+            again = await editor.request("ide.attach", {"session": old_id[:8]})
+            assert again["session_id"] == new_id
+            # The workspace's session is never resumed by an attach that names none.
+            await editor.request("ide.detach")
+        with pytest.raises(Failed) as unnamed:
+            await editor.request("ide.attach", {"session": None})
+        assert unnamed.value.code == -32011
+    async with owner_db(db_url) as db:
+        rows = await db.all(
+            "SELECT kind, claude_session_id FROM session_requests WHERE state = 'started' "
+            "ORDER BY id"
+        )
+        assert rows == [("new", None), ("resume", conversation)]
+        assert await db.one(
+            "SELECT claude_session_id FROM sessions WHERE id = %s::uuid", (new_id,)
+        ) == (conversation,)
+
+
 async def test_a_start_the_server_refuses_says_why_and_an_unnamed_start_has_no_name(
     db_url: str, tmp_path: Path, store: CredentialStore
 ):

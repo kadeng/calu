@@ -32,6 +32,9 @@ import { errorCode, errorText, type BridgeCore } from './bridgeCore';
 /** Milliseconds a session request waits before the chat says that no server may be running. */
 export const SLOW_START_MS = 3000;
 
+/** Milliseconds `reattach` waits before the chat says that the session is being resumed. */
+export const RESUME_NOTICE_MS = 1000;
+
 /** An input box (or its browser equivalent). */
 export interface InputOptions {
   /** Title of the box. */
@@ -260,22 +263,38 @@ export class Sessions {
    * shown: the caller falls back to the session of the workspace. A session attached by
    * `attachEndpoint` is asked at its address with its token again.
    *
+   * A session that no longer runs (its `calu serve` was stopped) is resumed by the bridge
+   * through the running server (D280): the result then names another session, whose
+   * transcript is loaded whole. While the bridge waits longer than `RESUME_NOTICE_MS`, the
+   * chat shows "Resuming the session".
+   *
    * @param afterSeq Sequence number of the last event the chat view applied for that session.
-   * @returns True if that session is attached again; false if there was none or it is gone.
+   * @returns True if that session, or the session that resumed it, is attached; false if
+   *   there was none, it is gone and could not be resumed (e.g. no server runs).
    */
   async reattach(afterSeq: number): Promise<boolean> {
     const session = this.lastAttachedId;
     if (!session) return false;
+    const notice = setTimeout(
+      () => this.dispatch({ method: 'ui.starting', params: { title: 'Resuming the session', slow: false } }),
+      RESUME_NOTICE_MS,
+    );
     try {
       await this.bridge.ensureStarted();
       const where = this.endpoint?.sessionId === session ? { address: this.endpoint.address, token: this.endpoint.token } : {};
       let result = await this.bridge.request('ide.attach', { session, after_seq: afterSeq, ...where }, false);
-      // A replay with a gap cannot continue the transcript: take the whole session again.
-      const resumed = afterSeq > 0 && result.complete === true;
-      if (afterSeq > 0 && !resumed) result = await this.bridge.request('ide.attach', { session, after_seq: 0, ...where }, false);
+      // Another session id: the bridge resumed the conversation in a new session, whose
+      // events start anew. A replay with a gap cannot continue the transcript either: take
+      // the whole session again.
+      const same = result.session_id === session;
+      const resumed = same && afterSeq > 0 && result.complete === true;
+      if (same && afterSeq > 0 && !resumed) result = await this.bridge.request('ide.attach', { session, after_seq: 0, ...where }, false);
+      clearTimeout(notice);
       this.attached(result, resumed);
       return true;
     } catch (error) {
+      clearTimeout(notice);
+      this.dispatch({ method: 'ui.starting', params: {} });
       this.ui.log(`[calu] the session ${session.slice(0, 8)} was not attached again: ${errorText(error)}`);
       this.lastAttachedId = null;
       this.endpoint = null;

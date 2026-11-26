@@ -106,7 +106,7 @@ function fakeUi(script: Script): HostUi & SessionsUi {
 
 const ATTACH = { session_id: 's1', events: [], complete: true };
 
-async function started(answers: Record<string, Answer> = {}, script: Partial<Script> = {}) {
+async function started(answers: Record<string, Answer> = {}, script: Partial<Script> = {}, remembered?: string) {
   const bridge = new ScriptedBridge({
     'ide.initialize': () => ({ bridge_version: '1', protocol_version: undefined, workspace: '/w' }),
     'ide.status': () => ({ findings: [], database: { reachable: true }, locked: false }),
@@ -125,11 +125,12 @@ async function started(answers: Record<string, Answer> = {}, script: Partial<Scr
   const view = new FakeView();
   const s: Script = { confirm: true, inputs: [], asked: [], ...script };
   const ui = fakeUi(s);
-  const host = new ChatHost(core, view, ui, ui);
+  const stored: (string | null)[] = [];
+  const host = new ChatHost(core, view, ui, ui, (id) => stored.push(id), remembered);
   host.start();
   await core.ensureStarted();
   await new Promise((r) => setTimeout(r, 20));
-  return { bridge, core, view, host, script: s };
+  return { bridge, core, view, host, script: s, stored };
 }
 
 describe('BridgeCore', () => {
@@ -211,6 +212,21 @@ describe('ChatHost', () => {
     expect(view.state.session.sessionId).toBe('s1');
     bridge.notify('session.event', { method: 'user.input', params: { text: 'hello', seq: 1 } });
     await new Promise((r) => setTimeout(r, 5));
+    host.dispose();
+  });
+
+  it('attaches to the remembered session again; one the bridge resumed is loaded whole and remembered (D280)', async () => {
+    // The owner, 2026-11-26: after a restart of `calu serve` the chat had to pick its session
+    // by hand. The bridge resumes the named session and answers with the new one.
+    const { bridge, view, host, stored } = await started(
+      { 'ide.attach': (p) => (p.session === 'old' ? { session_id: 'new', events: [], complete: true } : ATTACH) },
+      {},
+      'old',
+    );
+    expect(bridge.requests.filter((r) => r.method === 'ide.attach').map((r) => r.params.session)).toEqual(['old']);
+    expect(view.state.session.sessionId).toBe('new');
+    expect(view.state.starting).toBeNull();
+    expect(stored).toContain('new');
     host.dispose();
   });
 

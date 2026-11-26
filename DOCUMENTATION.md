@@ -1005,8 +1005,10 @@ and in Claude Code's transcript. If no session runs in the directory, `calu atta
 newest session of the directory (or of the nearest directory above it) and asks your running
 `calu serve` to resume it. Claude Code starts again only then, and the session has its calu
 history: the turns, the chat summary and the checkers' context. `--session ID` names a
-dormant session by the beginning of its id. Without a running `calu serve`, the message names
-the commands that continue the session in a terminal:
+dormant session by the beginning of its id. The chat of the VSCode extension and of `calu
+web` does the same for the session it was attached to: after a restart of `calu serve` it
+resumes that session ("Resuming the session") instead of asking you to pick one. Without a
+running `calu serve`, the message names the commands that continue the session in a terminal:
 
 ```bash
 calu run --continue                  # the newest conversation of this directory

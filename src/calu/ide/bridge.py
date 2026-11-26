@@ -644,18 +644,24 @@ class Bridge:
         return await self.access.read(work, _password(params))
 
     async def _attach(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Answer `ide.attach`: attach to a running session.
+        """Answer `ide.attach`: attach to a session; resume a named one that is dormant.
 
             `address` given  ─► that address with `token` (no database is asked)
             else             ─► a local socket that needs no token (a session started with
                                 `--insecure`, or root's own for a root bridge)
             else             ─► the database: the session is picked and a token minted
+            `session` named, none of these runs it (D280: dormant, e.g. after a restart
+            of `calu serve`):
+                a running session continues its conversation ─► attach to that one
+                else ─► resume the conversation through `calu serve`, as `ide.start`
+                        {kind: "resume"} does, in the session's directory
 
         Side effects: detaches first if a session is attached; connects once to each
         token-free local socket to find the session (each session logs that); a lookup
         through the database also closes the open escalations of gone sessions
-        (`herd.sessions`) and may write a `client_tokens` row; starts the connection, whose
-        events flow after the response.
+        (`herd.sessions`) and may write a `client_tokens` row; a resume also writes a
+        `session_requests` row and waits for the server (`_request_session`); starts the
+        connection, whose events flow after the response.
 
         Args:
             params: `session` (an id or its beginning; null for the workspace's session),
@@ -663,12 +669,17 @@ class Bridge:
                 machine's sockets or database `address` and `token`.
 
         Returns:
-            `{attached: true, session_id, initialize, snapshot, events, complete}`.
+            `{attached: true, session_id, initialize, snapshot, events, complete}`. After a
+            resume or for the session that continues the conversation, `session_id` is that
+            session's (not the one asked for) and the events start at 0, whatever
+            `after_seq` said.
 
         Raises:
-            RpcError: `NO_SESSION` if no session matches or it cannot be reached;
-                `SEVERAL_SESSIONS` if several match; `NEEDS_PASSWORD` or `NO_DATABASE`; the
-                session's own error if it refuses the token.
+            RpcError: `NO_SESSION` if no session matches (and none named is dormant) or it
+                cannot be reached; `SEVERAL_SESSIONS` if several match; `NEEDS_PASSWORD` or
+                `NO_DATABASE`; the session's own error if it refuses the token; for a resume
+                the errors of `_request_session` (`NO_SERVER`, `SERVER_REFUSED`,
+                `START_CANCELLED`).
         """
         hint = _text(params, "session")
         after_seq = _number(params, "after_seq") or 0
@@ -677,9 +688,89 @@ class Bridge:
         async with self._attaching:
             if address:
                 endpoint = Endpoint(address, _text(params, "token") or "")
-            else:
+                return await self._attach_to(endpoint, after_seq)
+            try:
                 endpoint = await self._find(hint, password)
-            return await self._attach_to(endpoint, after_seq)
+                return await self._attach_to(endpoint, after_seq)
+            except RpcError as error:
+                if error.code != NO_SESSION or not hint:
+                    raise
+                woken = await self._dormant(hint, password)
+                if woken is None:
+                    raise
+                if isinstance(woken, Endpoint):
+                    return await self._attach_to(woken, 0)
+        # Outside `_attaching`: `_request_session` takes it itself once the server answered.
+        log.info("resuming the dormant session %s (Claude %s)", hint, woken.claude_session_id)
+        return await self._request_session(woken, "", password)
+
+    async def _dormant(self, hint: str, password: str | None) -> Endpoint | SessionRequest | None:
+        """Find out how to continue the session `hint` names when it does not run (D280).
+
+        The session is looked up among those of this host and of the OS user this bridge runs
+        as that have a Claude session id (`herd.dormant_session`). If a session that serves clients already
+        continues its conversation (another editor, calu's own resume after an end, D282),
+        that one is meant; else the conversation is to be resumed in the session's directory.
+        A bridge that runs as root resumes nothing: root's sessions are `calu run`
+        processes, which no `calu serve` resumes.
+
+        Side effects: reads `sessions`; for a running successor, writes a `client_tokens` row.
+
+        Args:
+            hint: The session id, or its beginning, that `ide.attach` named.
+            password: The password of a protected credential, if the request brought one.
+
+        Returns:
+            The endpoint of the running successor (token minted); else the resume request
+            to file; None if no such session exists, it has no Claude session id, or it
+            still runs (and was not found for another reason, which the caller reports).
+
+        Raises:
+            RpcError: `NEEDS_PASSWORD` or `NO_DATABASE`.
+        """
+        if os.geteuid() == 0:
+            return None
+        # The sessions are recorded with the OS user they work for (`session_os_user`), whose
+        # home holds the transcripts: this process's. The request goes to the server that
+        # `ide.start` asks (`self.user`, which only tests set).
+        recorded, user = _os_user(), self.user or _os_user()
+
+        async def work(db: Db) -> Endpoint | SessionRequest | None:
+            """Look the session and its successors up.
+
+            Args:
+                db: The connection.
+
+            Returns:
+                As `_dormant`.
+            """
+            row = await herd.dormant_session(db, self.hostname, recorded, None, hint)
+            if row is None or row.claude_session_id is None:
+                return None
+            if row.ended_at is None and not row.stale:
+                return None
+            successors = [
+                other
+                for other in await herd.sessions(db, active_only=True)
+                if other.claude_session_id == row.claude_session_id
+                and other.hostname == self.hostname
+                and other.address
+                and not other.stale
+            ]
+            if successors:
+                newest = max(successors, key=lambda other: other.started_at)
+                token_id, token = await herd.mint_token(db, newest.id, "calu ide")
+                return Endpoint(newest.address, token, token_id, newest.id, password)
+            return SessionRequest(
+                hostname=self.hostname,
+                os_user=user,
+                directory=row.directory,
+                kind="resume",
+                claude_session_id=row.claude_session_id,
+                label=f"calu ide ({user})",
+            )
+
+        return await self.access.read(work, password)
 
     async def _detach_request(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer `ide.detach`. Side effect: revokes a token the bridge minted.
@@ -745,7 +836,33 @@ class Bridge:
             project=_text(params, "project"),
             label=f"calu ide ({user})",
         )
-        password = _password(params)
+        return await self._request_session(wanted, name, _password(params))
+
+    async def _request_session(
+        self, wanted: SessionRequest, name: str, password: str | None
+    ) -> dict[str, Any]:
+        """File a session request, wait until `calu serve` started it, and attach to it.
+
+        Side effects: writes a `session_requests` row and waits for its outcome (withdrawn if
+        no server claims it, if the editor goes away meanwhile, or on `ide.start.cancel`);
+        sets the session's name if one is given; mints a client token; detaches from the
+        session attached before. Takes `_attaching` once the server answered.
+
+        Args:
+            wanted: The request.
+            name: The new session's name; "" leaves it unnamed.
+            password: The password of a protected credential, if the request brought one.
+
+        Returns:
+            As `ide.attach`.
+
+        Raises:
+            RpcError: `NO_SERVER` if no server answered (the message names the command);
+                `SERVER_REFUSED` if the server did not start the session (its message);
+                `START_CANCELLED` if `ide.start.cancel` took the request back;
+                `NEEDS_PASSWORD` or `NO_DATABASE`.
+        """
+        user = wanted.os_user
         # Only the wait for the server can be taken back (`ide.start.cancel`): `work` drops
         # this scope from `_start_waits` in the step in which the server's answer arrives, so
         # a cancel after that finds nothing to take back and the request attaches.
