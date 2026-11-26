@@ -14,7 +14,7 @@
 >
 > — *Tron* (1982), [source](https://www.imdb.com/title/tt0084827/quotes/)
 
-## A Coding Agent under constant supervision
+## A Coding Agent for critical thinkers
 
 **The problem** A coding agent produces steps faster than a person can read them. Left
 unwatched it drifts from the task, and a wrong step costs more the later it is caught. 
