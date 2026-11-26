@@ -63,6 +63,43 @@ neither ran nor was refused, and the note holds the answer (agent/records/PLAN.m
 SESSION_ENDED_NOTE = "the session ended before anybody answered"
 """Note of an escalation that was still open when its session ended (`SessionStore.end`)."""
 
+NUL_SIGN = "␀"
+"""What a NUL character is stored as (the sign ␀). PostgreSQL holds no NUL in `text` or
+`jsonb`: a write with one fails, and a step or an escalation that cannot be recorded is
+denied. A tool input, a file's content or a diff can hold one (a binary file in a commit)."""
+
+
+def storable(value: Any) -> Any:
+    """Return a value with every NUL character replaced by `NUL_SIGN`, for the database.
+
+    Args:
+        value: A JSON-like value: a string, or dicts, lists and tuples of such values, with
+            anything else inside.
+
+    Returns:
+        The same structure (a tuple becomes a list). Strings, dict keys included, have their
+        NUL characters replaced; every other value is returned as it is.
+    """
+    if isinstance(value, str):
+        return value.replace("\x00", NUL_SIGN) if "\x00" in value else value
+    if isinstance(value, Mapping):
+        return {storable(key): storable(item) for key, item in value.items()}  # pyright: ignore[reportUnknownVariableType]
+    if isinstance(value, (list, tuple)):
+        return [storable(item) for item in value]  # pyright: ignore[reportUnknownVariableType]
+    return value
+
+
+def json_text(value: Any) -> str:
+    """Serialize a value for a `jsonb` column, without NUL characters (`storable`).
+
+    Args:
+        value: A JSON-like value; an object JSON does not know is stored as its `str`.
+
+    Returns:
+        The JSON text.
+    """
+    return json.dumps(storable(value), default=lambda item: storable(str(item)))
+
 
 @dataclass(frozen=True)
 class SessionIdentity:
@@ -856,7 +893,7 @@ class DatabaseSessionStore:
         """
         await self._db.execute(
             "SELECT calu_session_setting_change(%s::uuid, %s, %s::jsonb, %s::jsonb, %s)",
-            (self._require_session(), setting, json.dumps(old), json.dumps(new), actor),
+            (self._require_session(), setting, json_text(old), json_text(new), actor),
         )
 
     async def set_address(self, address: str) -> None:
@@ -984,7 +1021,7 @@ class DatabaseSessionStore:
                 step.agent_id,
                 step.tool_use_id,
                 step.tool_name,
-                json.dumps(step.tool_input, default=str),
+                json_text(step.tool_input),
                 step.git_commit,
             ),
         )
@@ -1054,7 +1091,7 @@ class DatabaseSessionStore:
             (
                 before,
                 after,
-                json.dumps(
+                json_text(
                     {
                         "paths": list(paths),
                         "undeclared": list(undeclared),
@@ -1114,8 +1151,8 @@ class DatabaseSessionStore:
             (
                 self._require_session(),
                 turn.index,
-                json.dumps(turn.user_inputs),
-                json.dumps([s.model_dump(mode="json") for s in turn.steps]),
+                json_text(turn.user_inputs),
+                json_text([s.model_dump(mode="json") for s in turn.steps]),
                 turn.answer,
                 turn.answer_narration,
                 turn.narrated,
@@ -1611,7 +1648,7 @@ class DatabaseSessionStore:
         return await self._db.scalar(
             "INSERT INTO escalations (session_id, step_id, reason, context)"
             " VALUES (%s, %s, %s, %s) RETURNING id",
-            (self._require_session(), step_id, reason, json.dumps(context, default=str)),
+            (self._require_session(), step_id, storable(reason), json_text(context)),
         )
 
     async def escalation_context(self, escalation_id: int) -> EscalationContextResult | None:

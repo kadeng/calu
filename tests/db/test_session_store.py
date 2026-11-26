@@ -222,6 +222,39 @@ async def test_turn_records_round_trip(db_url: str) -> None:
     )
 
 
+async def test_a_nul_character_never_keeps_a_step_or_an_escalation_from_being_stored(
+    db_url: str,
+) -> None:
+    """PostgreSQL holds no NUL; a write that failed would deny the step (the owner's report:
+    a PNG in an escalated commit, "\\u0000 cannot be converted to text")."""
+    owner = await connect(db_url)
+    _, session_url = await setup(owner, db_url, "test:model")
+    conn = await connect(session_url)
+    try:
+        store = DatabaseSessionStore(Db(conn))
+        await store.start(IDENTITY)
+        step_id = await store.add_step(
+            StepRow(
+                seq=1, tool_name="Write", tool_input={"content": "a\x00b", "k\x00": [("x\x00",)]}
+            )
+        )
+        escalation = await store.open_escalation(
+            "binary\x00reason", {"rendered": "+\x89PNG\r\n\x1a\n\x00", "n": 1}, step_id
+        )
+        cur = await owner.execute(
+            "SELECT s.tool_input, e.reason, e.context FROM steps s JOIN escalations e"
+            " ON e.step_id = s.id WHERE e.id = %s",
+            (escalation,),
+        )
+        tool_input, reason, context = await cur.fetchone()  # type: ignore[misc]
+        assert tool_input == {"content": "a␀b", "k␀": [["x␀"]]}
+        assert reason == "binary␀reason"
+        assert context == {"rendered": "+\x89PNG\r\n\x1a\n␀", "n": 1}
+    finally:
+        await conn.close()
+        await owner.close()
+
+
 async def test_the_session_waits_for_a_decision_and_cancels_its_own(db_url: str) -> None:
     owner = await connect(db_url)
     _, session_url = await setup(owner, db_url, "test:model")

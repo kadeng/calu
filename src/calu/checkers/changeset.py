@@ -50,7 +50,12 @@ git reads `config` from the common directory, so no setting of the repository re
 diff: no program it names is run (file system monitor, content filters, external diff, text
 conversion, a fetch of missing objects), and no setting can leave a file out of the diff or
 change how it is shown. `DIFF_OPTIONS` states the same on the command line, and `--text` shows
-the content of a file that an attribute declares binary.
+the content of a file that an attribute declares binary. calu itself then leaves out the
+content of binary data files (`without_binary_content`): a file that is named like an image
+or a font and holds a NUL character is shown as its name and the size of its change. The rule
+goes by the name and the content, both of which the agent chooses. Code hidden in a file named
+`x.png` is not read at the commit. It is not run by that name either: running it takes a
+command, which the command checker judges.
 
 `-a` makes git read the files of the working tree while it commits. calu's diff reads them the
 same way, with the settings that decide how a file's content becomes a blob copied from the
@@ -749,7 +754,9 @@ async def _read_changeset(cwd: Path, options: CommitOptions, scratch: Path) -> C
         scratch: An empty directory of calu's own; the caller removes it.
 
     Returns:
-        The change, or an empty result if there is nothing to commit.
+        The change, or an empty result if there is nothing to commit. The content of binary
+        data files (images, fonts and the like) is not in it: each is named with the size of
+        its change. A NUL character elsewhere is shown as ␀ (`without_binary_content`).
 
     Raises:
         _UnreadableError: If git could not be asked or the change cannot be read whole.
@@ -810,13 +817,68 @@ async def _read_changeset(cwd: Path, options: CommitOptions, scratch: Path) -> C
     if options.all_tracked:
         await _refuse_filtered(top_dir, [*diff, "--name-only", "-z", *against], environment)
     stat = await _git(top_dir, [*diff, "--stat", *against], environment)
-    patch = await _git(top_dir, [*diff, *against], environment)
+    raw = await _git_raw(top_dir, [*diff, *against], environment)
+    patch = without_binary_content(raw).decode(errors="replace")
     if not stat.strip() and not patch.strip():
         return Changeset()
     cut = len(patch) > MAX_DIFF_CHARS
     if cut:
         patch = patch[:MAX_DIFF_CHARS] + "\n[... the diff is cut here; the summary above is whole]"
     return Changeset(text=f"{stat.rstrip()}\n\n{patch}", cut=cut)
+
+
+_FILE_START = re.compile(rb"^(?=diff --git )", re.MULTILINE)
+"""Where the part of one file starts in a patch. A content line never matches: each begins
+with "+", "-" or a space."""
+
+DATA_SUFFIXES = frozenset(
+    {
+        *("png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tif", "tiff"),
+        *("woff", "woff2", "ttf", "otf", "eot"),
+        *("pdf", "mp3", "wav", "ogg", "flac", "mp4", "webm", "mov"),
+    }
+)
+"""Name endings of files whose binary content `without_binary_content` leaves out: images,
+fonts, PDF, audio and video. No interpreter, import or build step runs such a file by its
+name. Archives, compiled code and libraries are not in the list, on purpose."""
+
+NUL_SIGN = "␀"
+"""What a NUL character becomes in the text a checker and the database get (the sign ␀)."""
+
+
+def without_binary_content(patch: bytes) -> bytes:
+    """Take the content of binary data files out of a patch, and every NUL character.
+
+    A binary data file is not checked like a source file: the bytes of an image tell a
+    checker nothing and fill its prompt. A file's part of the patch loses its content only
+    if both hold: it contains a NUL character, and the file's name ends in one of
+    `DATA_SUFFIXES`. The agent controls a file's content, so a NUL character alone hides
+    nothing: in every other file the content stays, with each NUL character shown as
+    `NUL_SIGN`. A source file or a script with a NUL character in it is therefore still read.
+
+    Args:
+        patch: The output of `git diff` with `--text`.
+
+    Returns:
+        The patch without NUL characters. The hunks of each binary data file are replaced by
+        the line "(binary content, not shown: about N bytes added, M bytes removed)"; its
+        header lines (`diff --git`, mode, `index`, `---`, `+++`) are kept.
+    """
+    parts = _FILE_START.split(patch)
+    for index, part in enumerate(parts):
+        if b"\x00" not in part:
+            continue
+        header, hunk, body = part.partition(b"\n@@")
+        named = header.split(b"\n", 1)[0].rstrip(b'"').rpartition(b".")[2].lower()
+        if not hunk or named.decode(errors="replace") not in DATA_SUFFIXES:
+            parts[index] = part.replace(b"\x00", NUL_SIGN.encode())
+            continue
+        lines = (hunk + body).split(b"\n")
+        added = sum(len(line) for line in lines if line.startswith(b"+"))
+        removed = sum(len(line) for line in lines if line.startswith(b"-"))
+        note = f"(binary content, not shown: about {added} bytes added, {removed} bytes removed)"
+        parts[index] = header.replace(b"\x00", b"") + b"\n" + note.encode() + b"\n"
+    return b"".join(parts)
 
 
 def _write_scratch(scratch: Path, config: str, common_dir: Path) -> None:
