@@ -57,9 +57,11 @@ Open items found on the way:
 
 The UI test desktop on this machine: image `calu-uitest:latest`, container `calu-uitest`
 running; start with `bash uitest/run.sh` (no execute bit in this checkout); drive with
-`~/.local/bin/uv run --no-project --with cua python uitest/desktop.py ...`. Node is not
-installed on the host: build the extension in a `node:22-slim` container and copy `calu.vsix`
-to `~/.cache/calu-uitest/share/`.
+`~/.local/bin/uv run --no-project --with cua python uitest/desktop.py ...`. Node 24 is in
+`~/.nvm/versions/node/`, the JDK 25 in `~/.cache/calu-jdk/`, the headless Chromium installed by
+`scripts/get-browser.sh`. The container was recreated with `apparmor=unconfined` (the owner's
+decision), so bubblewrap and Claude Code's sandbox work in it; `run.sh` now passes that option
+for every container it creates (commit `d6aece6`).
 
 How the owner wants to work, as learned in this session:
 
