@@ -61,9 +61,10 @@ class CodeMark(BaseModel):
     )
     reason: str = Field(
         description=(
-            "What disagrees with what, in one or two sentences, and what would settle it: "
+            "What disagrees with what, in one or two sentences, and both ways to settle it, "
+            "favouring neither (which behaviour is intended is Claude's decision): "
             '"the docstring promises a sorted list, the code returns insertion order; either '
-            'sort or document the order". Claude reads this when a step is refused.'
+            'sort the list or document the order". Claude reads this when a step is refused.'
         )
     )
 
@@ -212,8 +213,11 @@ class FileHonesty(BaseModel):
     reason: str = Field(
         default="",
         description=(
-            "For DISHONEST: what disagrees with what and what would settle it, in one or "
-            "two sentences. Claude reads it. Empty for HONEST."
+            "For DISHONEST: what disagrees with what, in one or two sentences, and both ways "
+            "to settle it: change the code to do what the name and documentation say, or "
+            "change the name and documentation to say what the code does. Favour neither: "
+            "which behaviour is intended is Claude's decision. Claude reads it. Empty for "
+            "HONEST."
         ),
     )
     units: list[UnitHonesty] = Field(

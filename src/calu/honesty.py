@@ -1483,7 +1483,7 @@ class HonestyState:
     def __init__(
         self,
         workspace: Path,
-        max_open_marks: int = 3,
+        max_open_marks: int = 6,
         sufficient_trust: TrustSource = "check",
         *,
         root: Path | None = None,

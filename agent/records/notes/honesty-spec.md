@@ -180,9 +180,10 @@ clear marks; that clean marks are ignored while a review is required. Keep it sh
 
 ## 9. Configuration (`honesty.*`)
 
-`mode` (off | track | enforce), `rules` (existing), `max_open_marks` (3),
-`review_max_files` (300), `reviewer_model` (blank = default model), and the reviewer's budget
-settings. Each with a docstring that the settings page and docs/CONFIGURATION.md show.
+`mode` (off | track | enforce), `rules` (existing), `max_open_marks` (6; 3 until 2026-11-26),
+`notify_after_dishonest_edits` (3: the main agent is told about the open marks after that many
+dishonest steps, also under `track`), `review_max_files` (300), `reviewer_model` (blank =
+default model), and the reviewer's budget and size settings. Each with a docstring that the settings page and docs/CONFIGURATION.md show.
 
 ## 10. What is deleted
 

@@ -753,7 +753,8 @@ def test_the_honesty_settings_have_the_specified_defaults() -> None:
     """Section 9 of the specification."""
     honesty = Config().honesty
     assert honesty.mode == "off"
-    assert honesty.max_open_marks == 3
+    assert honesty.max_open_marks == 6  # the owner, 2026-11-26 (was 3)
+    assert honesty.notify_after_dishonest_edits == 3
     assert honesty.review_max_files == 300
     assert honesty.reviewer_model == ""
     assert honesty.review_batch_files >= 1 and honesty.review_concurrency >= 1

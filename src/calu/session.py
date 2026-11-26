@@ -522,6 +522,19 @@ LOCK_HOOK_MARGIN_S = 30.0
 """Seconds kept back from the PreToolUse hook's timeout (`HOOK_TIMEOUT_S`) when an approved
 call waits for its locks there, so that the hook answers before Claude Code gives up on it."""
 
+NOTICE_MARKS = 10
+"""How many open marks the notice about dishonest steps lists (`Session._honesty_notice`)."""
+
+HONESTY_NOTICE = (
+    "calu's honesty checker found {count} of the recent steps dishonest: their code and its "
+    "names or documentation disagree. Open marks: {marks}. For each, decide which behaviour "
+    "is intended, then either change the code to do what its name and documentation say, or "
+    "change the name and documentation to say what the code does; neither is preferred. An "
+    "edit that brings them into agreement closes its mark."
+)
+"""The notice to Claude's main agent after `honesty.notify_after_dishonest_edits` dishonest
+steps (the owner, 2026-11-26)."""
+
 PAUSE_HOOK_MARGIN_S = 60.0
 """Seconds of the PreToolUse hook's time that a call held by the user's pause leaves for its
 locks and its answer, on top of `LOCK_HOOK_MARGIN_S`."""
@@ -732,6 +745,11 @@ class Session:
         )
         """The escalations of this session and the hold they put on other steps
         (`calu.escalations`); it outlives runs."""
+        self._dishonest_steps = 0
+        """Steps that opened a mark since Claude was last told (`_count_dishonest`)."""
+        self._notice_due = False
+        """Whether Claude's main agent is to be told about the open marks with the next
+        checked tool call (`_honesty_notice`)."""
         self.pause = Pause(self._emit_safely)
         """The user's pause (`pause.set`): approved checked calls wait while it lasts
         (`calu.pause`); it outlives runs."""
@@ -2254,7 +2272,8 @@ class Session:
         (`SessionStore.distrust_file`); an edit that the edit checkers approved verifies the
         file at the content they judged, and that verification is stored in the database with
         the source "check" unless the file carries an open mark; the marks whose code is gone
-        are closed; and a plain commit made in a clean state is certified (`_certify`).
+        are closed; and a plain commit made in a clean state is certified (`_certify`). A step
+        that opened marks is counted for the notice to Claude (`_count_dishonest`).
 
         Side effects: changes `self.honesty`, may write to the database, emits a `log` event
         that names what changed and `honesty.update`. Never raises: if applying fails, a
@@ -2295,6 +2314,7 @@ class Session:
                             )
                         )
             await self._report_marks(changes)
+            self._count_dishonest(changes)
         except Exception as exc:
             log.exception("applying a step's result to the honesty state failed")
             for state in list(self._states.values()):
@@ -2401,6 +2421,48 @@ class Session:
                 level="info",
                 message=f"honesty: commit {commit.short} certified as trusted (source {source})",
             )
+        )
+
+    def _count_dishonest(self, changes: MarkChanges) -> None:
+        """Count a step that opened marks; make the notice to Claude due at the threshold.
+
+        Side effects: increments `_dishonest_steps` for a step that opened at least one mark;
+        when it reaches `honesty.notify_after_dishonest_edits` (not 0), sets `_notice_due` and
+        starts counting again. Works in every `honesty.mode` but "off", which records no mark.
+
+        Args:
+            changes: What one step's result changed in the marks.
+        """
+        limit = self.config.honesty.notify_after_dishonest_edits
+        if not changes.opened or limit <= 0:
+            return
+        self._dishonest_steps += 1
+        if self._dishonest_steps >= limit:
+            self._dishonest_steps = 0
+            self._notice_due = True
+
+    def _honesty_notice(self) -> str:
+        """Take the due notice to Claude's main agent about the open marks.
+
+        The notice says how many steps were found dishonest, lists the open marks (at most
+        `NOTICE_MARKS`) and leaves the way out to Claude: change the code, or change the names
+        and documentation. Side effect: clears `_notice_due`.
+
+        Returns:
+            The text, sent as the `main_note` of the next checked tool call; "" when no notice
+            is due or no mark is open any more.
+        """
+        if not self._notice_due:
+            return ""
+        self._notice_due = False
+        marks = list(self._honesty_sent.marks)
+        if not marks:
+            return ""
+        listed = "; ".join(f"{mark.label()} ({mark.reason})" for mark in marks[:NOTICE_MARKS])
+        if len(marks) > NOTICE_MARKS:
+            listed += f"; and {len(marks) - NOTICE_MARKS} more"
+        return HONESTY_NOTICE.format(
+            count=self.config.honesty.notify_after_dishonest_edits, marks=listed
         )
 
     async def _report_marks(self, changes: MarkChanges) -> None:
@@ -3709,7 +3771,9 @@ class Session:
         """Decide about a tool call before it runs (ToolGate).
 
         Side effects: records the step in the database and in the context, emits `edit.diff`
-        (edits) and `check.result`, and remembers the reason of an escalation for `ask`. While
+        (edits) and `check.result`, remembers the reason of an escalation for `ask`, and hands
+        out a due notice about dishonest steps as the result's `main_note`
+        (`_honesty_notice`). While
         an escalation of the session is open or being opened, a call that needs a check waits
         in the gate first (`StepGate.judge`), and a verdict ASK makes this step count as an
         escalation that is being opened (`EscalationDesk.expect_ask`).
@@ -3900,7 +3964,12 @@ class Session:
             )
         if traces_note and result.decision.approves:
             notes.append(traces_note)
-        return GateResult(verdict=verdict, reason=result.reason, context="\n\n".join(notes))
+        return GateResult(
+            verdict=verdict,
+            reason=result.reason,
+            context="\n\n".join(notes),
+            main_note=self._honesty_notice(),
+        )
 
     async def _held_late(
         self,

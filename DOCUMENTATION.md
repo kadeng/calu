@@ -1947,7 +1947,7 @@ commit with the same content keeps its trust.
 |---|---|---|
 | **Marks** | the honesty checker or the honesty review found a function, a class or a whole file dishonest, with a reason | the honesty checker answers HONEST for a later edit of that file; or a person clears a wrong mark |
 | **Unreviewed files** | the content differs from the baseline and nobody verified it. This happens when a shell command or a program outside the session changed the file, when a person allowed the edit after an escalation, or when the staged content differs from the working file | an honesty review verifies them, or a person certifies the file |
-| **Review required** | more marks are open than `honesty.max_open_marks` (3); from then on an edit that the honesty checker answers HONEST no longer clears a mark, and only an honesty review does | an honesty review leaves no mark |
+| **Review required** | more marks are open than `honesty.max_open_marks` (6); from then on an edit that the honesty checker answers HONEST no longer clears a mark, and only an honesty review does | an honesty review leaves no mark |
 
 The state is **clean** when there is a baseline, no open mark, no unreviewed file, and no
 review is required.
@@ -1965,6 +1965,12 @@ concerned.
 - DISHONEST never stops the edit. Calu records a mark and tells Claude. A later edit that puts
   name, comment and behaviour back in agreement is answered HONEST, which clears the file's
   marks.
+- A finding names both ways to settle it and favours neither: change the code to do what its
+  name and documentation say, or change the name and documentation to say what the code does.
+  Which behaviour is intended is Claude's decision, not the checker's or the reviewer's.
+- After 3 steps found dishonest (`honesty.notify_after_dishonest_edits`; 0 switches it off),
+  Claude's main agent gets a notice with the open marks, with its next checked tool call. This
+  happens under `track` as well, where nothing is blocked.
 - The checker escalates only edits that look deliberate: a backdoor, hidden behaviour, a
   comment written to mislead.
 - The checker may mark a file other than the edited one, because an edit to `src/parser.py` can

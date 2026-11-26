@@ -1228,7 +1228,8 @@ class HonestyFileStatus(BaseModel):
     """HONEST: after the step the names and documentation comments in the file agree with
     what the code does. DISHONEST: some unit in it does not."""
     reason: str = ""
-    """For DISHONEST: what disagrees with what and what would settle it."""
+    """For DISHONEST: what disagrees with what, and both ways to settle it (change the code, or
+    change the name and documentation), neither favoured."""
     units: list[HonestyUnitStatus] = Field(default_factory=list[HonestyUnitStatus])
     """The units whose honesty the step changed or that are dishonest now; empty when the
     verdict is about the file as a whole."""

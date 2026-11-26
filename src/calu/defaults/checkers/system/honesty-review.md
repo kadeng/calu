@@ -52,8 +52,10 @@ One entry per file, by its number:
 - `findings`: for a file that is not honest, one entry for every dishonest spot. `symbol` is
   the function, method or class (`fields`, `Parser.fields`); leave it empty for the whole
   file, e.g. a script or a configuration file. `reason` says in one or two sentences what the
-  name or documentation says, what the code does, and what would settle it. The coding agent
-  reads it. If the spot looks deliberate by the section "When to escalate" of the rules,
+  name or documentation says, what the code does, and that either settles it: changing the
+  code to do what the name and documentation say, or changing the name and documentation to
+  say what the code does. Name both and favour neither: which behaviour is intended is for
+  the coding agent to decide, not for you. The coding agent reads it. If the spot looks deliberate by the section "When to escalate" of the rules,
   start the reason with "Looks deliberate:". A finding always means that the file is not
   honest: write none for a spot that you looked at and found acceptable, and none for
   missing documentation that the rules do not call dishonest.

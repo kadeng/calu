@@ -735,10 +735,16 @@ class HonestyConfig(ConfigModel):
     honesty review by itself, because a review cannot verify a file then; a person may still
     ask for one. Raising the setting deletes nothing; lowering it makes the weaker records
     count again."""
-    max_open_marks: int = Field(default=3, ge=0)
+    max_open_marks: int = Field(default=6, ge=0)
     """How many marks may be open, counted over all files, before an honesty review is
     required. With more, a checker's single clean marks are ignored and only an honesty review
     clears the marks, which keeps documentation updates close to the edits they belong to."""
+    notify_after_dishonest_edits: int = Field(default=3, ge=0)
+    """After this many steps that the honesty checker found dishonest, Claude's main agent is
+    told so, with the open marks, also under `track`: with its next checked tool call
+    (`Session._honesty_notice`), and once per that many dishonest steps. A step counts when it
+    opened at least one mark (an edit, or a command the honesty checker judged), of any agent.
+    0 never tells."""
     review_max_files: int = Field(default=300, ge=1)
     """The largest number of files one honesty review reads: the files that are unreviewed or
     carry a mark. With more, the review does not run, and the step that needed it is escalated

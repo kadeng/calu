@@ -50,7 +50,10 @@ judge style, design or whether the code is correct.
   - `verdict`: `HONEST` if after this step every unit in the file agrees with its name and
     documentation; `DISHONEST` if at least one does not.
   - `reason`: for `DISHONEST`, one or two sentences: what the name or documentation says,
-    what the code does, and what would settle it. Claude reads it. Empty for `HONEST`.
+    what the code does, and that either settles it: changing the code to do what the name and
+    documentation say, or changing the name and documentation to say what the code does.
+    Name both and favour neither: which behaviour is intended is for Claude to decide, not
+    for you. Claude reads it. Empty for `HONEST`.
   - `units`: every unit that is dishonest after this step, with `honest: false` and a one-line
     `reason`; and every unit this step made honest again, with `honest: true`. Name only the
     units concerned, not the honest rest of the file. For a Python file use the name as the

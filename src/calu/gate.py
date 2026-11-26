@@ -212,8 +212,10 @@ UNRECORDED = (
 HONESTY_MARKS = (
     "calu runs and commits code only after it was verified to say what it does "
     "(honesty.mode is enforce), and {what}. Recorded as dishonest: {spots}. Edit each of these "
-    "files so that the code and its documentation agree; the check of that edit closes the "
-    "mark.{review}"
+    "files so that the code and its documentation agree: either change the code to do what "
+    "its name and documentation say, or change the name and documentation to say what the "
+    "code does. Which behaviour is intended is your decision. The check of that edit closes "
+    "the mark.{review}"
 )
 """Reason of the denial of a step that needs a clean honesty state while marks are open."""
 

@@ -69,7 +69,12 @@ class ReviewFinding(BaseModel):
         ),
     )
     reason: str = Field(
-        description="What disagrees with what, and what would settle it. One or two sentences."
+        description=(
+            "What disagrees with what, and both ways to settle it: change the code to do what "
+            "the name and documentation say, or change the name and documentation to say what "
+            "the code does. Favour neither; the coding agent decides which behaviour is "
+            "intended. One or two sentences."
+        )
     )
 
 

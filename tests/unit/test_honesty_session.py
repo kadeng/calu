@@ -28,6 +28,7 @@ from calu.protocol.messages import (
     Log,
     ToolResult,
     TurnResult,
+    UserInput,
 )
 from calu.session import Session, SessionError
 from calu.store import MemorySessionStore
@@ -362,8 +363,10 @@ async def test_a_closing_mark_needs_an_edit_of_that_file(repo: Path):
 
 
 async def test_more_marks_than_allowed_require_a_review_and_clean_marks_are_ignored(repo: Path):
-    """Section 3: the fourth mark sets "review required"; a clean mark is then ignored."""
-    for name in ("a", "b", "c"):
+    """Section 3: with the default of six (`honesty.max_open_marks`), the seventh mark sets
+    "review required"; a clean mark is then ignored."""
+    names = ("a", "b", "c", "d", "e", "f")
+    for name in names:
         (repo / f"{name}.py").write_text("x = 1\n", encoding="utf-8")
     session, rec, _store = await session_on(
         repo,
@@ -371,13 +374,49 @@ async def test_more_marks_than_allowed_require_a_review_and_clean_marks_are_igno
         models={"honesty": honesty_answering(honest=["src/parser.py"])},
     )
     mark(session)
-    for name in ("a", "b", "c"):
+    for name in names[:-1]:
         mark(session, f"{name}.py", "")
+    assert not session.honesty.review_required  # six marks are open
+    mark(session, "f.py", "")
     assert session.honesty.review_required
     await run_turns(session, rec)
-    assert len(session.honesty.open_marks) == 4
+    assert len(session.honesty.open_marks) == 7
     assert "a review is required, so a clean mark is ignored" in logs(rec)
     assert rec.of(HonestyUpdate)[-1].review_required
+
+
+@pytest.mark.parametrize("limit", [3, 0])
+async def test_claude_is_told_after_three_dishonest_edits_also_under_track(repo: Path, limit: int):
+    """The owner, 2026-11-26: after D (`honesty.notify_after_dishonest_edits`, default 3)
+    dishonest edits the main agent hears about the open marks, also in `track` mode, with
+    both ways out and neither preferred. 0 never tells."""
+    dishonest = "x = 1  # calu:dishonest\n"
+    session, rec, _store = await session_on(
+        repo,
+        [
+            [
+                write("a.py", dishonest),
+                write("b.py", dishonest),
+                write("c.py", dishonest),
+                write("d.py", "y = 2\n"),
+            ]
+        ],
+        "track",
+        models={"honesty": honesty_answering()},
+        notify_after_dishonest_edits=limit,
+    )
+    await run_turns(session, rec)
+    assert len(session.honesty.open_marks) == 3
+    notices = [e.text for e in rec.of(UserInput) if "honesty checker found" in e.text]
+    if limit == 0:
+        assert notices == []
+        return
+    (notice,) = notices
+    assert "found 3 of the recent steps dishonest" in notice
+    assert "a.py" in notice and "b.py" in notice and "c.py" in notice
+    assert "change the code" in notice and "change the name and documentation" in notice
+    assert "neither is preferred" in notice
+    assert next(e for e in rec.of(UserInput) if e.text == notice).source != "user"
 
 
 async def test_a_person_clears_a_mark_and_every_client_hears_it(repo: Path):
