@@ -144,6 +144,56 @@ the session at the first failure, because retrying does not repair them."""
 HOLD_ALL = AutoEscalate(commands=True, edits=True, subagents=True)
 """The auto-escalation categories of a session whose configuration is known to be stale."""
 
+
+class ReloadHold:
+    """Remembers the hold that failed settings reloads put on one session.
+
+    The hold itself is `HOLD_ALL` in the session's categories. This class decides when to
+    place it and what to go back to. It changes nothing by itself.
+
+    - `place` says whether to hold now. It says yes once per streak of failed reloads.
+      So a person who chooses another supervision level during the streak keeps it.
+    - `release` ends the streak after a reload that succeeded. It returns the categories
+      to go back to, if the hold is still in force.
+    """
+
+    def __init__(self) -> None:
+        """Start with no hold placed."""
+        self.held_from: AutoEscalate | None = None
+        """The categories before the hold; None until a hold was placed in this streak."""
+
+    def place(self, current: AutoEscalate) -> bool:
+        """Tell whether the hold has to be placed now, and remember what it replaces.
+
+        Args:
+            current: The session's categories now.
+
+        Returns:
+            True for the first call of a streak, unless the session holds everything
+            already. False afterwards, also when a person lowered the level since.
+        """
+        if self.held_from is not None or current == HOLD_ALL:
+            return False
+        self.held_from = current
+        return True
+
+    def release(self, current: AutoEscalate) -> AutoEscalate | None:
+        """End the streak after a reload that succeeded.
+
+        Args:
+            current: The session's categories now.
+
+        Returns:
+            The categories the session had before the hold, if this streak placed a hold
+            and the session still holds everything. None if no hold was placed, or a
+            person chose another level since: their choice stays.
+        """
+        before, self.held_from = self.held_from, None
+        if before is not None and current == HOLD_ALL:
+            return before
+        return None
+
+
 PR_SET_DUMPABLE = 4
 """`prctl` option that sets whether other processes of the same user may read this one."""
 
@@ -1132,9 +1182,7 @@ async def _run(
     )
     session.add_trace_secret(login_password, "password")
 
-    held_from: AutoEscalate | None = None
-    """What waited for a human before failed reloads held every checked step; None while no
-    such hold is in force."""
+    reload_hold = ReloadHold()
 
     async def on_settings(new: ProjectSettings) -> None:
         """Apply reloaded settings and report it.
@@ -1145,13 +1193,12 @@ async def _run(
         Args:
             new: The newly loaded settings.
         """
-        nonlocal held_from
         before = session.config.auto_escalate
-        if held_from is not None and before == HOLD_ALL:
+        restored = reload_hold.release(before)
+        if restored is not None:
             # The hold of the failed reloads ends: back to what the session had before it.
             # `announce_auto_escalate` below records and announces the change.
-            session.config.auto_escalate = held_from
-        held_from = None
+            session.config.auto_escalate = restored
         session.apply_settings(new)
         # A client may offer the categories as a setting of its own (the ACP adapter maps them
         # to ACP's session modes), so it has to hear about a change made elsewhere -- and the
@@ -1174,8 +1221,14 @@ async def _run(
         The session keeps the settings it has, which may be laxer than what the database holds
         now. Invalid stored settings and a vanished project row hold the session at once, any
         other error after `HOLD_AFTER_FAILED_RELOADS` failures in a row: every checked step
-        then waits for a human until a reload succeeds (fail closed). The categories the
-        session had before are remembered in `held_from`, and `on_settings` restores them.
+        then waits for a human (fail closed). The hold ends in one of two ways:
+
+        - A reload succeeds. `on_settings` then restores the categories the session had
+          before the hold, which `ReloadHold` remembers.
+        - A person chooses another supervision level (`auto_escalate.set`). That choice
+          stands: the hold is placed once per streak of failed reloads, and later failures
+          of the same streak do not put it back. The session then runs on its stale
+          settings with the level the person chose.
 
         Args:
             exc: Why the reload failed.
@@ -1193,14 +1246,16 @@ async def _run(
         else:
             message = (
                 f"the configuration could not be reloaded ({text}); the session may run on "
-                "stale settings, so every checked step waits for a human until a reload succeeds"
+                "stale settings, so every checked step waits for a human until a reload succeeds "
+                "or a person chooses another supervision level"
             )
         if failures == 1 or failures == HOLD_AFTER_FAILED_RELOADS:
             await emit(Log(level="error", message=message))
-        if not hold or session.config.auto_escalate == HOLD_ALL:
+        if not hold or not reload_hold.place(session.config.auto_escalate):
+            # The hold is placed once per streak of failures. A person who chooses another
+            # level after it has read why the session holds; the next failed retry must not
+            # undo that choice.
             return
-        nonlocal held_from
-        held_from = session.config.auto_escalate
         try:
             await session.set_auto_escalate(HOLD_ALL, "session: configuration reload failed")
         except Exception:

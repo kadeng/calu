@@ -27,7 +27,9 @@ UNCHECKED = Config(auto_escalate=AutoEscalate(unchecked=True))
 async def test_a_command_the_checker_would_deny_passes_without_a_checker(tmp_path: Path) -> None:
     """The fake command checker denies "calu:deny"; with the level unchecked it is not asked."""
     session, rec, store = make_session(
-        tmp_path, [[{"tool": "Bash", "input": {"command": "python3 run.py  # calu:deny"}}]], UNCHECKED
+        tmp_path,
+        [[{"tool": "Bash", "input": {"command": "python3 run.py  # calu:deny"}}]],
+        UNCHECKED,
     )
     async with anyio.create_task_group() as tg:
         await session.start(tg)

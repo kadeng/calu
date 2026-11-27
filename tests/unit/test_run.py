@@ -6,7 +6,9 @@ import os
 import anyio
 import pytest
 
+from calu import run
 from calu.checkers import Decision, Route
+from calu.config import AutoEscalate
 from calu.protocol.messages import (
     AssistantDelta,
     AssistantText,
@@ -421,3 +423,40 @@ async def test_continue_resumes_the_newest_conversation_of_the_directory(
     # Together with a named conversation: refused.
     both = dataclasses.replace(options, resume_id=newest.claude_session_id)
     assert await run._continued(None, both, console) is None  # type: ignore[arg-type]
+
+
+# ------------------------------------------------------------------ the hold of failed reloads
+
+
+def test_failed_reloads_hold_once_and_a_reload_that_succeeds_goes_back() -> None:
+    """The hold replaces the session's categories once; the next good reload restores them."""
+    hold = run.ReloadHold()
+    before = AutoEscalate(edits=True)
+    assert hold.place(before) is True
+    # The session now holds everything; later failures of the streak place nothing new.
+    assert hold.place(run.HOLD_ALL) is False
+    assert hold.release(run.HOLD_ALL) == before
+    # The streak is over: a new one holds again.
+    assert hold.place(before) is True
+
+
+def test_a_level_a_person_chose_during_the_hold_stands() -> None:
+    """The owner: "Confirm everything" must not come back every time (2026-11-27).
+
+    A session whose settings cannot be reloaded holds every checked step. That is fail
+    closed. A person who then chooses another level has read why the session holds, so the
+    next failed retry does not put the hold back, and the next good reload keeps the choice.
+    The price: the session runs on stale settings with the level the person chose.
+    """
+    hold = run.ReloadHold()
+    assert hold.place(AutoEscalate()) is True
+    chosen = AutoEscalate(edits=True)
+    assert hold.place(chosen) is False, "a later failure of the same streak"
+    assert hold.release(chosen) is None, "the choice stays after a reload that succeeds"
+
+
+def test_no_hold_is_placed_on_a_session_that_holds_everything_already() -> None:
+    """Nothing to replace, so nothing to restore."""
+    hold = run.ReloadHold()
+    assert hold.place(run.HOLD_ALL) is False
+    assert hold.release(run.HOLD_ALL) is None

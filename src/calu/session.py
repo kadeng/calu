@@ -462,9 +462,7 @@ HANDED_BACK_EMPTY = (
 )
 """Why an empty final result of a subagent that handed its report back is not reviewed (the
 step's recorded reason, D252)."""
-RESULT_UNCHECKED = (
-    "Subagent result accepted without a check: the supervision level is unchecked."
-)
+RESULT_UNCHECKED = "Subagent result accepted without a check: the supervision level is unchecked."
 """The summary of a subagent result that no checker read (`auto_escalate.unchecked`)."""
 HANDBACK_POINTER = re.compile(r"This agent's report was delivered to you as a message from\b")
 """The start of the final result Claude Code (2.1.327) gives a foreground subagent that handed
@@ -5165,9 +5163,7 @@ class Session:
         if unchecked:
             # No checker runs (requirement 53): the result is accepted as it is.
             outcome = ResultOutcome(
-                review=ResultReview(
-                    verdict=ResultVerdict.ACCEPT, note="", summary=RESULT_UNCHECKED
-                )
+                review=ResultReview(verdict=ResultVerdict.ACCEPT, note="", summary=RESULT_UNCHECKED)
             )
         else:
             outcome = await self._review(result)

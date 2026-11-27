@@ -1490,8 +1490,8 @@ async def test_changing_the_auto_escalation_categories_is_recorded_with_who_aske
     # Switching it off again is recorded as well -- that is the direction that matters.
     await session.set_auto_escalate(AutoEscalate(), client="whoever")
     assert store.setting_changes[-1][1:] == (
-        {"commands": False, "edits": True, "subagents": False},
-        {"commands": False, "edits": False, "subagents": False},
+        {"commands": False, "edits": True, "subagents": False, "unchecked": False},
+        {"commands": False, "edits": False, "subagents": False, "unchecked": False},
         "whoever",
     )
 

@@ -1652,9 +1652,8 @@ def _who_approved(route: Route, source: str, approval: CheckDecision) -> str:
     if source == "unchecked":
         return "No checker ran: the supervision level is unchecked."
     who = f"The {route.value} checker" if source == "checker" else "The rules"
-    return (
-        f"{who} decided {approval.decision.value}"
-        + (f": {approval.reason}" if approval.reason else ".")
+    return f"{who} decided {approval.decision.value}" + (
+        f": {approval.reason}" if approval.reason else "."
     )
 
 
