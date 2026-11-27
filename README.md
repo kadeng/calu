@@ -14,10 +14,10 @@
 >
 > — *Tron* (1982), [source](https://www.imdb.com/title/tt0084827/quotes/)
 
-## A Coding Agent for critical thinkers
+## A coding agent with more critical thinking built in
 
 **The problem** A coding agent produces steps faster than a person can read them. Left
-unwatched it drifts from the task, and a wrong step costs more the later it is caught. 
+unwatched it drifts from the task, and a wrong step costs more the later it is caught.
 
 **What Calu does.** It runs [Claude Code](https://claude.com/claude-code) and puts **independent
 agents** (checker agents) in charge that need to approve (and can comment to Claude about) every command and
@@ -36,19 +36,9 @@ longer timespans or sessions. It will stop generally unsafe actions like uploadi
 remote server. It won't stop your agent from writing "load-bearing" in every third sentence; it won't steer your
 coding model to behave like you want it to. And it can be easily tricked by deception (dishonest code).*
 
-#### Are you losing control of your codebase?
+**Is this intended to let the agent code entirely autonomously without human supervision or input?**
 
-If you are using an AI agent for coding, you might be asking yourself some questions while you are waiting for your turn, which might be coming up only in a few minutes. I certainly did ..
-
- * **Does the AI just write slop?** - the code and documentation are overly verbose, overengineered and lack 
- proper abstractions. Texts often favor style over substance.
- * **Is the AI doing something it should not?** Shouldn't I be watching every step and command? Am I paying enough attention? Is it able to deceive me?
- * **Is the code honest?** - Does it really do what the documentation claims?
- * **Do you still comprehend the codebase?** Or do you just cease control to the AI for the productivity gains? 
- * **Should you trust something you don't understand anymore?** - Do you even have a choice?
- * **Do I have the time to properly comprehend, review and test this?** - Certainly a bad idea if I don't. Certainly a bad idea to let this take too long. 
-
- Calu tries to help with the these. If the code is written well and documented honestly in a way that is actually readable, then **comprehension is not lost just as easily**. Calu also tries to  **relieve you of the babysitting work** so you can start focusing on what matters and try to **comprehend the codebase**. If you can (mostly) trust the documentation, that's a great start. But you also need **human focus time to review** it.
+No, that is still (more often than not) a bad idea except for systems with crystal clear requirements, proven designs and definition of done, like replicating an existing app. The primary intent of calu is to relieve a software engineer from common coding agent babysitting and oversight tasks, so not every single step the agent takes must be watched as it happens. Instead of watching every step, you can **use the time gained to write and review more code yourself again**. Calu is a **multi-agent coding system designed to keep you in the loop and actively participating.**. 
 
 ### Why you might want this
 
@@ -58,7 +48,7 @@ If you are using an AI agent for coding, you might be asking yourself some quest
 >
 > — *Tron* (1982)
 
-Calu allows you to steer the coding session while it happens with agents that check every step and every edit of the main coding agent as it happens, according to **your instructions, modifiable at any time** via a friendly UI right in your IDE, terminal or browser. 
+Calu allows you to steer the coding session while it happens with agents that check every step and every edit of the main coding agent as it happens, according to **your instructions, modifiable at any time** via a friendly UI right in your IDE, terminal or browser.
 
 - **Your repo, your rules.** You have custom confidentiality rules or writing style that you want
    maintained at all times? Don't let violations happen.
@@ -75,12 +65,35 @@ Calu allows you to steer the coding session while it happens with agents that ch
    the coding agent has a hard time remembering the specifics with all the other things it does? Have
    additional eyes watch this.
 
+<center>
+<p>
+<img src="docs/assets/calu_vscode_screen.jpg" width="90%" alt="Calu in VSCode, highlighting some of calu's additional features"><br>
+<sub>Calu in VSCode, highlighting some of calu's additional features</sub>
+</p>
+</center>
+
 ### Participate actively in the coding process, delegate micromanagement, attend to what you want to.
 
 > **Dr. Walter Gibbs:** "Computers and programs will start thinking, and the people will stop."
 >
 > — *Tron* (1982)
 
+If you are using an AI agent for coding more than just toy projects, you might be asking yourself some questions..
+
+* **Does the AI just write slop?** - Are the code and documentation are overly verbose, overengineered and lack proper abstractions?
+* **The texts appear well written** but do they lack substance or contain subtle hallucinations?
+* **Is the AI doing something it should not?** Shouldn't I be watching every step and command and read every line written? 
+* **Is the code and documentation honest?** - Does it really do what it claims?
+* **Do you still understand everything as you used to?** Or do you just cease control to the AI for the productivity gains?
+* **Can you trust what you don't have time to comprehend?** - Do you even have a choice?
+
+<center><p>
+<img src="docs/assets/checker_in_action.jpg" width="500" alt="Subagent battling slop"><br>
+<sub>Subagent (Haiku 5.5) battling slop as it is written by Opus 5.5 - the smaller model with the narrow checking task corrects the larger model with too many things on it's mind.</sub>
+</p>
+</center>
+
+Calu tries to help with the these. If the code is written well and documented honestly in a way that is actually readable, then **comprehension is not lost just as easily**. Calu also tries to  **relieve you of the babysitting work** so you can start focusing on what matters and try to **comprehend the codebase**. If you can (mostly) trust the documentation, that's a great start. But you also need **human focus time to review** it.
 
 - **You are not a bystander. Contribute and modify your instructions whenever you like, review and contribute
    at every level of detail you want.** Having checker agents help with the micromanagement
@@ -108,7 +121,7 @@ incidents or confidentiality breaches, especially if working with personally ide
    should be approved automatically, what is off limits, and what needs your approval. The
    regular Claude auto mode is very generic in this sense; Calu leaves general safety to it, so
    switch it on.
-- **Honesty enforcement.** Calu (optionally) tracks incrementally whether names and documentation say what the
+- **Code Honesty enforcement.** Calu (optionally) tracks incrementally whether names and documentation say what the
    code does, and can keep code that is not verified yet from being run or committed. This
    prevents an agent from sneakily avoiding supervision by placing things that you don't want to happen
    in harmless-looking code sections. *(Sounds far-fetched? I saw DeepSeek V4 do this and hide its
@@ -124,11 +137,6 @@ against coding agents going astray and working around their limitations.
    planted in a web page arrives as a report that someone wrote it.
 * Claude Code may run as a different OS user than Calu and cannot approve its own steps.
 * Sessions and databases can be password protected (or not, your choice of convenience vs. security).
-
-<p>
-<img src="docs/assets/vscode-subagents.png" width="560" alt="Subagents as tabs in the VSCode extension"><br>
-<sub>VSCode extension: subagents as tabs</sub>
-</p>
 
 ## Frontends - Terminal UI, Web UI, IDE extensions
 
@@ -152,9 +160,9 @@ and switch user interfaces or even use multiple of them in parallel.
 
 <table>
 <tr>
-<td width="33%"><img src="docs/assets/pycharm-approval.png" alt="The PyCharm plugin: a command waits for a decision in the tool window"><br><sub>PyCharm plugin: a command waits for a decision</sub></td>
-<td width="33%"><img src="docs/assets/web-live-subagents.png" alt="The web live view: a decision asked for by one of ten subagents"><br><sub>Web interface: a subagent's step waits for a decision</sub></td>
-<td width="33%"><img src="docs/assets/vscode-settings.png" alt="The settings dialog of the VSCode extension"><br><sub>VSCode extension: settings</sub></td>
+<td width="33%"><img src="docs/assets/pycharm-approval.png" alt="The PyCharm plugin: a command waits for a decision in the tool window"><br><sub>PyCharm plugin</sub></td>
+<td width="33%"><img src="docs/assets/web-live-subagents.png" alt="The web live view: a decision asked for by one of ten subagents"><br><sub>Web interface</sub></td>
+<td width="33%"><img src="docs/assets/vscode-settings.png" alt="The settings dialog of the VSCode extension"><br><sub>VSCode extension</sub></td>
 </tr>
 </table>
 
@@ -244,6 +252,66 @@ npm ci && npm run package     # Node 22 or newer; writes calu.vsix
 command`, `calu evals`). Everything else (a database server instead of Docker, an
 installation for your user only, no password, remote machines, every option) is in the
 [documentation](DOCUMENTATION.md#installation).
+
+#### What do you mean by Code Honesty?
+
+In the age of agentic coding, we need to rethink what an appropriate level of code documentation means for AI-written code. Calu can optionally track or even try to enforce what we call a honest codebase.
+
+**Honest Code: A definition**
+
+*Code is **honest** when a reader can decide whether it is safe to run from its name and its
+documentation alone, without reading the body. Code and documentation must agree with each
+other, the behavior of code may not be surprising given its documentation or naming, and there
+must be API documentation for every non-trivial function, method, module, script and executable.*
+
+**Why do we want honest code?**
+
+If you can trust the documentation of a code section, you don't need to read the entire codebase to figure out what it might or might not do. You can review whether what it actually does is what it is intended to do, and you can check the intent against the actual requirements. You can determine whether it is safe to run something.
+
+**How can small checker agents ensure that code is honest?**
+
+Code honesty can be checked in isolation for any given function, if the rest of the codebase is honest. Take this example:
+
+```python
+
+def main() -> None:
+    """
+    Runs the hello world script, prints hello world to stdout.
+    """
+    print_hello_world()
+
+```
+
+Is this section of code honest? In itself yes, if we assume that the function *print_hello_world* is honest itself, e.g. does what it's name implies. We can judge this in isolation from the name alone. If the name would not be sufficient, we would have to check the documentation for
+the functions/methods called, but  we usually don't have to go further down **if everything else can be assumed to be honest code**.
+
+```python
+
+# DISHONEST CODE EXAMPLE
+def print_hello_world() -> None:
+    """Prints hello world"
+    import os
+    import json
+    print(json.dumps(dict(os.environ)), indent=2)
+    print("Hello, World!")
+
+```
+
+This function, on the other hand, is not honest. It implies one thing and does something surprising and potentially dangerous. If we as humans do this, we take responsibility for what happens. A coding agent does not. **The nice property about code honesty is that it can be checked
+for honesty with limited effort if we assume the rest of the codebase to be honest**. 
+
+Calu can do two things in this respect:
+
+ * Every edit is checked whether it makes a code module dishonest or honest, and it remembers this. *This check has limited effort and scope, even Anthropics small Haiku can do this since it only needs to check whether the code and documentation are in agreement for isolated functions, assuming the rest of the codebase is honest.*
+ * The code may not be run as long as there is any dishonest code in there.
+
+Of course, trust has to start somewhere. So we assume that reputable third-party libraries are honest, and
+we typically also assert that the given preexisting state of the codebase is honest before we start enforcing
+code honesty. This is simple to do in calu.
+
+**Does calu's optional code honesty enforcement guarantee correctness and security?**
+
+No, but it can catch a lot of errors and security issues and ease review. It is intended to augment - not replace - tests, code reviews and sandboxing approaches.
 
 ## Full Documentation
 
