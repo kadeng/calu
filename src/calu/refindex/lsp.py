@@ -1,28 +1,35 @@
-"""The fast reference index: a language server asked over the Language Server Protocol.
+"""The fast reference index: it asks a language server.
 
-    start     the server as a child process (stdin and stdout, JSON-RPC with Content-Length
-              frames); `initialize` with the project directory; then wait for the server's
-              message that it has read the project (`LspIndex.ready_log`)
-    referrers `textDocument/references` at the unit's name, without the declaration
-              + for every other method or function of the same bare name (`workspace/symbol`)
-                whose `textDocument/implementation` names the unit: its references too.
-                Those are the calls through a base class or a Protocol, which the server
-                counts for the base method only.
-    changed   `workspace/didChangeWatchedFiles` for files written since, then `SETTLE_S`
-              before the next question
+A language server is the program an editor uses for "find all references". It understands
+one language well, including the types of variables, so its answers are exact. This module
+starts such a server and asks it which code refers to a given function, method or class.
+The default server is basedpyright, for Python.
 
-Measured with basedpyright 1.40.2 on calu's own code (`spikes/RESULTS.md`, "The reference
-index"): asked before it is ready, and for about two seconds after a new file was announced,
-the server answers with an empty list and no error. An empty list from a server that has not
-reported ready is therefore never passed on as "no referrers": the answer is not `complete`.
+How it works:
 
-The index confirms; it has no unclear places. What a language server cannot resolve (a
-receiver without a known type, a name in a string, another language) is missing from its
-answer without a sign. The word search (`calu.refindex.search`) is the complete one.
+1. It starts the server as a child process and talks to it over its standard input and
+   output, in the Language Server Protocol.
+2. It waits until the server says that it has read the project (`LspIndex.ready_log`).
+3. For a question it asks the server for the references of the unit.
+4. It also asks for the references of every base-class or Protocol method that the unit
+   implements. The server files a call like `store.save()` under the base method when
+   `store` is only known by its base type, so those calls would otherwise be missed.
 
-The server parses the project's files, which the supervised agent writes. Whoever starts an
-`LspIndex` chooses the user and the sandbox the server runs in (`command`); this module starts
-the command it is given and nothing else.
+Two things were measured with basedpyright 1.40.2 on calu's own code and shaped this module
+(`spikes/RESULTS.md`, "The reference index"):
+
+- A server that has not finished reading the project answers with an empty list, and no
+  error. The same happens for about two seconds after it was told about a new file. An
+  empty list could be mistaken for "nothing refers to this". So this module marks an answer
+  as not complete when the server never reported that it was ready, and it waits `SETTLE_S`
+  after `changed`.
+- The server never says "I could not work this out". A call on a variable of unknown type,
+  a name inside a string, and code in another language are simply absent from its answer.
+  The word search (`calu.refindex.search`) is the index that misses nothing.
+
+Safety: the server reads files that the supervised coding agent writes. This module runs
+the command it is given and nothing more. Whoever creates an `LspIndex` decides which user
+and which sandbox the server runs in.
 """
 
 import json

@@ -46,6 +46,7 @@ def project(tmp_path: Path) -> Path:
     (root / "run.sh").write_text("python -c 'add_user()'  # add_user\n", encoding="utf-8")
     (root / "build" / "out.py").write_text("add_user()\n", encoding="utf-8")
     (root / "data.bin").write_bytes(b"\0add_user\0")
+    (root / "NOTES.md").write_text("`add_user` adds a user. Call add_user().\n", "utf-8")
     (root / ".gitignore").write_text("build/\n", encoding="utf-8")
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     subprocess.run(["git", "-C", str(root), "add", "src/users.py", ".gitignore"], check=True)
@@ -69,8 +70,8 @@ def test_the_search_reports_every_code_occurrence_of_the_bare_name(project: Path
     """The word search confirms nothing and misses nothing: the call, the method of the same
     name in another class, the name as a string and as a dotted path, the untracked caller
     and the shell script are all unclear. The definition, the comment, the docstrings, a
-    string that only mentions the name, a longer identifier, the ignored file and the binary
-    file are left out."""
+    string that only mentions the name, a longer identifier, the Markdown file, the ignored
+    file and the binary file are left out."""
     answer = SearchIndex(project).find(Unit("src/users.py", "Users.add_user", line=5))
     assert answer.referrers == ()
     assert [(p.path, p.line) for p in answer.unclear] == [
@@ -82,7 +83,8 @@ def test_the_search_reports_every_code_occurrence_of_the_bare_name(project: Path
         ("src/users.py", 18),
         ("src/users.py", 18),
     ]
-    assert answer.dismissed == 4  # the definition, the comment, the module docstring, the label
+    # the definition, the comment, the module docstring, the label, two mentions in NOTES.md
+    assert answer.dismissed == 6
     assert answer.complete and answer.problem == ""
     assert answer.unclear[4].text.startswith('users.add_user("a")')
     assert answer.unclear[4].column == 10

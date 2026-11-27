@@ -1,18 +1,33 @@
 """The slow and complete reference index: a word search over the project's files.
 
-    files   git ls-files --cached --others --exclude-standard, in the project directory
-            (tracked and untracked files, without what git ignores); every file below the
-            directory when it is no git work tree
-    hits    every occurrence of the unit's bare name as a whole word
-    left out, and counted as dismissed:
-            the definition itself (`Unit.path`, `Unit.line`)
-            in a Python file: a hit in a comment, and a hit in a string unless the string is
-            the name or a dotted path that ends with it ("pkg.mod.name")
+It answers the question "where does the name of this function, method or class occur?".
+It cannot tell whether an occurrence really means that unit or something else with the same
+name. So it confirms nothing: every place it reports is "unclear" and someone else has to
+decide.
 
-The search knows no scopes and no types, so it confirms nothing: every hit it keeps is
-unclear. Python's comments and strings are told apart with the standard library's `tokenize`;
-a file it cannot tokenize, and a file of any other language, is searched as plain text.
-Nothing is imported or run.
+Which files it reads:
+
+- In a git repository: the tracked files and the untracked files, but not what git ignores.
+  Library folders such as `.venv` and `node_modules` are normally ignored, so they are
+  skipped.
+- Outside a git repository: every file below the project directory.
+
+What counts as a hit: the unit's bare name as a whole word. `add_user` is found in
+`x.add_user(1)`, and not in `add_user_later`.
+
+Hits it leaves out, and only counts:
+
+- The definition of the unit itself.
+- Every hit in a prose file, such as Markdown or plain text (`PROSE_SUFFIXES`). A document
+  describes code. It contains no function that could depend on the unit.
+- In a Python file, a hit in a comment.
+- In a Python file, a hit in a string that only mentions the name. A string that is exactly
+  the name, or a dotted path ending with it ("pkg.mod.add_user"), is kept: that is how
+  `getattr` and configuration files refer to code.
+
+Comments and strings are recognised only in Python files, with the standard library's
+`tokenize`. A Python file that cannot be tokenized, and every file of another language, is
+searched as plain text. No project code is imported or run.
 """
 
 import io
@@ -32,6 +47,10 @@ MAX_FILES = 50_000
 
 MAX_FILE_BYTES = 2_000_000
 """Files larger than this are not searched; the answer is then not complete."""
+
+PROSE_SUFFIXES = (".md", ".markdown", ".rst", ".txt", ".adoc")
+"""File names that hold prose, not code. A project's documents name its functions all the
+time: on calu more than half of all hits were in such files."""
 
 GIT_TIMEOUT_S = 20.0
 """Longest the listing of the files may take."""
@@ -81,6 +100,9 @@ class SearchIndex:
                 skipped += 1
                 continue
             if unit.name not in text:
+                continue
+            if name.lower().endswith(PROSE_SUFFIXES):
+                dismissed += sum(len(word.findall(line)) for line in text.splitlines())
                 continue
             outside = _not_code(text, unit.name) if name.endswith((".py", ".pyi")) else None
             for number, line in enumerate(text.splitlines(), start=1):

@@ -1,24 +1,28 @@
-"""The reference index: which places of a project reference a unit of its code.
+"""The reference index: which places in a project refer to a given function, method or class.
 
-The honesty state needs this when the contract of a unit changes: the units that reference it
-relied on the old contract and have to be judged again
-(`agent/records/notes/honesty-dependencies-design.md`). The index sits behind one interface,
-`ReferenceIndex`, so that an implementation can be exchanged for another (the owner's
-requirement 52):
+Why calu needs it: when the documented behaviour of a unit changes, the code that uses the
+unit relied on the old description and has to be checked again for honesty
+(`agent/records/notes/honesty-dependencies-design.md`).
 
-    SearchIndex      `search.py`: a word search over the project's files. Slow and complete:
-                     it reports every place the bare name occurs and cannot tell which of
-                     them mean the unit. Every hit outside a comment or a string is "unclear".
-    LspIndex         `lsp.py`: a language server. Fast and exact for its language; what it
-                     cannot resolve is missing from its answer.
-    CombinedIndex    `combined.py`: the search's hits, sorted by a fast index and then by a
-                     model (`judge.py`) that reads the places nothing cheaper could settle.
+All implementations answer the same question through one interface, `ReferenceIndex`, so
+that one can be exchanged for another (the owner's requirement 52):
 
-This package's own names need no model library; `judge` and `combined` import Pydantic AI
-and are imported by their module names.
+- `SearchIndex` (`search.py`): a word search over the project's files. Slow, and it misses
+  nothing. It cannot tell which occurrences really mean the unit, so it reports them all as
+  "unclear".
+- `LspIndex` (`lsp.py`): asks a language server. Fast and exact for one language. What the
+  server cannot work out is silently missing.
+- `CbmIndex` (`cbm.py`): asks the code graph of codebase-memory-mcp. No setup, many
+  languages, and it finds fewer referrers than a language server.
+- `CombinedIndex` (`combined.py`): the word search first, then a fast index, then a model
+  (`judge.py`) for the places nothing cheaper could decide.
 
-An index never answers "no referrers" because it knows nothing: what it cannot decide is
-unclear, and a checker reads those places.
+The rule all of them follow: an index never answers "nothing refers to this" merely because
+it knows nothing. What it cannot decide is reported as unclear, and a checker reads those
+places.
+
+Importing this package does not load a model library. `judge` and `combined` use Pydantic
+AI; import them by their module names.
 """
 
 from calu.refindex.model import Place, ReferenceIndex, Referrers, Unit

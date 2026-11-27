@@ -1,18 +1,24 @@
 """The combined reference index: search first, then explain away (the owner's idea).
 
-    search    every place the unit's name occurs               (complete, far too many)
-    fast      the places a fast index reports as references    -> referrers
-              each other place: what does the name resolve to?
-                  the unit                                     -> referrer
-                  another definition                           -> dismissed
-                  not known                                    -> left over
-    judge     the places left over, read by a model            yes -> referrer, no ->
-                                                               dismissed, unsure -> unclear
+It finds the code that refers to a unit in three stages. Each stage is cheaper than the next
+one, and each later stage only looks at what the earlier ones could not decide.
 
-Each stage is cheaper than the next and sees only what the one before could not settle. The
-fast index and the judge are optional: without them their places stay unclear, so an index
-that knows nothing hides no referrer. The one way to lose a referrer is a wrong "another
-definition" of the resolver or a wrong "no" of the judge.
+1. **Search.** The word search lists every place where the unit's name occurs. Nothing is
+   missed, but most of these places mean something else.
+2. **Fast index** (optional), for example a language server:
+   - A place it reports as a reference is a referrer.
+   - For each other place it is asked what the name there refers to. If that is the unit,
+     the place is a referrer. If it is another definition, the place is dropped. If it does
+     not know, the place goes on to the next stage.
+3. **Judge** (optional). A model reads each place that is left: "yes" makes it a referrer,
+   "no" drops it, "unsure" leaves it unclear.
+
+Why this order is safe: the two later stages can only confirm a place or drop it with a
+reason. A stage that is missing, not ready or knows nothing leaves its places unclear. So a
+weak index never hides a referrer; it only leaves more work for the judge.
+
+A referrer can be lost in two ways only: the fast index wrongly says "another definition",
+or the judge wrongly says "no".
 """
 
 from dataclasses import dataclass

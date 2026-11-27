@@ -185,3 +185,39 @@ async def test_a_fast_index_that_is_not_ready_adds_its_problem_and_loses_nothing
     answer = await CombinedIndex(SearchIndex(root), NotReady()).referrers(UNIT)
     assert len(answer.unclear) == 4 and answer.complete
     assert "The fast index: The language server is not ready." in answer.problem
+
+
+async def test_a_place_whose_surroundings_did_not_change_is_not_judged_twice(
+    tmp_path: Path,
+) -> None:
+    """The judge's yes and no are kept by the unit and the shown lines without their numbers.
+    A second question costs no model call, also after lines were added above the place and
+    after the unit's own documentation changed. A change next to the place asks again."""
+    root = project(tmp_path)
+    requests: list[str] = []
+    judge = MatchJudge(root, judging(requests))
+    place = Place("glue.rs", 1, 14, '#[pyo3(name = "save")]')
+    assert await judge.judge(UNIT, [place]) == {place: "yes"}
+    assert len(requests) == 1
+    (root / "glue.rs").write_text(
+        '// a new first line\n#[pyo3(name = "save")]\nfn store_save() {}\n', "utf-8"
+    )
+    (root / "store.py").write_text(
+        'class Store:\n    def save(self, x):\n        """New."""\n', "utf-8"
+    )
+    moved = Place("glue.rs", 2, 14, '#[pyo3(name = "save")]')
+    assert await judge.judge(UNIT, [moved]) == {moved: "yes"}
+    assert len(requests) == 2, "the added line is inside the shown lines, so this is asked again"
+    assert await judge.judge(UNIT, [moved]) == {moved: "yes"}
+    assert len(requests) == 2
+
+
+async def test_an_unsure_answer_is_not_kept(tmp_path: Path) -> None:
+    """Only yes and no are kept: an unsure place is asked about again the next time."""
+    root = project(tmp_path)
+    requests: list[str] = []
+    judge = MatchJudge(root, judging(requests))
+    place = Place("other.py", 2, 9, "disk.save(2)")
+    assert await judge.judge(UNIT, [place]) == {place: "unsure"}
+    assert await judge.judge(UNIT, [place]) == {place: "unsure"}
+    assert len(requests) == 2
