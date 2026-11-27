@@ -58,8 +58,14 @@ feature must work end to end in the Cua desktop before the owner tests by hand.
     in Chromium after the fix).
   - Step 3 is done. The report to the owner that the plan promises after step 3 was given
     on 2026-11-27.
-- Next: steps 4 to 6 as in the design's section 8 (the settings panes, the suggested rule in
-  the escalation dialogs, documentation and the PLAN decision).
+- D291 (2026-11-27, `bafa4c5`): no lifting any more; calu's built-in rules are settings
+  `built_in_rules.*` (web settings, "Rules" → "Built-in rules"). See the design's section 6.
+- Step 4 is done: the pane "Temporary rules" in the web settings (`228949d`, POST
+  `/temporary-rules`) and the card in the VSCode settings dialog (`684b406`); both tried in
+  the Cua desktop (test plan, section S).
+- Next: step 5 (a suggested rule in the checkers' answer and in the escalation dialogs of the
+  VSCode chat, the web pane, the escalation page and the full-screen client; report to the
+  owner after it), then step 6 (documentation), then the owner's issue report below.
 
 **The owner's list of 2026-11-26 evening:**
 
