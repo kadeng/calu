@@ -411,7 +411,9 @@ broken down or extended. Derived requirements and design decisions belong in
     still possible, but under regular circumstances only Accept with comment and Escalate (
     for example if there's a secret in the final message that the main agent should not see
     ) are used. Denial of subagent results usually makes no sense, but no need to remove that
-    outright."
+    outright." And: "This is for subagent *results*. The rules for a subagent *launch
+    instructions* are different, these can be handed back to the main agent for
+    reformulation."
 
 ## Soft goals and priorities
 

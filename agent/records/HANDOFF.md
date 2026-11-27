@@ -66,6 +66,16 @@ agent. What remains to do:
   escalates, like every error in calu. Passing it with the note "not reviewed" would stop a
   broken checker from holding subagents, and would also let a secret through whenever the
   checker fails.
+- **Launch instructions are different (the owner, the same day):** "This is for subagent
+  *results*. The rules for a subagent *launch instructions* are different, these can be
+  handed back to the main agent for reformulation." The code cannot do that yet. The check
+  of a task (`Agent`, `Task`, Claude's `SendMessage` to a subagent; D256) uses the result
+  checker's three answers, and the session maps them to PASS, PASS with a comment, or
+  ESCALATE. There is no answer that refuses the call and gives the main agent the reason, so
+  a task the checker objects to either starts with a comment or waits for a person. To
+  build: an answer of the task check that becomes DENY with the reason, so the main agent
+  rewrites the task; the instructions say when to use it and when to escalate (a task that
+  hands a subagent what was refused to Claude still escalates). Results get no such answer.
 
 ### PLAN.md shortened, its full text archived (2026-11-27)
 
