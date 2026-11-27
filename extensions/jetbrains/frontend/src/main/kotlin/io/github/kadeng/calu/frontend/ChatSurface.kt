@@ -756,8 +756,12 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
         }
     }
 
-    override fun decide(key: String, allow: Boolean, note: String) =
-        host.act("decide", buildJsonObject { put("key", JsonPrimitive(key)); put("allow", JsonPrimitive(allow)); if (note.isNotEmpty()) put("note", JsonPrimitive(note)) })
+    override fun decide(key: String, allow: Boolean, note: String, rule: String) =
+        host.act("decide", buildJsonObject {
+            put("key", JsonPrimitive(key)); put("allow", JsonPrimitive(allow))
+            if (note.isNotEmpty()) put("note", JsonPrimitive(note))
+            if (rule.isNotEmpty()) put("rule", JsonPrimitive(rule))
+        })
 
     override fun answer(key: String, answer: String) =
         host.act("decide", buildJsonObject { put("key", JsonPrimitive(key)); put("allow", JsonPrimitive(false)); put("answer", JsonPrimitive(answer)) })

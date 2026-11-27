@@ -517,6 +517,9 @@ data class QuestionView(
  *   `ui.decisionFailed`; `null` before the first decision.
  * @property answer The answer text the user sent for the questions (kept after the card closed).
  * @property note The note of the decision; `null` if none.
+ * @property suggestedRule A temporary rule a checker suggested (`escalation.request`
+ *   `suggested_rule`, set by `addEscalation`); "" for none. `EscalationCard` puts it into its
+ *   rule field.
  */
 @Serializable
 data class EscalationView(
@@ -534,6 +537,7 @@ data class EscalationView(
     val pending: Boolean? = null,
     val answer: String? = null,
     val note: String? = null,
+    val suggestedRule: String = "",
 )
 
 /**

@@ -388,6 +388,7 @@ internal fun addEscalation(state: ViewState, e: JsonObject, focus: Boolean): Vie
         questions = parseQuestions(e["questions"]),
         openedAt = e.str("opened_at"),
         status = EscalationStatus.OPEN,
+        suggestedRule = e.str("suggested_rule")?.take(1000) ?: "",
     )
     val next = state.copy(escalations = withEntry(state.escalations, escKey, view))
     val withCard = appendItem(next, key) { id -> EscalationItem(id, escKey) }

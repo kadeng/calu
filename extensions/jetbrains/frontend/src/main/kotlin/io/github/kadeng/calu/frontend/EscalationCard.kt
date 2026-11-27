@@ -38,8 +38,11 @@ interface CardActions {
      * @param key The escalation's key in the state.
      * @param allow True to allow the step, false to deny it.
      * @param note The note typed into the card; "" for none.
+     * @param rule The temporary rule in the card's rule field; "" for none. The chat's
+     *   "decide" action adds it for one day and this session (`ruleWithDecision`) before it
+     *   sends the decision.
      */
-    fun decide(key: String, allow: Boolean, note: String)
+    fun decide(key: String, allow: Boolean, note: String, rule: String)
 
     /**
      * Answer the agent's questions.
@@ -95,6 +98,12 @@ class EscalationCard(private val actions: CardActions, private val attached: () 
     private var shownEnded = false
     private var showAll = false
     private val note = JBTextField().apply { emptyText.text = "Note for Claude (optional)" }
+    /**
+     * The temporary rule of the card: set to the checker's suggestion when a new escalation is
+     * shown, passed to `decide` by Allow and Deny, and added by the chat for one day and this
+     * session (`ruleWithDecision`) if not empty.
+     */
+    private val ruleField = JBTextField().apply { emptyText.text = "Temporary rule for this session, 1 day (optional; added if not empty)" }
     private val answerField = JBTextField().apply { emptyText.text = "Your answer, or an addition to the chosen options" }
     private var choices: List<List<JToggleButton>> = emptyList()
 
@@ -118,7 +127,10 @@ class EscalationCard(private val actions: CardActions, private val attached: () 
         val nowEnded = ended()
         if (e == shown && nowAttached == shownAttached && nowEnded == shownEnded) return
         val sameOpen = e != null && shown?.key == e.key && shown?.status == EscalationStatus.OPEN && e.status == EscalationStatus.OPEN && choices.size == e.questions.size
-        if (!sameOpen) showAll = false
+        if (!sameOpen) {
+            showAll = false
+            ruleField.text = e?.suggestedRule.orEmpty()
+        }
         shown = e
         shownAttached = nowAttached
         shownEnded = nowEnded
@@ -203,6 +215,7 @@ class EscalationCard(private val actions: CardActions, private val attached: () 
             if (reason.isNotEmpty()) add(textArea(reason))
             for ((label, text) in stepParts(e)) add(stepBox(label, neutraliseBidi(text), e, nowAttached))
             add(note)
+            add(ruleField)
         }
         val buttons = JPanel(WrapLayout(8, 4)).apply { isOpaque = false }
         val enabled = nowAttached && e.pending != true
@@ -216,8 +229,8 @@ class EscalationCard(private val actions: CardActions, private val attached: () 
                 }
             })
         } else {
-            allowButton = JButton("Allow").apply { isEnabled = enabled; toolTipText = "Let this step run once"; addActionListener { actions.decide(e.key, true, note.text.trim()) } }
-            denyButton = JButton("Deny").apply { isEnabled = enabled; toolTipText = "Refuse this step; the note tells Claude why"; addActionListener { actions.decide(e.key, false, note.text.trim()) } }
+            allowButton = JButton("Allow").apply { isEnabled = enabled; toolTipText = "Let this step run once"; addActionListener { actions.decide(e.key, true, note.text.trim(), ruleField.text.trim()) } }
+            denyButton = JButton("Deny").apply { isEnabled = enabled; toolTipText = "Refuse this step; the note tells Claude why"; addActionListener { actions.decide(e.key, false, note.text.trim(), ruleField.text.trim()) } }
             buttons.add(allowButton)
             buttons.add(denyButton)
         }

@@ -250,6 +250,25 @@ suspend fun ChatController.ruleAdd(command: String): Boolean = run("Adding the t
 }
 
 /**
+ * Add the temporary rule an escalation card sends with its decision: for this session and one
+ * day (`ide.rules.add`), and say in the chat what was stored or why not: the stored rule, a
+ * warning if calu answered without one, or (through `run`) the error of a refused rule.
+ *
+ * @param text The rule's text, not blank.
+ * @return True if calu answered the request (with or without the rule), false if it refused
+ *   or failed; the caller sends the decision either way.
+ */
+suspend fun ChatController.ruleWithDecision(text: String): Boolean = run("Adding the temporary rule (the decision is sent anyway)") {
+    val params = buildJsonObject { put("text", JsonPrimitive(text.trim())); put("duration", JsonPrimitive("1d")); put("scope", JsonPrimitive("session")) }
+    val rule = supervisor.request("ide.rules.add", params).asObj()?.get("rule")?.asObj()
+    if (rule != null) {
+        notice("info", "Temporary rule added: ${rule.str("line").orEmpty()}")
+    } else {
+        notice("warning", "calu answered without the rule; check with /rules whether it was stored.")
+    }
+}
+
+/**
  * List the active temporary rules in the chat (`/rules`, `ide.rules.list`).
  *
  * @return True if the bridge answered.
@@ -332,7 +351,7 @@ suspend fun ChatController.comment(input: CommentInput): Boolean {
  *     attach {session?}             start {kind, claude_session_id?, fork_before_turn?, prompt?, name?}
  *     cancelStart {}                detach {}                     refreshSessions {}
  *     send {text, inject, tab, images?: [{data: base64, mediaType}]}
- *     decide {key, allow, note?, answer?}
+ *     decide {key, allow, note?, answer?, rule?}
  *     interrupt {}                  setModel {model}              setEffort {effort}
  *     setLevel {level}              rename {session_id, name}     restartBridge {}
  *     setPermissionMode {mode}
@@ -356,7 +375,12 @@ suspend fun ChatController.act(action: String, args: JsonObject = EMPTY_OBJECT):
     "detach" -> { detach(); true }
     "refreshSessions" -> { refreshStatus(); refreshSessions(true) != null }
     "send" -> parseOutgoingImages(args["images"])?.let { sendMessage(args.str("text").orEmpty(), args.bool("inject"), args.str("tab") ?: MAIN, it) } ?: false
-    "decide" -> args.str("key")?.let { decide(it, args.bool("allow"), args.str("note"), args.str("answer")) } ?: false
+    "decide" -> args.str("key")?.let { key ->
+        // A temporary rule from the card goes first (design section 5, `ruleWithDecision`
+        // above); a refused one is shown and the decision is sent anyway.
+        args.str("rule")?.takeIf { it.isNotBlank() }?.let { ruleWithDecision(it) }
+        decide(key, args.bool("allow"), args.str("note"), args.str("answer"))
+    } ?: false
     "interrupt" -> interrupt()
     "setModel" -> { setModel(args.str("model")); true }
     "setEffort" -> { setEffort(args.str("effort") ?: "default"); true }
