@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { MAX_IMAGE_BASE64, MAX_TEXT, parseWebviewMessage } from '../../src/shared/messages';
+import { MAX_IMAGE_BASE64, MAX_RECHECK_IDS, MAX_TEXT, MAX_UNIT_TEXT, parseWebviewMessage } from '../../src/shared/messages';
 
 const manifest = JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8'));
 const extensionSource = readFileSync(join(__dirname, '..', '..', 'src', 'extension.ts'), 'utf8');
@@ -75,7 +75,7 @@ describe('parseWebviewMessage', () => {
     for (const type of [
       'ready', 'attach', 'newSession', 'refreshSessions', 'detach', 'startServer', 'retryServer', 'copyServerCommand', 'install',
       'restartBridge', 'openSettings', 'showContext', 'refreshUsage', 'interrupt', 'showLog', 'unlock',
-      'forkConversation', 'honestyReview',
+      'forkConversation', 'honestyReview', 'honestyGraphGet',
     ]) {
       expect(parseWebviewMessage({ type, extra: 'dropped' })).toEqual({ type });
     }
@@ -175,6 +175,37 @@ describe('parseWebviewMessage', () => {
       { type: 'honestyClear', markId: '4' },
     ]) {
       expect(parseWebviewMessage(bad), JSON.stringify(bad)?.slice(0, 80)).toBeUndefined();
+    }
+  });
+});
+
+describe('the messages of the honesty graph', () => {
+  it('takes a unit or a whole file to mark, and the entries to drop', () => {
+    expect(parseWebviewMessage({ type: 'honestyMark', path: ' src/x.py ', symbol: 'Parser.parse', reason: 'dropped' })).toEqual({
+      type: 'honestyMark',
+      path: 'src/x.py',
+      symbol: 'Parser.parse',
+    });
+    expect(parseWebviewMessage({ type: 'honestyMark', path: 'run.sh', symbol: '' })).toEqual({ type: 'honestyMark', path: 'run.sh', symbol: '' });
+    expect(parseWebviewMessage({ type: 'honestyDismiss', recheckIds: [3, 7] })).toEqual({ type: 'honestyDismiss', recheckIds: [3, 7] });
+  });
+
+  it('refuses a mark without a file or a name, and a list that is empty, too long or not of integers', () => {
+    for (const bad of [
+      { type: 'honestyMark', symbol: 'f' },
+      { type: 'honestyMark', path: '  ', symbol: 'f' },
+      { type: 'honestyMark', path: 'x.py' },
+      { type: 'honestyMark', path: 'x.py', symbol: 4 },
+      { type: 'honestyMark', path: 'x'.repeat(MAX_UNIT_TEXT + 1), symbol: '' },
+      { type: 'honestyMark', path: 'x.py', symbol: 's'.repeat(MAX_UNIT_TEXT + 1) },
+      { type: 'honestyDismiss' },
+      { type: 'honestyDismiss', recheckIds: [] },
+      { type: 'honestyDismiss', recheckIds: 3 },
+      { type: 'honestyDismiss', recheckIds: [1, '2'] },
+      { type: 'honestyDismiss', recheckIds: [1.5] },
+      { type: 'honestyDismiss', recheckIds: Array.from({ length: MAX_RECHECK_IDS + 1 }, (_, i) => i) },
+    ]) {
+      expect(parseWebviewMessage(bad), JSON.stringify(bad).slice(0, 80)).toBeUndefined();
     }
   });
 });

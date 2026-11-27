@@ -33,8 +33,9 @@ variables of `pane/theme.css` are defined in the pane: a new `--vscode-*` variab
   `escalation-why-<key>`, `input-text`, `input-send`, `input-interrupt`, `side-toggle`,
   `hint-<hintId>`, `hint-action-<hintId>` (also `hint-starting-session` for a waiting session
   request), `server-help`, `queue-<id>`, `header-model`,
-  `header-effort`, `header-level`, `header-honesty`, `header-usage` (model, effort and usage sit
-  in the composer footer and keep these ids), `header-settings`, `input-hint`, `chat-list`,
+  `header-effort`, `header-level`, `header-honesty`, `header-honesty-graph`, `header-usage`
+  (model, effort and usage sit in the composer footer and keep these ids), `header-settings`,
+  `input-hint`, `chat-list`,
   `activity`, `agent-head-<agentId>`; settings:
   `settings-search`, `settings-nav-<sectionId>`, `setting-<key>`, `setting-reset-<key>`,
   `setting-error-<key>`, `scope-select`, `models-card`, `preset-<id>`, `role-<key>`,
@@ -168,6 +169,9 @@ or why nobody can. `formatAnswer(questions, choices)` builds the answer text of 
 | `honestyReview` | | `honesty.review` (can take minutes; `honesty.update` reports progress) |
 | `honestyTrust` | | after a confirmation, `honesty.trust {rev: "HEAD"}` |
 | `honestyClear` | `markId` (`HonestyMarkInfo.id`) | `honesty.clear {mark_id}` |
+| `honestyGraphGet` | | `honesty.graph`; the answer goes back as `honestyGraph {sessionId, graph}`, a failure as `honestyGraph {sessionId, graph: null, error}` (no notice in the chat). The webview sends it only while it shows the honesty graph |
+| `honestyMark` | `path` (relative to the workspace), `symbol` (dotted name; "" for the whole file) | asks for a one-line reason; an accepted, non-blank reason sends `honesty.mark {path, symbol, reason}` |
+| `honestyDismiss` | `recheckIds` (`HonestyGraphNode.recheck_ids`, 1 to 1000 integers) | `honesty.dismiss {recheck_ids}` |
 | `itemAction` | `toolUseId`, `action` (`ItemActionId`) | context-menu action (`itemMenu.ts`) |
 | `stateReport` | `requestId`, `state` | answer to `reportState` (tests) |
 
@@ -176,7 +180,22 @@ or why nobody can. `formatAnswer(questions, choices)` builds the answer text of 
 `reset {state}`, `event {event}`, `settings {settings}`, `bell` (play the escalation chime),
 `restoreInput {text}` (put the text back into the input), `retracted {text}` (a retracted queued
 message: into the input if it is empty, otherwise discarded), `reportState {requestId}` (answer
-with `stateReport`).
+with `stateReport`), `honestyGraph {sessionId, graph, error?}` (the answer to `honestyGraphGet`:
+the result of `honesty.graph` for the session `sessionId`, or `graph: null` with the error).
+
+### The honesty graph
+
+"Graph" in the header (`header-honesty-graph`) shows the honesty graph in the transcript's place
+(`webview/honestyGraph.ts`; layout in `src/shared/honestyGraphLayout.ts`, everything else
+without a DOM in `src/shared/honestyGraphModel.ts`). `ui.graph` in the webview's saved state
+remembers it. While it is closed the webview asks nothing and draws nothing. While it is open it
+sends `honestyGraphGet` when it opens, when `state.honesty` is replaced (`honesty.update`) and
+when the session changes: one request at a time, at most two a second. A click on a node sends
+`openLink` with `<path>#L<line>` (the path percent-encoded), because `openFile` takes only
+absolute paths that a tool call named. The node menu sends `honestyClear` (once per mark),
+`honestyDismiss`, `honestyTrust {path}` and `honestyMark`. A tab click and a focus request
+(a new escalation) close the graph. Test ids: `honesty-graph`, `honesty-graph-notes`,
+`honesty-graph-notice`, `honesty-graph-canvas`, `honesty-graph-legend`, `honesty-graph-retry`.
 
 Events of the extension itself (all handled by `applyEvent`): `bridge.status`, `ui.link`,
 `ui.detached`, `ui.sessions`, `ui.serverHelp`, `ui.hints`, `ui.model`, `ui.usage`, `ui.notice`,

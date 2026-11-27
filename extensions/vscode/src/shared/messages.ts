@@ -7,12 +7,15 @@
  *     attach/newSession/switch... -->  QuickPick, ide.attach / ide.start
  *                       <------------  event {event}  <--------------------  session.event, ide.link
  *     openFile/openDiff/openLink --->  opens editors
+ *     honestyGraphGet -------------->  bridge.session("honesty.graph")
+ *                       <------------  honestyGraph {graph}
  *
  * The extension validates every incoming message with `parseWebviewMessage` and drops invalid
  * ones; the webview is treated as untrusted input. `WEBVIEW_CONTRACT.md` describes what the
  * host does for each message.
  */
 
+import type { HonestyGraphResult } from '../protocol.generated';
 import type { ItemActionId } from './itemMenu';
 import { LEVEL_IDS, PERMISSION_MODES, type LevelId, type PermissionModeId } from './levels';
 import type { ViewEvent, ViewState } from './viewState';
@@ -181,6 +184,19 @@ export type WebviewMessage =
   | { type: 'honestyTrust'; rev?: string; checkout?: string; path?: string; ask?: 'rev' | 'file' }
   /** Close one open honesty mark by hand (`honesty.clear`). */
   | { type: 'honestyClear'; markId: number }
+  /**
+   * Ask the attached session for its honesty graph (`honesty.graph`); the host answers with
+   * `honestyGraph`. The webview sends it only while it shows the graph.
+   */
+  | { type: 'honestyGraphGet' }
+  /**
+   * Record a unit as dishonest by hand (`honesty.mark`); the host asks for the reason first.
+   * `path` is relative to the workspace. `symbol` is the dotted name of the unit, "" for the
+   * whole file.
+   */
+  | { type: 'honestyMark'; path: string; symbol: string }
+  /** Drop entries of the code to judge again by hand (`honesty.dismiss`). */
+  | { type: 'honestyDismiss'; recheckIds: number[] }
   /** Answer to `reportState` (tests): the webview's own copy of the state. */
   | { type: 'stateReport'; requestId: number; state: unknown };
 
@@ -203,7 +219,18 @@ export type HostMessage =
    * the field is empty, and is discarded otherwise, so that nothing the user typed since is
    * overwritten or mixed with it.
    */
-  | { type: 'retracted'; text: string };
+  | { type: 'retracted'; text: string }
+  /**
+   * The answer to `honestyGraphGet`. `sessionId` is the session that was asked (`null` if none
+   * was attached). `graph` is the result of `honesty.graph`, or `null` if the request failed;
+   * `error` then says why.
+   */
+  | { type: 'honestyGraph'; sessionId: string | null; graph: HonestyGraphResult | null; error?: string };
+
+/** Longest path or dotted name of a unit in an honesty message, in characters. */
+export const MAX_UNIT_TEXT = 1000;
+/** Most entries of `honestyDismiss.recheckIds`. */
+export const MAX_RECHECK_IDS = 1000;
 
 /** Display settings of the chat view (from the `calu.chat.*` settings). */
 export interface ChatSettings {
@@ -260,6 +287,7 @@ const BARE_TYPES = [
   'unlock',
   'forkConversation',
   'honestyReview',
+  'honestyGraphGet',
   'cancelStart',
 ] as const;
 
@@ -419,6 +447,16 @@ export function parseWebviewMessage(raw: unknown): WebviewMessage | undefined {
     }
     case 'honestyClear':
       return typeof m.markId === 'number' && Number.isInteger(m.markId) ? { type: 'honestyClear', markId: m.markId } : undefined;
+    case 'honestyMark':
+      if (!text(m.path) || m.path.length > MAX_UNIT_TEXT) return undefined;
+      if (typeof m.symbol !== 'string' || m.symbol.length > MAX_UNIT_TEXT) return undefined;
+      return { type: 'honestyMark', path: m.path.trim(), symbol: m.symbol.trim() };
+    case 'honestyDismiss': {
+      const ids = m.recheckIds;
+      if (!Array.isArray(ids) || ids.length === 0 || ids.length > MAX_RECHECK_IDS) return undefined;
+      if (!ids.every((id) => Number.isSafeInteger(id))) return undefined;
+      return { type: 'honestyDismiss', recheckIds: ids as number[] };
+    }
     case 'stateReport':
       return typeof m.requestId === 'number' ? { type: 'stateReport', requestId: m.requestId, state: m.state } : undefined;
     default:

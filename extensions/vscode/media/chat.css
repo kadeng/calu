@@ -1346,3 +1346,155 @@ pre { unicode-bidi: isolate; text-align: left; }
 .honesty-verdict { color: var(--calu-muted); }
 .honesty-file.dishonest .honesty-verdict { color: var(--calu-warn); font-weight: 600; }
 .honesty-unit { margin: 1px 0 1px 1.2em; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ---- Honesty graph (webview/honestyGraph.ts) ------------------------------------------------- */
+
+/* The graph takes the transcript's place: the same flex item, shown instead of it.
+
+     .hg-bar      notes | − + Fit
+     .hg-notice   a text instead of the graph (off, clean, error)
+     .hg-canvas   the scrolling area with the <svg>
+     .hg-legend   the states and what they mean
+
+   A state has a colour and a glyph, so that it can be told without colour. */
+.honesty-graph {
+  --hg-red: var(--vscode-charts-red, #f14c4c);
+  --hg-yellow: var(--vscode-charts-yellow, #cca700);
+  --hg-orange: var(--vscode-charts-orange, #d18616);
+  --hg-green: var(--vscode-charts-green, #89d185);
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.quiet-button.graph-toggle.active {
+  color: var(--vscode-foreground);
+  background: var(--calu-hover);
+  border-color: var(--calu-strong-border);
+}
+.hg-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 10px 2px;
+  font-size: 0.92em;
+}
+.hg-notes { flex: 1; min-width: 0; color: var(--calu-muted); overflow-wrap: anywhere; }
+.hg-tools { display: flex; gap: 2px; flex: none; }
+.hg-button {
+  min-width: 1.9em;
+  padding: 1px 6px;
+  color: var(--calu-muted);
+  border-color: var(--calu-border);
+}
+.hg-button:hover:not(:disabled) { color: var(--vscode-foreground); background: var(--calu-hover); }
+.hg-notice {
+  margin-top: 14%;
+  padding: 0 16px;
+  text-align: center;
+  color: var(--calu-muted);
+}
+.hg-notice.error { color: var(--vscode-foreground); }
+.hg-notice p { margin: 0 0 10px; overflow-wrap: anywhere; }
+.hg-canvas {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.hg-canvas.panning { cursor: grabbing; }
+.hg-svg { display: block; margin: 0 auto; }
+
+.hg-edge { fill: none; stroke: var(--calu-muted); stroke-width: 1.2; opacity: 0.8; }
+.hg-edge.uncertain { stroke-dasharray: 4 3; }
+.hg-arrow { fill: var(--calu-muted); stroke: none; opacity: 0.8; }
+
+.hg-node, .hg-key { --hg-c: var(--hg-orange); }
+.hg-node.dishonest, .hg-key.dishonest { --hg-c: var(--hg-red); }
+.hg-node.changed, .hg-key.changed { --hg-c: var(--hg-yellow); }
+.hg-node.recheck, .hg-key.recheck { --hg-c: var(--hg-orange); }
+.hg-node.caller, .hg-key.caller { --hg-c: var(--hg-orange); }
+.hg-node.honest, .hg-node.settled, .hg-key.honest { --hg-c: var(--hg-green); }
+.hg-node { cursor: pointer; }
+.hg-node:focus { outline: none; }
+.hg-back { fill: var(--vscode-sideBar-background, var(--vscode-editor-background, Canvas)); stroke: none; }
+.hg-shape { fill: var(--hg-c); fill-opacity: 0.22; stroke: var(--hg-c); stroke-width: 1.5; }
+.hg-node.recheck .hg-shape { stroke-width: 2; }
+.hg-node.caller .hg-shape { fill-opacity: 0.08; stroke-width: 1; }
+.hg-node.group .hg-shape { stroke-dasharray: 2 2; }
+.hg-node.settled { opacity: 0.75; }
+.hg-node:hover .hg-shape { fill-opacity: 0.36; }
+.hg-node:focus-visible .hg-shape { stroke: var(--vscode-focusBorder, var(--calu-accent)); stroke-width: 2.5; }
+.hg-label, .hg-count, .hg-glyph {
+  fill: var(--vscode-foreground);
+  font-family: var(--calu-mono);
+  font-size: 12px;
+  pointer-events: none;
+}
+.hg-glyph { font-weight: 700; }
+.hg-count { opacity: 0.75; }
+.hg-ring {
+  fill: none;
+  stroke: var(--calu-accent);
+  stroke-width: 2;
+  animation: hg-pulse 1.4s ease-in-out infinite;
+}
+@keyframes hg-pulse {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 1; }
+}
+
+.hg-legend {
+  padding: 3px 10px 4px;
+  border-top: 1px solid var(--calu-border);
+  font-size: 0.88em;
+  color: var(--calu-muted);
+  max-height: 45%;
+  overflow-y: auto;
+}
+.hg-legend summary { cursor: pointer; }
+.hg-legend-title { margin-right: 4px; }
+.hg-key { display: inline-block; margin: 0 8px 0 0; white-space: nowrap; }
+.hg-key-glyph {
+  display: inline-block;
+  min-width: 1.5em;
+  margin-right: 3px;
+  padding: 0 3px;
+  text-align: center;
+  font-weight: 700;
+  color: var(--vscode-foreground);
+  border: 1.5px solid var(--hg-c);
+  border-radius: 999px;
+}
+.hg-meanings { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 6px 0 2px; }
+.hg-meanings dt { white-space: nowrap; margin: 0; }
+.hg-meanings dt.hg-key { border-left: 3px solid var(--hg-c); padding-left: 5px; }
+.hg-meanings dd { margin: 0; }
+
+/* The heading of a node's menu is a name from the code: shown as it is written. */
+.graph-menu .menu-heading { text-transform: none; letter-spacing: 0; font-family: var(--calu-mono); font-size: 0.9em; overflow-wrap: anywhere; }
+
+.hg-tip {
+  position: fixed;
+  z-index: 90;
+  max-width: min(30em, calc(100vw - 8px));
+  padding: 4px 8px;
+  pointer-events: none;
+  color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
+  background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, var(--calu-surface)));
+  border: 1px solid var(--vscode-editorHoverWidget-border, var(--calu-strong-border));
+  border-radius: 4px;
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, transparent);
+  font-size: 0.92em;
+}
+.hg-tip-id { font-family: var(--calu-mono); overflow-wrap: anywhere; }
+.hg-tip-state { color: var(--calu-muted); }
+.hg-tip-detail { margin-top: 3px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+@media (max-height: 480px) and (min-width: 600px) and (min-aspect-ratio: 2/1) {
+  #app > .honesty-graph { grid-column: 1; grid-row: 4; min-height: 0; }
+}

@@ -2560,6 +2560,34 @@ class HonestyState:
             return None
         return self.shared.texts.get(record.sha256)
 
+    @_locked
+    def earlier_text(self, path: str | Path) -> str | None:
+        """Return the text a file had when it was last clean, for showing what changed since.
+
+        Side effects: may read the file to hash it, and asks git for the baseline's content.
+
+        Args:
+            path: The file; absolute, or relative to the workspace.
+
+        Returns:
+            The text of the content verified last in this session, if it differs from the
+            present content and is still kept. Otherwise the text the baseline records for
+            the file. None if neither is known: a new file, no baseline, or git failed.
+        """
+        key = self.key(path)
+        ids = self._content(key)
+        if ids is not None:
+            kept = self._last_verified_text(key, ids.sha256)
+            if kept is not None:
+                return kept
+        base = self._base()
+        if base is None:
+            return None
+        try:
+            return self._baseline_text(self._repository(), self._tree(base.commit_id), key)
+        except GitError:
+            return None
+
     def _baseline_text(
         self, top: Path, tree: Mapping[str, tuple[str, str]], key: str
     ) -> str | None:

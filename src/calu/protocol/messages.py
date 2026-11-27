@@ -303,6 +303,90 @@ class HonestyTrustParams(BaseModel):
     note: str = ""
 
 
+class HonestyMarkParams(BaseModel):
+    """`honesty.mark`: record a unit, or a whole file, as dishonest by hand.
+
+    A person's own finding, like a checker's mark: the state is not clean while it is open, and
+    an edit of the file that the honesty checker answers HONEST closes it. Result: `{}`. A
+    file that does not exist in the project is an error.
+    """
+
+    path: str
+    """The file, absolute or relative to the workspace."""
+    symbol: str = ""
+    """The function, method or class, as a dotted name; "" for the whole file."""
+    reason: str = Field(min_length=1, max_length=500)
+    """One sentence that says what is wrong."""
+
+
+class HonestyDismissParams(BaseModel):
+    """`honesty.dismiss`: drop entries of the code to judge again, by hand.
+
+    A person's decision that a unit still says what it does, although a unit it uses changed
+    its signature or doc comment. Result: `{}`; an id that names no entry is ignored.
+    """
+
+    recheck_ids: list[int] = Field(min_length=1)
+    """The ids of the entries, as `HonestyGraphNode.recheck_ids` names them."""
+
+
+class HonestyGraphNode(BaseModel):
+    """One unit in the honesty graph (`honesty.graph`)."""
+
+    id: str
+    """`path:dotted.name`, or the path alone for a whole file."""
+    path: str
+    """The file, relative to the workspace."""
+    line: int
+    """The line of the unit's definition (1-based); 1 for a whole file."""
+    name: str
+    """The short name to show: `parse`, `Parser.parse`, or the file's name."""
+    kind: Literal["unit", "file"]
+    state: Literal["dishonest", "recheck", "changed", "caller", "honest"]
+    """`dishonest`: an open mark. `recheck`: it uses a unit whose signature or doc comment
+    changed and is to be judged again. `changed`: its file changed and nobody verified it.
+    `caller`: it uses a dishonest unit and is itself unchanged; this blocks nothing.
+    `honest`: the unit whose changed contract caused a `recheck`."""
+    detail: str = ""
+    """Text for a hover: the reason of a mark, what changed, or what the unit uses."""
+    reviewing: bool = False
+    """True while a running honesty review reads the unit's file."""
+    mark_ids: list[int] = Field(default_factory=list[int])
+    """The open marks on the unit, for `honesty.clear`."""
+    recheck_ids: list[int] = Field(default_factory=list[int])
+    """The unit's entries of code to judge again, for `honesty.dismiss`."""
+    count: int = 1
+    """How many units the node stands for; more than 1 only when `by_file` is set."""
+
+
+class HonestyGraphEdge(BaseModel):
+    """One "uses" relation of the honesty graph: `source` uses `target`."""
+
+    source: str
+    target: str
+    certain: bool = True
+    """False for a link found by the name alone that nothing confirmed."""
+
+
+class HonestyGraphResult(BaseModel):
+    """Result of `honesty.graph`: the units that are not clean, and what uses what.
+
+    The session computes it when asked and sends nothing by itself. A client asks again when
+    `honesty.update` arrives, and only while it shows the graph.
+    """
+
+    nodes: list[HonestyGraphNode] = Field(default_factory=list[HonestyGraphNode])
+    edges: list[HonestyGraphEdge] = Field(default_factory=list[HonestyGraphEdge])
+    by_file: bool = False
+    """True if the graph has one node per file because it had too many nodes."""
+    everything: bool = False
+    """True if every file counts as unreviewed (no baseline); the unreviewed files are then
+    not listed."""
+    mode: str = "off"
+    """`honesty.mode`; with "off" the graph is empty."""
+    review_running: bool = False
+
+
 class FilesUserEditParams(BaseModel):
     """`files.user_edit`: the user is about to write these files through an editor.
 
@@ -878,6 +962,9 @@ REQUESTS: dict[str, type[BaseModel]] = {
     "honesty.clear": HonestyClearParams,
     "honesty.trust": HonestyTrustParams,
     "honesty.review": EmptyParams,
+    "honesty.graph": EmptyParams,
+    "honesty.mark": HonestyMarkParams,
+    "honesty.dismiss": HonestyDismissParams,
     "files.user_edit": FilesUserEditParams,
     "human_diffs.add": HumanDiffAddParams,
     "interrupt": EmptyParams,

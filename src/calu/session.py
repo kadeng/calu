@@ -125,7 +125,7 @@ import socket
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -243,6 +243,7 @@ from calu.honesty import (
     run_git,
     shown,
 )
+from calu.honesty_graph import add_callers, build_graph
 from calu.logfile import one_line
 from calu.models import resolve_model
 from calu.pause import Pause
@@ -266,6 +267,9 @@ from calu.protocol.messages import (
     Event,
     FilesUserEditResult,
     HonestyFileStatus,
+    HonestyGraphEdge,
+    HonestyGraphNode,
+    HonestyGraphResult,
     HonestyInfo,
     HonestyMarkInfo,
     HonestyReviewResult,
@@ -544,7 +548,45 @@ def _message_text(tool_input: dict[str, Any]) -> str:
 
 LOCK_HOOK_MARGIN_S = 30.0
 """Seconds kept back from the PreToolUse hook's timeout (`HOOK_TIMEOUT_S`) when an approved
-call waits for its locks there, so that the hook answers before Claude Code gives up on it."""
+call waits for its locks there, so that the hook answers before Claude Code gives up on it.
+The second check of a command (`Session._check_again`) ends at the same point."""
+
+CHECKED_AGAIN_LOG = (
+    "{tool} of {who}: another call ended in {where} after the check of this command began; "
+    "the command is checked again while it holds its locks"
+)
+"""The log line before the second check of a command (`Session._check_again`, D276)."""
+
+CHECKED_AGAIN = (
+    "Another call ended in {where} after the first check of this command began, so the "
+    "command was checked again while it held its locks. The second check decided: {reason}"
+)
+"""The reason of a DENY or ESCALATE that the second check of a command gave. `reason` is the
+second check's own reason."""
+
+CHECKED_AGAIN_SUMMARY = "Checked again after another call ended in {where}: {summary}"
+"""The summary of the second check's record in the checkers' context (`_record_check`)."""
+
+NOT_CHECKED_AGAIN_LOG = (
+    "{tool} of {who}: another call ended in {where} after the last check of this command. "
+    "A person allowed the command, so it runs without another check"
+)
+"""The log warning when a command that a person allowed gets its locks and `CallLocks.stale`
+names a change (`Session.ask`)."""
+
+
+def _same_text(one: str, other: str) -> bool:
+    """Tell whether two texts are equal apart from case and whitespace.
+
+    Args:
+        one: A text.
+        other: Another text.
+
+    Returns:
+        True when both give the same words in lower case.
+    """
+    return one.lower().split() == other.lower().split()
+
 
 NOTICE_MARKS = 10
 """How many open marks the notice about dishonest steps lists (`Session._honesty_notice`)."""
@@ -596,6 +638,10 @@ MARKER_UNCHANGED = (
     "finished since the last one you asked for, so none was started."
 )
 """The note when the marker is repeated with nothing done in between."""
+
+GRAPH_CALLERS_TIMEOUT_S = 20.0
+"""Longest the search for the callers of dishonest units may take for one `honesty.graph`
+request; after it the graph is sent without them."""
 
 DEPENDENTS_FALLBACK = (
     "honesty: the search for the code that uses {cause} did not finish in time or failed "
@@ -749,6 +795,8 @@ class Session:
         a checkout not looked up yet, looks the baselines up again."""
         self._review_running = False
         """True while an honesty review runs; at most one runs at a time."""
+        self._review_files: tuple[str, ...] = ()
+        """The files the running honesty review reads; empty while none runs."""
         self._review_run: ReviewRun | None = None
         """The honesty review in flight, if any; a second caller waits for it."""
         self._last_review: tuple[Reviewed, HonestyReviewResult] | None = None
@@ -1221,6 +1269,139 @@ class Session:
             self._honesty_heads.pop(root, None)
         for root, state in self._states.items():
             state.excluded = self._excluded_of(known[root])
+
+    async def honesty_graph(self) -> HonestyGraphResult:
+        """Build the honesty graph for a client that shows it (`honesty.graph`).
+
+        The graph holds the units that are not clean and what uses what
+        (`calu.honesty_graph`). It is computed when asked; nothing is kept between requests,
+        so a client that does not show the graph costs nothing.
+
+        The callers of dishonest units are found with the word search, and with the language
+        server if `honesty.dependents_navigator` names one. No model is asked.
+
+        Side effects: reads git and the project's files in a worker thread; may start the
+        language server.
+
+        Returns:
+            The graph; empty with `honesty.mode` "off".
+        """
+        mode = self.config.honesty.mode
+        if mode == "off":
+            return HonestyGraphResult(mode=mode)
+        snapshot = await self.honesty_snapshot()
+        reviewing = self._review_files
+
+        def before(path: str) -> str | None:
+            """Return the text a file had when it was last clean.
+
+            Args:
+                path: The file, relative to the workspace.
+
+            Returns:
+                The content last verified in this session, else the baseline's; None if
+                neither is known.
+            """
+            state = self._state_for_path(self.workspace / path)
+            return state.earlier_text(path)
+
+        graph = await anyio.to_thread.run_sync(
+            build_graph, self.workspace, snapshot, before, reviewing
+        )
+        cfg = self.config.honesty
+        command = tuple(cfg.dependents_navigator)
+        if command and (
+            self._navigator is None
+            or not isinstance(self._navigator.navigator, LspNavigator)
+            or self._navigator.navigator.command != command
+        ):
+            self._close_navigator()
+            self._navigator = lsp_index(self.workspace, command)
+        index = CombinedIndex(SearchIndex(self.workspace), self._navigator if command else None)
+        try:
+            with anyio.fail_after(GRAPH_CALLERS_TIMEOUT_S):
+                graph = await add_callers(graph, self.workspace, index)
+        except Exception:
+            log.exception("finding the callers of dishonest units for the honesty graph failed")
+        return HonestyGraphResult(
+            nodes=[HonestyGraphNode(**asdict(node)) for node in graph.nodes],
+            edges=[HonestyGraphEdge(**asdict(edge)) for edge in graph.edges],
+            by_file=graph.by_file,
+            everything=graph.everything,
+            mode=mode,
+            review_running=self._review_running,
+        )
+
+    async def mark_by_hand(
+        self, path: str, symbol: str, reason: str, client: str = "unknown"
+    ) -> None:
+        """Record a unit or a file as dishonest for a person (`honesty.mark`).
+
+        Side effects: opens a mark in the honesty state of the file's checkout, withdraws the
+        stored trust of the file's content as for a checker's mark, logs who did it and
+        sends `honesty.update`.
+
+        Args:
+            path: The file, absolute or relative to the workspace.
+            symbol: The dotted name of the unit; "" for the whole file.
+            reason: What is wrong, in one sentence.
+            client: Who asked, for the mark and the log.
+
+        Raises:
+            SessionError: If `honesty.mode` is "off", or the mark was not recorded (the file
+                does not exist in the project, or the path is not allowed for a mark).
+        """
+        if self.config.honesty.mode == "off":
+            raise SessionError("honesty.mode is off")
+        by = f"{client or 'unknown'} (by hand)"
+        target = Path(path) if Path(path).is_absolute() else self.workspace / path
+        async with self._honesty_lock:
+            state = await anyio.to_thread.run_sync(self._state_for_path, target)
+            key = state.key(target)
+            changes = await anyio.to_thread.run_sync(
+                state.record, [CodeMark(path=key, symbol=symbol, reason=reason)], [], by
+            )
+            for sha256 in changes.withdrawn:
+                await self.recorder.attempt(
+                    "withdrawing the stored trust of a file content",
+                    self.store.distrust_file(sha256, CERTIFIER),
+                )
+        if not changes.opened:
+            why = "; ".join(changes.ignored) or "the mark was not recorded"
+            raise SessionError(f"no mark was opened: {why}")
+        await self._emit_safely(
+            Log(level="info", message=f"honesty: {by} marked {key}:{symbol} as dishonest")
+        )
+        await self.announce_honesty()
+
+    async def dismiss_recheck(self, recheck_ids: Sequence[int], client: str = "unknown") -> None:
+        """Drop entries of the code to judge again for a person (`honesty.dismiss`).
+
+        Side effects: removes the entries from the honesty state of every checkout, logs who
+        did it and how many were dropped, and sends `honesty.update`. An id that names no
+        entry is ignored.
+
+        Args:
+            recheck_ids: The ids of the entries.
+            client: Who asked, for the log.
+        """
+        wanted = set(recheck_ids)
+        dropped = 0
+        async with self._honesty_lock:
+            for state in list(self._states.values()):
+                kept = [unit for unit in state.recheck if unit.id not in wanted]
+                dropped += len(state.recheck) - len(kept)
+                state.recheck = kept
+        await self._emit_safely(
+            Log(
+                level="info",
+                message=(
+                    f"honesty: {client or 'unknown'} (by hand) dropped {dropped} unit(s) from "
+                    "the code to judge again"
+                ),
+            )
+        )
+        await self.announce_honesty()
 
     async def clear_mark(self, mark_id: int, client: str = "unknown") -> HonestyMark:
         """Close one open mark by hand: a person's override of a checker (`honesty.clear`).
@@ -1744,6 +1925,7 @@ class Session:
             )
         )
         self._review_running = True
+        self._review_files = tuple(file.path for file in plan.files)
         try:
             await self.announce_honesty()
             async with self._checking_scope():
@@ -1752,6 +1934,7 @@ class Session:
                 )
         finally:
             self._review_running = False
+            self._review_files = ()
         if outcome.problem:
             self._review_failed = (anyio.current_time(), outcome.problem)
             await self._emit_safely(Log(level="warning", message=f"honesty: {outcome.problem}"))
@@ -4034,6 +4217,13 @@ class Session:
             (`StepGate.last_look`)        the gate looked              ASK instead of PASS/ALLOW
                                                                        only after `HOLD_BUDGET_S`
                                           exception while it waits     ASK
+            the locks of an approved      not free in the hook's time  DENY
+            command or edit (D276)
+            second check of a command     another call ended in its    the second decision
+            (`_check_again`, D276)        worktrees since its check    replaces the first
+                                          began
+                                          the second check fails or    ASK
+                                          runs out of time
 
         A subagent's `SubagentHandback` call is not routed: its report is reviewed by the
         subagent-result checker instead (`_handback`, D252).
@@ -4053,16 +4243,24 @@ class Session:
             return await self._checked(step, started)
         except BaseException:
             # A cancelled hook or an unexpected error: the call gives up its turn, so that its
-            # agent's later calls need not wait for it.
+            # agent's later calls need not wait for it. It did not run, so it also gives back
+            # the locks it may hold already, e.g. when its second check was cancelled.
+            self.locks.release(step)
             self.locks.withdraw(step)
             raise
 
     async def _checked(self, step: Step, started: float) -> GateResult:
         """Implement `pre_tool_use` after the call's ticket was issued.
 
+        An approved command or edit takes its locks here (D276). For a command the session
+        then asks whether another call ended in its worktrees since its check began
+        (`CallLocks.check_begins`, `CallLocks.stale`). If so, the command is checked again
+        while it holds its locks (`_check_again`), and the second decision replaces the first.
+
         Args:
             step: The tool call.
-            started: When `pre_tool_use` began (`time.monotonic`), for the lock wait's budget.
+            started: When `pre_tool_use` began (`time.monotonic`). The lock wait and the
+                second check get what is left of the hook's time from then.
 
         Returns:
             As `pre_tool_use`.
@@ -4074,6 +4272,8 @@ class Session:
         try:
             await self._refresh_checkouts()
             own = await anyio.to_thread.run_sync(self.step_checkouts, step)
+            # Before any checker looks at a command: the generations of its locks (D276).
+            self.locks.check_begins(step, own)
             step.checkout, step.other_checkouts = self.checkouts.header(own)
             if step.tool_name == "Bash":
                 step.sandbox = self.config.claude.sandbox.outside_reason(
@@ -4097,17 +4297,7 @@ class Session:
             # A command that writes code or configuration outside its checkouts takes the
             # global lock exclusively (D276); the mark holds for a later take in `ask` too.
             self.locks.mark_writes_outside(step)
-        await self._mark_at_once(step, decided)
-        try:
-            self._keep_honesty(step, decided, expected, contracts)
-            if decided.clean_commit and step.tool_use_id:
-                kept = self._run_state.peek(step.tool_use_id).honesty
-                if kept is not None:
-                    kept.root = self.step_checkouts(step)[0].root
-                    kept.head_before = await self._head(kept.root)
-        except Exception:
-            # Without the record nothing is verified and no commit is certified.
-            log.exception("keeping a step's honesty changes failed")
+        await self._note_honesty(step, decided, expected, contracts)
         result, source, comment = decided.decision, decided.source, ""
         if result.decision is Decision.ESCALATE:
             # From here on no other step is approved, although the escalation's row does not
@@ -4166,6 +4356,20 @@ class Session:
                 self._run_state.peek(key).running = False
                 self._run_state.release(key)
                 break
+            changed = self.locks.stale(step)
+            if changed:
+                # Another call ended in the command's worktree after its check began (D276).
+                # The command is checked again while it holds its locks, and the second
+                # decision replaces the first.
+                left = HOOK_TIMEOUT_S - LOCK_HOOK_MARGIN_S - (time.monotonic() - started)
+                decided, comment, retake = await self._check_again(
+                    step, step_id, pending, decided, comment, changed, left
+                )
+                result, source = decided.decision, decided.source
+                if not result.decision.approves:
+                    break
+                if retake:
+                    continue
             if decided.route in (Route.COMMAND, Route.CHANGESET):
                 # The "before" of the command's write set (D31). It holds its locks now, so what
                 # other calls wrote while it waited for them is not counted as its write set.
@@ -4218,6 +4422,150 @@ class Session:
                 note for note in (self._take_marker_note(), self._honesty_notice()) if note
             ),
         )
+
+    async def _note_honesty(
+        self,
+        step: Step,
+        decided: Decided,
+        expected: str | None,
+        contracts: list[ContractChange],
+    ) -> None:
+        """Record what a decision about a step means for the honesty state.
+
+        In this order:
+
+        1. The dirty marks of a command or a commit are recorded at once (`_mark_at_once`).
+        2. What the call changes if it succeeds is kept for its tool result (`_keep_honesty`).
+        3. For a plain commit decided in a clean state, the kept record gets the root of the
+           step's checkout and its HEAD before the commit. The certification needs both.
+
+        A failure in 2 or 3 is logged and not raised. Without the record nothing is verified
+        and no commit is certified.
+
+        Args:
+            step: The tool call.
+            decided: The gate's decision with the checkers' answers.
+            expected: For an edit, the SHA-256 `HonestyState.expect_edit` computed before the
+                checkers judged it; None otherwise.
+            contracts: For an edit, the definitions whose signature or doc comment it changes
+                (`_contract_changes`); [] otherwise.
+        """
+        await self._mark_at_once(step, decided)
+        try:
+            self._keep_honesty(step, decided, expected, contracts)
+            if decided.clean_commit and step.tool_use_id:
+                kept = self._run_state.peek(step.tool_use_id).honesty
+                if kept is not None:
+                    kept.root = self.step_checkouts(step)[0].root
+                    kept.head_before = await self._head(kept.root)
+        except Exception:
+            # Without the record nothing is verified and no commit is certified.
+            log.exception("keeping a step's honesty changes failed")
+
+    async def _check_again(
+        self,
+        step: Step,
+        step_id: int | None,
+        pending: PendingNarration,
+        first: Decided,
+        remark: str,
+        changed: Sequence[str],
+        limit_s: float,
+    ) -> tuple[Decided, str, bool]:
+        """Check an approved command a second time while it holds its locks (D276).
+
+        Another call ended in a worktree of the command after its first check began
+        (`CallLocks.stale`). The first check may have judged files that are different now.
+        The command holds its locks, so no call that takes locks writes there during this
+        check. The second decision replaces the first:
+
+            a `log` event: where the other call ended, the command is checked again
+              │
+            `StepGate.decide_again`: at most `limit_s`, no wait behind an open escalation
+              │
+            the bookkeeping of a decision: the mark of a command that writes outside its
+            checkouts, the honesty record of the call (the first check's record is dropped),
+            the checker runs, the `steps` row, the checkers' context, `check.result`
+              │
+              ├─ PASS, ALLOW ──► the command keeps its locks
+              └─ DENY, ESCALATE ──► the locks are given back, the call no longer counts as
+                                    running; the reason says that this was a second check
+
+        If the second check reached a verdict, the lock generations read at the take count as
+        the checked ones from then on (`CallLocks.checked_again`). A second check that failed
+        or ran out of time leaves them, so a later take reports the change again.
+
+        If the second check is the first to say that the command writes outside its
+        checkouts, the command holds the global lock only shared. Its locks are then given
+        back, and the caller takes them again.
+
+        Args:
+            step: The tool call, which holds its locks.
+            step_id: Its `steps` row, or None if it could not be stored.
+            pending: Claude's thinking and text before the call, as the first check left it.
+            first: The first decision. Its `hold_left` is carried over.
+            remark: The first check's remark for Claude, which has not been sent yet; "" for
+                none. It is dropped, unless the second check makes the same remark.
+            changed: Where another call ended (`CallLocks.stale`), not empty.
+            limit_s: The seconds this check may take: what is left of the hook's time.
+
+        Returns:
+            (the second decision, the second check's remark for Claude or "", whether the
+            caller must take the call's locks again before it runs). The third value is only
+            true for an approval. A failure of the check is an ESCALATE with source
+            "internal", and so is an approval that could not be recorded. Never an approval
+            by error.
+        """
+        key = step.tool_use_id or ""
+        where = ", ".join(changed)
+        who = f"subagent {step.agent_id}" if step.agent_id else "the main agent"
+        await self._emit_safely(
+            Log(
+                level="info",
+                message=CHECKED_AGAIN_LOG.format(tool=step.tool_name, who=who, where=where),
+            )
+        )
+        again = await self.gate.decide_again(step, pending, limit_s, where)
+        again.hold_left = first.hold_left
+        raw_remark = again.decision.comment.strip()
+        reached = again.source != "internal"  # the check ran to a verdict
+        if reached and not again.decision.decision.approves:
+            again.decision = again.decision.model_copy(
+                update={"reason": CHECKED_AGAIN.format(where=where, reason=again.decision.reason)}
+            )
+        retake = False
+        if any(
+            outcome.decision.writes_outside_worktree is True
+            for checker, outcome in again.runs
+            if not checker.judges_honesty
+        ):
+            retake = self.locks.mark_writes_outside(step)
+        self._run_state.peek(key).honesty = None  # what the first check kept is void
+        self._run_state.release(key)
+        await self._note_honesty(step, again, None, [])
+        if again.decision.decision is Decision.ESCALATE:
+            self.desk.expect_ask(step, again.source)
+        comment = ""
+        try:
+            comment = await self._record_check(step, step_id, pending, again, again=where)
+        except Exception as exc:
+            log.exception("recording the second decision about a step failed")
+            if again.decision.decision.approves:
+                again.decision = unrecorded(again.decision, exc)
+                again.source = "internal"
+        if reached:
+            self.locks.checked_again(step)
+        approved = again.decision.decision.approves
+        if approved and not comment and raw_remark and _same_text(raw_remark, remark):
+            # `_record_check` left the remark out as "already sent in this turn": it found it
+            # in the record of the first check. That one was never sent, so it goes out now.
+            comment = remark
+        if not approved:
+            self._run_state.peek(key).running = False
+            self._run_state.release(key)
+        if not approved or retake:
+            self.locks.release(step)
+        return again, comment, retake and approved
 
     async def _held_late(
         self,
@@ -4284,7 +4632,12 @@ class Session:
         return result, source, True
 
     async def _record_check(
-        self, step: Step, step_id: int | None, pending: PendingNarration, decided: Decided
+        self,
+        step: Step,
+        step_id: int | None,
+        pending: PendingNarration,
+        decided: Decided,
+        again: str = "",
     ) -> str:
         """Record the decision about a step everywhere it belongs, after it was made.
 
@@ -4293,11 +4646,19 @@ class Session:
         The "before" snapshot of an approved command (D31) comes later, once the command holds
         its locks (`_checked`, D276).
 
+        The second check of a command (`_check_again`) is recorded the same way, next to the
+        first: its checker runs are added to the step's, and the `steps` row gets the second
+        decision. Three things differ. The record in the checkers' context is a second one,
+        whose summary says that the command was checked again (`CHECKED_AGAIN_SUMMARY`). That
+        record carries no narration, because the first has it. And no narration is started.
+
         Args:
             step: The tool call.
             step_id: Its `steps` row, or None if it could not be stored.
             pending: Claude's thinking and text before the call, with the narration if made.
-            decided: What `StepGate.decide` returned.
+            decided: What `StepGate.decide` or `StepGate.decide_again` returned.
+            again: "" for the first check. For a second check: where another call ended, as
+                the summary names it.
 
         Returns:
             The checker's remark for Claude on an approved step, or "" if there is none or the
@@ -4311,13 +4672,16 @@ class Session:
         comment = result.comment.strip() if result.decision.approves else ""
         if comment and self._comment_already_sent(comment, step.agent_id):
             comment = ""  # the same remark was already sent in this turn
+        summary = result.step_summary
+        if again:
+            summary = CHECKED_AGAIN_SUMMARY.format(where=again, summary=summary)
         record = StepRecord(
             tool_name=step.tool_name,
             agent_id=step.agent_id,
             decision=result.decision.value,
-            summary=result.step_summary,
+            summary=summary,
             comment=comment,
-            narration=pending.text or "",
+            narration="" if again else pending.text or "",
         )
         self.context.step(record)
         self._fold_if_due()
@@ -4330,8 +4694,10 @@ class Session:
             and pending.text is None
             and self.narrator
             and self._run_state.tg is not None
+            and not again
         ):
             # No checker ran (rules, policy): narrate for the context without delaying the call.
+            # The record of a second check is not narrated: the first one is.
             self._spawn(self._narrate_record, record, pending.outputs)
         if step_id is not None:
             for checker, run in decided.runs:
@@ -4395,6 +4761,10 @@ class Session:
         session traces before it runs (`_finalize_for_commit`); if that pass fails, the
         answer becomes a denial with the reason.
 
+        A command that the human allowed is not checked a second time (D276). When it has its
+        locks and another call ended in its worktrees since its last check
+        (`CallLocks.stale`), a `log` warning says so, and the command runs.
+
         Returns:
             The human's answer. An escalation that ended without a human decision (stop,
             timeout, interrupt) counts as a denial and has `cancelled` set. If the escalation
@@ -4418,6 +4788,19 @@ class Session:
             busy = await self.locks.take(step, None)
             if busy:
                 return HumanAnswer(allow=False, message=busy, note=answer.note)
+            changed = self.locks.stale(step)
+            if changed:
+                # No second check here (D276): the person's decision stands. The log says
+                # that the command runs on files that no check has seen.
+                who = f"subagent {step.agent_id}" if step.agent_id else "the main agent"
+                await self._emit_safely(
+                    Log(
+                        level="warning",
+                        message=NOT_CHECKED_AGAIN_LOG.format(
+                            tool=step.tool_name, who=who, where=", ".join(changed)
+                        ),
+                    )
+                )
             allowed = True
         finally:
             if not allowed:

@@ -39,7 +39,7 @@ The chat pane in VSCode is a side bar about 350 pixels wide. So:
 
 - A node is a compact pill with the short name (`fields`, `Parser.parse`).
 - The callers of one unit collapse into one node "12 callers". A click expands it.
-- The view pans and zooms.
+- The view pans, and zooms with Ctrl and the scroll wheel (the owner, 2026-11-27).
 
 The pane has no runtime dependency today. The layout would use `@dagrejs/dagre` (MIT),
 bundled by esbuild. The drawing is SVG written by hand.
@@ -60,12 +60,15 @@ The view replaces the chat area while it is open. A switch in the pane's header 
 
 ## 4. What the client gets
 
-The client subscribes when the view becomes visible and unsubscribes when it is hidden.
-While no client is subscribed, the server computes nothing for the view.
+As built, there is no subscription. The client asks for the graph with the request
+`honesty.graph` when the view becomes visible, and asks again whenever the event
+`honesty.update` arrives while the view is open. The server computes the graph when asked
+and keeps nothing. So a hidden view costs nothing, and a client that disconnects leaves
+nothing behind.
 
-On each change the server sends the whole graph with a revision number. The graph is small,
-and the client compares it with the one before to animate. Updates are sent at most twice a
-second.
+The answer is the whole graph. It is small, and the client compares it with the one before
+to animate: a node that is gone is shown once more in green, then removed. The client sends
+at most about two requests a second.
 
 | Part | Content |
 |---|---|

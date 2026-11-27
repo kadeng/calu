@@ -82,6 +82,16 @@ closed" of `StepGate` is the one place that turns an error into a decision:
     an exception while an approved step waited
       behind an escalation that appeared while
       the approval was recorded                       `Session.pre_tool_use` -> `unrecorded`
+    the second check of a command raised, or did
+      not finish in the time it had                   `StepGate.decide_again` -> `failed`,
+                                                      `undecided`
+
+The second check (D276, agent/records/notes/locking.md section 9): with locking on, another
+call can end in a command's worktree after the command's check began. The session then asks
+for the decision again once the command holds its locks (`decide_again`). It is the same
+decision as the first, with two differences: the step does not wait behind an open escalation,
+because a call that holds locks does not wait, and the time is what the PreToolUse hook has
+left.
 
 An escalation that appears while an approval is recorded is no error: the step is held again
 (`last_look`, `wait_again`) and becomes an escalation of its own only when its `HOLD_BUDGET_S`
@@ -209,6 +219,15 @@ CHECK_UNFINISHED = (
 
 CHECK_FAILED = "Checking failed with an internal error ({error})."
 """Reason of the escalation of a step whose check raised an exception."""
+
+RECHECK_UNFINISHED = (
+    "Another call ended in {changed} after the check of this command began, so the command "
+    "had to be checked again before it runs. The second check did not finish within the "
+    "{budget:.0f} s that were left for it. Nothing has checked the command against the files "
+    "as they are now."
+)
+"""Reason of the escalation of a command whose second check (`StepGate.decide_again`) did not
+finish in its time, or had no time at all."""
 
 UNRECORDED = (
     "The checkers decided {decision}, but calu then failed with an internal error ({error}), "
@@ -593,6 +612,52 @@ class StepGate:
             decided = self.failed(step, exc)
         return decided
 
+    async def decide_again(
+        self, step: Step, pending: PendingNarration | None, limit_s: float, changed: str
+    ) -> Decided:
+        """Decide a second time about a command that holds its locks; any failure yields ESCALATE.
+
+        The session calls this when another call ended in a worktree of the command after its
+        first check began (`calu.call_locks.CallLocks.stale`). The command holds its locks
+        now, so no other call that takes locks writes there while this check runs.
+
+        The decision is made as in `decide` (`judge`), with two differences:
+
+        - The step does not wait behind an open escalation, neither before the check nor
+          after an approval. A call that holds locks does not wait. The caller looks for an
+          open escalation afterwards (`last_look`).
+        - The time is `limit_s`, and at most `GATE_BUDGET_S`.
+
+        Side effects: as `judge`, without the waits behind an escalation.
+
+        Args:
+            step: The tool call.
+            pending: Claude's thinking and text before the call, or None. The first check
+                narrated it if a checker ran, and it is not narrated again then.
+            limit_s: The seconds the caller can give, e.g. what is left of the PreToolUse
+                hook's time.
+            changed: Where the other call ended, for the reason, e.g. "the worktree `.`".
+
+        Returns:
+            What `judge` returned. Or an ESCALATE decision with source "internal" when the
+            check raised, when it did not finish in its time, or when `limit_s` is not above
+            0 (no check runs then). Never raises an `Exception`; the caller's cancellation
+            passes through.
+        """
+        budget_s = min(float(GATE_BUDGET_S), limit_s)
+        try:
+            decided: Decided | None = None
+            if budget_s > 0:
+                with anyio.move_on_after(budget_s) as budget:
+                    decided = await self.judge(step, pending, budget, waits=False)
+            if decided is None:
+                reason = RECHECK_UNFINISHED.format(changed=changed, budget=max(budget_s, 0.0))
+                decided = self.undecided(step, reason)
+        except Exception as exc:
+            log.exception("deciding again about a step failed")
+            decided = self.failed(step, exc)
+        return decided
+
     def failed(self, step: Step, exc: Exception) -> Decided:
         """Build the decision for a step whose check raised: a human decides.
 
@@ -787,6 +852,8 @@ class StepGate:
         step: Step,
         pending: PendingNarration | None,
         budget: anyio.CancelScope | None = None,
+        *,
+        waits: bool = True,
     ) -> Decided:
         """Decide about `step`: rules, tool policy, then the checkers of its route.
 
@@ -805,16 +872,19 @@ class StepGate:
         the state already computed (see the module docstring).
 
         Side effects: a step that needs a check waits while an escalation is open or being
-        opened, before the check and again after an approval (`_hold`, `_settle`). May run the
-        honesty review (`_needs_clean`).
+        opened, before the check and again after an approval (`_hold`, `_settle`); not with
+        `waits` false. May run the honesty review (`_needs_clean`).
         If a checker runs, narrates `pending` first (sets `pending.text`) and passes the
-        narration to the checker.
+        narration to the checker. A `pending` that is narrated already is not narrated again.
 
         Args:
             step: The tool call.
             pending: Claude's thinking and text before the call, or None.
             budget: The cancel scope that bounds this call (`GATE_BUDGET_S`), which `_hold`
                 extends by the time it waits; None if the caller set no bound.
+            waits: False for the second check of a command that holds its locks
+                (`decide_again`): the step then never waits behind an escalation, and an
+                approval is not turned into an escalation because one is open.
 
         Returns:
             The route, the decision, who decided, what the rules found and the checker's model
@@ -879,7 +949,7 @@ class StepGate:
             step = step.model_copy(update={"notes": [*step.notes, *outcome.notes]})
         held = ""
         hold_left = float(HOLD_BUDGET_S)
-        if route not in (Route.ALLOW, Route.DENY, Route.ESCALATE):
+        if waits and route not in (Route.ALLOW, Route.DENY, Route.ESCALATE):
             # Everything below can approve the step, so it waits here while a human decides
             # about another one. Steps the tool policy answers without a check are not held.
             hold_started = anyio.current_time()
@@ -929,6 +999,7 @@ class StepGate:
                 step,
                 budget,
                 hold_left,
+                waits,
             )
         if route in (Route.ALLOW, Route.DENY, Route.ESCALATE):
             # Route.ALLOW means "no check": the step passes to Claude Code's own approval.
@@ -961,6 +1032,7 @@ class StepGate:
                 step,
                 budget,
                 hold_left,
+                waits,
             )
         diff: str | None = None
         diff_text, diff_cut = "", False
@@ -1077,6 +1149,7 @@ class StepGate:
             step,
             budget,
             hold_left,
+            waits,
         )
 
     def _executes(
@@ -1272,6 +1345,7 @@ class StepGate:
         step: Step,
         budget: anyio.CancelScope | None,
         hold_left: float,
+        waits: bool = True,
     ) -> Decided:
         """Make sure an approval does not stand while an escalation is open or being opened.
 
@@ -1287,13 +1361,16 @@ class StepGate:
             step: The tool call.
             budget: The cancel scope that bounds `_decide`, or None.
             hold_left: Seconds of `HOLD_BUDGET_S` that the hold before the check did not use.
+            waits: False for the second check of a command that holds its locks: the step
+                does not wait here, and an open escalation changes nothing. The other cases
+                of `_auto_escalate` still apply.
 
         Returns:
             `decided`, with an approval turned into an ESCALATE where `_auto_escalate` says so,
             and with `hold_left` set to what the waits left of the step's `HOLD_BUDGET_S`.
         """
         decided = self._auto_escalate(decided, held, step)
-        if decided.decision.decision.approves and self._desk.holding():
+        if waits and decided.decision.decision.approves and self._desk.holding():
             started = anyio.current_time()
             held = await self._hold(step, budget, hold_left)
             hold_left = max(hold_left - (anyio.current_time() - started), 0.0)

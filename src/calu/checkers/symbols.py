@@ -146,6 +146,25 @@ def definition_names(source: str, path: str) -> list[str] | None:
         return None
 
 
+def definition_lines(source: str, path: str) -> dict[str, int] | None:
+    """Map the functions, methods and classes of a Python file to the lines they start on.
+
+    Args:
+        source: The file's content.
+        path: The file's name; only `.py` and `.pyi` files are read.
+
+    Returns:
+        Dotted name -> the 1-based line of its `def` or `class` keyword. None in the cases
+        where `definition_names` returns None.
+    """
+    if not path.endswith((".py", ".pyi")) or len(source) > MAX_SOURCE_CHARS:
+        return None
+    try:
+        return {name: node.lineno for name, node in _definitions(ast.parse(source)).items()}
+    except SyntaxError, ValueError, RecursionError:
+        return None
+
+
 def _definitions(tree: ast.AST, prefix: str = "") -> dict[str, Definition]:
     """Collect the definitions of a syntax tree by dotted name.
 

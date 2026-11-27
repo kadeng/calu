@@ -1,6 +1,6 @@
 """Locks that keep edits away from running commands, per worktree (agent/records/PLAN.md D274).
 
-Not wired into Calu yet: nothing outside this package and its tests imports it.
+`calu.call_locks` connects a session to it (D276); locking is off by default.
 `calu.locking.scheme` defines which locks commands and edits take and in which order the calls
 of an agent get them (`RWLockingScheme`, and `NoLockingScheme` for when locking is off).
 `calu.locking.rwlock` defines the FIFO shared/exclusive lock a backend implements;

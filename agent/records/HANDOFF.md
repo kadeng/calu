@@ -1634,7 +1634,7 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
 --wait`. about 470 commits, ~111k lines of Python in `src` (counted 2026-11-27; the other counts
 of this line are older), ~66k of tests, 3 migration files (the baseline of D266, `0002_temporary_rules.sql` and
 `0003_temporary_rules_no_lifting.sql`), 30 CLI commands (29 in `calu --help` and the hidden easter egg
-`calu lightcycles`), 29 protocol requests,
+`calu lightcycles`), 32 protocol requests,
 22 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
 there.

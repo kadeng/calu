@@ -9,7 +9,7 @@ it. Nothing here touches files, processes or the network.
 import enum
 import threading
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 
@@ -147,6 +147,7 @@ class ThreadRWLock(RWLock):
         self._owners: set[str] = set()
         self._exclusive = False
         self._next_token = 1
+        self._generation = 0  # how often a hold was released with `changed=True`
 
     def request(self, mode: LockMode, owner: str) -> ThreadLockRequest:
         """Put a request for `mode` into the queue at once, without waiting, and return it.
@@ -178,12 +179,14 @@ class ThreadRWLock(RWLock):
             self._grant_waiting()
         return ThreadLockRequest(self, entry)
 
-    def release(self, hold: Hold) -> None:
+    def release(self, hold: Hold, changed: bool = False) -> None:
         """Give back `hold` and grant the waiting requests that fit now.
 
         Args:
             hold: A hold that this lock granted, that `wait` returned and that was not
                 released yet.
+            changed: True when what the lock guards may have changed while the hold was held.
+                The lock's generation then goes up by one before the next request is granted.
 
         Raises:
             LockError: `hold` is not a current hold of this lock.
@@ -197,7 +200,18 @@ class ThreadRWLock(RWLock):
                 or entry.owner != hold.owner
             ):
                 raise LockError(f"{hold!r} is not a current hold of the lock {self.key!r}")
+            if changed:
+                self._generation += 1
             self._drop_grant(entry)
+
+    def generation(self) -> int:
+        """Return how often a hold of this lock was released with `changed=True`.
+
+        Returns:
+            The lock's generation; 0 for a lock no holder reported a change on.
+        """
+        with self._mutex:
+            return self._generation
 
     def state(self) -> LockState:
         """Return the lock's holders and waiting requests now.
@@ -298,6 +312,22 @@ class ThreadLockSpace(LockSpace):
             if lock is None:
                 lock = self._locks[key] = ThreadRWLock(key)
             return lock
+
+    def generations(self, keys: Iterable[str]) -> dict[str, int]:
+        """Return the generation of each lock in `keys` (`ThreadRWLock.generation`).
+
+        The locks are read one after the other, not at one moment.
+
+        Args:
+            keys: Lock keys. A key whose lock was never used has the generation 0; no lock is
+                created for it.
+
+        Returns:
+            Key -> generation, one entry per key.
+        """
+        with self._mutex:
+            locks = {key: self._locks.get(key) for key in keys}
+        return {key: lock.generation() if lock else 0 for key, lock in locks.items()}
 
     def snapshot(self) -> Sequence[LockState]:
         """Return the state of every lock, all taken at one moment.

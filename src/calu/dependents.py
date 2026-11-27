@@ -161,6 +161,27 @@ def enclosing(tree: ast.Module | None, line: int) -> str:
     return ".".join(names)
 
 
+def enclosing_unit(root: Path, path: str, line: int) -> str | None:
+    """Name the unit around a line of a file of the project.
+
+    Side effects: reads and parses the file.
+
+    Args:
+        root: The project directory.
+        path: The file, relative to it.
+        line: The 1-based line.
+
+    Returns:
+        The dotted name of the innermost function, method or class around the line. "" for
+        the top level of the file, and for a file that is not Python or does not parse. None
+        if the line belongs to an `import` statement, which uses nothing.
+    """
+    tree = _parse(root, path)
+    if tree is not None and _in_import(tree, line):
+        return None
+    return enclosing(tree, line)
+
+
 def _definition_at(scope: ast.AST, line: int) -> DEFINITION | None:
     """Find the definition directly in a scope that contains a line.
 

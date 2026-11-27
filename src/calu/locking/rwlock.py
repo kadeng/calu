@@ -21,6 +21,13 @@ PostgreSQL may follow. Every backend must keep this contract (the owner's decisi
   withdrawn first.
 - **Release from anywhere.** A hold is released by passing it to `RWLock.release`, from any
   thread. `LockRequest.withdraw` wakes a `wait` blocked in another thread.
+- **Generations.** Every lock has a generation: a number that starts at 0 and never goes down.
+  `RWLock.release(hold, changed=True)` advances it. The holder says with it that what the lock
+  guards may have changed. The number advances in the same step as the release, before the
+  next request is granted. `LockSpace.generations` reads the numbers. A caller uses them like
+  this: it remembers a generation, takes the lock later, and reads the number again. The same
+  number means that no holder in between reported a change. A backend may advance a
+  generation more often than holders ask for, never less often.
 
 Limit: call the lock API from worker threads, never from the main thread of a program that
 takes Ctrl-C. An asynchronous exception (KeyboardInterrupt, a signal handler that raises) can
@@ -58,7 +65,7 @@ import enum
 import math
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 
@@ -245,12 +252,14 @@ class RWLock(ABC):
         """
 
     @abstractmethod
-    def release(self, hold: Hold) -> None:
+    def release(self, hold: Hold, changed: bool = False) -> None:
         """Give back `hold` and grant the waiting requests that fit now.
 
         Args:
             hold: A hold that this lock granted, that `wait` returned and that was not
                 released yet.
+            changed: True when what the lock guards may have changed while the hold was held.
+                The lock's generation then advances before the next request is granted.
 
         Raises:
             LockError: `hold` is not a current hold of this lock.
@@ -291,6 +300,17 @@ class LockSpace(ABC):
 
         Raises:
             ValueError: `key` is empty.
+        """
+
+    @abstractmethod
+    def generations(self, keys: Iterable[str]) -> dict[str, int]:
+        """Return the generation of each lock in `keys` (see the module docstring).
+
+        Args:
+            keys: Lock keys. A key whose lock was never used has the generation 0.
+
+        Returns:
+            Key -> generation, one entry per key.
         """
 
     def snapshot(self) -> Sequence[LockState] | None:

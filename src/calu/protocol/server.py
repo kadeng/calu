@@ -89,6 +89,8 @@ from calu.protocol.messages import (
     EventsSubscribeResult,
     FilesUserEditParams,
     HonestyClearParams,
+    HonestyDismissParams,
+    HonestyMarkParams,
     HonestyTrustParams,
     HumanDiffAddParams,
     InitializeParams,
@@ -140,6 +142,7 @@ READ_ONLY_METHODS = frozenset(
         "context.get",
         "usage.get",
         "usage.panel",
+        "honesty.graph",
     }
 )
 """Requests that change nothing in the session. Before **every other** request the client's
@@ -1366,6 +1369,18 @@ class Client:
                 )
             case "honesty.review":
                 return await session.request_review(client=self.name or "unknown")
+            case "honesty.graph":
+                return await session.honesty_graph()
+            case "honesty.mark":
+                assert isinstance(params, HonestyMarkParams)
+                await session.mark_by_hand(
+                    params.path, params.symbol, params.reason, client=self.name or "unknown"
+                )
+                return {}
+            case "honesty.dismiss":
+                assert isinstance(params, HonestyDismissParams)
+                await session.dismiss_recheck(params.recheck_ids, client=self.name or "unknown")
+                return {}
             case "files.user_edit":
                 assert isinstance(params, FilesUserEditParams)
                 return await session.user_edit(params.paths, client=self.name or "unknown")

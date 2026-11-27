@@ -311,6 +311,54 @@ describe('ChatHost', () => {
     file.host.dispose();
   });
 
+  it('answers honestyGraphGet with the graph of the attached session, or with the error', async () => {
+    const graph = { nodes: [{ id: 'a.py:f', path: 'a.py', line: 3, name: 'f', kind: 'unit', state: 'dishonest' }], edges: [], mode: 'track' };
+    let fail = false;
+    const { host, view, bridge } = await started({
+      'session.call': (p) => {
+        if (p.method !== 'honesty.graph') return {};
+        if (fail) throw new Error('no session is attached');
+        return graph;
+      },
+    });
+    const noticesBefore = JSON.stringify(view.state.items);
+    await host.handle({ type: 'honestyGraphGet' });
+    expect(bridge.last('session.call')).toEqual({ method: 'honesty.graph', params: {} });
+    expect(view.sent.at(-1)).toEqual({ type: 'honestyGraph', sessionId: 's1', graph });
+
+    fail = true;
+    await host.handle({ type: 'honestyGraphGet' });
+    expect(view.sent.at(-1)).toEqual({ type: 'honestyGraph', sessionId: 's1', graph: null, error: 'no session is attached' });
+    // The graph view shows the error itself: the chat gets no notice.
+    expect(JSON.stringify(view.state.items)).toBe(noticesBefore);
+    host.dispose();
+  });
+
+  it('marks a unit as dishonest only with a typed reason, and drops code to judge again', async () => {
+    const calls: { method: unknown; params: unknown }[] = [];
+    const answers = {
+      'session.call': (p: Record<string, unknown>) => {
+        if (String(p.method).startsWith('honesty.')) calls.push({ method: p.method, params: p.params });
+        return {};
+      },
+    };
+    const typed = await started(answers, { inputs: ['  it also deletes the cache  '] });
+    await typed.host.handle({ type: 'honestyMark', path: 'src/x.py', symbol: 'Parser.parse' });
+    expect(typed.script.asked).toContain('calu: mark as dishonest');
+    expect(calls).toEqual([{ method: 'honesty.mark', params: { path: 'src/x.py', symbol: 'Parser.parse', reason: 'it also deletes the cache' } }]);
+    await typed.host.handle({ type: 'honestyDismiss', recheckIds: [4, 9] });
+    expect(calls.at(-1)).toEqual({ method: 'honesty.dismiss', params: { recheck_ids: [4, 9] } });
+    typed.host.dispose();
+
+    calls.length = 0;
+    for (const answer of [undefined, '   ']) {
+      const cancelled = await started(answers, { inputs: [answer] });
+      await cancelled.host.handle({ type: 'honestyMark', path: 'src/x.py', symbol: '' });
+      expect(calls).toEqual([]);
+      cancelled.host.dispose();
+    }
+  });
+
   it('leaves the platform its own messages', async () => {
     const handled: string[] = [];
     const { host } = await started();

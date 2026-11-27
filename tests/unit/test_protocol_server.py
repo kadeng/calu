@@ -1084,6 +1084,8 @@ def test_every_request_that_is_not_listed_as_read_only_exists():
         "honesty.clear",
         "honesty.trust",
         "honesty.review",
+        "honesty.mark",
+        "honesty.dismiss",
         "files.user_edit",
         "human_diffs.add",
         "interrupt",

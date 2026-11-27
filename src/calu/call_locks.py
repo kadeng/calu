@@ -19,6 +19,18 @@ which takes no lock and never waits.
 The locks live in a space that every session of the process shares (`shared_space`): the
 threads of this process ("process"), or a state file that the other Calu processes of the user
 share ("files"). A worktree is named by the resolved path of its root.
+
+A command's check runs before the command has its locks, so another call can write in its
+worktree in between. `CallLocks` lets the session notice that (locking.md, section 9):
+
+    check_begins    remembers the generations of the command's locks (`calu.locking.rwlock`)
+    take            reads them again once the command holds its locks, and compares
+    stale           names the locks whose generation differs: another call ended there
+    checked_again   the session checked the command again; the numbers read by `take` now
+                    count as the checked ones
+
+With locking off there are no generations, and `stale` never names anything. Edits are not
+compared: an edit's checkers judge the edit itself.
 """
 
 import logging
@@ -61,6 +73,9 @@ MAX_WAIT_S = 3600.0
 
 WAIT_THREADS = 64
 """How many calls of one session may wait for their locks at the same time (worker threads)."""
+
+OUTSIDE_CHANGED = "the files outside the worktrees"
+"""How `CallLocks.stale` names the global lock when its generation changed."""
 
 _spaces: dict[str, LockSpace] = {}
 _spaces_mutex = threading.Lock()
@@ -227,6 +242,12 @@ class CallLocks:
         self._tickets: dict[str, Ticket] = {}
         self._leases: dict[str, Lease] = {}
         self._outside: set[str] = set()
+        # Per command: the generations of its locks that its check saw (`check_begins`,
+        # `checked_again`).
+        self._marks: dict[str, dict[str, int]] = {}
+        # Per command that holds its locks: the generations read at its last `take`, and the
+        # names of the locks whose number differs from `_marks`.
+        self._fresh: dict[str, tuple[dict[str, int], tuple[str, ...]]] = {}
         self._limiter = anyio.CapacityLimiter(WAIT_THREADS)
 
     @property
@@ -285,7 +306,78 @@ class CallLocks:
         with self._mutex:
             self._tickets[step.tool_use_id] = ticket
 
-    def mark_writes_outside(self, step: Step) -> None:
+    def check_begins(self, step: Step, checkouts: Sequence[Checkout]) -> None:
+        """Remember the generations of a command's locks, when its check begins.
+
+        Call it after `issue` and before a checker looks at the command. `take` reads the
+        numbers again once the command holds its locks, and `stale` names what differs.
+
+        Nothing is remembered in three cases:
+
+        - The call is not a command, has no id, or was not issued.
+        - Locking is off for the call (the setting noted at `issue`), or its space is broken.
+        - The numbers cannot be read. That is logged, and `stale` then names every lock of
+          the command.
+
+        Never raises an `Exception`.
+
+        Args:
+            step: The tool call.
+            checkouts: The checkouts the command belongs to (`Session.step_checkouts`), which
+                `take` will lock.
+        """
+        key = step.tool_use_id or ""
+        if step.tool_name not in SHELL_TOOLS or not key:
+            return
+        with self._mutex:
+            mode = self._modes.get(key)
+        if mode is None or mode.broken:
+            return
+        try:
+            marks = mode.scheme.generations(str(checkout.root) for checkout in checkouts)
+        except Exception:
+            log.exception("reading the lock generations for %s failed", key)
+            return
+        if marks:
+            with self._mutex:
+                self._marks[key] = marks
+
+    def stale(self, step: Step) -> tuple[str, ...]:
+        """Name where another call ended since the check of a command that holds its locks.
+
+        `take` made the comparison when the command got its locks: the generations then,
+        against those of `check_begins` or of the last `checked_again`. A lock without a
+        remembered number counts as changed.
+
+        Args:
+            step: The tool call.
+
+        Returns:
+            One name per lock whose generation differs, e.g. "the worktree `.`", or
+            `OUTSIDE_CHANGED` for the global lock. Empty when nothing differs, when the call
+            holds no locks, when it is not a command, and with locking off.
+        """
+        with self._mutex:
+            fresh = self._fresh.get(step.tool_use_id or "")
+        return fresh[1] if fresh else ()
+
+    def checked_again(self, step: Step) -> None:
+        """Note that the session checked a command again while it holds its locks.
+
+        The generations that `take` read count as the checked ones from now on, and `stale`
+        names nothing until the next `take`. Does nothing for a call that holds no locks.
+
+        Args:
+            step: The tool call.
+        """
+        key = step.tool_use_id or ""
+        with self._mutex:
+            fresh = self._fresh.get(key)
+            if fresh is not None:
+                self._marks[key] = fresh[0]
+                self._fresh[key] = (fresh[0], ())
+
+    def mark_writes_outside(self, step: Step) -> bool:
         """Note that a command writes code or configuration outside its checkouts.
 
         The command checker says so (`CheckDecision.writes_outside_worktree`). Every later
@@ -294,16 +386,25 @@ class CallLocks:
 
         Args:
             step: The tool call; one that is not a command, or has no id, is ignored.
+
+        Returns:
+            True when the mark is new. A call that already holds its locks then holds the
+            global lock shared, and only a new `take` makes it exclusive. False when the call
+            was marked before, or is ignored.
         """
-        if step.tool_name in SHELL_TOOLS and step.tool_use_id:
-            with self._mutex:
-                self._outside.add(step.tool_use_id)
+        if step.tool_name not in SHELL_TOOLS or not step.tool_use_id:
+            return False
+        with self._mutex:
+            new = step.tool_use_id not in self._outside
+            self._outside.add(step.tool_use_id)
+        return new
 
     def withdraw(self, step: Step) -> None:
         """Give up the call's turn: it was denied, or it will run without its locks being taken.
 
-        A lock call of this tool call that is still waiting is cancelled. Never raises: a
-        backend error is logged (see `_give_back`).
+        A lock call of this tool call that is still waiting is cancelled. The generations
+        remembered for the call are forgotten. Never raises: a backend error is logged (see
+        `_give_back`).
 
         Args:
             step: The tool call.
@@ -312,6 +413,8 @@ class CallLocks:
         with self._mutex:
             ticket = self._tickets.pop(key, None)
             self._modes.pop(key, None)
+            self._marks.pop(key, None)
+            self._fresh.pop(key, None)
         if ticket is not None:
             _give_back(ticket, key)
 
@@ -324,6 +427,10 @@ class CallLocks:
         "retake:<tool call id>"), so that a cancellation ends its wait, too. The wait runs in a
         worker thread; when this coroutine is cancelled, the ticket is withdrawn and a lease
         that arrives anyway is given back.
+
+        A command that got its locks has the generations of its locks read and compared with
+        the remembered ones (`check_begins`); `stale` gives the result. When they cannot be
+        read, the locks are given back and the call is denied.
 
         Args:
             step: The approved tool call.
@@ -342,6 +449,7 @@ class CallLocks:
             # The setting noted at `issue` for the first take; the current one for a re-take.
             mode = self._modes.pop(key, None) or self._current
             old = self._leases.pop(key, None)
+            self._fresh.pop(key, None)
         if old is not None:
             _give_back(old, key)
         if mode.broken:
@@ -368,7 +476,11 @@ class CallLocks:
         return ""
 
     def release(self, step: Step) -> None:
-        """Give back the locks of a call that holds them, e.g. before a person decides about it.
+        """Give back the locks of a call that has not run, e.g. before a person decides about it.
+
+        The generations of its locks do not advance: the call changed nothing. Call
+        `call_ended` for a call that may have run. What `check_begins` or `checked_again`
+        remembered stays, so the next `take` compares with it.
 
         Never raises: a backend error is logged (see `_give_back`).
 
@@ -378,11 +490,16 @@ class CallLocks:
         key = step.tool_use_id or ""
         with self._mutex:
             lease = self._leases.pop(key, None)
+            self._fresh.pop(key, None)
         if lease is not None:
-            _give_back(lease, key)
+            _give_back(lease, key, ran=False)
 
     def call_ended(self, tool_use_id: str) -> None:
         """Give back the locks of a call that ended (its tool result arrived), and its ticket.
+
+        The generations of its worktree locks advance, and that of the global lock when the
+        call held it exclusively (`calu.locking.scheme.counts_changes`): the call may have
+        written there.
 
         Never raises: a backend error is logged (see `_give_back`).
 
@@ -394,6 +511,8 @@ class CallLocks:
             ticket = self._tickets.pop(tool_use_id, None)
             self._modes.pop(tool_use_id, None)
             self._outside.discard(tool_use_id)
+            self._marks.pop(tool_use_id, None)
+            self._fresh.pop(tool_use_id, None)
         if lease is not None:
             _give_back(lease, tool_use_id)
         if ticket is not None:
@@ -401,6 +520,9 @@ class CallLocks:
 
     def close(self) -> None:
         """Give back every lock and ticket of the session (its run ended).
+
+        The generations advance as in `call_ended`: a call that still held locks may have
+        run.
 
         Never raises: each lease and ticket is given back on its own, and a backend error is
         logged (see `_give_back`).
@@ -410,6 +532,8 @@ class CallLocks:
             tickets, self._tickets = dict(self._tickets), {}
             self._modes.clear()
             self._outside.clear()
+            self._marks.clear()
+            self._fresh.clear()
         for key, lease in leases.items():
             _give_back(lease, key)
         for key, ticket in tickets.items():
@@ -469,6 +593,9 @@ class CallLocks:
     ) -> Lease:
         """Make the scheme's lock call for `step`; blocks until it has its locks.
 
+        For a command, the generations of its locks are then read and compared (`_compare`).
+        If that fails, the lease is given back before the error is raised.
+
         Args:
             step: A tool call that needs locks.
             scheme: The scheme of the setting the call uses (`take`).
@@ -481,7 +608,9 @@ class CallLocks:
         Raises:
             LockTimeoutError: The locks were not free in time.
             LockCancelledError: The ticket was withdrawn while the call waited.
-            LockError: The scheme refused the call (a second lease of its owner, a used ticket).
+            LockError: The scheme refused the call (a second lease of its owner, a used
+                ticket), or the generations cannot be used.
+            OSError: The generations cannot be read.
         """
         plan = self._plan(step)
         owner = f"{step.tool_use_id}@{self._token}"
@@ -493,18 +622,54 @@ class CallLocks:
         if budget_s is not None:
             wait = max(0.0, min(wait, budget_s))
         if plan.kind == "command":
-            return scheme.run_command_in_worktrees(
+            lease = scheme.run_command_in_worktrees(
                 plan.worktrees,
                 timeout=wait,
                 writes_outside=plan.writes_outside,
                 owner=owner,
                 ticket=ticket,
             )
+            try:
+                self._compare(step.tool_use_id or "", scheme, plan)
+            except BaseException:
+                _give_back(lease, owner, ran=False)
+                raise
+            return lease
         if plan.kind == "edit":
             return scheme.edit_in_worktree(
                 plan.worktrees[0], path=plan.path, timeout=wait, owner=owner, ticket=ticket
             )
         return scheme.edit_outside_worktree(timeout=wait, owner=owner, ticket=ticket)
+
+    def _compare(self, key: str, scheme: LockingScheme, plan: _Plan) -> None:
+        """Read the generations of a command that holds its locks, and compare them.
+
+        The numbers cannot advance while the command holds its locks, except when a process
+        that held a lock ends (the file backend then advances all of them). They are compared
+        with what `check_begins` or `checked_again` remembered; a lock without a remembered
+        number counts as changed. The result is kept for `stale` and `checked_again`. With
+        locking off there are no numbers, and nothing is kept.
+
+        Args:
+            key: The tool call's id.
+            scheme: The scheme the command got its locks from.
+            plan: The command's plan.
+
+        Raises:
+            LockError: The backend's state cannot be used.
+            OSError: The backend's state cannot be read.
+        """
+        now = scheme.generations(plan.worktrees)
+        if not now:
+            return
+        with self._mutex:
+            seen = self._marks.get(key, {})
+            changed = tuple(
+                OUTSIDE_CHANGED if lock == GLOBAL_KEY else plan.labels.get(lock, f"`{lock}`")
+                for lock, number in now.items()
+                if seen.get(lock) != number
+            )
+            self._fresh[key] = (now, changed)
 
     async def _in_thread(self, call: Callable[[], Lease], ticket: Ticket | None) -> Lease:
         """Run a blocking lock call in a worker thread; never leave a lease behind.
@@ -543,7 +708,7 @@ class CallLocks:
                 if not cancelled:
                     arrived.append(lease)
                     return lease
-            _give_back(lease, lease.operation.owner)
+            _give_back(lease, lease.operation.owner, ran=False)
             raise LockCancelledError(lease.operation, lease.waited_s)
 
         try:
@@ -555,13 +720,13 @@ class CallLocks:
                 cancelled = True
                 late = arrived[0] if arrived else None
             if late is not None:
-                _give_back(late, late.operation.owner)
+                _give_back(late, late.operation.owner, ran=False)
             if ticket is not None:
                 _give_back(ticket, ticket.agent)
             raise
 
 
-def _give_back(held: Lease | Ticket, key: str) -> None:
+def _give_back(held: Lease | Ticket, key: str, ran: bool = True) -> None:
     """Release a lease or withdraw a ticket; log a failure instead of raising it.
 
     A lease counts as released even when the backend failed (`Lease.release`). The file
@@ -571,10 +736,13 @@ def _give_back(held: Lease | Ticket, key: str) -> None:
     Args:
         held: The lease or ticket.
         key: The tool call's id, for the log.
+        ran: For a lease: False when its call did not run, so the generations of its locks
+            stay as they are (`Lease.release` with `changed=False`). True, the default, when
+            the call ran or may have run. Not used for a ticket.
     """
     try:
         if isinstance(held, Lease):
-            held.release()
+            held.release(changed=ran)
         else:
             held.withdraw()
     except Exception:

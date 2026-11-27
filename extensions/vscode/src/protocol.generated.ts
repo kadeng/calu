@@ -524,6 +524,56 @@ export interface HonestyClearParams {
   mark_id: number;
 }
 /**
+ * `honesty.dismiss`: drop entries of the code to judge again, by hand.
+ *
+ * A person's decision that a unit still says what it does, although a unit it uses changed
+ * its signature or doc comment. Result: `{}`; an id that names no entry is ignored.
+ */
+export interface HonestyDismissParams {
+  /**
+   * @minItems 1
+   */
+  recheck_ids: [number, ...number[]];
+}
+/**
+ * One "uses" relation of the honesty graph: `source` uses `target`.
+ */
+export interface HonestyGraphEdge {
+  certain?: boolean;
+  source: string;
+  target: string;
+}
+/**
+ * One unit in the honesty graph (`honesty.graph`).
+ */
+export interface HonestyGraphNode {
+  count?: number;
+  detail?: string;
+  id: string;
+  kind: "unit" | "file";
+  line: number;
+  mark_ids?: number[];
+  name: string;
+  path: string;
+  recheck_ids?: number[];
+  reviewing?: boolean;
+  state: "dishonest" | "recheck" | "changed" | "caller" | "honest";
+}
+/**
+ * Result of `honesty.graph`: the units that are not clean, and what uses what.
+ *
+ * The session computes it when asked and sends nothing by itself. A client asks again when
+ * `honesty.update` arrives, and only while it shows the graph.
+ */
+export interface HonestyGraphResult {
+  by_file?: boolean;
+  edges?: HonestyGraphEdge[];
+  everything?: boolean;
+  mode?: string;
+  nodes?: HonestyGraphNode[];
+  review_running?: boolean;
+}
+/**
  * The code honesty state of a session as a client shows it (`calu.honesty`).
  *
  * With the mode "off" every other field but `worktrees` has its default. The state is clean
@@ -554,6 +604,18 @@ export interface HonestyInfo {
 export interface HonestyMarkInfo {
   id: number;
   opened_by?: string | null;
+  path: string;
+  reason: string;
+  symbol?: string;
+}
+/**
+ * `honesty.mark`: record a unit, or a whole file, as dishonest by hand.
+ *
+ * A person's own finding, like a checker's mark: the state is not clean while it is open, and
+ * an edit of the file that the honesty checker answers HONEST closes it. Result: `{}`. A
+ * file that does not exist in the project is an error.
+ */
+export interface HonestyMarkParams {
   path: string;
   reason: string;
   symbol?: string;
@@ -1363,6 +1425,9 @@ export interface RequestParams {
   'events.subscribe': EventsSubscribeParams;
   'files.user_edit': FilesUserEditParams;
   'honesty.clear': HonestyClearParams;
+  'honesty.dismiss': HonestyDismissParams;
+  'honesty.graph': EmptyParams;
+  'honesty.mark': HonestyMarkParams;
   'honesty.review': EmptyParams;
   'honesty.trust': HonestyTrustParams;
   'human_diffs.add': HumanDiffAddParams;
@@ -1391,6 +1456,7 @@ export interface RequestResults {
   'escalation.context': EscalationContextResult;
   'events.subscribe': EventsSubscribeResult;
   'files.user_edit': FilesUserEditResult;
+  'honesty.graph': HonestyGraphResult;
   'honesty.review': HonestyReviewResult;
   'honesty.trust': HonestyTrustResult;
   'human_diffs.add': HumanDiffAddResult;

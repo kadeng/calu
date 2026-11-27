@@ -7,17 +7,19 @@
  *     any change            -> scheduleRender() -> render() once per animation frame:
  *
  *         header   session button | settings          setSection(signature): rebuilt only on change
- *                  Checkers | Context | Honesty | level
+ *                  Checkers | Context | Honesty | Graph | level
  *         tabs     Main + one per subagent            (hidden while there is no subagent)
  *         setup    cards of the empty / error state   (setupCards)
  *         list     transcript of the visible tab      per-item cache keyed by object identity
+ *         graph    the honesty graph, in the transcript's place while `ui.graph` (honestyGraph.ts)
  *         dock     escalations of other tabs | side questions | queue | activity | composer
  *
  *     clicks, keys, changes -> one delegated handler each, driven by `data-action`
  *
- * View-only state (visible tab, drafts per session, side mode) is saved with `vscode.setState`;
- * the view state itself comes from the host after every "ready". All text from calu is inserted
- * as text nodes or through `markdown()` (markdown-it with raw HTML disabled).
+ * View-only state (visible tab, drafts per session, side mode, graph open) is saved with
+ * `vscode.setState`; the view state itself comes from the host after every "ready". All text
+ * from calu is inserted as text nodes or through `markdown()` (markdown-it with raw HTML
+ * disabled).
  */
 
 import { ACTIVITY_VERBS, FRAME_MS, activityLine, sessionPhase, waitingSince } from '../src/shared/activity';
@@ -74,6 +76,7 @@ import {
   type ViewState,
 } from '../src/shared/viewState';
 import { actionButton, actionLink, copyText, el, icon, iconButton, logo, reveal, sameChildren, setSection, shown } from './dom';
+import { HonestyGraphView } from './honestyGraph';
 import { draftOf, itemDeps, renderItem, renderSubagentHead, subagentHeadDeps, type Ctx } from './items';
 import { markdown } from './markdown';
 import { usagePanelSections } from '../src/shared/usagePanel';
@@ -104,6 +107,8 @@ interface UiState {
   side: boolean;
   /** Ids of the one-line hints the user dismissed (`SetupCard.compact`). */
   dismissed: string[];
+  /** True while the honesty graph takes the transcript's place. */
+  graph: boolean;
 }
 
 /** Most drafts kept in `UiState.drafts`. */
@@ -129,6 +134,7 @@ function loadUi(): UiState {
     focusSeq: typeof ui.focusSeq === 'number' ? ui.focusSeq : 0,
     side: ui.side === true,
     dismissed: Array.isArray(ui.dismissed) ? ui.dismissed.filter((d): d is string => typeof d === 'string').slice(0, 20) : [],
+    graph: ui.graph === true,
   };
 }
 
@@ -201,6 +207,11 @@ let transcriptWrap!: HTMLElement;
 /** "Session ended" above the greyed transcript of a session that ended (`transcriptEnded`). */
 let endedBanner!: HTMLElement;
 let list!: HTMLElement;
+/** The place of the honesty graph: a sibling of the transcript, hidden while the chat shows. */
+let graphSlot!: HTMLElement;
+let graph!: HonestyGraphView;
+/** Where the transcript was when the graph opened ("bottom" = it followed new output). */
+let chatScroll: number | 'bottom' = 'bottom';
 let jumpButton!: HTMLButtonElement;
 let stripSlot!: HTMLElement;
 let sideSlot!: HTMLElement;
@@ -248,6 +259,9 @@ function buildSkeleton(): void {
   endedBanner.hidden = true;
   wrap.append(endedBanner, list, jumpButton);
   transcriptWrap = wrap;
+  graphSlot = el('div', 'honesty-graph', undefined, { role: 'region', 'aria-label': 'Honesty graph', 'data-testid': 'honesty-graph' });
+  graphSlot.hidden = true;
+  graph = new HonestyGraphView(graphSlot, (message) => vscode.postMessage(message));
 
   const dock = el('footer', 'dock');
   stripSlot = el('div', 'strip-slot');
@@ -292,7 +306,7 @@ function buildSkeleton(): void {
   dock.append(stripSlot, sideSlot, queueSlot, activityEl, composer, hintEl);
 
   announcer = el('div', 'sr-only', undefined, { 'aria-live': 'polite', role: 'status' });
-  app.append(header, tabsSlot, setupSlot, wrap, dock, announcer);
+  app.append(header, tabsSlot, setupSlot, wrap, graphSlot, dock, announcer);
 }
 
 /**
@@ -416,8 +430,8 @@ function buildSelect(name: string, testid: string, label: string, options: reado
 }
 
 /**
- * Build the quick row of calu's own features: Checkers, Context, the honesty chip and the
- * supervision level.
+ * Build the quick row of calu's own features: Checkers, Context, the honesty chip, the switch
+ * to the honesty graph and the supervision level.
  *
  * @returns The elements of the row.
  */
@@ -442,11 +456,60 @@ function buildQuickRow(): HTMLElement[] {
   });
   honesty.append(icon('shield'), el('span', '', chip.kind === 'off' ? 'Honesty: off' : chip.label));
   if (stored) honesty.append(el('span', 'chip stored-mode', stored));
+  const graphButton = buildGraphButton(attached);
   const level = levelOf(view.autoEscalate);
   const options: [string, string][] = LEVELS.map((l) => [l.id, l.name]);
   if (level === 'custom') options.unshift(['', levelLabel(view.autoEscalate)]);
   const select = buildSelect('level', 'header-level', 'Supervision level: which steps wait for you', options, level === 'custom' ? '' : level, !attached);
-  return [checkers, context, honesty, select, permissionSelect(attached)];
+  return [checkers, context, honesty, graphButton, select, permissionSelect(attached)];
+}
+
+/**
+ * Build the switch between the chat and the honesty graph, next to the honesty chip. While the
+ * graph is closed and cannot show anything (no attached session, or code honesty is off), the
+ * button is disabled and its tooltip says why. While the graph is open it always leads back.
+ *
+ * @param attached Whether a session is attached.
+ * @returns The button, with `data-testid="header-honesty-graph"`.
+ */
+function buildGraphButton(attached: boolean): HTMLButtonElement {
+  const on = (view.honesty?.mode ?? 'off') !== 'off';
+  const title = ui.graph
+    ? 'Back to the chat'
+    : !attached
+      ? 'The honesty graph needs an attached session.'
+      : !on
+        ? 'The honesty graph needs code honesty: choose "track" or "enforce" in the Honesty menu.'
+        : 'Show the honesty state as a graph: the units that are dishonest, changed or to judge again, and what uses them';
+  const button = actionButton('', 'honestyGraph', {
+    class: `quiet-button graph-toggle${ui.graph ? ' active' : ''}`,
+    'data-testid': 'header-honesty-graph',
+    'aria-pressed': String(ui.graph),
+    title,
+  });
+  button.append(icon('graph'), el('span', '', 'Graph'));
+  button.disabled = !ui.graph && (!attached || !on);
+  return button;
+}
+
+/**
+ * Show the honesty graph in the transcript's place, or the transcript again. The transcript
+ * comes back where it was: a hidden element loses its scroll position.
+ *
+ * @param open True for the graph, false for the chat.
+ * @returns Nothing. Side effect: if this changes what is shown, it sets `ui.graph`, closes an
+ *   open popup and renders (the graph view then asks the host for the graph, or stops asking).
+ */
+function showGraph(open: boolean): void {
+  if (ui.graph === open) return;
+  if (open) chatScroll = stick ? 'bottom' : list.scrollTop;
+  ui.graph = open;
+  closePopup(false);
+  render();
+  if (open) return;
+  stick = chatScroll === 'bottom';
+  list.scrollTop = chatScroll === 'bottom' ? list.scrollHeight : chatScroll;
+  jumpButton.hidden = stick || list.childElementCount === 0;
 }
 
 /**
@@ -573,7 +636,7 @@ function renderHeader(): void {
     const anchor = sessionSlot.querySelector('button');
     if (anchor) refreshPopup('sessions', buildSessionMenu(), { anchor });
   }
-  const quickSig = JSON.stringify([view.honesty, view.honestyStored, view.autoEscalate, view.permissionMode, isAttached(view)]);
+  const quickSig = JSON.stringify([view.honesty, view.honestyStored, view.autoEscalate, view.permissionMode, isAttached(view), ui.graph]);
   if (setSection(quickSlot, quickSig, buildQuickRow)) {
     const anchor = quickSlot.querySelector('[data-testid="header-honesty"]');
     if (anchor) refreshPopup('honesty', buildHonestyMenu(), { anchor });
@@ -690,12 +753,15 @@ function renderTabs(): void {
 }
 
 /**
- * Show another tab: remember the scroll position of the current one, then render.
+ * Show another tab: remember the scroll position of the current one, then render. A tab shows
+ * its transcript, so an open honesty graph is closed.
  *
  * @param tab `MAIN` or an agent id.
  * @returns Nothing.
  */
 function switchTab(tab: string): void {
+  // First back to the chat, so that the scroll position of the tab that is left is right.
+  showGraph(false);
   if (tab === ui.tab) return;
   ui.tab = tab;
   render();
@@ -828,7 +894,7 @@ function nearBottom(): boolean {
  *
  * The list follows new output only while the user has not scrolled up (`stick`).
  *
- * @param hidden True if the setup area replaces the transcript.
+ * @param hidden True if the setup area or the honesty graph replaces the transcript.
  * @returns Nothing.
  */
 function renderList(hidden: boolean): void {
@@ -885,7 +951,8 @@ function renderList(hidden: boolean): void {
   if (!sameChildren(list, wanted)) list.replaceChildren(...wanted);
   if (stick) list.scrollTop = list.scrollHeight;
   jumpButton.hidden = hidden || stick || !hasContent;
-  if (!document.hidden && items.length > 0) seen[ui.tab] = items[items.length - 1].id;
+  // Output behind the honesty graph or the setup area was not seen.
+  if (!document.hidden && !hidden && items.length > 0) seen[ui.tab] = items[items.length - 1].id;
 }
 
 /**
@@ -1641,7 +1708,8 @@ function scheduleRender(): void {
 /**
  * Re-render all dynamic parts and schedule saving the view-only state.
  *
- * @returns Nothing.
+ * @returns Nothing. Side effect: while the honesty graph is open, it may ask the host for the
+ *   graph (`HonestyGraphView.update`); while it is closed it asks and draws nothing.
  */
 function render(): void {
   renderQueued = false;
@@ -1652,7 +1720,11 @@ function render(): void {
   renderTabs();
   renderHeader();
   const setupOnly = renderSetup();
-  renderList(setupOnly);
+  // The setup area (no session, no server) comes before the graph: it says what to do first.
+  const graphShown = ui.graph && !setupOnly;
+  renderList(setupOnly || graphShown);
+  graphSlot.hidden = !graphShown;
+  graph.update({ visible: graphShown, attached: ctx.attached, sessionId: view.sessions.attachedId, honesty: view.honesty });
   setSection(stripSlot, JSON.stringify([otherOpenEscalations(view, ui.tab), ctx.held().byAgent]), buildStrip);
   setSection(sideSlot, JSON.stringify([ui.side, view.side]), buildSide);
   setSection(queueSlot, JSON.stringify(view.queue), buildQueue);
@@ -1924,6 +1996,14 @@ function onClick(event: MouseEvent): void {
       return;
     case 'honestyClear':
       vscode.postMessage({ type: 'honestyClear', markId: Number(data.id) });
+      return;
+    case 'honestyGraph':
+      showGraph(!ui.graph);
+      return;
+    case 'graphMenu':
+      // An entry of a node's menu in the honesty graph.
+      closePopup();
+      graph.menuAction(data.op ?? '', data.id ?? '');
       return;
     case 'usage':
       if (openPopupId() === 'usage') closePopup();
@@ -2237,13 +2317,19 @@ function syncUiWithState(): void {
  * Switch to the tab named by a new focus request of the state (an escalation arrived there).
  * Each request (`view.focus.seq`) is handled once, so the user can switch tabs afterwards.
  *
- * @returns Nothing. Side effect: may change `ui.tab`, `ui.focusSeq` and `focusNewCard`.
+ * @returns Nothing. Side effect: may change `ui.tab`, `ui.focusSeq`, `focusNewCard`, and
+ *   `ui.graph` with `stick` (an open honesty graph closes; the next render shows the chat).
  */
 function applyFocus(): void {
   const focus = view.focus;
   if (!focus || focus.seq <= ui.focusSeq) return;
   ui.focusSeq = focus.seq;
   ui.tab = focus.tab;
+  // The card that asks for the user is in the transcript: the honesty graph must not cover it.
+  if (ui.graph) {
+    ui.graph = false;
+    stick = chatScroll === 'bottom';
+  }
   focusNewCard = true;
 }
 
@@ -2290,6 +2376,9 @@ function onHostMessage(message: HostMessage): void {
     case 'retracted':
       // Into an empty field only: what the user typed since is neither replaced nor mixed.
       if (!input.value.trim()) setInput(message.text);
+      return;
+    case 'honestyGraph':
+      graph.receive(message);
       return;
     case 'reportState': {
       if (renderQueued) render();

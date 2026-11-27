@@ -69,6 +69,14 @@ empty.
 - **Honesty mode**: the menu stores `honesty.mode` in calu's settings; the running session
   reads the change and the chip follows. If the session does not report the stored mode, the
   chip shows both ("stored: track").
+- **Honesty graph**: "Graph" next to the Honesty chip shows the honesty state in place of the
+  transcript; a second click, a click on a tab or a new approval card shows the chat again. A
+  node is a unit of code. Red is dishonest, yellow changed and unverified, orange to judge
+  again (strong border) or a caller of a dishonest unit (thin border), green just settled; each
+  state also has its own sign, explained under "Legend". A click opens the source. A right
+  click (or the context-menu key, or Shift+F10) offers "Mark as honest", "Mark as dishonest…"
+  and "Open the source". Drag to pan; Ctrl and the scroll wheel zoom. The session is asked for
+  the graph only while it is open.
 - **Usage panel**: a click on the context chip below the message field asks the session
   (`usage.panel`) and shows the 5-hour and weekly limits as Claude Code reported them, each
   with the time of the report or "not reported yet by Claude Code", the plan's limits when

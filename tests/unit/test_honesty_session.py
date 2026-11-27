@@ -1599,3 +1599,52 @@ async def test_without_the_setting_no_code_is_judged_again(repo: Path):
     )
     await run_turns(session, rec)
     assert (await session.honesty_snapshot()).recheck == ()
+
+
+# ------------------------------------------------------------------ the honesty graph
+
+
+async def test_the_graph_names_the_dishonest_unit_its_callers_and_the_code_to_judge_again(
+    repo: Path,
+):
+    """`honesty.graph`: after an edit that changes the doc comment of `fields` and a mark a
+    person puts on it, the graph holds `fields` as dishonest and `main`, which calls it, as
+    code to judge again, with an edge between them. Dismissing the entry by hand leaves `main`
+    as a mere caller, found by the word search for the view. With the mode off the graph is
+    empty."""
+    with_caller(repo)
+    session, rec, _store = await session_on(
+        repo,
+        [[write("src/parser.py", CHANGED_DOC)]],
+        mode="track",
+        models={"honesty": honesty_answering(honest=["src/parser.py"])},
+        dependents=True,
+        dependents_judge=False,
+    )
+    await run_turns(session, rec)
+    await session.mark_by_hand("src/parser.py", "fields", "sends data away", client="tester")
+    graph = await session.honesty_graph()
+    states = {node.id: node.state for node in graph.nodes}
+    assert states == {"src/parser.py:fields": "dishonest", "src/app.py:main": "recheck"}
+    assert [(edge.source, edge.target) for edge in graph.edges] == [
+        ("src/app.py:main", "src/parser.py:fields")
+    ]
+    marked = next(node for node in graph.nodes if node.state == "dishonest")
+    assert "sends data away (found by tester (by hand))" in marked.detail and marked.line == 4
+    entry = next(node for node in graph.nodes if node.state == "recheck")
+    await session.dismiss_recheck(entry.recheck_ids, client="tester")
+    after = await session.honesty_graph()
+    assert {node.id: node.state for node in after.nodes}["src/app.py:main"] == "caller"
+    assert "dropped 1 unit(s) from the code to judge again" in logs(rec)
+
+    off, _rec, _store = await session_on(repo, [], mode="off")
+    assert (await off.honesty_graph()).nodes == []
+    with pytest.raises(SessionError):
+        await off.mark_by_hand("src/parser.py", "fields", "x")
+
+
+async def test_a_mark_by_hand_needs_a_file_of_the_project(repo: Path):
+    """`honesty.mark` on a file that does not exist opens nothing and says so."""
+    session, _rec, _store = await session_on(repo, [], mode="track")
+    with pytest.raises(SessionError, match="no mark was opened"):
+        await session.mark_by_hand("src/missing.py", "", "nothing here")

@@ -42,6 +42,9 @@ const USAGE_REFRESH_MS = 2000;
 /** Milliseconds a session gets to report a honesty mode that was just stored for it. */
 const MODE_ANNOUNCE_MS = 4000;
 
+/** Longest reason of a mark made by hand (the limit of `honesty.mark`). */
+const MAX_MARK_REASON = 500;
+
 /** The chat view as the host sees it. */
 export interface ChatView {
   /** The authoritative view state. */
@@ -474,6 +477,17 @@ export class ChatHost implements Disposable {
       case 'honestyClear':
         await this.run('Clearing the mark', () => this.bridge.session('honesty.clear', { mark_id: message.markId }));
         return;
+      case 'honestyGraphGet':
+        await this.sendHonestyGraph();
+        return;
+      case 'honestyMark':
+        await this.markDishonest(message.path, message.symbol);
+        return;
+      case 'honestyDismiss':
+        await this.run('Dropping the code to judge again', () =>
+          this.bridge.session('honesty.dismiss', { recheck_ids: message.recheckIds as [number, ...number[]] }),
+        );
+        return;
       default:
         await this.run('The action', () => this.ui.handle(message));
     }
@@ -686,6 +700,47 @@ export class ChatHost implements Disposable {
       const now = result.commit_id ? 'is trusted now; it is the baseline of the honesty state.' : 'is trusted now.';
       this.notice('info', result.recorded ? `${what} ${now}` : `${what} was trusted already.`);
     });
+  }
+
+  /**
+   * Ask the attached session for its honesty graph (`honesty.graph`) and send the answer to
+   * the chat view as `honestyGraph`. A failure is sent as the message's `error` and logged; it
+   * is not shown as a notice, because the graph view shows it.
+   *
+   * @returns A promise that resolves when the answer was sent (never rejects).
+   */
+  private async sendHonestyGraph(): Promise<void> {
+    const sessionId = this.sessions.attachedId;
+    try {
+      const graph = await this.bridge.session('honesty.graph', {});
+      this.chat.send({ type: 'honestyGraph', sessionId, graph });
+    } catch (error) {
+      this.ui.log(`[calu] the honesty graph was not loaded: ${errorText(error)}`);
+      this.chat.send({ type: 'honestyGraph', sessionId, graph: null, error: errorText(error) });
+    }
+  }
+
+  /**
+   * Record a unit or a whole file as dishonest for the user (`honesty.mark`).
+   *
+   * Side effects: an input asks for the reason in one line. Only an accepted, non-blank reason
+   * sends the request. An error (no attached session, a file that is not in the project) is
+   * shown as a notice.
+   *
+   * @param path The file, relative to the workspace.
+   * @param symbol The dotted name of the unit; "" for the whole file.
+   * @returns Nothing; cancelling does nothing.
+   */
+  private async markDishonest(path: string, symbol: string): Promise<void> {
+    const what = symbol ? `${symbol} in ${path}` : path;
+    const typed = await this.ui.input({
+      title: 'calu: mark as dishonest',
+      prompt: `What is wrong with ${what}? One sentence; the mark stays open until the code is fixed or the mark is cleared.`,
+      validate: (text) => (!text.trim() ? 'A reason is needed.' : text.trim().length > MAX_MARK_REASON ? `At most ${MAX_MARK_REASON} characters.` : undefined),
+    });
+    const reason = typed?.trim();
+    if (!reason || reason.length > MAX_MARK_REASON) return;
+    await this.run(`Marking ${what} as dishonest`, () => this.bridge.session('honesty.mark', { path, symbol, reason }));
   }
 
   // ---------------------------------------------------------------- hints and usage

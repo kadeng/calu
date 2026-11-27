@@ -35,6 +35,17 @@ change fails (e.g. the disk is full), the entry stays in the file, and the next 
 space removes it: no hold is left that nobody knows of. An entry that a change adds counts only
 when the change was written.
 
+Generations (`calu.locking.rwlock`). The state holds two kinds of numbers:
+
+- `generations`: one number per lock that was ever released with `changed=True`. Such a
+  release adds one, in the change that removes the entry. If that change fails, the next
+  change of the space adds it.
+- `lost`: one number for the whole space. It goes up by one for every granted entry that is
+  removed because its process ended. Nobody can say what that process changed.
+
+A lock's generation is its own number plus `lost`. A holder that died therefore advances the
+generation of every lock. The numbers stay in the state file as long as the file exists.
+
 The holds of a process belong to it: `release` and `withdraw` work from any of its threads, not
 from other processes. Create one `FileLockSpace` per directory and process; an object inherited
 across a `fork` must not be used in the child. The directory must belong to the user and must
@@ -49,7 +60,7 @@ import secrets
 import stat
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -289,11 +300,18 @@ def _is_state(state: object) -> bool:
 
     Returns:
         True for {"version": 1, "seq": int, "locks": {key: [entry, ...]}} with complete entries.
+        "generations" ({key: int}) and "lost" (int) may be missing; when they are there, they
+        must have these types.
     """
     if not isinstance(state, dict) or state.get("version") != 1:
         return False
     locks = state.get("locks")
     if not isinstance(state.get("seq"), int) or not isinstance(locks, dict):
+        return False
+    generations = state.get("generations", {})
+    if not isinstance(generations, dict) or not isinstance(state.get("lost", 0), int):
+        return False
+    if not all(isinstance(count, int) for count in generations.values()):
         return False
     return all(
         isinstance(entries, list)
@@ -659,7 +677,7 @@ class FileRWLock(RWLock):
         seq = space._change(enqueue, key)
         return FileLockRequest(space, key, seq, mode, owner)
 
-    def release(self, hold: Hold) -> None:
+    def release(self, hold: Hold, changed: bool = False) -> None:
         """Give back `hold` and grant the waiting requests that fit now.
 
         The space forgets the hold first: if the change fails, the hold counts as released all
@@ -668,6 +686,10 @@ class FileRWLock(RWLock):
         Args:
             hold: A hold that this lock granted to this process, that `wait` returned and that
                 was not released yet.
+            changed: True when what the lock guards may have changed while the hold was held.
+                The lock's generation then goes up by one in the change that removes the
+                entry (`FileLockSpace._prune`). If that change fails, the space's next change
+                adds it.
 
         Raises:
             LockError: `hold` is not a current hold of this lock in this process, or the state
@@ -680,6 +702,8 @@ class FileRWLock(RWLock):
                 raise LockError(f"{hold!r} is not a current hold of the lock {key!r}")
             del space._held[key, hold.token]
             space._mine.discard((key, hold.token))
+            if changed:
+                space._ended.add((key, hold.token))
 
         def give_back(state: dict[str, Any]) -> None:
             """Remove the held entry, if it is still there, and grant what fits.
@@ -728,6 +752,8 @@ class FileLockSpace(LockSpace):
         self._wakes: dict[str, threading.Condition] = {}
         self._mine: set[tuple[str, int]] = set()  # entries this space wants
         self._held: dict[tuple[str, int], Hold] = {}  # holds `wait` returned
+        # Holds released with `changed=True` whose lock's generation is not advanced yet.
+        self._ended: set[tuple[str, int]] = set()
         self._locks: dict[str, FileRWLock] = {}
 
     def lock(self, key: str) -> FileRWLock:
@@ -749,6 +775,27 @@ class FileLockSpace(LockSpace):
             if lock is None:
                 lock = self._locks[key] = FileRWLock(self, key)
             return lock
+
+    def generations(self, keys: Iterable[str]) -> dict[str, int]:
+        """Return the generation of each lock in `keys`, as one read of the state file shows it.
+
+        A lock's generation is its number in the state's `generations` plus the state's `lost`
+        (see the module docstring). A release with `changed=True` whose change failed is not
+        counted until the space's next change; until then its entry still holds the lock.
+
+        Args:
+            keys: Lock keys. A key without a number of its own has the generation `lost`.
+
+        Returns:
+            Key -> generation, one entry per key.
+
+        Raises:
+            LockError: The state file is not a lock state.
+            OSError: The space's directory cannot be read.
+        """
+        state = self._read()
+        own, lost = state["generations"], state["lost"]
+        return {key: own.get(key, 0) + lost for key in keys}
 
     def snapshot(self) -> Sequence[LockState]:
         """Return the state of every lock, as one read of the state file shows it.
@@ -787,7 +834,8 @@ class FileLockSpace(LockSpace):
         """Read the state file; an absent file is the empty state.
 
         Returns:
-            The state.
+            The state. It always has "generations" and "lost": a file without them (written
+            before generations existed) gets {} and 0.
 
         Raises:
             LockError: The file is not a state of this backend.
@@ -796,7 +844,7 @@ class FileLockSpace(LockSpace):
         try:
             fd = os.open(self.state_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
         except FileNotFoundError:
-            return {"version": 1, "seq": 0, "locks": {}}
+            return {"version": 1, "seq": 0, "locks": {}, "generations": {}, "lost": 0}
         with os.fdopen(fd, encoding="utf-8") as source:
             text = source.read()
         try:
@@ -805,6 +853,8 @@ class FileLockSpace(LockSpace):
             raise LockError(f"{self.state_path} is not a lock state ({exc})") from None
         if not _is_state(state):
             raise LockError(f"{self.state_path} is not a lock state of version 1")
+        state.setdefault("generations", {})
+        state.setdefault("lost", 0)
         return state
 
     def _change(
@@ -816,9 +866,10 @@ class FileLockSpace(LockSpace):
         """Change the state under the flock: prune, apply `change`, write it if it changed.
 
         The pruning removes the entries of processes that ended and the entries of this space
-        that it no longer wants (`_mine`). `change` may add to `_mine` and `_held`; when the
-        change fails (it raises, or the state cannot be written), both are put back as they
-        were, and nothing is written. Afterwards the waiting requests of this process are
+        that it no longer wants (`_mine`), and advances the generations that are due (`_prune`).
+        `change` may add to `_mine` and `_held`; when the change fails (it raises, or the state
+        cannot be written), `_mine`, `_held` and `_ended` are put back as they were, and
+        nothing is written. Afterwards the waiting requests of this process are
         woken: those of `key`, or all of them when `key` is None or the pruning removed an
         entry.
 
@@ -839,7 +890,7 @@ class FileLockSpace(LockSpace):
         if deadline is None:
             deadline = time.monotonic() + FLOCK_WAIT_S
         with self._mutex:
-            mine, held = set(self._mine), dict(self._held)
+            mine, held, ended = set(self._mine), dict(self._held), set(self._ended)
             fd = os.open(
                 self.mutex_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600
             )
@@ -853,7 +904,8 @@ class FileLockSpace(LockSpace):
                 if after != before:
                     self._write(after)
             except BaseException:
-                self._mine, self._held = mine, held  # the change did not happen
+                # The change did not happen.
+                self._mine, self._held, self._ended = mine, held, ended
                 raise
             finally:
                 os.close(fd)  # also ends the flock
@@ -880,6 +932,13 @@ class FileLockSpace(LockSpace):
     def _prune(self, state: dict[str, Any]) -> bool:
         """Remove the entries of ended processes and the unwanted ones of this space; grant then.
 
+        The generations advance here as well (see the module docstring):
+
+        - For every hold of this space that was released with `changed=True` since its last
+          written change (`_ended`), the lock's number in `generations` goes up by one.
+          `_ended` is emptied; `_change` puts it back when the change is not written.
+        - For every granted entry of a process that ended, `lost` goes up by one.
+
         Args:
             state: The state; changed in place.
 
@@ -891,19 +950,26 @@ class FileLockSpace(LockSpace):
         """
         me = _this_process()
         removed = False
+        for key, _seq in self._ended:
+            state["generations"][key] = state["generations"].get(key, 0) + 1
+        self._ended.clear()
         for key in list(state["locks"]):
             entries = state["locks"][key]
-            kept = [
-                entry
-                for entry in entries
-                if (
-                    (key, entry["seq"]) in self._mine
-                    if entry["space"] == self._token
+            kept = []
+            for entry in entries:
+                own = (
+                    entry["space"] == self._token
                     and entry["pid"] == me.pid
                     and entry["start"] == me.start
-                    else _alive(entry)
                 )
-            ]
+                if own:
+                    keep = (key, entry["seq"]) in self._mine
+                else:
+                    keep = _alive(entry)
+                    if not keep and entry["granted"]:
+                        state["lost"] += 1
+                if keep:
+                    kept.append(entry)
             if len(kept) == len(entries):
                 continue
             removed = True

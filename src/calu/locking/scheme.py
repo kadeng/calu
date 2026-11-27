@@ -47,9 +47,20 @@ Rules (the owner's decisions of 2026-11-25; the locks themselves are FIFO, `calu
 - **Timeouts.** `LockTimeouts` holds a default and a maximum for commands and for edits (both
   types of edit). A call may pass its own timeout; a value above the maximum is cut to it, and
   an infinite, NaN or negative value is refused. No wait is unbounded.
+- **Generations.** A caller can find out whether another call wrote where a command runs,
+  between two moments (`calu.locking.rwlock`, "Generations"):
+
+        the command's check begins     marks = generations(its worktrees)
+        the command has its lease      generations(its worktrees) == marks  ->  nothing changed
+
+  `Lease.release` advances the generation of the locks that `counts_changes` names: every
+  worktree lock of the lease, and the global lock when the lease held it exclusively. That
+  covers a command and an edit in the worktree, an edit outside the worktrees, and a command
+  that writes outside. A call that did not run releases with `changed=False`.
 
 `RWLockingScheme` locks through a `LockSpace` (the backend). `NoLockingScheme` takes the same
-calls, checks the same arguments and never waits: the drop-in when the feature is off.
+calls, checks the same arguments and never waits: the drop-in when the feature is off. It has no
+generations.
 """
 
 import enum
@@ -124,6 +135,24 @@ def lock_order(key: str) -> tuple[int, str]:
     if key == GLOBAL_KEY:
         return (2, key)
     return (0 if key.startswith("worktree:") else 1, key)
+
+
+def counts_changes(key: str, mode: LockMode) -> bool:
+    """Tell whether the release of a hold advances its lock's generation (`Lease.release`).
+
+    Args:
+        key: A key made by `GLOBAL_KEY`, `worktree_key` or `file_key`.
+        mode: The mode the lock was held in.
+
+    Returns:
+        True for a worktree lock in either mode: a command and an edit both may have written
+        in the worktree. True for the global lock held exclusively: an edit outside the
+        worktrees, or a command that writes outside. False for the global lock held shared and
+        for a file lock.
+    """
+    if key == GLOBAL_KEY:
+        return mode is LockMode.EXCLUSIVE
+    return key.startswith("worktree:")
 
 
 class OperationKind(enum.Enum):
@@ -609,13 +638,19 @@ class LockCancelledError(Exception):
         self.waited_s = waited_s
 
 
-def _release_all(holds: Sequence[tuple[RWLock, Hold]], cause: BaseException | None = None) -> None:
+def _release_all(
+    holds: Sequence[tuple[RWLock, Hold]],
+    cause: BaseException | None = None,
+    changed: bool = False,
+) -> None:
     """Release `holds` in reverse order and try every one, even after one failed.
 
     Args:
         holds: (lock, hold) pairs in the order they were acquired.
         cause: The exception that ends an acquisition, if any. A failed release is then added
             to it as a note instead of being raised.
+        changed: True when the operation may have run. The locks that `counts_changes` names
+            are then released with `changed=True`, which advances their generation.
 
     Raises:
         Exception: The first release that failed (e.g. `LockError`, or an error of the
@@ -624,7 +659,7 @@ def _release_all(holds: Sequence[tuple[RWLock, Hold]], cause: BaseException | No
     first: Exception | None = None
     for lock, hold in reversed(holds):
         try:
-            lock.release(hold)
+            lock.release(hold, changed and counts_changes(hold.key, hold.mode))
         except Exception as exc:
             if cause is not None:
                 cause.add_note(f"releasing the lock {hold.key!r} failed as well: {exc!r}")
@@ -693,11 +728,16 @@ class Lease:
         with self._mutex:
             return self._released
 
-    def release(self) -> None:
+    def release(self, changed: bool = True) -> None:
         """Release every lock of the lease, in reverse order; do nothing when already released.
 
         When it returns, the locks are free, also for a call that came while another thread
         was still releasing: that call waits for the first one.
+
+        Args:
+            changed: True when the operation may have run, which is the default. The
+                generation of the locks that `counts_changes` names then advances. Pass False
+                only when the operation did not run at all.
 
         Raises:
             Exception: The first release the backend refused (e.g. `LockError`), after all
@@ -708,7 +748,7 @@ class Lease:
                 return
             self._released = True
             try:
-                _release_all(self._holds)
+                _release_all(self._holds, changed=changed)
             finally:
                 if self._on_release is not None:
                     self._on_release(self.operation.owner)
@@ -828,6 +868,28 @@ class LockingScheme(ABC):
             Agent id -> numbers of its ISSUED tickets; agents without them are left out.
         """
         return self._order.open_tickets()
+
+    @abstractmethod
+    def generations(self, worktrees: Iterable[str | os.PathLike[str]]) -> dict[str, int]:
+        """Return the generations of the locks a command in `worktrees` takes, as they are now.
+
+        See "Generations" in the module docstring. The numbers only mean something when two
+        readings are compared: equal numbers say that no call that held the lock in between
+        was released with `changed=True`.
+
+        Args:
+            worktrees: The worktree ids, as `run_command_in_worktrees` takes them.
+
+        Returns:
+            Lock key -> generation: one entry per worktree lock and one for the global lock.
+            Empty for a scheme that does not lock.
+
+        Raises:
+            TypeError: A worktree id is neither a string nor a path.
+            ValueError: A worktree id is empty.
+            LockError: The backend's state cannot be used.
+            OSError: The backend's state cannot be read.
+        """
 
     def run_command_in_worktree(
         self,
@@ -1131,6 +1193,28 @@ class RWLockingScheme(LockingScheme):
         super().__init__(timeouts)
         self.space = space
 
+    def generations(self, worktrees: Iterable[str | os.PathLike[str]]) -> dict[str, int]:
+        """Return the generations of the locks a command in `worktrees` takes, as they are now.
+
+        Reads them from the space (`LockSpace.generations`), which every scheme on that space
+        shares: the sessions of one process, and with the file backend the processes of one
+        user.
+
+        Args:
+            worktrees: The worktree ids, as `run_command_in_worktrees` takes them.
+
+        Returns:
+            Lock key -> generation: one entry per worktree lock and one for the global lock.
+
+        Raises:
+            TypeError: A worktree id is neither a string nor a path.
+            ValueError: A worktree id is empty.
+            LockError: The backend's state cannot be used.
+            OSError: The backend's state cannot be read.
+        """
+        keys = [worktree_key(_name("worktree", worktree)) for worktree in worktrees]
+        return self.space.generations([*keys, GLOBAL_KEY])
+
     def plan(self, operation: Operation) -> tuple[tuple[str, LockMode], ...]:
         """Return the locks `operation` takes, in the order it takes them (`lock_order`).
 
@@ -1240,6 +1324,18 @@ class NoLockingScheme(LockingScheme):
     Attributes:
         timeouts: The default and maximum waits (checked, never waited).
     """
+
+    def generations(self, worktrees: Iterable[str | os.PathLike[str]]) -> dict[str, int]:
+        """Return no generations: this scheme has no locks, so nothing is counted.
+
+        Args:
+            worktrees: The worktree ids; not looked at.
+
+        Returns:
+            An empty dict. Two readings are always equal, so a caller that compares them
+            never sees a change.
+        """
+        return {}
 
     def _take(self, operation: Operation, timeout_s: float, ticket: Ticket | None) -> Lease:
         """Return a lease without locks at once; the ticket enters.

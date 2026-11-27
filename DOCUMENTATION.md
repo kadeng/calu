@@ -683,11 +683,20 @@ edits and commands apart:
   ended. A call that waits for a person before it runs holds no lock.
 - A call that does not get its locks within its wait does not run. Claude is told that nothing
   ran and that the call can be repeated.
+- A command is checked a second time when another command or edit ended in one of its
+  worktrees after its check began and before it got its locks. The same holds when an edit
+  outside the worktrees ended in that time. The second check runs while the command holds its
+  locks, and its result decides: the command can now be denied, or go to a person. The log
+  says that the command was checked again, and the step shows both checks. Edits are not
+  checked twice: an edit's checkers judge the edit itself.
 
 **What locking guarantees**, for the calls of the sessions that share the locks (below):
 
 - No edit lands in a worktree while a command runs there, and two commands never run in one
   worktree at once. No edit outside the worktrees lands while any command runs.
+- A command that the checkers approved runs on the files its last check could read: no other
+  call under the locks wrote in its worktrees between the start of that check and the end of
+  the command.
 - The write set of a command (`changes.review`) contains only what happened while the command
   held its locks, so the review judges that command's changes and not another agent's edit.
 - No deadlock: every wait has a bound, and a call that waited too long is denied, not run.
@@ -696,8 +705,13 @@ edits and commands apart:
 
 **What it does not guarantee:**
 
-- A command is not checked again when a file changed between its check and the moment it got
-  its locks. Locking keeps the tree still while the command runs, not since it was checked.
+- A command that a person allowed is not checked a second time. When another call ended in its
+  worktrees after its last check, the log warns about it, and the command runs.
+- The second check follows the locks, not the files. A change that does not go through the
+  locks causes none: a change by a person or by a program outside Calu, by a process that
+  keeps running after its call, or by a tool other than Bash and the edit tools.
+- When the time Claude Code gives the permission check does not suffice for the second check,
+  the command does not run unchecked: a person is asked.
 - A process that keeps running after its call ended (a background shell, a server) is not
   covered, and neither are changes made by people or by programs outside Calu.
 - The `files` backend covers the Calu processes of your user on this machine in the same
@@ -709,8 +723,7 @@ edits and commands apart:
 - Whether a command writes outside its worktrees is the command checker's judgement of what the
   command shows. It counts source code, configuration, scripts and programs, not logs, caches,
   reports or data, and it is not a search for every side effect. A command it does not flag can
-  run at the same time as a command in another worktree. The judgement is made at the check, so
-  an edit outside that lands between the check and the locks is not seen by it.
+  run at the same time as a command in another worktree.
 
 **Upsides:** commands such as builds and tests run on a tree that does not change under them;
 the write-set review stays exact when agents work in parallel; a misbehaving agent cannot use
@@ -721,7 +734,10 @@ command makes the edits in its worktree wait; an edit outside the worktrees wait
 running command, and new commands wait behind it. A call that waits too long is denied, and
 Claude has to repeat it. While a person decides about a command's write set, the command keeps
 its locks, so edits in its worktree and outside every worktree wait meanwhile, in every
-session that shares the locks. Each command and edit costs about a millisecond more.
+session that shares the locks. Each command and edit costs about a millisecond more. A command
+costs a second check whenever another command or edit ended in its worktree after its first
+check began and before it got its locks, also when that call changed nothing the command
+uses. With several agents in one worktree this happens often.
 
 **When to switch it on:**
 
@@ -2243,8 +2259,15 @@ docstrings instead of Google style. They are not meant to change often.
 | Line client | a line starting with `*** code honesty` whenever the state changes | one `honesty:` line per file below the checker's line |
 | Full-screen client | the HONESTY panel and the `/honesty` page | a `honesty` line under a step when the honesty checker found a file dishonest or asked for a person; the expanded step lists every file |
 | Web live view | the "Code honesty" panel with "Trust HEAD", "Review now" and Clear per mark | one line per file, tagged `honesty` |
-| VSCode | the Honesty chip in the header | a `dishonest` chip on the step's row; every file in the step's details |
+| VSCode and the chat pane of the web interface | the Honesty chip in the header, and the honesty graph ("Graph" next to the chip) | a `dishonest` chip on the step's row; every file in the step's details |
 | ACP editor | shows the state | - |
+
+**The honesty graph.** "Graph" next to the Honesty chip shows the honesty state as a graph in
+place of the chat. A node is a unit of code; a line leads from a unit down to a unit it uses.
+Red is a unit with an open mark, yellow a changed unit that nobody verified, orange a unit to
+judge again or a caller of a dishonest unit, green a unit that was just settled. A click on a
+node opens its source. A right click offers "Mark as honest" and "Mark as dishonest…"; for a
+yellow node "Mark as honest" trusts the whole file, after a question.
 
 ### Judging the honesty checker before enforcing
 

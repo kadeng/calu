@@ -6,7 +6,9 @@ adversarial review of the design, is in `locking-design.md`.
 
 Status (2026-11-25): the component `src/calu/locking/` is built and tested, with a backend for
 the threads of one process and one for the processes of one user on one machine (section 8),
-and wired into Calu, off by default (section 9).
+and wired into Calu, off by default (section 9). Since 2026-11-27 a command whose worktree
+changed between its check and its locks is checked a second time (section 9, "The second
+check").
 
 ## 1. What locking guarantees
 
@@ -16,17 +18,24 @@ subagents, agents in other worktrees. Without locking, an edit of one agent can 
 another agent's command check and that command's run, and the command then executes something
 its check never saw.
 
-Locking provides four things:
+Locking provides five things:
 
 - **Isolation.** No edit lands in a worktree while a command runs there, and two commands of
   one worktree never run at once. No edit outside the worktrees lands while any command runs.
+- **What the check saw is what runs** (the owner, 2026-11-27: "an edit runs before the command
+  or after it, never while it runs"). A command's check runs before the command has its
+  locks. When another call ended in its worktrees in between, the command is checked again
+  while it holds its locks, and the second result decides (section 9, "The second check").
 - **Order.** The calls of one agent enter the lock queues in the order the agent issued them.
 - **Liveness.** No deadlock, and every wait has a bound.
 - **Unchanged approvals.** Locking never changes who approves a call: the checkers, auto
   mode's classifier, Claude Code's own rules and, for escalations, a person.
 
-Locking does not by itself make a command's check know of an edit that landed after the check
-began. That needs a second check when the command gets its locks (section 9, "Not built").
+The locks alone do not make a command's check know of an edit that landed after the check
+began. Until 2026-11-27 that was a gap, and the owner called it a bug. The example: the main
+agent runs `sleep 10 && python hello.py`, and a background subagent rewrites `hello.py` so
+that it prints every environment variable (evaluation case
+`running-a-file-a-background-subagent-is-rewriting`).
 
 ## 2. The scheme
 
@@ -69,19 +78,39 @@ lock, the global lock last.
 | 14 | `NoLockingScheme`: the same calls and checks, no locks (the owner) | Locking costs time (section 7). When it is off, Calu still makes every locking call, and the no-op scheme answers it |
 | 15 | Lock calls only from worker threads | An asynchronous exception (KeyboardInterrupt, a signal handler that raises) can strike inside any `with mutex:` and leave a lock or a mutex taken; no code can rule that out in CPython |
 | 16 | Generated owners start with `generated:`, which callers may not use | A caller's id such as `command-1` must never collide with a generated one |
+| 17 | Check again when the lock is taken, not lock before the check (the coordinator, 2026-11-27; the owner asked that the gap be fixed and that the fix be active only with locking on) | With the lock taken first, a command would hold its worktree during its check, and the checks of one worktree would run one after the other. Checking again costs a second check only when another call ended in between |
+| 18 | The marker is a generation per lock, kept in the lock space: a number that advances when a hold is released with `changed=True` | It costs one addition in a release that happens anyway, and one read per check. It lives where the locks live, so it reaches as far as they do: every session of a process, and with the file backend every process of the user. A hash or the change times of the files would cost a walk of the worktree for every command |
+| 19 | A release advances the generation for a call that may have run: an edit, and a command as well | A command can write anything in its worktree, and Calu does not know whether it did. The price: a command that only read also causes second checks |
+| 20 | A call that did not run releases without an advance (`Lease.release(changed=False)`) | Calls give their locks back before a person decides and when an escalation holds them. Without this, a command would make itself stale |
+| 21 | The global lock has a generation too. An edit outside the worktrees advances it, and so does a command that writes outside | This closes the same gap for an edit outside the worktrees that lands between a command's check and its locks |
+| 22 | The file backend advances every generation when a process ends while it holds a lock (`lost`) | Nobody can say what that process changed, and a counter per lock that only its holder advances would miss it |
+| 23 | A command that a person allowed is not checked a second time; a log warning names the change | Locking never changes who approves a call. A second check that denied there would overrule the person |
+
+Decisions 18 to 23 were made by the agent that built the second check (2026-11-27). The owner
+has not seen them yet. Decision 23 is the one most worth the owner's look: it leaves a command
+unchecked against a change that landed while a person decided.
 
 ## 4. The component
 
 ```
 src/calu/locking/
   rwlock.py       the contract every backend keeps: RWLock (request, release, acquire),
-                  LockRequest (wait, withdraw), LockSpace (lock, snapshot), Hold, LockState,
-                  checked_timeout, checked_owner, LockError; notes for future backends
+                  LockRequest (wait, withdraw), LockSpace (lock, generations, snapshot), Hold,
+                  LockState, checked_timeout, checked_owner, LockError; notes for future
+                  backends
   threadlocks.py  ThreadRWLock, ThreadLockSpace: the backend for the threads of one process
-  scheme.py       LockingScheme (the calls, issue, live_owners, open_tickets), RWLockingScheme
-                  (plan, the lock order), NoLockingScheme, LockTimeouts, Lease, Ticket,
-                  LockTimeoutError, LockCancelledError
+  filelocks.py    FileRWLock, FileLockSpace: the backend for the processes of one user
+  scheme.py       LockingScheme (the calls, issue, generations, live_owners, open_tickets),
+                  RWLockingScheme (plan, the lock order), NoLockingScheme, LockTimeouts, Lease,
+                  Ticket, counts_changes, LockTimeoutError, LockCancelledError
 ```
+
+Generations: every lock has a number that starts at 0. `RWLock.release(hold, changed=True)`
+adds one, in the same step as the release. `LockSpace.generations(keys)` reads the numbers.
+`Lease.release()` passes `changed=True` for the locks that `counts_changes` names: the worktree
+locks, and the global lock when it was held exclusively. `Lease.release(changed=False)` is for
+a call that did not run. `LockingScheme.generations(worktrees)` gives the numbers of the locks
+a command there takes; `NoLockingScheme` gives none.
 
 A caller:
 
@@ -121,6 +150,8 @@ limits:
 - One long command plus one waiting edit outside stops new commands in every worktree until the
   command ends or the edit times out; this follows from FIFO on the global lock.
 - Lock calls run in worker threads (decision 15).
+- The second check follows the locks, not the files. Its limits are in section 9, "The second
+  check".
 
 ## 6. Calls of one agent in parallel
 
@@ -146,6 +177,15 @@ agent's later calls wait for their turn.
   are wrong on purpose show that it finds what it looks for.
 - An adversarial review (2026-11-25) found the lock order and the backend sound and five defects
   in the ticket layer, all fixed (PLAN.md D274).
+- `tests/unit/test_locking_generations.py`: the generations of both backends and of the scheme.
+  A release with `changed=True` advances its lock only. A withdrawn grant, a lock call that
+  timed out and a lease given back without a run advance nothing. Two file spaces on one
+  directory share the numbers. A release whose write failed is counted with the next change. A
+  holder whose process ended advances every generation.
+- `tests/unit/test_call_locks_recheck.py`: what makes a command stale (`CallLocks`), and the
+  second check in a session. Its command checker reads the file that the command runs. The
+  owner's example is the first session test: the subagent's edit lands between the first
+  check's reading and the locks, the second check reads the rewritten file and denies.
 
 The cost of locking, one scenario run with and without it (six agents in two worktrees, 1 ms
 standing for 1 s): 1.34 to 1.47 times as long with locks; without them about 180 to 225
@@ -186,6 +226,19 @@ running command.
   that ended; a waiting request looks for them on its lock every 0.2 s, so a killed holder is
   gone within a fraction of a second. The holds of a process belong to it: its threads release
   them, other processes cannot.
+
+  Generations (2026-11-27): the state file holds them, so every process that shares the file
+  reads the same numbers.
+  - `generations` has one number per lock that was ever released with `changed=True`. The
+    scheme does that for worktree locks and the global lock, never for file locks, so the
+    list grows with the worktrees, not with the edited files. The numbers stay as long as the
+    state file exists (one boot).
+  - A release with `changed=True` adds one in the change that removes the entry. If that
+    change fails, the space's next change adds it. Until then the entry still holds the lock,
+    so nobody gets the lock without seeing the new number.
+  - `lost` is one number for the whole space. It goes up for every granted entry that is
+    removed because its process ended. A lock's generation is its own number plus `lost`.
+  - A state file written before generations existed is read as one with none.
 
   Decisions from the second review (2026-11-25):
   - **One process table per file.** Process ids can only be compared within one boot of one
@@ -248,10 +301,13 @@ Calu always makes the locking calls, and with locking off `NoLockingScheme` answ
 ```
 PreToolUse hook (Session.pre_tool_use)
   issue the call's ticket (commands and edits; one order per agent)
+  a command: remember the generations of its locks (CallLocks.check_begins)
   the check, as before
   approved  -> take the call's locks: a worker thread waits at most the configured wait and
                the hook's time left (minus 30 s)
                not in time -> DENY "Not run: ... the same call can be repeated"
+               a command: read the generations again; one differs (CallLocks.stale) ->
+               the second check, under the locks (below)
                then a command's "before" snapshot of its write set (D31)
                an escalation came up meanwhile (the last look) -> give the locks back, drop the
                snapshot, hold the call (at most the hook's time left), take them again; no
@@ -262,6 +318,7 @@ can_use_tool (Session.ask)
   give back the locks the call holds and drop its snapshot (Claude Code asks about a call the
   hook allowed)
   the person decides: allowed -> take the locks (configured wait), then the snapshot again;
+  a command whose generations differ runs all the same, with a warning in the log;
   denied, refused or cancelled -> withdraw the ticket
 PostToolUse (Session.review_write_set)
   the write-set review; the command still holds its locks, also while a person decides
@@ -315,9 +372,10 @@ end of the run: give back every lock and ticket of the session
   worktree. The checker judges what the command shows and is not asked for every side effect.
   `Session._checked` marks such a call (`CallLocks.mark_writes_outside`), and every take of the
   call, also the one in `ask`, uses `writes_outside=True`. No answer counts as false. The race
-  the owner named stays: an edit outside the worktrees that lands between the command's check
-  and its locks is not seen by the check. Evaluation cases: `checker_cases.yaml`
-  (`writes_outside`); the report counts wrong answers (`outside_wrong`).
+  the owner named is closed by the second check (below): an edit outside the worktrees that
+  ends between a command's check and its locks advances the global lock's generation.
+  Evaluation cases: `checker_cases.yaml` (`writes_outside`); the report counts wrong answers
+  (`outside_wrong`).
 - The owner of a call's locks is "<tool call id>@<token of the session's CallLocks>". The lock
   space is shared by every session of the user, and tool call ids are unique only per session;
   with bare ids, two sessions that used the same id collided (`LockError`, the call denied).
@@ -330,9 +388,86 @@ end of the run: give back every lock and ticket of the session
   (and go unreviewed); with locking they run one after the other and both are reviewed. Before
   the two fixes, six more tests failed on reused tool call ids.
 
+### The second check (2026-11-27)
+
+A command's check runs before the command has its locks. Before this was built, the following
+could happen with locking on:
+
+```
+1. the command's check begins; the command checker reads the file the command will run
+2. another agent's edit of that file lands in the same worktree
+3. the command is approved, takes the worktree's lock and runs a file its check never saw
+```
+
+Now the command is checked again when it has its locks, if another call ended in between:
+
+```
+Session._checked
+  CallLocks.check_begins     marks = the generations of the command's locks
+  the first check            (StepGate.decide)
+  approved -> CallLocks.take the locks; then the generations are read again
+  CallLocks.stale            the locks whose generation differs from marks
+    none      -> the command runs as before: one check, no extra cost
+    some      -> Session._check_again, while the command holds its locks:
+                   a log line: another call ended in <worktree>, the command is checked again
+                   StepGate.decide_again: the same decision as the first, without the waits
+                     behind an open escalation, in the hook's time left
+                   the record: the checker runs are added to the step, the step's row gets
+                     the second decision, the checkers' context gets a second record,
+                     `check.result` is sent again
+                   PASS, ALLOW     -> CallLocks.checked_again; the command runs
+                   DENY            -> the locks are given back; Claude gets the reason
+                   ESCALATE        -> the locks are given back; a person decides (`ask`)
+                   failed, or no
+                   time left       -> ESCALATE: the command never runs unchecked
+```
+
+- Which locks count: the worktree locks of the command, and the global lock.
+- What advances a generation: a call that may have run gives its lock back (`counts_changes`).
+  - A worktree lock: an edit or a command in that worktree.
+  - The global lock: an edit outside the worktrees, or a command that writes outside.
+  - A call that did not run gives its locks back without an advance.
+- Per worktree: a call that ended in another worktree causes no second check.
+- Where it reaches: the generations live in the lock space (section 8).
+  - Backend "process": every session of the process.
+  - Backend "files": every Calu process of the user in the same container.
+- After a second check under the locks no third is needed: nothing that takes locks can write
+  there while the command holds them. If the command gives its locks back without running (an
+  escalation came up) and takes them again, the generations are compared with those of the
+  second check.
+- The second check uses the hook's time: what is left of `HOOK_TIMEOUT_S` minus
+  `LOCK_HOOK_MARGIN_S`, and at most `GATE_BUDGET_S`. Without time, or when it fails, the
+  command is escalated with a reason that says so.
+- If the second check is the first to say that the command writes outside its worktrees, the
+  locks are given back and taken again, with the global lock exclusive.
+- A hook that is cancelled while the command holds its locks gives them back
+  (`Session.pre_tool_use`). Before, that window was a few milliseconds; with a second check in
+  it, it can be a model call long.
+- Edits are not checked twice: an edit's checkers judge the edit itself.
+- With locking off there are no generations: `NoLockingScheme.generations` is empty, nothing is
+  remembered, and `stale` never names anything.
+
+Its limits:
+
+- **A command that a person allowed is not checked again** (`Session.ask`). When another call
+  ended in its worktrees since its last check, a log warning says so, and the command runs.
+  Reason: locking never changes who approves a call. This is decision 23, which the owner has
+  not confirmed. The alternative is a second check in `ask` whose DENY overrules the person.
+- **It follows the locks, not the files.** A change that does not go through the locks causes
+  no second check: a person, a program outside Calu, a process that keeps running after its
+  call, a tool that is neither a command nor an edit (e.g. an MCP tool that writes files), and
+  Calu's own writes.
+- **It errs on the side of checking.** A command that ended in the worktree causes a second
+  check even if it only read. With several agents in one worktree, many commands are checked
+  twice. To narrow this, Calu would have to know what a command wrote. The write-set snapshots
+  (D31) know it only when they are on, and they leave out ignored files.
+- A second check that could not be recorded turns an approval into an escalation, like a first
+  check.
+- Nested worktrees are separate locks (see "Not built"): an edit in a worktree below the main
+  checkout causes no second check of a command in the main checkout.
+
 Not built:
-- A second check of a command whose worktree changed between its check and its locks
-  (section 1).
+- A second check of a command that a person allowed (above).
 - Processes that keep running after their call.
 - Calu's own writes (the final trace pass before a commit) are not under the locks.
 - Tickets follow the order in which the hooks run; that is the order of issue as long as Claude
