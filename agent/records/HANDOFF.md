@@ -26,34 +26,22 @@ it. Its section 7 quotes the owner's seven answers.
   `DOCUMENTATION.md` name it. Not tried with a real Claude Code or in a UI. Section 1 of the
   note says what differs from the proposal.
 - **The index is built behind an interface** (requirement 52): `calu.refindex.ReferenceIndex`.
-  Built: `SearchIndex`, the slow and complete word search (`tests/unit/test_refindex.py`).
-  Next: a fast index on a language server. Then the combination "search first, then explain
-  away" (the owner's idea, in the note's section 4; the owner is for it, after the two base
-  ones work). Nothing of `calu.refindex` is used by the honesty state yet.
-- **The indexer spike** (section 6 of the note) ran on 2026-11-27 as three subagents, each
-  with its own container, on 50 sample functions. The language-server part and the
-  codebase-memory-mcp part are complete for calu; Graphify's numbers are preliminary (its
-  subagent was stopped by an interruption). Results: `/tmp/claude-1000/spike/*/RESULTS.md`
-  and `refs.json`, **not yet copied to `spikes/RESULTS.md`**, and `/tmp` does not survive a
-  reboot. Share of the real referring files found: pyrefly 90 %, ty 88 %, basedpyright's
-  plain references 90 % (the rest needs "find implementations", for calls through a base
-  class or Protocol), codebase-memory-mcp 67 % (methods 63 %), Graphify 46 %, the word
-  search 100 % with 898 wrong files. A language server asked before it is ready answers
-  with an empty list.
-- The run on the owner's second repository (`~/projects/trading`, Python and Rust) was
-  started and stopped by the same interruption. A filtered copy with sources only is in
-  `/tmp/claude-1000/spike/trading-src`; remove it when the run is done or given up. The
+  Two implementations exist, with unit tests: `SearchIndex` (the slow and complete word
+  search) and `lsp.LspIndex` (a language server; basedpyright by default, found on the path,
+  not a dependency of calu). With the real basedpyright on calu's code `LspIndex` found 111
+  of the 115 reference files of the spike's sample (`spikes/RESULTS.md`, last section).
+  **Next:** the combination "search first, then explain away" (the owner's idea, the note's
+  section 4), then the stale part of the honesty state on top of the interface (the note's
+  section 3; steps 3 and 4 of its section 6). Nothing of `calu.refindex` is used by the
+  honesty state yet.
+- **Not decided or built for the index:** as which user and in which sandbox the session
+  starts the language server (it parses files the supervised agent writes); how the session
+  tells it about changed files (`LspIndex.changed`); a setting for the server's command;
+  servers for other languages.
+- **The indexer spike** is recorded in `spikes/RESULTS.md` ("The reference index") with the
+  reports in `spikes/reference-index/`. Graphify's subagent was stopped before its report;
+  the run on a second repository was dropped by the owner ("that one is huge"). The
   containers `calu-spike-*` are stopped, not removed.
-- Open: which language server calu starts (basedpyright bundles Node; pyrefly and ty are
-  single binaries), and whether it is a dependency of calu or a program found on the path.
-- D294: a contract change makes the referrers of a unit stale. Verdicts belong to nodes of
-  the graph where the index allows it; the project as a whole is clean or not, as today.
-- calu's checkers use the index on their own, with nothing added to Claude Code's
-  configuration. calu writes no language parsers of its own.
-- The indexer is not chosen. codebase-memory-mcp and Graphify (both named by the owner) and
-  language servers are compared in the note from their README and release pages only.
-  Nothing was installed or run. The spike in section 6 of the note decides; run it in a
-  container.
 - Still open: whether a subagent's marker counts.
 
 ### The subagent checker: remark on results, deny a task with a reason (requirement 51, 2026-11-27)

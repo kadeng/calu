@@ -1502,3 +1502,75 @@ Still open:
   undelivered text. This now also applies to subagents started without the field.
 - An interrupt that ends a hand-back review still lets `_handback` answer PASS. Since the fix
   this applies only to foreground subagents, which end with the interrupted turn.
+
+## The reference index: which tool finds the referrers of a function (2026-11-27, D294)
+
+For the honesty state calu has to know which code references a unit whose contract changed
+(`agent/records/notes/honesty-dependencies-design.md`). Compared on calu's own code, on 50
+functions and methods of `src/calu` chosen with a fixed seed (`reference-index/sample.json`:
+20 module-level functions, 20 methods, 10 with a name that four or more definitions share).
+Each tool ran in a container of its own, with the network cut for the indexing, on a copy of
+the checkout of 11:11 UTC. The full reports are `reference-index/language-servers.md` and
+`reference-index/codebase-memory-mcp.md`; Graphify's subagent was stopped before it wrote
+one, so its row is from its result file alone.
+
+Reference: basedpyright's `textDocument/references`, plus the references of every base-class
+or Protocol method the sample implements (311 places in 115 referring files). Share of those
+files a tool found:
+
+| Tool | All | Functions | Methods | Common names | Wrong files | Samples with a miss |
+|---|---|---|---|---|---|---|
+| pyrefly 1.5.0 | 90 % | 100 % | 98 % | 50 % | 1 | 6 |
+| ty 0.0.112 | 88 % | 96 % | 98 % | 50 % | 1 | 8 |
+| basedpyright 1.40.2, references alone | 90 % | 100 % | 100 % | 50 % | 0 | 5 |
+| codebase-memory-mcp 0.12.1 | 67 % | 96 % | 63 % | 14 % | 25 | 16 |
+| Graphify (`graphifyy`, version not recorded) | 46 % | 68 % | 39 % | 14 % | 9 | 27 |
+| word search over `src/` and `tests/` | 100 % | 100 % | 100 % | 100 % | 898 | 0 |
+
+What the graph tools miss, by the code at the place of the reference (found per referring
+file):
+
+| Reference | Places | codebase-memory-mcp | Graphify |
+|---|---|---|---|
+| `variable.name(...)`: the receiver is a local or a parameter | 177 | 44 % | 12 % |
+| `name(...)`: a plain call | 48 | 100 % | 97 % |
+| a call through a base class or a Protocol | 27 | 0 % | 0 % |
+| `self.name(...)` | 18 | 100 % | 100 % |
+| an import | 9 | 100 % | 88 % |
+| a call on the result of an expression | 8 | 25 % | 0 % |
+
+Both parse syntax and resolve what syntax proves. A call on a receiver needs the receiver's
+type, which a language server infers and these tools do not, or only in part. Most
+references in calu are of that kind.
+
+Further findings:
+
+- **A language server that is not ready answers with an empty list** and no error:
+  basedpyright before its log message "Found N source files", and for about 2 s after a new
+  file was announced. pyrefly has the same and no message.
+- **Calls through a base class or Protocol** are references of the base method. The server's
+  `textDocument/implementation` on the base method names the implementations.
+- **The word search**: 6,015 lines for the 50 samples, 5,731 of them no reference: about
+  2,490 in strings and docstrings, about 2,400 another symbol of the same name, 445 a
+  receiver the server cannot resolve.
+- **codebase-memory-mcp**: every sample has a node with a qualified name. An unresolved call
+  gets no edge. Its edge kind USAGE is one edge to one node chosen by the bare name, and 41
+  of its 100 CALLS edges are matches by a unique bare name. Full index 13 to 20 s, 8.4 s per
+  command-line call (2.9 s with its daemon, which serves a web page on 127.0.0.1:9749). It
+  indexes uncommitted and untracked files, writes nothing into the project and works without
+  a network. A store changed by hand is repaired only by deleting the project and indexing
+  again. A worktree inside the project is indexed as part of it. Hydra's `_target_` is not
+  linked.
+- **Time and memory of the servers**: basedpyright 3.1 s to the first answer, 0.27 s per
+  query, 0.9 GB; pyrefly 0.02 s per query, 0.35 GB; ty 0.05 s, 0.39 GB.
+
+**calu's own fast index** (`calu.refindex.lsp.LspIndex`, references plus the join over base
+methods) with basedpyright 1.40.2 on the checkout of the afternoon, dependencies installed
+(`reference-index/try_lspindex.py`): 111 of the 115 reference files, 7 further files, no
+incomplete answer, 9.6 s to the first answer, 95 s for the 50 samples. The 4 files it lacks
+hold the definition of the base or Protocol method, which the reference counts and the index
+leaves out. 5 of the 7 further files are `e.value.code` after `pytest.raises`, which the
+spike's server could not resolve without pytest installed.
+
+Not done: a run on a second, larger repository with Rust; Graphify's report; pyrefly's and
+ty's freshness.

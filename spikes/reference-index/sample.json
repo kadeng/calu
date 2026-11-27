@@ -1,0 +1,502 @@
+[
+ {
+  "path": "src/calu/admin.py",
+  "line": 440,
+  "col": 10,
+  "name": "enable_offer",
+  "qualname": "enable_offer",
+  "kind": "function",
+  "id": "S01",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/logfile.py",
+  "line": 89,
+  "col": 4,
+  "name": "_private_file_handler",
+  "qualname": "_private_file_handler",
+  "kind": "function",
+  "id": "S02",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/servers.py",
+  "line": 178,
+  "col": 10,
+  "name": "record_start",
+  "qualname": "record_start",
+  "kind": "function",
+  "id": "S03",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/web/settings.py",
+  "line": 1187,
+  "col": 4,
+  "name": "_section_fields",
+  "qualname": "_section_fields",
+  "kind": "function",
+  "id": "S04",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/context/foreign.py",
+  "line": 62,
+  "col": 4,
+  "name": "user_message_source",
+  "qualname": "user_message_source",
+  "kind": "function",
+  "id": "S05",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/db/local.py",
+  "line": 248,
+  "col": 4,
+  "name": "container_data",
+  "qualname": "container_data",
+  "kind": "function",
+  "id": "S06",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/models.py",
+  "line": 409,
+  "col": 4,
+  "name": "cache_settings",
+  "qualname": "cache_settings",
+  "kind": "function",
+  "id": "S07",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/traces/finalize.py",
+  "line": 646,
+  "col": 4,
+  "name": "stage",
+  "qualname": "stage",
+  "kind": "function",
+  "id": "S08",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/ide/link.py",
+  "line": 321,
+  "col": 4,
+  "name": "_connect_failure",
+  "qualname": "_connect_failure",
+  "kind": "function",
+  "id": "S09",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/logins.py",
+  "line": 153,
+  "col": 4,
+  "name": "no_login",
+  "qualname": "no_login",
+  "kind": "function",
+  "id": "S10",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/checkers/changeset.py",
+  "line": 332,
+  "col": 4,
+  "name": "commit_options",
+  "qualname": "commit_options",
+  "kind": "function",
+  "id": "S11",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/db/local.py",
+  "line": 132,
+  "col": 4,
+  "name": "prepare_data_dir",
+  "qualname": "prepare_data_dir",
+  "kind": "function",
+  "id": "S12",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/tui/render.py",
+  "line": 876,
+  "col": 4,
+  "name": "step_details",
+  "qualname": "step_details",
+  "kind": "function",
+  "id": "S13",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/admin.py",
+  "line": 352,
+  "col": 4,
+  "name": "_nest",
+  "qualname": "_nest",
+  "kind": "function",
+  "id": "S14",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/db/local.py",
+  "line": 191,
+  "col": 4,
+  "name": "new_owner_password",
+  "qualname": "new_owner_password",
+  "kind": "function",
+  "id": "S15",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/evals/cases.py",
+  "line": 405,
+  "col": 10,
+  "name": "cases_from_escalations",
+  "qualname": "cases_from_escalations",
+  "kind": "function",
+  "id": "S16",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/admin.py",
+  "line": 566,
+  "col": 10,
+  "name": "remove_from_setting",
+  "qualname": "remove_from_setting",
+  "kind": "function",
+  "id": "S17",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/tui/render.py",
+  "line": 2163,
+  "col": 4,
+  "name": "honesty_clean",
+  "qualname": "honesty_clean",
+  "kind": "function",
+  "id": "S18",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/context/turns.py",
+  "line": 166,
+  "col": 4,
+  "name": "label_for_unchecked",
+  "qualname": "label_for_unchecked",
+  "kind": "function",
+  "id": "S19",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/admin.py",
+  "line": 174,
+  "col": 10,
+  "name": "chat_summary",
+  "qualname": "chat_summary",
+  "kind": "function",
+  "id": "S20",
+  "group": "function"
+ },
+ {
+  "path": "src/calu/acp/adapter.py",
+  "line": 972,
+  "col": 14,
+  "name": "_on_check",
+  "qualname": "Adapter._on_check",
+  "kind": "method",
+  "id": "S21",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/locking/scheme.py",
+  "line": 832,
+  "col": 8,
+  "name": "run_command_in_worktree",
+  "qualname": "LockingScheme.run_command_in_worktree",
+  "kind": "method",
+  "id": "S22",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/tui/widgets/transcript.py",
+  "line": 462,
+  "col": 8,
+  "name": "all_text",
+  "qualname": "Transcript.all_text",
+  "kind": "method",
+  "id": "S23",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/store/config.py",
+  "line": 106,
+  "col": 8,
+  "name": "limits",
+  "qualname": "CheckerDefinition.limits",
+  "kind": "method",
+  "id": "S24",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/tui/widgets/transcript.py",
+  "line": 562,
+  "col": 8,
+  "name": "move_cursor",
+  "qualname": "Transcript.move_cursor",
+  "kind": "method",
+  "id": "S25",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/traces/writer.py",
+  "line": 294,
+  "col": 8,
+  "name": "_left_out_line",
+  "qualname": "TraceWriter._left_out_line",
+  "kind": "method",
+  "id": "S26",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/tui/model.py",
+  "line": 1270,
+  "col": 8,
+  "name": "load_snapshot",
+  "qualname": "SessionModel.load_snapshot",
+  "kind": "method",
+  "id": "S27",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/tui/connection.py",
+  "line": 220,
+  "col": 8,
+  "name": "drop_over",
+  "qualname": "Link.drop_over",
+  "kind": "method",
+  "id": "S28",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/tui/fake.py",
+  "line": 556,
+  "col": 8,
+  "name": "record",
+  "qualname": "FakeSession.record",
+  "kind": "method",
+  "id": "S29",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/traces/redact.py",
+  "line": 183,
+  "col": 8,
+  "name": "from_environment",
+  "qualname": "Secrets.from_environment",
+  "kind": "method",
+  "id": "S30",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/tui/model.py",
+  "line": 1665,
+  "col": 8,
+  "name": "_log",
+  "qualname": "SessionModel._log",
+  "kind": "method",
+  "id": "S31",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/db/target.py",
+  "line": 235,
+  "col": 8,
+  "name": "for_role",
+  "qualname": "Target.for_role",
+  "kind": "method",
+  "id": "S32",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/pause.py",
+  "line": 65,
+  "col": 8,
+  "name": "info",
+  "qualname": "Pause.info",
+  "kind": "method",
+  "id": "S33",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/tui/model.py",
+  "line": 269,
+  "col": 8,
+  "name": "duration",
+  "qualname": "StepBlock.duration",
+  "kind": "method",
+  "id": "S34",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/acp/adapter.py",
+  "line": 705,
+  "col": 14,
+  "name": "_set_mode",
+  "qualname": "Adapter._set_mode",
+  "kind": "method",
+  "id": "S35",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/store/config.py",
+  "line": 414,
+  "col": 14,
+  "name": "_rule_rows",
+  "qualname": "ConfigStore._rule_rows",
+  "kind": "method",
+  "id": "S36",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/acp/adapter.py",
+  "line": 690,
+  "col": 14,
+  "name": "_apply_auto",
+  "qualname": "Adapter._apply_auto",
+  "kind": "method",
+  "id": "S37",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/protocol/client.py",
+  "line": 58,
+  "col": 8,
+  "name": "code",
+  "qualname": "RequestFailed.code",
+  "kind": "method",
+  "id": "S38",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/tui/screens/checkers.py",
+  "line": 383,
+  "col": 8,
+  "name": "_store",
+  "qualname": "CheckersScreen._store",
+  "kind": "method",
+  "id": "S39",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/context/builder.py",
+  "line": 238,
+  "col": 8,
+  "name": "turn_number",
+  "qualname": "ContextBuilder.turn_number",
+  "kind": "method",
+  "id": "S40",
+  "group": "method"
+ },
+ {
+  "path": "src/calu/locking/threadlocks.py",
+  "line": 302,
+  "col": 8,
+  "name": "snapshot",
+  "qualname": "ThreadLockSpace.snapshot",
+  "kind": "method",
+  "id": "S41",
+  "group": "common-name"
+ },
+ {
+  "path": "src/calu/store/session.py",
+  "line": 1831,
+  "col": 14,
+  "name": "distrust_file",
+  "qualname": "DatabaseSessionStore.distrust_file",
+  "kind": "method",
+  "id": "S42",
+  "group": "common-name"
+ },
+ {
+  "path": "src/calu/traces/writer.py",
+  "line": 494,
+  "col": 8,
+  "name": "release",
+  "qualname": "TraceWriter.release",
+  "kind": "method",
+  "id": "S43",
+  "group": "common-name"
+ },
+ {
+  "path": "src/calu/web/password.py",
+  "line": 78,
+  "col": 4,
+  "name": "load",
+  "qualname": "load",
+  "kind": "function",
+  "id": "S44",
+  "group": "common-name"
+ },
+ {
+  "path": "src/calu/tui/screens/password.py",
+  "line": 35,
+  "col": 8,
+  "name": "compose",
+  "qualname": "PasswordScreen.compose",
+  "kind": "method",
+  "id": "S45",
+  "group": "common-name"
+ },
+ {
+  "path": "src/calu/store/memory.py",
+  "line": 308,
+  "col": 14,
+  "name": "load_history",
+  "qualname": "MemorySessionStore.load_history",
+  "kind": "method",
+  "id": "S46",
+  "group": "common-name"
+ },
+ {
+  "path": "src/calu/locking/threadlocks.py",
+  "line": 151,
+  "col": 8,
+  "name": "request",
+  "qualname": "ThreadRWLock.request",
+  "kind": "method",
+  "id": "S47",
+  "group": "common-name"
+ },
+ {
+  "path": "src/calu/call_locks.py",
+  "line": 302,
+  "col": 8,
+  "name": "withdraw",
+  "qualname": "CallLocks.withdraw",
+  "kind": "method",
+  "id": "S48",
+  "group": "common-name"
+ },
+ {
+  "path": "src/calu/call_locks.py",
+  "line": 402,
+  "col": 8,
+  "name": "close",
+  "qualname": "CallLocks.close",
+  "kind": "method",
+  "id": "S49",
+  "group": "common-name"
+ },
+ {
+  "path": "src/calu/claude/sdk_runner.py",
+  "line": 936,
+  "col": 14,
+  "name": "set_model",
+  "qualname": "SdkRunner.set_model",
+  "kind": "method",
+  "id": "S50",
+  "group": "common-name"
+ }
+]
