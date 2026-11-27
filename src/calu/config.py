@@ -1033,8 +1033,38 @@ class ClockConfig(ConfigModel):
     forward legitimately, so it is not an escalation)."""
 
 
+class BuiltInRulesConfig(ConfigModel):
+    """calu's own rules, applied before the allow and deny lists (`calu.checkers.rules`).
+
+    Each one makes a kind of step ask a person, whatever a checker would say. Switched off,
+    such a step is judged like any other: by the lists, the checkers and Claude Code's auto
+    mode. A temporary rule can then tell the checkers to allow it
+    (agent/records/notes/temporary-rules-design.md).
+    """
+
+    calu_commands: bool = True
+    """A command that runs calu itself asks (agent/records/PLAN.md D160), however it is
+    launched (by path, `uv run`, `uvx`, `pipx run`, `python -m calu`, behind wrappers). calu
+    decides Claude's escalations: a `calu resolve`, `calu config set` or `calu rules` of
+    Claude's would decide them or switch the checks off."""
+    calu_container: bool = True
+    """A `docker`, `podman` or `nerdctl` command that names calu's database container, compose
+    project or volume (`calu-db`) asks (D171): that container holds the escalations."""
+    calu_files: bool = True
+    """Reading or writing calu's own directories asks: its configuration (with the logins and
+    the checker keys) and its state, wherever `XDG_CONFIG_HOME` and `XDG_STATE_HOME` put them,
+    and any path with a `.config/calu` component."""
+    worktree_force_remove: bool = True
+    """`git worktree remove --force` (or `-f`) asks (D251): it deletes a worktree with its
+    uncommitted work, which Claude Code guards only for its own `ExitWorktree` tool."""
+
+
 class Config(ConfigModel):
     """The complete configuration with defaults for every field."""
+
+    built_in_rules: BuiltInRulesConfig = Field(default_factory=BuiltInRulesConfig)
+    """calu's own rules that make some steps ask a person: running calu, calu's database
+    container, calu's own files, a forced worktree removal. Each can be switched off."""
 
     command_checker: CheckerConfig = Field(default_factory=CheckerConfig)
     """The checker that reviews Bash commands and every tool call routed to it."""

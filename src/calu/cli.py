@@ -6876,7 +6876,6 @@ def cmd_rule(args: argparse.Namespace, store: CredentialStore) -> None:
     NAME` it applies to that project and with `--global` to every project. Otherwise it
     applies to one session. `--session ID` names it by an id or the start of one, as `calu
     sessions` shows them. Without an id it is the session running in the current directory.
-    `--lift-builtin` makes the rule lift calu's built-in protections, for one day at most.
 
     `list` prints the rules that count now, with `--all` also the expired and removed ones.
     `remove` ends a rule before it expires.
@@ -6886,7 +6885,7 @@ def cmd_rule(args: argparse.Namespace, store: CredentialStore) -> None:
 
     Args:
         args: Parsed arguments (`action`, `words`, `duration`, `session`, `project`,
-            `everywhere`, `lift_builtin`, `all`).
+            `everywhere`, `all`).
         store: The credential store.
 
     Raises:
@@ -6953,7 +6952,6 @@ def cmd_rule(args: argparse.Namespace, store: CredentialStore) -> None:
                 scope=scope,
                 project=args.project,
                 conversation=conversation,
-                lifts_builtin=args.lift_builtin,
             )
         except temp_rules.RuleError as exc:
             raise CliError(str(exc)) from exc
@@ -7824,12 +7822,6 @@ def build_parser() -> argparse.ArgumentParser:
         dest="everywhere",
         action="store_true",
         help="add: a rule for every session of every project",
-    )
-    rule.add_argument(
-        "--lift-builtin",
-        action="store_true",
-        help="add: the rule lifts calu's built-in protections of calu's own commands and "
-        "directories for the sessions it applies to (one day at most; some stay protected)",
     )
     rule.add_argument("--all", action="store_true", help="list: also expired and removed rules")
     rule.set_defaults(handler=cmd_rule)

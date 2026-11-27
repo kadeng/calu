@@ -624,12 +624,11 @@ async def test_temporary_rules_are_added_listed_and_removed(prepared, capsys) ->
     said = capsys.readouterr().out
     assert "added #1  every project  until " in said and "ask before pushing" in said
     assert await run(["project", "add", ".", "--name", "demo"]) == 0
-    assert await run(["rule", "add", "--project", "demo", "--lift-builtin", "calu may serve"]) == 0
+    assert await run(["rule", "add", "--project", "demo", "calu may serve"]) == 0
     assert "#2  project demo" in capsys.readouterr().out
     assert await run(["rule", "list"]) == 0
     listed = capsys.readouterr().out.splitlines()
     assert [line.split()[0] for line in listed] == ["#2", "#1"], "newest first"
-    assert "lifts built-in protections" in listed[0]
 
     assert await run(["rule", "remove", "#1"]) == 0
     assert "removed #1" in capsys.readouterr().out
@@ -640,7 +639,6 @@ async def test_temporary_rules_are_added_listed_and_removed(prepared, capsys) ->
     refused = [
         (["rule", "remove", "1"], "no active temporary rule #1"),
         (["rule", "add", "--for", "8d", "--global", "x"], "at most 7 days"),
-        (["rule", "add", "--for", "2d", "--global", "--lift-builtin", "x"], "one day at most"),
         (["rule", "add", "--global", "--project", "demo", "x"], "takes one of"),
         (["rule", "add", "--global"], "needs a text"),
         (["rule", "add", "--project", "nowhere", "x"], "no project 'nowhere'"),

@@ -631,11 +631,7 @@ async def test_temporary_rules_are_added_listed_and_removed_through_the_bridge(
         assert (await editor.request("ide.rules.list"))["rules"] == []
         added = await editor.request("ide.rules.add", {"command": "2h --global ask  first"})
         rule = added["rule"]
-        assert (rule["scope"], rule["text"], rule["lifts_builtin"]) == (
-            "global",
-            "ask  first",
-            False,
-        )
+        assert (rule["scope"], rule["text"]) == ("global", "ask  first")
         assert rule["line"].startswith(f"#{rule['id']}  every project  until ")
         assert rule["created_by"].startswith("calu ide:")
         typed = await editor.request(
@@ -655,8 +651,8 @@ async def test_temporary_rules_are_added_listed_and_removed_through_the_bridge(
             ("ide.rules.add", {"command": "--project ask"}, "registered project"),
             ("ide.rules.add", {"command": "9d --global ask"}, "at most 7 days"),
             ("ide.rules.add", {"command": "--global"}, "needs a text"),
-            # The editor never adds a rule that lifts the built-in protections.
-            ("ide.rules.add", {"command": "--global --lift-builtin x"}, "not a rule option"),
+            # A mistyped option does not become part of the rule's text.
+            ("ide.rules.add", {"command": "--global --projekt x"}, "not a rule option"),
             ("ide.rules.add", {}, "'text' is missing"),
         ]
         for method, params, why in refused:

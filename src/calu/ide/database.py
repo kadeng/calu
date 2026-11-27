@@ -418,8 +418,7 @@ async def add_rule(
 ) -> dict[str, Any]:
     """Store a temporary rule for the attached session, its project or every project.
 
-    A rule from the editor never lifts calu's built-in protections
-    (`temp_rules.add_from_client`).
+    The checks are those of `temp_rules.add_from_client`.
 
     Side effects: inserts a `temporary_rules` row.
 
@@ -437,8 +436,8 @@ async def add_rule(
     Raises:
         RpcError: `INVALID_PARAMS` if the text, the duration or the scope is refused, if the
             scope needs a conversation or a project that the attached session does not
-            have, or if the text starts with "--". Its first word is then not a rule
-            option here (`--lift-builtin`, for example) and would become part of the rule.
+            have, or if the text starts with "--" (a mistyped option would otherwise become
+            part of the rule's text).
         psycopg.Error: On database errors.
     """
     try:

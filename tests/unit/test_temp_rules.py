@@ -4,7 +4,6 @@ The design is `agent/records/notes/temporary-rules-design.md`; the database side
 `tests/db/test_temp_rules.py`.
 """
 
-import argparse
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -13,13 +12,9 @@ import pytest
 
 from calu.checkers import Step
 from calu.checkers.policy import Route
-from calu.checkers.rules import (
-    ALWAYS_ASKING_SUBCOMMANDS,
-    LIFTABLE_SUBCOMMANDS,
-    Rules,
-    calu_subcommand,
-)
+from calu.checkers.rules import Rules
 from calu.cli import build_parser
+from calu.config import BuiltInRulesConfig
 from calu.temp_rules import (
     PROMPT_HEADING,
     RuleError,
@@ -105,7 +100,6 @@ def rule(text: str, expires_at: datetime, removed: bool = False) -> TemporaryRul
         scope="global",
         project=None,
         conversation=None,
-        lifts_builtin=False,
         created_at=expires_at - timedelta(hours=1),
         expires_at=expires_at,
         created_by="cli:test",
@@ -132,29 +126,7 @@ def test_the_prompt_part_lists_only_the_rules_that_count_now() -> None:
     assert prompt_part(rules[1:3], now) == ""
 
 
-# ------------------------------------------------------------------ lifting built-in protections
-
-
-@pytest.mark.parametrize(
-    ("command", "expected"),
-    [
-        ("calu serve --web", "serve"),
-        ("/usr/local/bin/calu run --batch", "run"),
-        ("uv run calu doctor", "doctor"),
-        ("uvx calu@1.2 attach", "attach"),
-        ("python -m calu resolve 4 allow", "resolve"),
-        ("python3 -m calu.cli config set x 1", "config"),
-        ("calu --opt run resolve", None),  # an option's value could pose as the subcommand
-        ("calu --help", None),
-        ("calu", None),
-        ("calu 'unterminated", None),
-        ("ls -la", None),
-    ],
-)
-def test_the_subcommand_is_the_word_right_after_calu_or_unreadable(
-    command: str, expected: str | None
-) -> None:
-    assert calu_subcommand(command) == expected
+# ------------------------------------------------------------------ the built-in rules' switches
 
 
 def bash(command: str) -> Step:
@@ -167,53 +139,40 @@ def read(path: str) -> Step:
     return Step(tool_name="Read", tool_input={"file_path": path}, cwd="/w")
 
 
-def test_a_lifting_rule_leaves_calu_commands_and_directories_to_the_checkers() -> None:
-    """Option B of the design: the built-in protections step aside, within fixed limits."""
-    rules = Rules(Path("/w"))
-    asking = [
-        "calu serve",
-        "uv run calu doctor",
-        "calu resolve 4 allow",
-        "calu --opt run resolve",
-        "calu config set honesty.mode off",
-    ]
-    for command in asking:
-        assert rules.evaluate(bash(command)).ask, command
-    assert rules.evaluate(read("/home/u/.config/calu/tui.toml")).ask
-
-    rules.lifted = True
-    assert not rules.evaluate(bash("calu serve")).ask
-    assert not rules.evaluate(bash("uv run calu doctor")).ask
-    for command in asking[2:]:
-        reason = rules.evaluate(bash(command)).reason
-        assert "runs calu itself" in reason and "temporary rule lifts" in reason, command
-    assert not rules.evaluate(read("/home/u/.config/calu/tui.toml")).ask
-    for name in ("credentials.json", ".env"):
-        assert rules.evaluate(read(f"/home/u/.config/calu/{name}")).ask, name
-    # The other built-in pattern stays.
-    assert rules.evaluate(bash("git worktree remove --force wt")).ask
-
-
-def test_every_calu_subcommand_is_either_liftable_or_always_asking() -> None:
-    """A new subcommand needs a decision before a lifting rule can let it through."""
-    parser = build_parser()
-    (subparsers,) = (a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
-    commands = set(subparsers.choices)
-    assert not ALWAYS_ASKING_SUBCOMMANDS & LIFTABLE_SUBCOMMANDS
-    assert commands - ALWAYS_ASKING_SUBCOMMANDS - LIFTABLE_SUBCOMMANDS == set()
-    assert (ALWAYS_ASKING_SUBCOMMANDS | LIFTABLE_SUBCOMMANDS) - commands == set()
-    assert "rule" in ALWAYS_ASKING_SUBCOMMANDS  # a lifting rule must not let Claude add rules
+def test_each_built_in_rule_asks_until_its_setting_is_switched_off() -> None:
+    """`built_in_rules.*`: off, the step goes to the lists and the checkers like any other."""
+    steps = {
+        "calu_commands": [bash("calu resolve 4 allow"), bash("uv run calu doctor")],
+        "calu_container": [bash("docker exec calu-db-postgres-1 psql")],
+        "calu_files": [read("/home/u/.config/calu/credentials.json")],
+        "worktree_force_remove": [bash("git worktree remove --force wt")],
+    }
+    for switch, checked in steps.items():
+        rules = Rules(Path("/w"))
+        for step in checked:
+            assert rules.evaluate(step).ask, (switch, step)
+        rules.built_in = BuiltInRulesConfig(**{switch: False})
+        for step in checked:
+            assert not rules.evaluate(step).ask, (switch, step)
+        # The other built-in rules still apply.
+        for other, more in steps.items():
+            if other != switch:
+                assert all(rules.evaluate(step).ask for step in more), (switch, other)
+    # A deny list entry still applies to a step whose built-in rule is off.
+    rules = Rules.from_texts(Path("/w"), {"command-deny": "^calu resolve( |$)\n"})
+    rules.built_in = BuiltInRulesConfig(calu_commands=False)
+    assert rules.evaluate(bash("calu resolve 4 allow")).ask
+    assert not rules.evaluate(bash("calu doctor")).ask
 
 
-def test_a_rule_s_line_names_its_scope_its_end_and_what_it_lifts() -> None:
+def test_a_rule_s_line_names_its_scope_and_its_end() -> None:
     now = datetime(2026, 11, 26, 12, 0, tzinfo=UTC)
     mine = replace(rule("ask  first", now + timedelta(hours=2)), scope="session", conversation="c1")
     until = (now + timedelta(hours=2)).astimezone().strftime("%Y-%m-%d %H:%M %Z")
     assert mine.line("c1", now) == f"#1  this session  until {until}  ask first"
     assert mine.line(None, now).startswith("#1  session c1  until ")
     assert "  expired " in mine.line("c1", now + timedelta(hours=3))
-    lifting = replace(rule("x", now + timedelta(hours=2)), lifts_builtin=True)
-    assert f"every project  until {until}  lifts built-in protections  x" in lifting.line()
+    assert rule("x", now + timedelta(hours=2)).line() == f"#1  every project  until {until}  x"
     assert "removed, was until" in rule("x", now, removed=True).line(now=now)
     assert mine.as_json()["expires_at"] == (now + timedelta(hours=2)).isoformat()
 
@@ -239,7 +198,6 @@ def stored(
     scope: str = "global",
     conversation: str | None = None,
     expires_in: timedelta = timedelta(hours=1),
-    lifts: bool = False,
 ) -> TemporaryRule:
     """Build a rule as `ConfigStore.load` would hand it to a session."""
     now = datetime.now(UTC)
@@ -249,7 +207,6 @@ def stored(
         scope=scope,  # type: ignore[arg-type]
         project=None,
         conversation=conversation,
-        lifts_builtin=lifts,
         created_at=now - timedelta(minutes=5),
         expires_at=now + expires_in,
         created_by="cli:test",
@@ -267,7 +224,9 @@ def test_the_session_s_checkers_read_the_rules_of_its_scope(tmp_path: Path) -> N
         temporary_rules=(
             stored("Claude may run the database tests."),
             stored("Only for conversation c1.", scope="session", conversation="c1"),
-            stored("Lifts the protections.", conversation="c1", scope="session", lifts=True),
+        ),
+        config=settings.config.model_copy(
+            update={"built_in_rules": BuiltInRulesConfig(calu_commands=False)}
         ),
     )
     session, _rec, _store = make_session(tmp_path, [], settings=settings)
@@ -279,9 +238,9 @@ def test_the_session_s_checkers_read_the_rules_of_its_scope(tmp_path: Path) -> N
         assert "Claude may run the database tests." in prompt(route)
         assert "Only for conversation c1." not in prompt(route)
     assert "Claude may run" not in session.result_checker.instructions
-    assert not session.rules.lifted
+    # The settings' switches reach the session's rules.
+    assert session.rules.built_in.calu_commands is False
 
     session.session_id = "c1"  # the conversation becomes known after the start
     session._follow_temporary_rules()
     assert "Only for conversation c1." in prompt(Route.COMMAND)
-    assert session.rules.lifted

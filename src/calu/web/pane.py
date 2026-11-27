@@ -20,9 +20,9 @@ Framing: only `/pane` may be shown in a frame, and only by the origins of
 
 What a pane may ask its bridge (`PANE_METHODS`): attaching, starting and renaming sessions,
 the session protocol except `shutdown`, the settings it changes (honesty mode, effort), the
-temporary rules (`/rule`, `/rules`, `/rule-remove`; never one that lifts the built-in
-protections), and reading project files for its file view. Not: writing, deleting or renaming files
-(`ide.fs.write*`), attaching to an explicit address with a token, or anything else.
+temporary rules (`/rule`, `/rules`, `/rule-remove`), and reading project files for its file
+view. Not: writing, deleting or renaming files (`ide.fs.write*`), attaching to an explicit
+address with a token, or anything else.
 """
 
 from __future__ import annotations

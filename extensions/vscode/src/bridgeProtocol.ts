@@ -299,7 +299,6 @@ export interface IdeTemporaryRule {
   project: string | null;
   /** Claude's session id for scope "session". */
   conversation: string | null;
-  lifts_builtin: boolean;
   created_by: string;
   origin: string;
   /** ISO 8601. */

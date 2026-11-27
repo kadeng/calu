@@ -1411,7 +1411,8 @@ inside a container). No phase has unbuilt work in it.
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
 **2713 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. about 470 commits, ~83k lines of Python in `src` (~88k with the SQL, templates and
-default instructions), ~66k of tests, 2 migration files (the baseline of D266 and `0002_temporary_rules.sql`), 30 CLI commands (29 in `calu --help` and the hidden easter egg
+default instructions), ~66k of tests, 3 migration files (the baseline of D266, `0002_temporary_rules.sql` and
+`0003_temporary_rules_no_lifting.sql`), 30 CLI commands (29 in `calu --help` and the hidden easter egg
 `calu lightcycles`), 29 protocol requests,
 22 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs

@@ -1297,8 +1297,7 @@ class Bridge:
         The rule is given either as `command`, the arguments of the chat's `/rule` as typed
         (`[duration] [--session | --project | --global] text`, `temp_rules.split_command`),
         or as `text` with `duration` and `scope`. The scope "session" (the default) binds it
-        to the attached session's conversation and "project" to its project. A rule added
-        here never lifts calu's built-in protections.
+        to the attached session's conversation and "project" to its project.
 
         Side effects: writes `temporary_rules` with the user login; running sessions read
         the change at once.

@@ -35,7 +35,6 @@ the allow or deny lists; it steers the models' judgement as the instructions do.
 | `text` | The rule as the user wrote or accepted it, at most 1,000 characters |
 | `scope` | `global`, `project` (one registered project) or `session` (one conversation: Claude's session id, so the rule survives a resume, which creates a new `sessions` row) |
 | `expires_at` | Creation time plus the duration: at least 1 minute, at most 7 days, default 1 day |
-| `lifts_builtin` | Whether the rule also lifts calu's built-in protections, within the limits of section 6 |
 | `created_by`, `created_at` | Who added it (as for escalation decisions: `client:<name>`, `web:<user>`, `cli:<user>`) |
 | `removed_at`, `removed_by` | Set when a person removes it before it expires |
 | `origin` | `manual`, or the escalation id whose dialog created it |
@@ -166,25 +165,26 @@ I recommended A. The owner chose B: "It's not as if claude has no safeguards. We
 against a malicious agent here, not against a claude process whose code is malicious or already
 taken over."
 
-### B as designed
+### What was built for B, and what replaced it (2026-11-27, PLAN D291)
 
-The limits below are Claude's proposal for B; the owner chose B, not these details.
+Claude first built B as a flag on the rule (`lifts_builtin`, `calu rule add --lift-builtin`,
+one day at most, with fixed lists of calu subcommands and files that kept asking). The owner
+rejected that on 2026-11-27: "I never asked for a --lift-builtin thing, this is not generic
+enough. Don't we have allow and denylists? This is what they are for, there should never have
+been hardcoding." Of two ways, a regex in the deny list or "keep the calu hardcoding rule but
+make it a configurable flag", Claude took the second, which the owner had offered.
 
-- A rule with `lifts_builtin` can only be added in the web settings or with `calu rule add
-  --lift-builtin`, never from a chat or an escalation dialog. It lasts at most one day, and every
-  list shows it marked as lifting the built-in protections.
-- While such a rule applies to a session, the rules engine no longer escalates calu commands and
-  calu's own directories by itself. The step goes to the checkers instead, and they read the
-  rule's text like any other temporary rule.
-- These stay escalated, whatever a rule says:
-  - the calu subcommands that change what steers the checks or decide for a person:
-    `resolve`, `config`, `rules`, `rule`, `checker`, `token`, `setup`, `honesty`, `project`,
-    `credential`, `db`, `uninstall`;
-  - every read or write of the credential store (`credentials.json`) and of the checker key
-    file (`.env`).
-- The list of subcommands that stay escalated lives next to `BUILT_IN_COMMAND_DENY`, with a test
-  that fails when `calu --help` names a subcommand that is in neither list. So a new subcommand
-  forces a decision.
+Now:
+
+- calu's built-in rules are settings, each on by default and settable per project:
+  `built_in_rules.calu_commands`, `calu_container`, `calu_files`, `worktree_force_remove`
+  (`calu.config.BuiltInRulesConfig`). The web settings and the VSCode settings dialog show
+  them, as every setting.
+- With a switch off, its steps are judged like any other: by the allow and deny lists, the
+  checkers and Claude Code's auto mode. A temporary rule can then tell the checkers to allow
+  them, as any other rule does.
+- A temporary rule has no flag of its own; migration 0003 dropped the column and the one-day
+  limit that went with it.
 
 ## 7. The owner's decisions (2026-11-26)
 
@@ -201,9 +201,9 @@ The limits below are Claude's proposal for B; the owner chose B, not these detai
 
 8. Later on 2026-11-26, while step 3 was built: "temporary rules should be creatable and
    manageable in the web UI, terminal and IDE extensions alike." So the PyCharm plugin gets
-   the commands too, which the plan below did not list. Whether this also covers rules that
-   lift the built-in protections (section 6 limits those to the web settings and `calu rule
-   add --lift-builtin`) was not asked.
+   the commands too, which the plan below did not list.
+9. 2026-11-27: no lifting flag on a rule; calu's built-in rules become settings (section 6,
+   end).
 
 ## 8. Plan of work
 

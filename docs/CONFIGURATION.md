@@ -31,6 +31,11 @@ This file is generated from `calu.config` by `calu.configdoc`; a test keeps the 
 
 | Key | Type | Default | What it does |
 |---|---|---|---|
+| `built_in_rules` | BuiltInRulesConfig | see below | calu's own rules that make some steps ask a person: running calu, calu's database container, calu's own files, a forced worktree removal. Each can be switched off. |
+| `built_in_rules.calu_commands` | bool | `true` | A command that runs calu itself asks (agent/records/PLAN.md D160), however it is launched (by path, `uv run`, `uvx`, `pipx run`, `python -m calu`, behind wrappers). calu decides Claude's escalations: a `calu resolve`, `calu config set` or `calu rules` of Claude's would decide them or switch the checks off. |
+| `built_in_rules.calu_container` | bool | `true` | A `docker`, `podman` or `nerdctl` command that names calu's database container, compose project or volume (`calu-db`) asks (D171): that container holds the escalations. |
+| `built_in_rules.calu_files` | bool | `true` | Reading or writing calu's own directories asks: its configuration (with the logins and the checker keys) and its state, wherever `XDG_CONFIG_HOME` and `XDG_STATE_HOME` put them, and any path with a `.config/calu` component. |
+| `built_in_rules.worktree_force_remove` | bool | `true` | `git worktree remove --force` (or `-f`) asks (D251): it deletes a worktree with its uncommitted work, which Claude Code guards only for its own `ExitWorktree` tool. |
 | `command_checker` | CheckerConfig | see below | The checker that reviews Bash commands and every tool call routed to it. |
 | `command_checker.model` | text | `""` | Pydantic AI model string of this checker; blank uses the default: Haiku on the Anthropic API, or Haiku through AWS Bedrock in an EU region when `claude.use_bedrock` is on. Other values are e.g. "mistral:mistral-small-2603", "anthropic:claude-haiku-4-5", "fireworks:accounts/..." or "bedrock:eu.anthropic....". A claude.ai subscription cannot answer checks: it signs in only the `claude` CLI, which runs the main coding agent (agent/records/PLAN.md D258). |
 | `command_checker.effort` | one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` (or empty) | (empty) | Thinking effort: "off" for none, "low" to "max", or None for the model's default. More effort buys accuracy with latency and tokens. |

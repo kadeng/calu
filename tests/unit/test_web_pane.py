@@ -214,8 +214,8 @@ async def test_the_pane_may_not_write_files_end_the_session_or_attach_by_address
 
 
 async def test_the_pane_may_add_list_and_remove_temporary_rules() -> None:
-    """The three requests reach the bridge. That the bridge refuses a rule that lifts the
-    built-in protections is tested in `tests/db/test_ide_bridge_db.py`, not here."""
+    """The three requests reach the bridge; what the bridge does with them is tested in
+    `tests/db/test_ide_bridge_db.py`."""
     asked: list[str] = []
 
     async def bridge(method: str, params: dict[str, Any]) -> Any:

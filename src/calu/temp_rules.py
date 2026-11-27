@@ -9,13 +9,16 @@ command, edit and changeset checkers approve, for a limited time and a scope:
     project   every session of one registered project          project_id
     global    every session                                    -
 
-    duration  1m .. 7d ("30m", "1h", "3d"); default 1d; 1d at most for a rule that lifts
-              calu's built-in protections (`lifts_builtin`)
+    duration  1m .. 7d ("30m", "1h", "3d"); default 1d
 
-The table `temporary_rules` (migration 0002) enforces the limits too, so a client that skips
-this module cannot store a rule of eight days. Adding and removing go through the user login
-(`calu_admin`), which Claude does not have; the audit trigger records each change and announces
-it as `config_changed`, so a running session reads its rules again.
+A rule is text for the checkers only. calu's built-in rules (running calu, its database
+container, its own files) are settings (`Config.built_in_rules`); a rule can tell the checkers
+to allow such a step only where that setting is off.
+
+The table `temporary_rules` (migrations 0002 and 0003) enforces the limits too, so a client
+that skips this module cannot store a rule of eight days. Adding and removing go through the
+user login (`calu_admin`), which Claude does not have; the audit trigger records each change
+and announces it as `config_changed`, so a running session reads its rules again.
 
 Nothing here tells Claude which rules are active (the owner's decision, 2026-11-26).
 """
@@ -39,8 +42,6 @@ DEFAULT_DURATION = timedelta(days=1)
 
 MIN_DURATION = timedelta(minutes=1)
 MAX_DURATION = timedelta(days=7)
-MAX_LIFTING_DURATION = timedelta(days=1)
-"""The longest duration of a rule that lifts calu's built-in protections."""
 
 MAX_TEXT_CHARS = 1000
 """The longest text of a rule, as the table's check constraint allows."""
@@ -67,7 +68,6 @@ class TemporaryRule:
     """The project's name for scope "project"; None otherwise."""
     conversation: str | None
     """Claude's session id for scope "session"; None otherwise."""
-    lifts_builtin: bool
     created_at: datetime
     expires_at: datetime
     created_by: str
@@ -110,8 +110,7 @@ class TemporaryRule:
                 None for a rule known to count (one just added, or a list of active ones).
 
         Returns:
-            "#<id>  <scope>  until <local time>  <text>". A rule that lifts the built-in
-            protections has "lifts built-in protections" before the text. A removed rule has
+            "#<id>  <scope>  until <local time>  <text>". A removed rule has
             "removed, was until <local time>" in place of "until"; a rule that expired
             before `now` has "expired <local time>".
         """
@@ -125,16 +124,15 @@ class TemporaryRule:
             until = f"expired {when}"
         else:
             until = f"until {when}"
-        lifting = "  lifts built-in protections" if self.lifts_builtin else ""
-        return f"#{self.id}  {where}  {until}{lifting}  {' '.join(self.text.split())}"
+        return f"#{self.id}  {where}  {until}  {' '.join(self.text.split())}"
 
     def as_json(self) -> dict[str, object]:
         """Return the rule for a client that renders it itself (`ide.rules.*`).
 
         Returns:
-            `id`, `text`, `scope`, `project`, `conversation`, `lifts_builtin`, `created_by`,
-            `origin`, and `created_at`, `expires_at`, `removed_at` as ISO 8601 texts
-            (`removed_at` None for a rule that was not removed).
+            `id`, `text`, `scope`, `project`, `conversation`, `created_by`, `origin`; and
+            `created_at`, `expires_at`, `removed_at` as ISO 8601 texts (`removed_at` None
+            for a rule that was not removed).
         """
         return {
             "id": self.id,
@@ -142,7 +140,6 @@ class TemporaryRule:
             "scope": self.scope,
             "project": self.project,
             "conversation": self.conversation,
-            "lifts_builtin": self.lifts_builtin,
             "created_by": self.created_by,
             "origin": self.origin,
             "created_at": self.created_at.isoformat(),
@@ -233,7 +230,7 @@ def check_text(text: str) -> str:
 
 
 _COLUMNS = (
-    "r.id, r.text, r.scope, p.name, r.conversation, r.lifts_builtin, r.created_at, "
+    "r.id, r.text, r.scope, p.name, r.conversation, r.created_at, "
     "r.expires_at, r.created_by, r.origin, r.removed_at, r.removed_by"
 )
 _FROM = " FROM temporary_rules r LEFT JOIN projects p ON p.id = r.project_id"
@@ -260,7 +257,6 @@ async def add(
     scope: Scope = "session",
     project: str | None = None,
     conversation: str | None = None,
-    lifts_builtin: bool = False,
     origin: str = "manual",
 ) -> TemporaryRule:
     """Store a new rule. It counts from the database's present time.
@@ -276,8 +272,6 @@ async def add(
         scope: "session", "project" or "global".
         project: The project's name, for scope "project".
         conversation: Claude's session id, for scope "session".
-        lifts_builtin: Whether it lifts calu's built-in protections; such a rule lasts one day
-            at most. Only the web settings and `calu rule add --lift-builtin` pass True.
         origin: "manual", or "escalation <id>" for a rule from an escalation dialog.
 
     Returns:
@@ -291,8 +285,6 @@ async def add(
     clean = check_text(text)
     if not MIN_DURATION <= duration <= MAX_DURATION:
         raise RuleError("a rule lasts between one minute and 7 days")
-    if lifts_builtin and duration > MAX_LIFTING_DURATION:
-        raise RuleError("a rule that lifts calu's built-in protections lasts one day at most")
     if not created_by:
         raise RuleError("a rule needs the name of who adds it")
     project_id: int | None = None
@@ -310,17 +302,16 @@ async def add(
         raise RuleError(f"{scope!r} is no scope: session, project or global")
     row = await db.one(
         "WITH new AS (INSERT INTO temporary_rules (text, scope, project_id, conversation,"
-        " lifts_builtin, expires_at, created_by, origin)"
-        " VALUES (%s, %s, %s, %s, %s, now() + %s, %s, %s) RETURNING *)"
-        " SELECT new.id, new.text, new.scope, p.name, new.conversation, new.lifts_builtin,"
-        " new.created_at, new.expires_at, new.created_by, new.origin, new.removed_at,"
+        " expires_at, created_by, origin)"
+        " VALUES (%s, %s, %s, %s, now() + %s, %s, %s) RETURNING *)"
+        " SELECT new.id, new.text, new.scope, p.name, new.conversation, new.created_at,"
+        " new.expires_at, new.created_by, new.origin, new.removed_at,"
         " new.removed_by FROM new LEFT JOIN projects p ON p.id = new.project_id",
         (
             clean,
             scope,
             project_id,
             conversation if scope == "session" else None,
-            lifts_builtin,
             duration,
             created_by,
             origin,
@@ -466,8 +457,8 @@ async def add_from_client(
 ) -> tuple[TemporaryRule, str | None]:
     """Store a rule a person typed in a client attached to a session (a chat's `/rule`).
 
-    Such a rule never lifts calu's built-in protections. The scope "session" (the default)
-    binds it to the session's conversation, "project" to the session's project.
+    The scope "session" (the default) binds it to the session's conversation, "project" to
+    the session's project.
 
     Side effects: inserts a `temporary_rules` row (`add`).
 
@@ -485,17 +476,15 @@ async def add_from_client(
     Raises:
         RuleError: If the text, the duration or the scope is refused; if the scope needs a
             conversation or a project that the session does not have; or if the text starts
-            with "--". Its first word is then not a rule option here (`--lift-builtin`, for
-            example) and would become part of the rule.
+            with "--": a mistyped option would otherwise become part of the rule's text.
         psycopg.Error: On database errors.
     """
     conversation, project = await session_scope(db, session_id)
     chosen = scope or "session"
     if text.lstrip().startswith("--"):
         raise RuleError(
-            f"{text.split()[0]} is not a rule option here; the options are --session,"
-            " --project and --global. A rule that lifts calu's built-in protections is"
-            " added in the web settings or with `calu rule add --lift-builtin`"
+            f"{text.split()[0]} is not a rule option; the options are --session, --project"
+            " and --global"
         )
     if chosen == "session" and not conversation:
         raise RuleError(
@@ -557,8 +546,8 @@ async def remove(db: Db, rule_id: int, removed_by: str) -> TemporaryRule | None:
     row = await db.one(
         "WITH gone AS (UPDATE temporary_rules SET removed_at = now(), removed_by = %s"
         " WHERE id = %s AND removed_at IS NULL AND expires_at > now() RETURNING *)"
-        " SELECT gone.id, gone.text, gone.scope, p.name, gone.conversation,"
-        " gone.lifts_builtin, gone.created_at, gone.expires_at, gone.created_by, gone.origin,"
+        " SELECT gone.id, gone.text, gone.scope, p.name, gone.conversation, gone.created_at,"
+        " gone.expires_at, gone.created_by, gone.origin,"
         " gone.removed_at, gone.removed_by FROM gone LEFT JOIN projects p"
         " ON p.id = gone.project_id",
         (removed_by, rule_id),

@@ -973,18 +973,12 @@ class Session:
         """Create the checkers of the command, edit and changeset routes.
 
         Side effects: sets `_rules_part` to the temporary rules' part of their prompts at this
-        moment (`_temporary_part`), which `_prompt` appends, and `rules.lifted` to whether a
-        temporary rule that lifts calu's built-in protections applies to this session.
+        moment (`_temporary_part`), which `_prompt` appends.
 
         Returns:
             Route -> its checkers (`_route_checkers`).
         """
         self._rules_part = self._temporary_part()
-        now = datetime.now(UTC)
-        self.rules.lifted = any(
-            rule.lifts_builtin and rule.active(now) and applies_to(rule, self.session_id)
-            for rule in self.settings.temporary_rules
-        )
         return {
             Route.COMMAND: self._route_checkers(Route.COMMAND, self.config.command_checker),
             Route.EDIT: self._route_checkers(Route.EDIT, self.config.edit_checker),
@@ -5492,8 +5486,9 @@ class Session:
     def _guard_traces(self) -> None:
         """Tell the rules, the honesty state and the write sets where the traces are.
 
-        The rules also get the registry of checkouts here (D251), because a settings reload
-        replaces them.
+        The rules also get two other settings here, because a settings reload replaces them:
+        the registry of checkouts (D251) and the switches of calu's built-in rules
+        (`Config.built_in_rules`, copied to `Rules.built_in`).
 
         While `traces.enabled` is on, the trace directory is calu's own output inside the
         project: a tool call that would write there waits for a person, the checkers' code
@@ -5504,6 +5499,7 @@ class Session:
         directory = cfg.directory if cfg.enabled else None
         self.rules.trace_directory = None if directory is None else self.workspace / directory
         self.rules.checkouts = self.checkouts  # worktrees are judged as checkouts (D251)
+        self.rules.built_in = self.config.built_in_rules
         self._trace_dir = directory
         # The human diffs (D253) are calu's own output too, while they are recorded.
         diffs = self.config.human_diffs

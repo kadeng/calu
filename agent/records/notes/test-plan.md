@@ -1312,7 +1312,7 @@ Cua desktop, scripted backend, VSCode extension built from the working tree afte
 | `/rule 30m --global Never push to a remote`, then `/rules` | ok: both listed under "Temporary rules that apply to this session", newest first |
 | `/rule-remove 1`, `/rule-remove 2`, `/rules` | ok: each removal is answered with the rule, then "No temporary rules are active." |
 | `/rule 9d too long` | ok: refused, "a rule lasts at most 7 days; a rule for longer belongs in the checker instructions" |
-| `/rule --lift-builtin calu may serve` | ok: refused; the message names the web settings and `calu rule add --lift-builtin` |
+| `/rule --lift-builtin calu may serve` | ok at the time: refused. The option is gone since D291 (2026-11-27); a text starting with `--` is still refused as a mistyped option |
 | That a checker's prompt holds the rule | only in the unit tests: the scripted checkers do not read instructions |
 | The web chat pane, `/rule 1h --project …`, `/rules`, `/rule-remove 3` | was refused ("the chat pane may not ask 'ide.rules.add'"): the pane's list of bridge requests lacked them. Fixed (`PANE_METHODS`); then ok in Chromium, and `calu rule list` showed no rule left afterwards |
 | `calu attach`, full-screen client | unit test (`test_tui_many.py`) with the fake admin access; not run against a database |

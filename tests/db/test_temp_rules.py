@@ -89,23 +89,14 @@ async def test_the_module_refuses_what_the_design_does_not_allow(db_url: str) ->
             await temp_rules.add(db, "x", created_by="cli:test", scope="project", project="gone")
         with pytest.raises(RuleError, match="conversation"):
             await temp_rules.add(db, "x", created_by="cli:test")
-        with pytest.raises(RuleError, match="one day at most"):
-            await temp_rules.add(
-                db,
-                "Calu may run calu.",
-                created_by="cli:test",
-                scope="global",
-                lifts_builtin=True,
-                duration=timedelta(days=2),
-            )
         with pytest.raises(RuleError, match="between one minute and 7 days"):
             await temp_rules.add(
                 db, "x", created_by="cli:test", scope="global", duration=timedelta(days=8)
             )
-        lifting = await temp_rules.add(
-            db, "Calu may run calu.", created_by="cli:test", scope="global", lifts_builtin=True
+        week = await temp_rules.add(
+            db, "x", created_by="cli:test", scope="global", duration=timedelta(days=7)
         )
-        assert lifting.lifts_builtin
+        assert week.expires_at - week.created_at == timedelta(days=7)
     finally:
         await conn.close()
 
@@ -117,8 +108,6 @@ async def test_the_module_refuses_what_the_design_does_not_allow(db_url: str) ->
         ("scope, expires_at", "'global', now() + interval '8 days'"),
         # below a minute
         ("scope, expires_at", "'global', now() + interval '30 seconds'"),
-        # a lifting rule of two days
-        ("scope, expires_at, lifts_builtin", "'global', now() + interval '2 days', true"),
         # a session rule without its conversation
         ("scope, expires_at", "'session', now() + interval '1 hour'"),
         # a global rule with a conversation
