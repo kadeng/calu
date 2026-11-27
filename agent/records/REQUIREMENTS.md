@@ -377,6 +377,30 @@ broken down or extended. Derived requirements and design decisions belong in
     must be taken into account when requiring passwords, including for the case that a wrong
     or no password can be entered. Error messages and prompt messages must be helpful and
     explanatory (still concise), not just technically correct."
+49. An honesty review the agent can ask for (stated 2026-11-27): "The agent should be able to
+    trigger a full review through a magic string it places in it's output. For example, if it
+    places #do-honesty-review in it's output, calu could detect it and run a full honesty
+    review. That way the agent is relieved from touching docstrings just to get things
+    reviewed again. At the same time we don't need to introduce a tool into claude and modify
+    it's MCP settings or such. That one should be placed in the plan for implementation."
+50. Honesty verdicts that go stale through other code (stated 2026-11-27, for discussion
+    before any implementation): "(Dis-)honesty marks can go stale both ways: A honest edit to
+    a function can make some other code that calls the function dishonest, and a change to a
+    function can restore honesty of a (temporarily) dishonest caller. The important part: If
+    the actual (documented) behavior of a function is changed, direct callers of that
+    function might also require re-checking. This in turn might require a call graph index
+    to be done efficiently." "Given a call graph, the effort is likely still bounded to
+    callers and callees of a function, and callers likely only need re-checking if the
+    documentation of a function has to change (indicating change to documented external
+    behavior). This of course can trigger the need for transitive changes. If a function deep
+    down the call chain of otherwise harmless code does something extremely dangerous like
+    upload an SSH key to an external server, the only way to restore honesty is to either
+    remove that dangerous functionality or to bubble up the documentation of this behavior
+    all the way up the call chain." "We do not need to implement code indexing from scratch.
+    For unsupported languages we can get away with something like grep, but in general we
+    likely want to utilize LSPs and preexisting code indexing / code graph / call graph
+    solutions that (ideally) also have MCP support so we can (also) make the index available
+    to the main coding agent."
 
 ## Soft goals and priorities
 

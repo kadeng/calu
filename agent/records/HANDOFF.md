@@ -2,9 +2,65 @@
 
 State on 2026-11-27 (the section "Pick up here" is current; older sections below keep the
 state of their day). Read this, then `AGENTS.md`, `REQUIREMENTS.md` and `PLAN.md` (decisions
-D1-D292, open questions §11, phases §12).
+D1-D294, open questions §11, phases §12; the full text of a shortened decision is in
+`agent/records/notes/plan-archive.md`).
+
+**Next step: step 6 of the temporary rules** (documentation; the section "The session in
+`~/projects/calu2`" below says what it covers). After it, the owner's issue report on
+stopping and resuming sessions, then the honesty design of the next section, starting with
+the review marker and the indexer spike. The owner set this order on 2026-11-27.
 
 ## Pick up here
+
+### Honesty across units: designed and decided (2026-11-27), nothing built
+
+The owner's requirements 49 and 50. The design note is
+`agent/records/notes/honesty-dependencies-design.md`; PLAN D293, D294 and phase 11 point at
+it. Its section 7 quotes the owner's seven answers.
+
+- **Order of work (the owner): finish the old work first.** Step 6 of the temporary rules,
+  then the stop-and-resume issue report below, then this design.
+- D293: the marker `#do-honesty-review` anywhere in an agent's text starts an honesty review.
+- D294: a contract change makes the referrers of a unit stale. Verdicts belong to nodes of
+  the graph where the index allows it; the project as a whole is clean or not, as today.
+- calu's checkers use the index on their own, with nothing added to Claude Code's
+  configuration. calu writes no language parsers of its own.
+- The indexer is not chosen. codebase-memory-mcp and Graphify (both named by the owner) and
+  language servers are compared in the note from their README and release pages only.
+  Nothing was installed or run. The spike in section 6 of the note decides; run it in a
+  container.
+- Still open: whether a subagent's marker counts.
+
+### PLAN.md shortened, its full text archived (2026-11-27)
+
+The owner found `PLAN.md` too large; it went from 543 KB to 251 KB. The full text of every
+row that changed is in `agent/records/notes/plan-archive.md`, word for word, under the same
+number, so a `D<n>` cited in code, tests or `docs/` still resolves.
+
+- **Stubs:** 125 decision rows (built, fixed defects, superseded) and 15 answered questions
+  are one line each in the plan. Sections 13.1 to 13.4 are a pointer.
+- **Short rows:** the 52 rows over 2 KB that still govern the code hold the decision and its
+  reason in about 900 characters and end with "As built:". Sonnet subagents wrote them. The
+  owner's quoted words in them were checked against the originals by script. They are
+  summaries: where a short row and the archive differ, the archive is right.
+- **When a row is needed in full**, read it in the archive. Write a new decision as a row in
+  the plan, as before.
+- Checked: every archived row is identical to the committed one; the plan still has 293
+  decision rows and 21 question rows.
+- Stale entries found and left as they are: phase 5 calls D31 open, phase 9 calls the VSCode
+  extension "not started" (D229 built it), phase 7 says ACP was not driven by a real editor
+  (D221 did), Q22 was overtaken by D241, Q8 is answered by D28 without saying so.
+- The decision table is not in numeric order. D121 is cited (by D120 and a test) and does
+  not exist.
+- Of 38 quotations of the owner in the rows, 3 are also in `REQUIREMENTS.md`.
+
+### Backlog (the owner, 2026-11-27): subagent messages as formatted text
+
+"Subagent task notifications and subagent result handbacks render as XML, not as Markdown.
+This is not urgent, but in Claude Code they render much more nicely in a formatted display.
+We should be able to implement that for the most common subagent message types as well. I
+like the fact that after compaction I get to see the entire context. We should keep that,
+but also render this formatted or as plaintext, without XML."
 
 ### The session in `~/projects/calu2` (2026-11-26): manual testing with the owner, then features
 

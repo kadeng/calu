@@ -22,7 +22,7 @@ READMEs). This file stays at the top level, where every agent looks first.
 | `README.md` | Description for end users, getting started |
 | `DOCUMENTATION.md` | The user documentation: commands, credentials, sandbox, remote access, web interface, ACP, checkers |
 | `agent/records/REQUIREMENTS.md` | The owner's requirements and priorities, only as stated by the owner. Do not add derived requirements; those belong in `agent/records/PLAN.md`. |
-| `agent/records/PLAN.md` | Design, decisions, threat model, database sketch, CLI, open questions, phases |
+| `agent/records/PLAN.md` | Design, decisions, threat model, database sketch, CLI, open questions, phases. A decision that is built, fixed or superseded is a stub or a short row there; its full text, word for word, is in `agent/records/notes/plan-archive.md` under the same number |
 | `agent/records/HANDOFF.md` | State of the work and next steps, for the next session |
 | `agent/records/notes/` | Specs, research notes, the test plan (`test-plan.md`), reports, evaluations and their screenshots |
 | `docs/TESTING.md` | The four test layers, the spikes and the manual checklist |
