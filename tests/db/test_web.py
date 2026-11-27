@@ -6,7 +6,7 @@ import httpx
 import psycopg
 import pytest
 
-from calu import admin, herd
+from calu import admin, herd, temp_rules
 from calu.context.turns import StepRecord, TurnRecord
 from calu.db import Db, connect
 from calu.setup import setup
@@ -306,6 +306,46 @@ def area(page: str, name: str) -> str:
 
     body = page.split(f'name="{name}"', 1)[1].split(">", 1)[1].split("</textarea>", 1)[0]
     return html.unescape(body)
+
+
+async def test_temporary_rules_are_added_and_removed_on_the_settings_page(db_url: str) -> None:
+    """The pane "Temporary rules": add one for every project or the page's project, remove it."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        await admin.add_project(db, "demo")
+        async with await client_for(db) as client:
+            page = (await client.get("/settings")).text
+            assert 'id="temporary-rules"' in page and "No temporary rule counts now." in page
+            assert 'form="st-temp-rules" name="text"' in page
+
+            added = await client.post(
+                "/temporary-rules?project=demo",
+                data={
+                    "add": "1",
+                    "text": "Claude may run make.",
+                    "duration": "2h",
+                    "scope": "project",
+                },
+            )
+            # The client follows the redirect back to the settings page, which says what happened.
+            assert added.url.fragment == "temporary-rules" and "Added rule #" in added.text
+            assert "Claude may run make." in added.text and "project demo" in added.text
+            (rule,) = await temp_rules.listed(db)
+            assert (rule.scope, rule.project, rule.created_by[:4]) == ("project", "demo", "web:")
+
+            refused = await client.post(
+                "/temporary-rules", data={"add": "1", "text": "x", "duration": "9d"}
+            )
+            assert "Nothing changed: a rule lasts" in refused.text
+            gone = await client.post("/temporary-rules", data={"remove": str(rule.id)})
+            assert f"Removed rule #{rule.id}: Claude may run make." in gone.text
+            assert await temp_rules.listed(db) == []
+            again = await client.post("/temporary-rules", data={"remove": str(rule.id)})
+            assert f"no active temporary rule #{rule.id}" in again.text
+    finally:
+        await conn.close()
 
 
 async def test_one_settings_page_holds_the_values_the_instructions_and_the_rules(

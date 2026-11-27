@@ -229,6 +229,47 @@
           </div>
         </div>
       {% endif %}
+      {% if pane.temporary_rules is not none %}
+        <div class="st-group">
+          <h2>Counting now</h2>
+          {% if rule_message %}<p class="st-note{{ ' is-warn' if rule_failed }}" role="status">{{ rule_message }}</p>{% endif %}
+          <div class="st-card">
+            {% for r in pane.temporary_rules %}
+              <div class="st-row st-row--inline" data-search="temporary rule {{ r.text | lower }}">
+                <div class="st-row-text">
+                  <div class="st-row-title"><span class="st-label">#{{ r.id }} · {{ r.where() }}</span>
+                    <span class="st-meta">until {{ r.expires_at.astimezone().strftime('%Y-%m-%d %H:%M %Z') }} · added by {{ r.created_by }}</span></div>
+                  <div class="st-help">{{ r.text }}</div>
+                </div>
+                <div class="st-row-control">
+                  <button type="submit" form="st-temp-rules" name="remove" value="{{ r.id }}">Remove</button>
+                </div>
+              </div>
+            {% else %}
+              <div class="st-row" data-search="temporary rule"><div class="st-row-text"><span class="st-help">No temporary rule counts now.</span></div></div>
+            {% endfor %}
+          </div>
+          <h2>Add a rule</h2>
+          <div class="st-card">
+            <div class="st-row st-row--block st-rule-form" data-search="temporary rule add">
+              <label class="st-label" for="st-rule-text">Rule</label>
+              <textarea id="st-rule-text" form="st-temp-rules" name="text" rows="3" maxlength="1000"
+                        placeholder="e.g. Claude may run the database tests with scripts/db-tests.sh."></textarea>
+              <div class="st-row-control">
+                <label>For <input type="text" form="st-temp-rules" name="duration" value="1d" size="5"
+                              pattern="[0-9]+[mhdMHD]" title="1m to 7d, e.g. 30m, 12h, 3d"></label>
+                <label>Applies to
+                  <select form="st-temp-rules" name="scope">
+                    {% if project %}<option value="project" selected>project {{ project }}</option>{% endif %}
+                    <option value="global">every project</option>
+                  </select></label>
+                <button class="primary" type="submit" form="st-temp-rules" name="add" value="1">Add rule</button>
+              </div>
+              <div class="st-help">A rule for one conversation is added in its chat with <code>/rule</code>, or with <code>calu rule add --session ID</code>.</div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
     </section>
     {% endfor %}
 
@@ -241,6 +282,10 @@
     </div>
     <noscript><p><button class="primary" type="submit">Save changes</button></p></noscript>
   </form>
+  {# The temporary rules' own form: its fields sit in the pane and name it with `form=`, so
+     they are not part of the settings form, and Enter in a setting never removes a rule. #}
+  <form id="st-temp-rules" method="post" hidden
+        action="{{ url_for('temporary_rules') }}{% if project %}?project={{ project | urlencode }}{% endif %}"></form>
   {% if offer %}
   <form id="st-offer" method="post" hidden
         action="{{ url_for('settings') }}{% if project %}?project={{ project | urlencode }}{% endif %}">

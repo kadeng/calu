@@ -36,7 +36,7 @@ from typing import Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel
 
-from calu import admin, herd
+from calu import admin, herd, temp_rules
 from calu.admin import SHIPPED_SETTINGS
 from calu.checkers.rules import RULE_LISTS
 from calu.config import CheckerConfig, Config
@@ -332,6 +332,9 @@ class Pane:
     misses: list[herd.CheckerMiss] = field(default_factory=list)
     """Steps this pane's checker approved and a human then denied, newest first: the cases to
     correct its instructions against."""
+    temporary_rules: list[temp_rules.TemporaryRule] | None = None
+    """For the pane of the temporary rules: the rules that count now (possibly none), each
+    with a Remove button, and a form that adds one. None on every other pane."""
 
     @property
     def fields(self) -> list[Field]:
@@ -372,6 +375,8 @@ class Sources:
     """The newest steps a checker approved that a human then denied."""
     step_lines: Sequence[str] = ()
     """What `herd.StepStats.lines` says about all steps: paths through the gate and delays."""
+    temporary_rules: Sequence[temp_rules.TemporaryRule] = ()
+    """Every temporary rule that counts now, of every scope, newest first."""
 
 
 @dataclass
@@ -391,8 +396,8 @@ async def load(db: Db, project: str | None, record: bool = True) -> Sources:
     """Read everything the settings page shows for one scope.
 
     Args:
-        db: A connection that may read `config`, `checker_types`, `rules` and `projects`, and
-            for the record `steps`, `checker_runs` and `escalations`.
+        db: A connection that may read `config`, `checker_types`, `rules`, `temporary_rules`
+            and `projects`, and for the record `steps`, `checker_runs` and `escalations`.
         project: The project whose scope to show, or None for the global scope.
         record: Whether to read what the checkers decided so far as well; False where only
             the editable values are needed.
@@ -415,6 +420,7 @@ async def load(db: Db, project: str | None, record: bool = True) -> Sources:
         stats={row.checker_name: row for row in await herd.checker_stats(db)} if record else {},
         misses=await herd.checker_misses(db, limit=MISSES_READ) if record else (),
         step_lines=(await herd.step_stats(db)).lines() if record else (),
+        temporary_rules=await temp_rules.listed(db),
     )
 
 
@@ -440,7 +446,11 @@ def panes(src: Sources) -> list[Pane]:
     # The sidebar lists each section once: a pane of a section placed later (`RULES_SECTIONS`)
     # moves up to its section; the order within a section is kept.
     found.sort(key=lambda pane: SIDEBAR_ORDER.index(pane.section))
-    return [pane for pane in found if pane.groups or pane.facts or pane.links]
+    return [
+        pane
+        for pane in found
+        if pane.groups or pane.facts or pane.links or pane.temporary_rules is not None
+    ]
 
 
 def overlay(found: Sequence[Pane], posted: Mapping[str, str], errors: Mapping[str, str]) -> None:
@@ -836,7 +846,10 @@ def _record(stats: herd.CheckerStats | None) -> list[tuple[str, str, bool]]:
 
 
 def _rule_panes(src: Sources) -> list[Pane]:
-    """Build the three rule panes, each with its allow list and its deny list.
+    """Build the panes of the rules.
+
+    The three list panes have their allow list and their deny list; the pane of the temporary
+    rules lists those that count now and has a form to add one.
 
     Args:
         src: The sources.
@@ -907,6 +920,18 @@ def _rule_panes(src: Sources) -> list[Pane]:
             if target in ("all", f"{kind}-deny", f"{kind}-allow")
         ]
         found.append(pane)
+    found.append(
+        Pane(
+            id="temporary-rules",
+            section="Rules",
+            title="Temporary rules",
+            description=(
+                "Sentences the checkers read next to their instructions until they expire."
+                " The lists and the built-in rules come first."
+            ),
+            temporary_rules=list(src.temporary_rules),
+        )
+    )
     return found
 
 

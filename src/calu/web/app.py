@@ -71,7 +71,17 @@ from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from calu import __version__, admin, asuser, herd, localsocket, logins, servers, session_requests
+from calu import (
+    __version__,
+    admin,
+    asuser,
+    herd,
+    localsocket,
+    logins,
+    servers,
+    session_requests,
+    temp_rules,
+)
 from calu.credentials import CredentialStore
 from calu.db import Db
 from calu.homes import short_path
@@ -381,6 +391,12 @@ def create_app(
         Route("/checkers/{name}", _page(checker_redirect, state), name="checker"),
         Route("/rules", _page(rules_redirect, state), name="rules"),
         Route("/settings", _page(settings_page, state), methods=["GET", "POST"], name="settings"),
+        Route(
+            "/temporary-rules",
+            _page(temporary_rules_change, state),
+            methods=["POST"],
+            name="temporary_rules",
+        ),
         Route(PANE_PATH, pane_page, name="pane"),
         WebSocketRoute(
             PANE_RPC_PATH, functools.partial(pane_socket, store=store, panes=panes), name="pane_rpc"
@@ -2555,6 +2571,59 @@ async def rules_redirect(request: Request, state: _State) -> Response:
     return RedirectResponse(f"{url}#rules-command", 307)
 
 
+async def temporary_rules_change(request: Request, state: _State) -> Response:
+    """Add or remove a temporary rule from the settings page (`calu.temp_rules`).
+
+    The form holds either `remove` (a rule's id) or `add` with `text`, `duration` (as `calu
+    rule add --for` takes it) and `scope` ("project" for the page's project, "global"). A rule
+    for one conversation is added in its chat instead.
+
+    Side effects: writes `temporary_rules` with this interface's login; running sessions read
+    the change at once.
+
+    Args:
+        request: The request; `?project=NAME` is the page's scope.
+        state: The shared state.
+
+    Returns:
+        A redirect to the pane of the temporary rules, whose `rule` query parameter says what
+        was done or, with `rule_failed=1`, why nothing was.
+    """
+    from calu.web import start
+
+    project = request.query_params.get("project") or None
+    form = await request.form()
+    by = f"web:{start.web_user()}"
+    failed = False
+    try:
+        if form.get("remove"):
+            raw = str(form.get("remove"))
+            gone = await temp_rules.remove(state.db, int(raw), by) if raw.isdigit() else None
+            if gone is None:
+                said, failed = f"Nothing changed: no active temporary rule #{raw}", True
+            else:
+                said = f"Removed rule #{gone.id}: {' '.join(gone.text.split())}"
+        else:
+            scope = "project" if form.get("scope") == "project" and project else "global"
+            rule = await temp_rules.add(
+                state.db,
+                str(form.get("text") or ""),
+                created_by=by,
+                duration=temp_rules.parse_duration(str(form.get("duration") or "") or None),
+                scope=scope,
+                project=project if scope == "project" else None,
+            )
+            said = f"Added rule #{rule.id}."
+    except temp_rules.RuleError as error:
+        said, failed = f"Nothing changed: {error}", True
+    url = request.url_for("settings").include_query_params(rule=said)
+    if failed:
+        url = url.include_query_params(rule_failed="1")
+    if project:
+        url = url.include_query_params(project=project)
+    return RedirectResponse(f"{url}#temporary-rules", 303)
+
+
 async def settings_page(request: Request, state: _State) -> Response:
     """Show and change everything that steers a session, for the global scope or one project.
 
@@ -2621,6 +2690,9 @@ async def settings_page(request: Request, state: _State) -> Response:
             "project": project or "",
             "saved": request.query_params.get("saved"),
             "set_added": request.query_params.get("set_added"),
+            # What the last add or remove of a temporary rule did (`temporary_rules_change`).
+            "rule_message": request.query_params.get("rule", ""),
+            "rule_failed": request.query_params.get("rule_failed") == "1",
             # A switch the save turned on offers a related one (`admin.ENABLE_OFFERS`).
             "offer": admin.ENABLE_OFFERS.get(request.query_params.get("offer") or ""),
             "errors": errors,

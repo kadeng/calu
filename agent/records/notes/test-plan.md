@@ -1319,6 +1319,15 @@ Cua desktop, scripted backend, VSCode extension built from the working tree afte
 | `calu attach --plain` | prints the `calu rule` command (no database login); unit test |
 | PyCharm plugin, `/rule`, `/rules`, `/rule-remove`, `/btw` | Kotlin tests pass, plugin builds; **not tried in the IDE**: PyCharm in the recreated desktop asks for the JetBrains user agreement again, which is the owner's to accept |
 
+### S. Temporary rules, step 4: the web settings pane (2026-11-27)
+
+| Case | Result |
+|---|---|
+| Settings → Rules → "Temporary rules" of project demo: add "Claude may run make in the demo project." for 2h, scope "project demo" | ok: "Added rule #4." and the rule listed with its scope, end and author `web:cua` |
+| Remove it with its button | ok: "Removed rule #4: …", the list empty, `calu rule list` empty |
+| The text field | was 26 rem high (the code editor's height); now 5 rem in the body font |
+| A duration over 7 days, an unknown id | refused with the reason on the page (database test) |
+
 ### R. The switches of calu's built-in rules (D291, 2026-11-27)
 
 | Case | Result |
