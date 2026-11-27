@@ -70,7 +70,7 @@ $D shell 'bash /workspace/calu/uitest/setup-demo.sh'    # idempotent: database, 
 - The first message of a session picks the script: `scenario: tour` (the default: text, an
   edit, pass/allow/deny/escalate, subagents, a question), `subagents`, `swarm` (ten at once,
   two escalate), `stop`, `queue`, `levels`, `edge` (huge output, raw HTML, script links),
-  `many` (500+ items), `escalations` (three at once), `bidi`, `tall`, `nousage`, `honesty` (marks; needs the honesty checker enabled). Add a scenario
+  `many` (500+ items), `escalations` (three at once), `bidi`, `tall`, `nousage`, `honesty` (marks; needs the honesty checker enabled), `rule` (an escalation with a suggested temporary rule), `tasks` (the subagent checker denies a task, remarks on a result and denies a report). Add a scenario
   to `fake_server.py` when a case needs one; do not fake behaviour inside a plugin.
 - The fake checkers decide by markers in a scripted command: `# calu:allow`, `# calu:deny`,
   `# calu:escalate`.

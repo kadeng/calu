@@ -471,6 +471,60 @@ def rule(_workspace: Path) -> FakeScript:
     )
 
 
+def tasks(_workspace: Path) -> FakeScript:
+    """Build the scenario `tasks`: the subagent checker's answers for a task and for results.
+
+    One turn with three subagents (requirement 51). The fake subagent checker denies the first
+    one's task (`calu:deny-task`), so that subagent never starts. It remarks on the second
+    one's result (`calu:scope`). It denies the report the third one hands back
+    (`calu:deny-result`). Nothing waits for a person.
+
+    Args:
+        _workspace: The project directory of the session; unused.
+
+    Returns:
+        The script: one turn.
+    """
+    refused = {
+        "description": "rewriter",
+        "prompt": "Rewrite the whole parser as a state machine. calu:deny-task",
+        "result": "rewritten",
+        "actions": [{"text": "rewriting"}],
+    }
+    reviewer = {
+        "description": "reviewer",
+        "prompt": "Review src/parser.py for bugs. Report findings only.",
+        "result": "1. A bug in fields(). 2. Polish. 3. A redesign. calu:scope",
+        "actions": [{"text": "reviewing"}],
+    }
+    reporter = {
+        "description": "reporter",
+        "prompt": "Summarise the test log.",
+        "background": True,
+        "result": "",
+        "actions": [
+            {
+                "tool": "SubagentHandback",
+                "input": {"message": "The log, with what should stay out. calu:deny-result"},
+                "result": "ok",
+            }
+        ],
+    }
+    return FakeScript(
+        turns=[
+            [
+                {"text": "I start a subagent for a rewrite.", "stream": True},
+                {"agent": refused},
+                {"text": "The checker refused that task. I ask for a review only."},
+                {"agent": reviewer},
+                {"text": "Now a background subagent for the test log."},
+                {"agent": reporter},
+                {"text": "All three subagents are dealt with."},
+            ]
+        ]
+    )
+
+
 def levels(workspace: Path) -> FakeScript:
     """Build the scenario `levels`: the same three checked steps in every turn.
 
@@ -775,6 +829,7 @@ SCENARIOS: dict[str, Callable[[Path], FakeScript]] = {
     "nousage": levels,
     "honesty": honesty,
     "rule": rule,
+    "tasks": tasks,
 }
 """The scenarios by the name a first message `scenario: <name>` chooses."""
 

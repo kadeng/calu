@@ -1365,3 +1365,17 @@ in the container (no web password), Chromium.
 | Web session list, "chat" of an ended session | was a second link to the dead session. Fixed: ended rows offer "resume" only |
 | Web session list, "resume" with no session running | ok: the pane asked the server and attached to the resumed session |
 | The pane of `calu web --sudo` (root for a user) | fixed in code, not tried: the bridge took itself for root and refused every resume (unit test only; the desktop has no root web interface) |
+
+### U. The subagent checker's answers for a task and a result (2026-11-27, requirement 51)
+
+Cua desktop, VSCode chat, scripted server from the working tree, first message
+`scenario: tasks` (new). One round, three screenshots. Only the VSCode chat was looked at.
+
+| Case | Result |
+|---|---|
+| The checker denies a subagent's task | ok: the Agent row shows DENY, the card "Subagent checker" gives the reason and the sentence that the task may be written again; nobody was asked (`screenshots/vscode-subagent-task-denied.png`) |
+| The row of the denied Agent call | open: it keeps the state "running", and the agent bar keeps a tab named by an id ("12d8-2") for the subagent that never started. Not looked into: it may be the scripted runner's doing |
+| The checker remarks on a result | rendered, not looked at closely: the reviewer's row is PASS and completed |
+| The checker denies a handed-back report | ok: the main agent gets the checker's note and "refused this report, so you do not get it"; nobody was asked. The note was headed "a reminder and suggestions; ... the decision is yours"; fixed, a refusal now has its own heading (unit test; not looked at again in the desktop) |
+| "New session" right after the server was started again | the panel showed "No answer yet: maybe no calu server is running" with "Start calu server" for a few seconds, then attached. This belongs to the owner's stop-and-resume report |
+| A real model with the fix of the failed checks (`note` required) | not run |

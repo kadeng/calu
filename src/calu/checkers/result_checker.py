@@ -90,8 +90,9 @@ NOTE_IN_SUMMARY = re.compile(r"\n\s*Note:\s*")
 def _note_is_required(schema: dict[str, Any]) -> None:
     """Name `note` as a required key in the schema the model is shown.
 
-    Validation still accepts an answer without it. Measured on 2026-11-27 with Claude Haiku:
-    with `note` optional, the model answered `{"verdict": "ANNOTATE", "summary": ...}` in three
+    Validation still accepts an answer without it. Seen on 2026-11-27 with the checker model
+    of the owner's installation: with `note` optional, the model answered
+    `{"verdict": "ANNOTATE", "summary": ...}` in three
     attempts out of three, with its remark at the end of the summary or missing, and the check
     failed four times in one session.
 

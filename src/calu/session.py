@@ -437,6 +437,11 @@ SUBAGENT_NOTE_TEMPLATE = (
     "user: a reminder and suggestions; weigh them, the decision is yours] {note}"
 )
 """How the result checker's note is framed for Claude (sent as a priority "next" message)."""
+SUBAGENT_REFUSAL_TEMPLATE = (
+    '[The subagent checker, on behalf of the user, refused the report of the subagent "{label}"] '
+    "{note}"
+)
+"""How the note is framed when the result checker answered DENY: it is no suggestion."""
 HANDED_BACK_EMPTY = (
     "The final result is empty because the subagent handed its report back with "
     "SubagentHandback, and the result checker reviewed that report then; this empty result "
@@ -4689,7 +4694,8 @@ class Session:
                 )
         if not note:
             return "", denied
-        return SUBAGENT_NOTE_TEMPLATE.format(label=label, note=note), denied
+        template = SUBAGENT_REFUSAL_TEMPLATE if refused else SUBAGENT_NOTE_TEMPLATE
+        return template.format(label=label, note=note), denied
 
     async def _pass_handed_back(self, step: Step, step_id: int | None) -> None:
         """Record an empty final result after a reviewed handback as passed without a check.

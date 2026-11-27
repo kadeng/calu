@@ -413,6 +413,7 @@ async def test_a_report_the_checker_denies_is_not_handed_back(tmp_path: Path):
     assert results and "The subagent checker refused this report" in results[0].content
     injected = [u.text for u in rec.of(UserInput) if "result checker" in u.text]
     assert injected and "so you do not get it" in injected[0]
+    assert "refused the report" in injected[0] and "the decision is yours" not in injected[0]
     reviewed = next(s for s in store.steps.values() if s.row.tool_name == "SubagentResult")
     assert reviewed.checker_runs[0].decision == "deny"
 
