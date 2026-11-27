@@ -169,11 +169,8 @@ this is also confusing." In detail:
 **For the owner's installation:** D290 (a PNG in an escalated commit) is fixed in the
 repository only. Until `/usr/local/lib/calu` is reinstalled from `main`, a commit with a
 binary file that the changeset checker escalates is denied with "calu could not record this
-step". For that reason five screenshots named in the test plan are in the working tree of
-`calu2` (`agent/records/notes/screenshots/`) and not committed yet: `vscode-rules-chat.png`
-and `web-pane-rules.png` (section P), `web-settings-built-in-rules.png` (section R),
-`vscode-settings-rules.png` (section S), `vscode-escalation-rule.png` (section T). Commit
-them once the owner's installation runs `main`.
+step". The five screenshots of the test plan's sections P, R, S and T were held back for
+that reason and are committed since 2026-11-27 (`b44357e`); that commit was not escalated.
 
 Also open from today: the length guard of the checker instructions has allowances for the
 generated-code sections and the owner's AI-slop rule (`tests/unit/test_instructions.py`); a
