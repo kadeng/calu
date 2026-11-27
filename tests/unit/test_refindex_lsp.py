@@ -13,7 +13,7 @@ from typing import Any
 from calu.refindex import Place, Unit
 from calu.refindex.lsp import lsp_index
 from calu.refindex.model import Resolution
-from calu.refindex.navigator import NavigatorIndex, Position
+from calu.refindex.navigator import NavigatorIndex, Position, name_column
 
 SERVER = Path(__file__).with_name("fake_lsp_server.py")
 
@@ -195,3 +195,12 @@ def test_any_navigator_that_answers_the_interface_serves_the_index(tmp_path: Pat
         assert answer.complete
         navigator.ready = False
         assert not index.find(Unit("a.py", "Store.save", line=2)).complete
+
+
+def test_a_name_is_looked_for_only_on_an_existing_line(tmp_path: Path) -> None:
+    """Line 0 and a line past the end of the file have no column: line 0 must not read the
+    last line of the file."""
+    (tmp_path / "a.py").write_text("def save(): ...\n", "utf-8")
+    assert name_column(tmp_path, "a.py", 1, "save") == 4
+    assert name_column(tmp_path, "a.py", 0, "save") is None
+    assert name_column(tmp_path, "a.py", 2, "save") is None

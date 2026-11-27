@@ -383,9 +383,11 @@ def name_column(root: Path, path: str, line: int, name: str) -> int | None:
         The 0-based column of its first occurrence as a whole word; None if the file or the
         line cannot be read or the name is not there.
     """
+    if line < 1:
+        return None
     try:
         text = (root / path).read_text("utf-8", errors="replace").splitlines()[line - 1]
     except OSError, IndexError:
         return None
-    found = re.search(rf"(?<![\w]){re.escape(name)}(?![\w])", text) if line >= 1 else None
+    found = re.search(rf"(?<![\w]){re.escape(name)}(?![\w])", text)
     return found.start() if found else None
