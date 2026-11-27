@@ -258,7 +258,9 @@ The spike's numbers for the 50 sample functions (basedpyright, word search over 
 `tests/`): 6,015 hits. 284 are references the server confirms, and 27 more go through a base
 class or a Protocol. About 2,400 resolve to another unit of the same name and about 2,490 are
 in strings or docstrings: both explained away. 445 have an unresolved receiver: unclear,
-about 9 per function, most of them on the ten common names. Not measured: how many of the
+about 9 per function, most of them on the ten common names. The spike's report gave the two
+large groups as round figures, so about 390 of the hits are not assigned to a group here.
+Not measured: how many of the
 hits in strings are the name itself or a dotted path, and the time of one resolution per hit.
 
 ## 5. How calu and Claude Code use the index
