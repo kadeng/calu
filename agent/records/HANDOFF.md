@@ -206,7 +206,14 @@ Open items found on the way:
   --sudo --web` fail to start (the owner, 2026-11-26). Not investigated.
 - A subagent check failed once with "Exceeded maximum output retries (1)"; ten live repeats did
   not reproduce it. Two retries and a log of the refused answers are in place; read the log
-  if it happens again.
+  if it happens again. **It happened again on 2026-11-27, three times in one session**
+  ("Exceeded maximum output retries (2)"), on the results of three of the seven subagents,
+  all three reports of file work in Markdown with backticks; the owner saw the escalations
+  and asked whether this is a bug. The escalation is as designed (a failed check never
+  approves). The failing check is a defect, cause not known: the refused answers are in the
+  server's log (`/var/lib/calu/log/`, root's), which this session could not read. Two
+  causes to check there: an ANNOTATE without a note three times in a row
+  (`result_checker._require_note`), or an answer cut at `max_tokens`.
 - The terminal client and the PyCharm plugin have no pause button yet (they show the notices).
 - `honesty.generated_paths` is not set for this repository; the owner decides whether to list
   `^src/calu/web/static/pane/`.
