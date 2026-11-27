@@ -621,6 +621,8 @@ def test_an_escalation_names_the_line_clients_own_commands() -> None:
     asked = {**request, "questions": [{"question": "Which?", "header": "Q", "options": []}]}
     line = render("escalation.request", asked)
     assert line is not None and "/answer 12 <your answer>" in line and "/allow" not in line
+    offered = render("escalation.request", {**request, "suggested_rule": "Claude may push."})
+    assert offered is not None and "suggested rule: Claude may push." in offered
 
 
 def test_the_line_client_prints_no_character_a_terminal_would_obey(capsys) -> None:

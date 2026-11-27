@@ -143,9 +143,10 @@ def render(method: str, params: dict[str, Any]) -> str | None:
         params: Its params.
 
     Returns:
-        The line, or None for events the terminal does not show. An escalation is followed
-        by the commands of this client that show and decide it. An event that cannot be
-        turned back into its model (an older or newer session) is shown as its raw params.
+        The line, or None for events the terminal does not show. An escalation is shown with
+        a checker's suggested temporary rule, if any, and the commands of this client that
+        show and decide it. An event that cannot be turned back into its model (an older or
+        newer session) is shown as its raw params.
     """
     model = EVENT_TYPES.get(method)
     if model is None:
@@ -161,9 +162,17 @@ def render(method: str, params: dict[str, Any]) -> str | None:
                 if event.questions
                 else f"/allow {number} [note]  ·  /deny {number} [note]"
             )
+            # A suggested temporary rule is only shown: this client has no database login
+            # (`/rule` prints the `calu rule` command that adds it).
+            suggested = (
+                f"    suggested rule: {event.suggested_rule}  (/rule adds one)\n"
+                if event.suggested_rule
+                else ""
+            )
             return (
                 f"\n*** escalation {number}: {event.tool_name}\n"
                 f"    {event.reason}\n"
+                f"{suggested}"
                 f"    /why {number} shows everything  ·  {how}\n"
             )
         return format_event(event)

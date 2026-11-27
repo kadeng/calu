@@ -385,6 +385,10 @@ class Decision:
     then not reported as decided elsewhere."""
     note: str = ""
     """The note the user wrote for Claude, sent with the next allow or deny."""
+    suggested_rule: str = ""
+    """A temporary rule a checker suggested (`escalation.request`); "" for none. The card
+    (`render.card_lines`) shows it as the `/rule` command that adds it; it is never added by
+    itself."""
     armed: bool = False
     """True after the first allow key on a step a deny rule stopped; the second one allows."""
     error: str = ""
@@ -2062,6 +2066,7 @@ class SessionModel:
             by_rule=by_rule and not questions,
             picks=[set() for _ in questions],
             free=["" for _ in questions],
+            suggested_rule=request.suggested_rule,
         )
         self.decisions[request.escalation_id] = decision
         change.decisions = True

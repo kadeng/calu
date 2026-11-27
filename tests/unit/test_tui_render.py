@@ -244,6 +244,9 @@ def test_the_decision_card_shows_the_step_the_reason_and_the_keys() -> None:
     noted = "\n".join(plain(render.card_lines(decision, model, view(76), (1, 2), max_lines=12)))
     assert "note for Claude: only this once" in noted
     assert "the session refused: no open escalation e1" in noted
+    decision.suggested_rule = "Claude may force-push its own branches."
+    offered = "\n".join(plain(render.card_lines(decision, model, view(76), (1, 2), max_lines=12)))
+    assert "suggested rule: /rule Claude may force-push its own branches." in offered
 
 
 def test_a_reconnecting_client_offers_no_decision_keys() -> None:

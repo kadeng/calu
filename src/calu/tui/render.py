@@ -1640,7 +1640,8 @@ def card_lines(
     Returns:
         The lines: a head with kind, agent, tool, the escalation's id (`#12`, as `/allow`,
         `/deny`, `/why` and `calu resolve` take it) and waiting time; the step or the question
-        with its options; the reason; the user's note and the session's refusal if any; and
+        with its options; the reason; a checker's suggested temporary rule as the `/rule`
+        command that adds it; the user's note and the session's refusal if any; and
         the keys, as many as fit the width, or, while this client's decision is on its way,
         a line that says so.
     """
@@ -1683,7 +1684,8 @@ def card_lines(
         body, hidden = card_step(decision, model, view, _step_room(decision, max_lines))
         lines += body
         reason = Text.assemble(("Stopped: ", palette.muted), (decision.reason, palette.fg))
-        room = max(1, max_lines - len(lines) - 1 - bool(decision.note) - bool(decision.error))
+        extra = bool(decision.note) + bool(decision.error) + bool(decision.suggested_rule)
+        room = max(1, max_lines - len(lines) - 1 - extra)
         wrapped = wrap(reason, view.width - 4)
         if len(wrapped) > room:
             wrapped = wrapped[:room]
@@ -1698,6 +1700,15 @@ def card_lines(
         if total > 1:
             hints.append((7, "] next"))
         hints.append((1, "the second press confirms, any other key types"))
+    if decision.suggested_rule and not decision.is_question:
+        # Design section 5: offered, never added by itself. The full-screen client has no form
+        # fields on its cards, so it names the command that adds the rule (or an edited one).
+        lines.append(
+            Text.assemble(
+                ("  suggested rule: ", palette.accent),
+                (cut(f"/rule {decision.suggested_rule}", view.width - 21), palette.fg),
+            )
+        )
     if decision.note:
         lines.append(
             Text.assemble(
