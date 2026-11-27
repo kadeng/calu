@@ -370,7 +370,8 @@ def combine_decisions(verdicts: list[tuple[str, CheckDecision]]) -> CheckDecisio
     `checker_runs` row -- and every non-empty comment is kept; both name the checker they came
     from when more than one checker ran, so a denial can be attributed. The summary of the step
     is taken from the first checker that wrote one, because all of them describe the same step
-    and the route's own checker comes first.
+    and the route's own checker comes first. An escalated step keeps the first suggested rule
+    of a checker that escalated it; any other decision keeps none.
 
     Args:
         verdicts: One (checker name, decision) pair per checker that ran, the route's own
@@ -423,11 +424,20 @@ def combine_decisions(verdicts: list[tuple[str, CheckDecision]]) -> CheckDecisio
         (name, decision.comment.strip()) for name, decision in verdicts if decision.comment.strip()
     ]
     summary = next((d.step_summary for _, d in verdicts if d.step_summary.strip()), "")
+    suggested = next(
+        (
+            d.suggested_rule.strip()
+            for _, d in verdicts
+            if d.decision is Decision.ESCALATE and d.suggested_rule.strip()
+        ),
+        "",
+    )
     return CheckDecision(
         decision=winner,
         reason=labelled(reasons),
         comment=labelled(comments),
         step_summary=summary,
+        suggested_rule=suggested if winner is Decision.ESCALATE else "",
     )
 
 

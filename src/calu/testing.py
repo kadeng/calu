@@ -13,6 +13,8 @@ without a model. It knows the test triggers of the shipped checker instructions
     otherwise                                                   -> PASS
     step text contains "calu:comment"   -> a remark to Claude next to the decision
     step text contains "calu:outside"   -> `writes_outside_worktree` true (else left out)
+    step text contains "calu:suggest=WORD", decision ESCALATE
+                                        -> `suggested_rule` "Claude may run WORD in this project."
 
 The rows are tried from the top. As in the shipped instructions, "calu:test-allow" and
 "calu:test-pass" count only in what the user wrote (the "**User:**" blocks of the context,
@@ -115,7 +117,10 @@ def _rule_based(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         decision, reason = "PASS", ""
     comment = "Fake checker remark (calu:comment)." if "calu:comment" in step else ""
     first_line = next((ln for ln in step.splitlines() if ln.startswith("Tool call")), "a step")
-    outside = {"writes_outside_worktree": True} if "calu:outside" in step else {}
+    extra: dict[str, object] = {"writes_outside_worktree": True} if "calu:outside" in step else {}
+    suggested = re.search(r"calu:suggest=([A-Za-z]+)", step)
+    if suggested and decision == "ESCALATE":
+        extra["suggested_rule"] = f"Claude may run {suggested.group(1)} in this project."
     return ModelResponse(
         parts=[
             ToolCallPart(
@@ -125,7 +130,7 @@ def _rule_based(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
                     "reason": reason,
                     "step_summary": f"Fake summary of {first_line}.",
                     "comment": comment,
-                    **outside,
+                    **extra,
                 },
             )
         ]

@@ -116,6 +116,17 @@ class StepVerdict(BaseModel):
             "is nothing worth saying. At most about 100 words."
         ),
     )
+    suggested_rule: str = Field(
+        default="",
+        description=(
+            "Only for ESCALATE, and optional: one temporary rule that would have let this "
+            "step pass, for the person to accept, edit or drop, e.g. \"Claude may run the "
+            "project's database tests against local containers.\" Write an intent or a "
+            "scope, not one literal command line. Leave empty when no rule would be sensible: "
+            "a backdoor, a deliberate evasion, or a step only a person can judge each time. "
+            "At most about 40 words."
+        ),
+    )
     step_summary: str = Field(
         description=(
             "What the step does and why Claude is doing it: one or two plain sentences for a "

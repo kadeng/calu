@@ -109,6 +109,9 @@ class PerCall:
     pending_reason: tuple[str, str] | None = None
     """(reason, source) of an escalation the session decided on and for which `ask` has not been
     called yet; None otherwise."""
+    pending_rule: str = ""
+    """The temporary rule a checker suggested with that escalation (`StepVerdict.
+    suggested_rule`), for the person's dialog; "" for none."""
     honesty: PendingHonesty | None = None
     """What the call changes in the honesty state once it succeeded; None if nothing, or once
     it was applied or discarded."""

@@ -1288,6 +1288,11 @@ class EscalationRequest(Event):
     """When the step began to wait. The snapshot of `state.get` carries the same value, so a
     client that attaches later can say how long the step has waited. None from a session that
     does not report it."""
+    suggested_rule: str = ""
+    """A temporary rule a checker suggested with the escalation, which would have let the step
+    pass (agent/records/notes/temporary-rules-design.md, section 5); "" for none. A client
+    shows it in an editable field next to Allow and Deny and adds it with the user login if
+    the field is not empty when the person decides. The session never adds it."""
 
 
 class EscalationResolved(Event):

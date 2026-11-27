@@ -4015,7 +4015,9 @@ class Session:
         if result.decision is Decision.ESCALATE:
             self.desk.expect_ask(step, source)
             if step.tool_use_id:
-                self._run_state.call(step.tool_use_id).pending_reason = (result.reason, source)
+                call = self._run_state.call(step.tool_use_id)
+                call.pending_reason = (result.reason, source)
+                call.pending_rule = result.suggested_rule
         verdict = {
             Decision.PASS: Verdict.PASS,
             Decision.ALLOW: Verdict.ALLOW,
@@ -4260,9 +4262,10 @@ class Session:
         """
         call = self._run_state.peek(step.tool_use_id or "")
         pending_reason, call.pending_reason = call.pending_reason, None
+        suggested, call.pending_rule = call.pending_rule, ""
         self._run_state.release(step.tool_use_id or "")
         reason, source = pending_reason or (HARNESS_ASKED, "harness")
-        asked = await self.desk.ask(step, reason, source)
+        asked = await self.desk.ask(step, reason, source, suggested_rule=suggested)
         if (
             source == "clock"
             and asked.outcome in ("allowed", "denied")

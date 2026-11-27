@@ -407,7 +407,7 @@ class EscalationDesk:
         """
         return [esc.request for esc in self.escalations.values() if esc.request is not None]
 
-    async def ask(self, step: Step, reason: str, source: str) -> Asked:
+    async def ask(self, step: Step, reason: str, source: str, suggested_rule: str = "") -> Asked:
         """Ask the human about `step` and wait for the answer; say how the escalation ended.
 
         Side effects: opens an `escalations` row, emits `escalation.request`, refreshes the
@@ -421,6 +421,9 @@ class EscalationDesk:
             step: The tool call that needs a decision.
             reason: Why it needs a decision; the human reads it.
             source: Who escalated (see `Escalation.source`).
+            suggested_rule: A temporary rule a checker suggested; "" for none. It goes into the
+                `escalation.request` event (`EscalationRequest.suggested_rule`, defined in
+                `calu.protocol.messages`) and into the row's context, for the clients.
 
         Returns:
             The answer and the outcome (see `Outcome`). The outcome is what the reviews after a
@@ -442,7 +445,7 @@ class EscalationDesk:
                 # capability request the tool name and the input say nothing actionable (D60).
                 reason = f"{step.asked_about}\n\n{reason}"
             rendered = _render_safely(step, self._workspace)
-            db_id = await self._open_row(step, reason, rendered)
+            db_id = await self._open_row(step, reason, rendered, suggested_rule)
             if db_id is None:
                 return Asked(
                     HumanAnswer(allow=False, message=DB_UNREACHABLE, cancelled=True),
@@ -460,6 +463,7 @@ class EscalationDesk:
                 reason=reason,
                 rendered=rendered,
                 opened_at=datetime.now(UTC),
+                suggested_rule=suggested_rule,
             )
             self.escalations[escalation_id] = esc
         finally:
@@ -504,13 +508,17 @@ class EscalationDesk:
         assert esc.answer is not None
         return Asked(esc.answer, esc.outcome)
 
-    async def _open_row(self, step: Step, reason: str, rendered: str) -> int | None:
+    async def _open_row(
+        self, step: Step, reason: str, rendered: str, suggested_rule: str = ""
+    ) -> int | None:
         """Open an `escalations` row for a step that needs a human decision.
 
         Args:
             step: The tool call.
             reason: Why it needs a decision.
             rendered: The step rendered as Markdown, for the operator.
+            suggested_rule: A checker's suggested temporary rule; stored in the row's context
+                as `suggested_rule` when not empty, for the escalation page.
 
         Returns:
             The id of the row, or None if it could not be stored in
@@ -518,6 +526,8 @@ class EscalationDesk:
             store failure (`store_failed` of the constructor).
         """
         context = self._row_context(step, rendered)
+        if suggested_rule:
+            context = {**context, "suggested_rule": suggested_rule}
         pauses: tuple[float | None, ...] = (*OPEN_ESCALATION_RETRY_S, None)
         for pause in pauses:
             try:

@@ -1061,6 +1061,29 @@ def test_the_honesty_checker_neither_vetoes_allow_nor_hides_the_answer_on_execut
     assert executes(fake, Route.COMMAND, runs, True) is False  # pyright: ignore[reportArgumentType]
 
 
+def test_an_escalation_keeps_the_suggested_rule_of_a_checker_that_escalated() -> None:
+    """Design section 5: one suggestion at most, only with an escalation."""
+    from calu.checkers import CheckDecision, Decision
+
+    def verdict(decision: Decision, rule: str = "") -> CheckDecision:
+        """A decision with a summary and maybe a suggested rule."""
+        return CheckDecision(decision=decision, reason="r", step_summary="s", suggested_rule=rule)
+
+    combine = gate_module.combine_decisions
+    escalated = combine(
+        [
+            ("command", verdict(Decision.PASS, "not from a passing checker")),
+            ("security", verdict(Decision.ESCALATE, " Claude may run make. ")),
+            ("other", verdict(Decision.ESCALATE, "a second one")),
+        ]
+    )
+    assert escalated.suggested_rule == "Claude may run make."
+    denied = combine(
+        [("command", verdict(Decision.DENY)), ("security", verdict(Decision.ESCALATE, "x"))]
+    )
+    assert denied.suggested_rule == "", "a denied step offers no rule"
+
+
 async def test_the_note_of_a_human_decision_is_user_input_for_the_checkers(tmp_path: Path):
     """Seen with real checkers: the user denied a step with the note "write it to ./env.sh
     instead", Claude did that, and the command checker refused the new step because "the user

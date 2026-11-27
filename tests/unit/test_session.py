@@ -171,6 +171,26 @@ async def test_escalation_waits_for_human(tmp_path: Path):
     assert rows[1].note == "not today"
 
 
+async def test_a_suggested_rule_reaches_the_escalation_and_its_row(tmp_path: Path):
+    """The checker's suggestion is offered to the person; the session adds no rule itself."""
+    step = {
+        "tool": "Bash",
+        "input": {"command": "make # calu:escalate calu:suggest=make"},
+        "result": "made",
+    }
+    session, rec, store = make_session(tmp_path, [[step], [dict(step, input={"command": "ls"})]])
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="build"))
+        (asked,) = await rec.wait_for(EscalationRequest)
+        assert asked.suggested_rule == "Claude may run make in this project."
+        context = store.contexts[int(asked.escalation_id)]
+        assert context["suggested_rule"] == asked.suggested_rule
+        await session.decide_escalation(asked.escalation_id, "allow", None)
+        await rec.wait_for(TurnResult)
+        await session.stop()
+
+
 async def test_escalation_resolved_in_the_database_continues_the_session(tmp_path: Path):
     session, rec, store = make_session(
         tmp_path,
