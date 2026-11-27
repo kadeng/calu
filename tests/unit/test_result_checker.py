@@ -342,6 +342,29 @@ def test_an_escalation_without_a_note_takes_the_summary_as_its_note() -> None:
         _require_note(last, ResultReview(verdict=ResultVerdict.DENY, summary="s"))
 
 
+def test_a_note_written_into_the_summary_is_taken_out_of_it() -> None:
+    """The failure of 2026-11-27: the model left `note` out and wrote its remark at the end of
+    the summary after "Note:". The summary is split there and the check does not fail. The
+    schema the model is shown names `note` as required, so that it writes the key at all."""
+    from types import SimpleNamespace
+
+    from calu.checkers.result_checker import ResultReview, ResultVerdict, _require_note
+
+    first: Any = SimpleNamespace(retry=0, max_retries=2)
+    review = _require_note(
+        first,
+        ResultReview(
+            verdict=ResultVerdict.ANNOTATE,
+            summary="The subagent wrote 13 drafts.\n\nNote: Check the quotations first.",
+        ),
+    )
+    assert review.verdict is ResultVerdict.ANNOTATE
+    assert review.summary == "The subagent wrote 13 drafts."
+    assert review.note == "Check the quotations first."
+    assert "note" in ResultReview.model_json_schema()["required"]
+    assert ResultReview(verdict=ResultVerdict.ACCEPT, summary="s").note == ""
+
+
 async def test_a_denied_task_goes_back_to_claude_with_the_reason(tmp_path: Path):
     """Requirement 51: the subagent checker's DENY for a task refuses the Agent call, and the
     reason Claude reads says that it may write the task again. Nobody is asked."""

@@ -28,13 +28,14 @@ See DOCUMENTATION.md "Checking subagent results" for the failure case it address
 through reviewer subagents).
 """
 
+import re
 import secrets
 import time
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import Agent, CachePoint, ModelRetry, RunContext, UsageLimits
 from pydantic_ai.capabilities import Caching
 from pydantic_ai.models import Model
@@ -82,8 +83,30 @@ class ResultVerdict(StrEnum):
     ESCALATE = "ESCALATE"
 
 
+NOTE_IN_SUMMARY = re.compile(r"\n\s*Note:\s*")
+"""Where a summary goes over into the note that a model wrote into it (`_require_note`)."""
+
+
+def _note_is_required(schema: dict[str, Any]) -> None:
+    """Name `note` as a required key in the schema the model is shown.
+
+    Validation still accepts an answer without it. Measured on 2026-11-27 with Claude Haiku:
+    with `note` optional, the model answered `{"verdict": "ANNOTATE", "summary": ...}` in three
+    attempts out of three, with its remark at the end of the summary or missing, and the check
+    failed four times in one session.
+
+    Args:
+        schema: The JSON schema of `ResultReview`; changed in place.
+    """
+    required = schema.setdefault("required", [])
+    if "note" not in required:
+        required.append("note")
+
+
 class ResultReview(BaseModel):
     """Structured output of the result checker (field descriptions are shown to the model)."""
+
+    model_config = ConfigDict(json_schema_extra=_note_is_required)
 
     verdict: ResultVerdict = Field(
         description=(
@@ -374,21 +397,25 @@ def _escalated_for_cut(outcome: ResultOutcome, cut: int, what: str) -> ResultOut
 def _require_note(ctx: RunContext[Any], output: ResultReview) -> ResultReview:
     """Output validator: ANNOTATE, DENY and ESCALATE need a non-empty note.
 
+    A model that leaves `note` out often writes it into the summary, after a line that
+    begins "Note:" (seen on 2026-11-27, see `_note_is_required`). Such a summary is split
+    there: the text after it becomes the note.
+
     An ESCALATE without a note takes the summary as its note: a small model often writes
     what the user has to decide into the summary, and asking it again fails the check as often
     as it helps. The person who decides then reads that text. An ANNOTATE or DENY without a
     note is asked for again. On the last attempt an ANNOTATE without a note counts as ACCEPT:
-    it has nothing to tell Claude, and a check that fails for it would make a person decide
-    about an ordinary task or result (seen three times on 2026-11-27, the cause not
-    confirmed).
+    it has nothing to tell Claude, and a check that fails for it makes a person decide about
+    an ordinary task or result.
 
     Args:
         ctx: The run's context; `retry` and `max_retries` say whether this is the last attempt.
         output: The model's review.
 
     Returns:
-        The review; for an ESCALATE without a note, a copy whose note is the summary; for an
-        ANNOTATE without a note on the last attempt, a copy with the verdict ACCEPT.
+        The review; with the note taken out of the summary where the model wrote it there;
+        for an ESCALATE without a note, a copy whose note is the summary; for an ANNOTATE
+        without a note on the last attempt, a copy with the verdict ACCEPT.
 
     Raises:
         ModelRetry: If an ANNOTATE or DENY has no note and attempts are left, if a DENY
@@ -396,6 +423,14 @@ def _require_note(ctx: RunContext[Any], output: ResultReview) -> ResultReview:
     """
     if output.verdict is ResultVerdict.ACCEPT or output.note.strip():
         return output
+    found = NOTE_IN_SUMMARY.search(output.summary)
+    if found and output.summary[: found.start()].strip() and output.summary[found.end() :].strip():
+        return output.model_copy(
+            update={
+                "summary": output.summary[: found.start()].strip(),
+                "note": output.summary[found.end() :].strip(),
+            }
+        )
     if output.verdict is ResultVerdict.ESCALATE and output.summary.strip():
         return output.model_copy(update={"note": output.summary.strip()})
     if output.verdict is ResultVerdict.ANNOTATE and ctx.retry >= ctx.max_retries:

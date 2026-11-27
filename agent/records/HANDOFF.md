@@ -70,9 +70,8 @@ reason and retried."
   **That change is Claude's reading of the owner's ruling; the owner has not confirmed it.**
   A task that reaches beyond the request is denied; a task that hands over a refused step
   still escalates.
-- An ANNOTATE without a note counts as ACCEPT on the last attempt, where it failed the
-  check before (`result_checker._require_note`). This removes one possible cause of the
-  failed checks of 2026-11-27; whether it was the cause is not known.
+- The failed checks of 2026-11-27 are explained and fixed ("Open items" below): the model
+  left the `note` key out.
 - A check that fails still escalates. The owner was asked whether that should stay and has
   not answered.
 - Evaluation cases: `review-demands-a-redesign` and
@@ -80,7 +79,7 @@ reason and retried."
   `subagent-task-asks-for-more-than-the-user-wanted` expects DENY. Not run against a real
   model.
 - Not done: a run in the Cua desktop or with a real model; the database layer was not run;
-  the cause of the failed checks (the server's log in `/var/lib/calu/log/` needs root).
+  the fix of the failed checks with a real model.
 - `tests/unit/test_protocol_side_usage.py::test_the_usage_panel_reads_claude_codes_usage_without_a_turn`
   fails in this checkout with and without these changes (an extra `session.state` event).
   Not investigated.
@@ -260,15 +259,15 @@ Open items found on the way:
   --sudo --web` fail to start (the owner, 2026-11-26). Not investigated.
 - A subagent check failed once with "Exceeded maximum output retries (1)"; ten live repeats did
   not reproduce it. Two retries and a log of the refused answers are in place; read the log
-  if it happens again. **It happened again on 2026-11-27, three times in one session**
-  ("Exceeded maximum output retries (2)"), on the results of three of the nine subagents
-  (the one that archived plan rows and two of the four that shortened rows; the six others,
-  reports of the same kind among them, were reviewed normally); the owner saw the escalations
-  and asked whether this is a bug. The escalation is as designed (a failed check never
-  approves). The failing check is a defect, cause not known: the refused answers are in the
-  server's log (`/var/lib/calu/log/`, root's), which this session could not read. Two
-  causes to check there: an ANNOTATE without a note three times in a row
-  (`result_checker._require_note`), or an answer cut at `max_tokens`.
+  if it happens again. **Found and fixed on 2026-11-27.** It happened four times in one
+  session ("Exceeded maximum output retries (2)"): once on a task and on the results of
+  three of nine subagents. The server's log (read with the owner's leave) shows the same
+  answer every time: `{"verdict": "ANNOTATE", "summary": ...}` with no `note` key, three
+  attempts out of three, the remark at the end of the summary after "Note:" or missing.
+  `note` was an optional key of the schema. Fix: the schema shown to the model names `note`
+  as required (`result_checker._note_is_required`), a note written into the summary is taken
+  out of it, and an ANNOTATE that still has no note on the last attempt counts as ACCEPT.
+  Unit tests only; not yet seen with a real model.
 - The terminal client and the PyCharm plugin have no pause button yet (they show the notices).
 - `honesty.generated_paths` is not set for this repository; the owner decides whether to list
   `^src/calu/web/static/pane/`.
