@@ -66,6 +66,12 @@ export interface GraphInput {
   sessionId: string | null;
   /** The honesty state of the session; a new object after every `honesty.update`. */
   honesty: HonestyInfo | null;
+  /**
+   * How many tool calls of the session have a result. A finished call can change the graph
+   * without changing `honesty`: a new caller of a dishonest unit, or one more changed
+   * function in a file that was unreviewed already.
+   */
+  steps: number;
 }
 
 /** The elements of the view while it is shown. */
@@ -111,7 +117,7 @@ function svgText(cls: string, x: number, y: number, text: string): SVGTextElemen
 /** The honesty graph view. Create one per page, for the element that holds it. */
 export class HonestyGraphView {
   private els: Elements | undefined;
-  private input: GraphInput = { visible: false, attached: false, sessionId: null, honesty: null };
+  private input: GraphInput = { visible: false, attached: false, sessionId: null, honesty: null, steps: 0 };
   /** The last graph of the session shown, or `null` before the first answer. */
   private graph: GraphData | null = null;
   /** The error of the last request, if it failed. */
@@ -124,6 +130,8 @@ export class HonestyGraphView {
   private session: string | null = null;
   /** The honesty state the graph was last asked for; `undefined` if it was not asked for. */
   private asked: HonestyInfo | null | undefined;
+  /** `GraphInput.steps` when the graph was last asked for. */
+  private steps = -1;
   private zoom = 1;
   /** The width the layout was computed for. */
   private width = 0;
@@ -161,8 +169,8 @@ export class HonestyGraphView {
    *
    * Side effects: while `visible` is false the view removes its elements, stops its timers and
    * asks nothing. While it is true, a session is attached and code honesty is on, the view
-   * asks the host for the graph (`honestyGraphGet`) when it opens, when the session changes
-   * and when `honesty` is a new object; never while the page is hidden.
+   * asks the host for the graph (`honestyGraphGet`) when it opens, when the session changes,
+   * when `honesty` is a new object and when `steps` changed; never while the page is hidden.
    *
    * @param input The state.
    * @returns Nothing.
@@ -183,9 +191,10 @@ export class HonestyGraphView {
     if (!input.attached || mode === 'off') {
       this.refresh.stop();
       this.forget();
-    } else if (!document.hidden && this.asked !== input.honesty) {
+    } else if (!document.hidden && (this.asked !== input.honesty || this.steps !== input.steps)) {
       const first = this.asked === undefined;
       this.asked = input.honesty;
+      this.steps = input.steps;
       this.refresh.want(first);
     }
     this.draw();

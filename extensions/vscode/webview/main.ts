@@ -1724,7 +1724,9 @@ function render(): void {
   const graphShown = ui.graph && !setupOnly;
   renderList(setupOnly || graphShown);
   graphSlot.hidden = !graphShown;
-  graph.update({ visible: graphShown, attached: ctx.attached, sessionId: view.sessions.attachedId, honesty: view.honesty });
+  // Counted only while the graph is shown: a finished tool call asks for the graph again.
+  const steps = graphShown ? Object.values(view.tools).filter((tool) => tool.result !== undefined).length : 0;
+  graph.update({ visible: graphShown, attached: ctx.attached, sessionId: view.sessions.attachedId, honesty: view.honesty, steps });
   setSection(stripSlot, JSON.stringify([otherOpenEscalations(view, ui.tab), ctx.held().byAgent]), buildStrip);
   setSection(sideSlot, JSON.stringify([ui.side, view.side]), buildSide);
   setSection(queueSlot, JSON.stringify(view.queue), buildQueue);
