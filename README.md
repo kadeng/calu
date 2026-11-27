@@ -20,13 +20,12 @@
 unwatched it drifts from the task, and a wrong step costs more the later it is caught.
 
 **What Calu does.** It runs [Claude Code](https://claude.com/claude-code) and puts **independent
-agents** (checker agents) in charge that need to approve (and can comment to Claude about) every command and
-every edit, and even every subagent invocation and result: models that follow instructions you write and
-interpret them in the context of your (retold/narrated) chat session.
+agents** in place that check and approve and/or comment to Claude about every edit, every command,
+every tool call and even every subagent invocation and result. These agents have the narrow task to ensure that the main coding agent stays honest, stays on track, remains under your control and is stopped in it's track if it begins to write slop. All of this without requiring you to babysit every step. 
 
 These checker agents focus on a much narrower task than your main coding agent. They can only read
 and decide, never act or write on their own. They are much better at keeping your instructions
-in mind at all times.
+in mind at all times. At the same time, Claude Code stays in place. **Calu does not replace Claude Code**, it augments it-
 
 **Is this not just what "Auto" approval mode does?**
 
@@ -36,9 +35,11 @@ longer timespans or sessions. It will stop generally unsafe actions like uploadi
 remote server. It won't stop your agent from writing "load-bearing" in every third sentence; it won't steer your
 coding model to behave like you want it to. And it can be easily tricked by deception (dishonest code).*
 
-**Is this intended to let the agent code entirely autonomously without human supervision or input?**
+**Is this intended to let the agent code without human supervision or input?**
 
 No, that is still (more often than not) a bad idea except for systems with crystal clear requirements, proven designs and definition of done, like replicating an existing app. The primary intent of calu is to relieve a software engineer from common coding agent babysitting and oversight tasks, so not every single step the agent takes must be watched as it happens. Instead of watching every step, you can **use the time gained to write and review more code yourself again**. Calu is a **multi-agent coding system designed to keep you in the loop and actively participating.**. 
+
+Also, **Calu is not a replacement for sandboxing and security measues**. A malicious agent will in all likelihood still have a good chance of escaping supervision if it really intends to. At the same time, the likelihood of it happening is  probably reduced a lot since **the checker agents also monitor the thinking traces for deceptive intent**. If the agent obviously thinks about deceiving, it would be escalated to the user.
 
 ### Why you might want this
 
@@ -300,10 +301,10 @@ def print_hello_world() -> None:
 This function, on the other hand, is not honest. It implies one thing and does something surprising and potentially dangerous. If we as humans do this, we take responsibility for what happens. A coding agent does not. **The nice property about code honesty is that it can be checked
 for honesty with limited effort if we assume the rest of the codebase to be honest**. 
 
-Calu can do two things in this respect:
+Calu can do two things in this respect (entirely optional):
 
  * Every edit is checked whether it makes a code module dishonest or honest, and it remembers this. *This check has limited effort and scope, even Anthropics small Haiku can do this since it only needs to check whether the code and documentation are in agreement for isolated functions, assuming the rest of the codebase is honest.*
- * The code may not be run as long as there is any dishonest code in there.
+ * **Optional** The code may not be run as long as there is any dishonest code in there.
 
 Of course, trust has to start somewhere. So we assume that reputable third-party libraries are honest, and
 we typically also assert that the given preexisting state of the codebase is honest before we start enforcing
