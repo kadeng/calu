@@ -132,6 +132,23 @@ We should be able to implement that for the most common subagent message types a
 like the fact that after compaction I get to see the entire context. We should keep that,
 but also render this formatted or as plaintext, without XML."
 
+### Backlog (the owner, 2026-11-27): a stronger advisor model for honesty the small model is unsure about
+
+"We could let the Haiku model occasionally use a smarter advisor model to determine honesty
+of complex code - for example to examine the honesty of a very tricky function where Haiku
+feels too unsure to make a call either way. For example, it may return
+HONEST/DISHONEST/UNSURE and on UNSURE we use a more powerful fallback ( which then has to
+make a final decision and can't say UNSURE ) - Optional, of course, and maybe with a limited
+budget how often this may happen. We could then use Opus or Sonnet as advisors."
+
+Not designed and not built. Where it would touch the code, as Claude reads it:
+
+- The honesty checker answers HONEST or DISHONEST per file today (`HonestyAnswer`, D217), and
+  the reviewer answers per file too (`FileVerdict`). Both would get a third answer.
+- The reference judge (`calu.refindex.judge`) already has "unsure". There it keeps the place
+  for a check; an advisor could decide it.
+- New settings: the advisor's model, and how often it may be asked per session or per hour.
+
 ### The session in `~/projects/calu2` (2026-11-26): manual testing with the owner, then features
 
 The owner tested by hand in the VSCode extension and the web interface. This session fixed what
