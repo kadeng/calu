@@ -29,6 +29,7 @@ from calu.changes import SnapshotStore
 from calu.checkers.model import CodeMark
 from calu.checkers.tools import StepTime
 from calu.context.narrator import ClaudeOutput
+from calu.dependents import ContractChange
 from calu.protocol.messages import ChatImage, QueuedMessage
 
 STEP_TIMES_KEPT = 500
@@ -64,6 +65,10 @@ class PendingHonesty:
     """HEAD before a `clean_commit` ran; the commit is certified only if HEAD moved."""
     root: Path | None = None
     """The checkout a `clean_commit` runs in (D251); None for the session directory."""
+    contracts: list[ContractChange] = field(default_factory=list[ContractChange])
+    """For an edit with `honesty.dependents` on: the definitions whose signature or doc
+    comment the edit changes (`calu.dependents.contract_changes`). After the edit succeeded,
+    the code that uses them is recorded as to judge again."""
 
 
 @dataclass(frozen=True)

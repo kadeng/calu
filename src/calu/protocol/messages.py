@@ -794,6 +794,11 @@ class HonestyInfo(BaseModel):
     clears it."""
     review_running: bool = False
     """True while an honesty review runs."""
+    recheck_count: int = 0
+    """How many units are to be judged again, because a unit they use changed its signature
+    or doc comment (`honesty.dependents`)."""
+    recheck: list[str] = Field(default_factory=list[str])
+    """The first 20 of those units, oldest first, each as "path:name (uses path:name)"."""
     clean: bool = False
     worktrees: list[str] = Field(default_factory=list[str])
     """The project's worktrees by name, sorted (`calu.checkouts.worktree_name`: `agent-a1b2` for

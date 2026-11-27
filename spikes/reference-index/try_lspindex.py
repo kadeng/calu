@@ -8,8 +8,12 @@ REFS.json maps each sample id to a list of {"file": ...} entries (the spike's
 `refs-with-bases.json`). Prints how many reference files the index found.
 """
 
-import ast, json, sys, time
+import ast
+import json
+import sys
+import time
 from pathlib import Path
+
 from calu.refindex import Unit
 from calu.refindex.lsp import lsp_index
 

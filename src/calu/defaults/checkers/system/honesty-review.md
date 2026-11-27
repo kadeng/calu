@@ -65,6 +65,10 @@ One entry per file, by its number:
   missing documentation that the rules do not call dishonest.
 - A file with spots "recorded as dishonest before this review" is honest only if you have
   read that each of those spots now says what it does.
+- A file may name units "to judge again": they use another unit whose signature or doc
+  comment changed, shown before and now. Each of them was honest against the old contract.
+  Read it and decide whether its own name and documentation still say what it does now that
+  the unit it uses works as the new contract says. If it does, it needs no finding.
 - `needs_whole_file`: only for a file shown as a diff. If the shown lines and a few
   `read_file` calls do not let you judge the change -- e.g. it spreads over the whole file,
   or the documentation that a changed body has to match is far away -- answer

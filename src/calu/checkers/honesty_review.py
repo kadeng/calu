@@ -166,12 +166,19 @@ def batch_prompt(batch: Sequence[ReviewFile], baseline: str) -> str:
         baseline: The short id of the baseline commit, or "" without a baseline.
 
     Returns:
-        A heading, one line about the baseline, and per file: "## File N: path", the open
-        marks on it, whether the whole file follows or its change (since the baseline, or
-        since its content last verified, as `ReviewFile.against` says), the text in a code
-        fence, and for a marked file shown as a diff the present source of its marked
-        definitions (`ReviewFile.excerpts`) in a second fence. Paths, symbols and reasons are
-        rendered on one line (`shown`).
+        A heading and one line about the baseline. Then, for each file:
+
+        - "## File N: path";
+        - the open marks on it;
+        - each unit to judge again (`ReviewFile.recheck`), with the unit it uses and that
+          unit's signature and doc comment before and now;
+        - whether the whole file follows or its change, and since when (the baseline, or the
+          content last verified, as `ReviewFile.against` says);
+        - that text in a code fence;
+        - for a file shown as a diff with marks or units to judge again: the present source
+          of those definitions (`ReviewFile.excerpts`) in a second fence.
+
+        Paths, symbols and reasons are rendered on one line each (`shown`).
     """
     parts = [
         "# Files to review",
@@ -191,6 +198,16 @@ def batch_prompt(batch: Sequence[ReviewFile], baseline: str) -> str:
                 for mark in file.marks
             )
             lines.append(f"Recorded as dishonest before this review: {spots}.")
+        for unit in file.recheck:
+            where = shown(unit.symbol, NOTE_PATH_CHARS) or "the top level of the file"
+            lines.append(
+                f"To judge again: {where}"
+                f" uses {shown(unit.cause, NOTE_PATH_CHARS)}, whose signature or doc comment "
+                "changed. It was judged honest against the old contract. The contract before "
+                "and now:"
+            )
+            lines.append(fence(unit.before, "python"))
+            lines.append(fence(unit.after, "python"))
         lines.append(
             "The whole file:"
             if file.whole
@@ -254,6 +271,7 @@ def verdicts(
                 for finding in verdict.findings
             ),
             marks=tuple(mark.id for mark in file.marks),
+            recheck=tuple(unit.id for unit in file.recheck),
         )
     return found, wanted
 
@@ -280,7 +298,14 @@ def whole_files(
             )
             continue
         second.append(
-            ReviewFile(file.path, file.sha256, file.content, whole=True, marks=file.marks)
+            ReviewFile(
+                file.path,
+                file.sha256,
+                file.content,
+                whole=True,
+                marks=file.marks,
+                recheck=file.recheck,
+            )
         )
     return second, unjudged
 

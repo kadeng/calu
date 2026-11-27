@@ -200,6 +200,7 @@ from calu.defaults.instructions import (
     redaction_instructions,
     review_instructions,
 )
+from calu.dependents import ContractChange, contract_changes, find_dependents
 from calu.escalations import ANSWER_TEMPLATE as ANSWER_TEMPLATE
 from calu.escalations import ASK_PENDING_S as ASK_PENDING_S
 from calu.escalations import DB_UNREACHABLE as DB_UNREACHABLE
@@ -234,8 +235,10 @@ from calu.honesty import (
     Reviewed,
     ReviewPlan,
     combine_snapshots,
+    expected_edit,
     find_baseline,
     merge_plans,
+    read_regular,
     resolve_commit,
     run_git,
     shown,
@@ -292,6 +295,11 @@ from calu.protocol.messages import (
 )
 from calu.protocol.messages import CheckResult as CheckResultEvent
 from calu.recorder import Recorder, model_name
+from calu.refindex import SearchIndex
+from calu.refindex.combined import CombinedIndex
+from calu.refindex.judge import MatchJudge
+from calu.refindex.lsp import LspNavigator, lsp_index
+from calu.refindex.navigator import NavigatorIndex
 from calu.run_state import STEP_TIMES_KEPT as STEP_TIMES_KEPT
 from calu.run_state import PendingHonesty, RunState
 from calu.steps import files_before as files_before
@@ -589,6 +597,12 @@ MARKER_UNCHANGED = (
 )
 """The note when the marker is repeated with nothing done in between."""
 
+DEPENDENTS_FALLBACK = (
+    "honesty: the search for the code that uses {cause} did not finish in time or failed "
+    "({why}); every hit of the word search counts"
+)
+"""The log line when the language server or the model did not finish (`_judge_dependents`)."""
+
 RULED_ROUTES = frozenset({"command", "edit", "changeset"})
 """The routes whose checkers read the temporary rules (`calu.temp_rules`; the owner chose the
 command and edit checkers, and the changeset checker that reviews a commit)."""
@@ -808,6 +822,11 @@ class Session:
         self._notice_due = False
         """Whether Claude's main agent is to be told about the open marks with the next
         checked tool call (`_honesty_notice`)."""
+        self._navigator: NavigatorIndex | None = None
+        """The language server that settles hits for `_judge_dependents`
+        (`honesty.dependents_navigator`); None while none was asked for."""
+        self._judge: MatchJudge | None = None
+        """The reference judge of `_judge_dependents`, with its cache of answers."""
         self._marker_note = ""
         """What the main agent is told with its next checked tool call about the review an
         agent asked for with `REVIEW_MARKER` (`_marker_review`); "" for nothing."""
@@ -2260,6 +2279,11 @@ class Session:
                     "unreviewed_count": len(snapshot.unreviewed.paths),
                     "unreviewed": list(snapshot.unreviewed.paths[:NOTE_LIMIT]),
                     "review_required": snapshot.review_required,
+                    "recheck_count": len(snapshot.recheck),
+                    "recheck": [
+                        f"{unit.label()} (uses {unit.cause})"
+                        for unit in snapshot.recheck[:NOTE_LIMIT]
+                    ],
                     "clean": snapshot.clean,
                 }
             )
@@ -2268,7 +2292,13 @@ class Session:
         self._honesty_sent = info
         await self._emit_safely(HonestyUpdate(**info.model_dump()))
 
-    def _keep_honesty(self, step: Step, decided: Decided, expected: str | None) -> None:
+    def _keep_honesty(
+        self,
+        step: Step,
+        decided: Decided,
+        expected: str | None,
+        contracts: list[ContractChange] | None = None,
+    ) -> None:
         """Remember what a step changes in the honesty state if its tool call succeeds.
 
         Nothing is applied here: the checkers judged a call that has not run. The record is
@@ -2288,6 +2318,8 @@ class Session:
             decided: The gate's decision with the checkers' answers.
             expected: For an edit, the SHA-256 `HonestyState.expect_edit` computed before the
                 checkers judged it; None otherwise.
+            contracts: For an edit, the definitions whose signature or doc comment it changes
+                (`_contract_changes`); None or [] otherwise.
         """
         if self.config.honesty.mode == "off" or not step.tool_use_id:
             return
@@ -2321,6 +2353,7 @@ class Session:
             expected_sha256=expected,
             checked=checked,
             clean_commit=decided.clean_commit,
+            contracts=list(contracts or []),
         )
 
     async def tool_succeeded(self, step: Step) -> None:
@@ -2366,9 +2399,11 @@ class Session:
         """Apply or discard what a tool call changes in the honesty state (section 2).
 
         For a call that succeeded, the record kept at the gate is applied (`_apply_record`).
-        For a call that failed or was denied, the record is dropped and nothing changes.
+        If the edit changed the signature or doc comment of definitions, the code that uses
+        them is then recorded as to judge again (`_judge_dependents`). For a call that failed
+        or was denied, the record is dropped and nothing changes.
 
-        Side effects: as `_apply_record`. Never raises.
+        Side effects: as `_apply_record` and `_judge_dependents`. Never raises.
 
         Args:
             tool_use_id: Claude's id of the call.
@@ -2380,6 +2415,8 @@ class Session:
         if pending is None or not ok or self.config.honesty.mode == "off":
             return
         await self._apply_record(pending)
+        if pending.contracts:
+            await self._judge_dependents(pending.contracts)
 
     async def _apply_record(self, pending: PendingHonesty) -> None:
         """Change the honesty state by one record of marks, an edit or a commit.
@@ -3385,9 +3422,10 @@ class Session:
         Open escalations are cancelled (their tool calls are denied). Claude's text that was
         not narrated yet is dropped. Waits for the background work of the last turn (narration,
         storing the turn, folding), at most `BACKGROUND_TIMEOUT_S` seconds, and for the
-        session trace to be written to its end, at most `TRACE_END_TIMEOUT_S` seconds. Does
-        nothing if no session runs and nothing is pending. A run that ends after this call was
-        ended by calu, and is not resumed automatically (`auto_resume`).
+        session trace to be written to its end, at most `TRACE_END_TIMEOUT_S` seconds. Stops
+        the language server of `_dependents_index`, if one runs. Does nothing else if no
+        session runs and nothing is pending. A run that ends after this call was ended by
+        calu, and is not resumed automatically (`auto_resume`).
         """
         self._stops += 1
         self._run_state.claude_outputs.clear()
@@ -3400,6 +3438,7 @@ class Session:
         with anyio.move_on_after(TRACE_END_TIMEOUT_S):
             # The run's last act is to write what its trace still holds (`_run`).
             await self._trace_closed.wait()
+        await anyio.to_thread.run_sync(self._close_navigator)
         if self.state not in ("stopped", "failed"):
             await self._set_state_safely("stopped")
 
@@ -4031,6 +4070,7 @@ class Session:
         pending = PendingNarration(self._run_state.claude_outputs.pop(step.agent_id, []))
         step_id: int | None = None
         expected: str | None = None
+        contracts: list[ContractChange] = []
         try:
             await self._refresh_checkouts()
             own = await anyio.to_thread.run_sync(self.step_checkouts, step)
@@ -4043,6 +4083,7 @@ class Session:
             step.generated = await anyio.to_thread.run_sync(self.gate.generated_named, step)
             step_id = await self.recorder.add_step(step)
             expected = await self._expect_edit(step)
+            contracts = await self._contract_changes(step)
             self._follow_temporary_rules()
             decided = await self.gate.decide(step, pending)
         except Exception as exc:
@@ -4058,7 +4099,7 @@ class Session:
             self.locks.mark_writes_outside(step)
         await self._mark_at_once(step, decided)
         try:
-            self._keep_honesty(step, decided, expected)
+            self._keep_honesty(step, decided, expected, contracts)
             if decided.clean_commit and step.tool_use_id:
                 kept = self._run_state.peek(step.tool_use_id).honesty
                 if kept is not None:
@@ -6120,6 +6161,158 @@ class Session:
         except Exception:
             log.exception("predicting the content of an edit failed")
             return None
+
+    async def _contract_changes(self, step: Step) -> list[ContractChange]:
+        """Find, before an edit runs, the definitions whose signature or doc comment it changes.
+
+        Args:
+            step: The tool call.
+
+        Returns:
+            The changes (`calu.dependents.contract_changes`) for an Edit, Write or MultiEdit of
+            a Python file inside the session directory, while `honesty.mode` is not "off" and
+            `honesty.dependents` is on. [] for every other call, and if the file cannot be
+            read, the edit cannot be predicted, or the computation fails.
+        """
+        cfg = self.config.honesty
+        raw = step.tool_input.get("file_path")
+        if cfg.mode == "off" or not cfg.dependents or step.tool_name not in EDIT_TOOLS or not raw:
+            return []
+        path = (Path(step.cwd or self.workspace) / str(raw)).resolve()
+
+        def compute() -> list[ContractChange]:
+            """Read the file and compare it with what the edit will write.
+
+            Returns:
+                The changes; [] as described above.
+            """
+            try:
+                relative = path.relative_to(self.workspace.resolve()).as_posix()
+            except ValueError:
+                return []
+            before = read_regular(path) if path.exists() else b""
+            if before is None:
+                return []
+            after = expected_edit(step.tool_name, step.tool_input, before or None)
+            if after is None:
+                return []
+            return contract_changes(
+                relative,
+                before.decode("utf-8", errors="replace"),
+                after.decode("utf-8", errors="replace"),
+            )
+
+        try:
+            return await anyio.to_thread.run_sync(compute)
+        except Exception:
+            log.exception("finding the contract changes of an edit failed")
+            return []
+
+    def _dependents_index(self) -> CombinedIndex:
+        """Build the reference index that finds the code using a changed unit.
+
+        The word search of the session directory always. A language server if
+        `honesty.dependents_navigator` names one; it is started once and kept for the session.
+        The reference judge if `honesty.dependents_judge` is on. Its model is the test model
+        named "reference-judge" if the session was given one, else `honesty.reviewer_model`,
+        else the default model. Its answers are kept for the session.
+
+        Returns:
+            The combined index (`calu.refindex.combined`).
+        """
+        cfg = self.config.honesty
+        command = tuple(cfg.dependents_navigator)
+        if not command:
+            self._close_navigator()
+        elif (
+            self._navigator is None
+            or not isinstance(self._navigator.navigator, LspNavigator)
+            or self._navigator.navigator.command != command
+        ):
+            self._close_navigator()
+            self._navigator = lsp_index(self.workspace, command)
+        judge = None
+        if cfg.dependents_judge:
+            model = (
+                self._models.get("reference-judge")
+                or cfg.reviewer_model.strip()
+                or default_model(self.config.claude.use_bedrock)
+            )
+            if self._judge is None:
+                self._judge = MatchJudge(self.workspace, resolve_model(model))
+            else:
+                self._judge.model = resolve_model(model)
+            judge = self._judge
+        return CombinedIndex(SearchIndex(self.workspace), self._navigator, judge)
+
+    def _close_navigator(self) -> None:
+        """Stop the language server of `_dependents_index`, if one runs. Never raises."""
+        if self._navigator is not None:
+            self._navigator.close()
+        self._navigator = None
+
+    async def _judge_dependents(self, changes: Sequence[ContractChange]) -> None:
+        """Record the code that uses each changed unit as to judge again.
+
+        For each change: the combined index finds the places that use the unit, within
+        `honesty.dependents_timeout_s`. If that runs out or fails, the word search alone is
+        asked, and every hit counts. The units around the places are recorded in the honesty
+        state (`HonestyState.add_recheck`).
+
+        Side effects: reads the project's files, may ask a language server and make model
+        calls, changes the honesty state, emits `log` events and `honesty.update`. The agent
+        waits meanwhile. Never raises: a failure is logged, and an honesty review is then
+        required, so that the state is not cleaner than it is.
+
+        Args:
+            changes: The definitions whose signature or doc comment an edit changed.
+        """
+        cfg = self.config.honesty
+        try:
+            for change in changes:
+                index = self._dependents_index()
+                try:
+                    with anyio.fail_after(cfg.dependents_timeout_s):
+                        found = await find_dependents(index, self.workspace, change)
+                except Exception as exc:
+                    why = "timeout" if isinstance(exc, TimeoutError) else type(exc).__name__
+                    await self._emit_safely(
+                        Log(
+                            level="warning",
+                            message=DEPENDENTS_FALLBACK.format(cause=change.cause, why=why),
+                        )
+                    )
+                    found = await find_dependents(
+                        SearchIndex(self.workspace), self.workspace, change
+                    )
+                async with self._honesty_lock:
+                    state = await anyio.to_thread.run_sync(
+                        self._state_for_path, self.workspace / change.path
+                    )
+                    added = await anyio.to_thread.run_sync(
+                        state.add_recheck, change.cause, change.before, change.after, found.units
+                    )
+                message = (
+                    f"honesty: {change.cause} changed its signature or doc comment; "
+                    f"{len(added)} unit(s) to judge again"
+                )
+                if found.problem:
+                    message += f" ({found.problem})"
+                await self._emit_safely(Log(level="info", message=message))
+        except Exception as exc:
+            log.exception("finding the code that uses a changed unit failed")
+            for state in list(self._states.values()):
+                state.review_required = True
+            await self._emit_safely(
+                Log(
+                    level="warning",
+                    message=(
+                        "honesty: the code that uses a changed unit could not be found "
+                        f"({type(exc).__name__}: {exc}); an honesty review is required"
+                    ),
+                )
+            )
+        await self.announce_honesty()
 
     async def _git_head(self) -> str | None:
         """Return the commit id of the workspace's git HEAD, cached for `GIT_HEAD_TTL_S`.

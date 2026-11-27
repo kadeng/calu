@@ -393,6 +393,41 @@ class Finding:
 
 
 @dataclass(frozen=True)
+class RecheckUnit:
+    """A unit that has to be judged again, because a unit it uses changed its contract.
+
+    A unit's contract is its name, its signature and its doc comment. The code that uses a
+    unit was judged honest against the old contract. When that contract changes, the using
+    unit's own documentation may no longer cover what it does, or it may cover it again
+    (`agent/records/notes/honesty-dependencies-design.md`, section 3). Such a unit is not
+    dishonest; it is not known to be honest any more, and an honesty review or a checked edit
+    of its file judges it again.
+    """
+
+    id: int
+    """Unique within the session, like a mark's id."""
+    path: str
+    """The file of the unit to judge again, as `HonestyState.key` names it."""
+    symbol: str
+    """Its dotted name in the file; "" for code at the top level of the file."""
+    cause: str
+    """The unit whose contract changed, as "path:dotted.name"."""
+    before: str
+    """The contract of `cause` that the unit was judged against: its signature and doc
+    comment."""
+    after: str
+    """The contract of `cause` now."""
+
+    def label(self) -> str:
+        """Render the unit to judge again.
+
+        Returns:
+            `path:symbol`, or the path alone for the top level of the file.
+        """
+        return f"{self.path}:{self.symbol}" if self.symbol else self.path
+
+
+@dataclass(frozen=True)
 class FileReview:
     """What an honesty review says about one file."""
 
@@ -403,6 +438,10 @@ class FileReview:
     marks: tuple[int, ...] | None = None
     """The ids of the open marks on the file when the review read it; None if not recorded.
     `HonestyState.apply_current_review` drops a result whose file has other open marks now."""
+    recheck: tuple[int, ...] = ()
+    """The ids of the units to judge again (`RecheckUnit`) that the review was shown for this
+    file. Applying the result settles those, and no unit that was added after the review
+    read the file."""
 
 
 type FileSeen = tuple[str, tuple[int, ...]]
@@ -433,6 +472,8 @@ class ReviewFile:
     content: str = ""
     """For a diff: the whole present content, which a second round shows when the reviewer
     asks for it (`FileVerdict.needs_whole_file`); "" when `whole`."""
+    recheck: tuple[RecheckUnit, ...] = ()
+    """The units of the file to judge again, with the contract change that caused it."""
 
 
 @dataclass(frozen=True)
@@ -538,18 +579,21 @@ class HonestySnapshot:
     """The open marks, oldest first."""
     unreviewed: Unreviewed
     review_required: bool
+    recheck: tuple[RecheckUnit, ...] = ()
+    """The units to judge again because a unit they use changed its contract, oldest first."""
 
     @property
     def clean(self) -> bool:
         """Whether code may be run and committed under `honesty.mode = enforce`.
 
         Returns:
-            True when there is a baseline, no open mark, no unreviewed file and no review is
-            required.
+            True when there is a baseline, no open mark, no unit to judge again, no
+            unreviewed file and no review is required.
         """
         return (
             self.baseline is not None
             and not self.marks
+            and not self.recheck
             and not self.unreviewed
             and not self.review_required
         )
@@ -616,6 +660,18 @@ class HonestySnapshot:
             lines.append(f"Open marks on other files: {'; '.join(map(spot, seen))}{rest}.")
         if not self.marks:
             lines.append("Open marks: none.")
+        if self.recheck:
+            seen_units = [
+                f"{shown(unit.label(), NOTE_PATH_CHARS)} (uses "
+                f"{shown(unit.cause, NOTE_PATH_CHARS)})"
+                for unit in self.recheck[:limit]
+            ]
+            more = len(self.recheck) - len(seen_units)
+            rest = f"; and {more} more" if more else ""
+            lines.append(
+                "Code to judge again, because a unit it uses changed its signature or doc "
+                f"comment ({len(self.recheck)}): {'; '.join(seen_units)}{rest}."
+            )
         if self.unreviewed.everything:
             if self.baseline is not None:
                 problem = shown(self.unreviewed.problem, NOTE_PATH_CHARS) or "git did not answer"
@@ -1465,6 +1521,11 @@ def combine_snapshots(
         marks=tuple(marks),
         unreviewed=unreviewed,
         review_required=any(snapshot.review_required for snapshot in snapshots),
+        recheck=tuple(
+            sorted(
+                (unit for snapshot in snapshots for unit in snapshot.recheck), key=lambda u: u.id
+            )
+        ),
     )
 
 
@@ -1633,6 +1694,9 @@ class HonestyState:
         no honesty review reads: calu's own output inside the project (the session traces,
         agent/records/PLAN.md D232). The session sets it when the configuration changes."""
         self.review_required = False
+        self.recheck: list[RecheckUnit] = []
+        """The units to judge again because a unit they use changed its contract
+        (`add_recheck`), oldest first."""
         self.generated = GeneratedRules()
         """Which files count as generated (`review_plan`, `record`); `Session._refresh_trust`
         sets it from `honesty.generated_paths` and `honesty.generated_contents`."""
@@ -2078,6 +2142,8 @@ class HonestyState:
         self.verified[key] = record
         self._remember_verified(key, record)
         self._keep_text(key, ids.sha256)
+        # The checkers judged the file with the units to judge again named in their note.
+        self.recheck = [unit for unit in self.recheck if unit.path != key]
         return record
 
     def _keep_text(self, key: str, sha256: str) -> None:
@@ -2152,6 +2218,8 @@ class HonestyState:
                 continue
             for mark in [m for m in self.open_marks if m.path == key]:
                 changes.closed.append(self._close(mark, REVIEWER))
+            settled = set(review.recheck)
+            self.recheck = [unit for unit in self.recheck if unit.id not in settled]
             self.verified[key] = Verified(review.sha256, "review")
             self.watched.add(key)
             for finding in review.findings:
@@ -2239,6 +2307,7 @@ class HonestyState:
             the repository, the watched files that exist, and the marked files.
         """
         found = self.dishonest_files()
+        found.update(unit.path for unit in self.recheck)
         if self._base() is not None:
             unreviewed = self.unreviewed()
             if unreviewed.everything:
@@ -2369,6 +2438,9 @@ class HonestyState:
         for key in candidates:
             marks = tuple(mark for mark in self.open_marks if mark.path == key)
             mark_ids = self._mark_ids(key)
+            recheck = tuple(unit for unit in self.recheck if unit.path == key)
+            recheck_ids = tuple(unit.id for unit in recheck)
+            held = bool(marks or recheck)
             data = read_regular(self.workspace / key, REVIEW_READ_BYTES)
             if data is None and not marks:
                 large = no_code_sha256(self.workspace / key)
@@ -2384,7 +2456,7 @@ class HonestyState:
                 skipped.append((key, why))
                 continue
             ids = hash_bytes(data, self._format())
-            unread = not marks and self._holds_no_code(key, data)
+            unread = not held and self._holds_no_code(key, data)
             try:
                 text = data.decode("utf-8")
             except UnicodeDecodeError:
@@ -2395,7 +2467,7 @@ class HonestyState:
                 else:
                     skipped.append((key, "not UTF-8 text"))
                 continue
-            if not marks and self._reviewed_source(key, ids) is not None:
+            if not held and self._reviewed_source(key, ids) is not None:
                 if base is None:
                     already += 1
                     continue
@@ -2415,7 +2487,7 @@ class HonestyState:
                 continue
             if self.generated.reason(key, data):
                 # Generated code is not judged; a mark that is open on it is closed.
-                shortcuts[key] = FileReview(ids.sha256, marks=mark_ids)
+                shortcuts[key] = FileReview(ids.sha256, marks=mark_ids, recheck=recheck_ids)
                 generated.append(key)
                 continue
             self.shared.texts.put(ids.sha256, text)
@@ -2426,11 +2498,13 @@ class HonestyState:
             elif top is not None:
                 before = self._baseline_text(top, tree, key)
             excerpts = ""
-            if marks and before is not None and len(data) > SMALL_FILE_BYTES:
-                # A large marked file: its change, and the marked definitions as they are now.
-                excerpts = marked_excerpts(text, key, [mark.symbol for mark in marks]) or ""
-            whole = before is None or (bool(marks) and not excerpts)
-            if before is not None and not marks and whitespace_only(before, text):
+            if held and before is not None and len(data) > SMALL_FILE_BYTES:
+                # A large file with marks or units to judge again: its change, and those
+                # definitions as they are now.
+                symbols = [mark.symbol for mark in marks] + [unit.symbol for unit in recheck]
+                excerpts = marked_excerpts(text, key, symbols) or ""
+            whole = before is None or (held and not excerpts)
+            if before is not None and not held and whitespace_only(before, text):
                 shortcuts[key] = FileReview(ids.sha256, marks=())
                 continue
             shown_text = text if whole else change_diff(before or "", text, key, self.context_lines)
@@ -2454,6 +2528,7 @@ class HonestyState:
                     against=against,
                     excerpts=excerpts,
                     content="" if whole else text,
+                    recheck=recheck,
                 )
             )
         return ReviewPlan(
@@ -2947,6 +3022,49 @@ class HonestyState:
         return Unreviewed(paths=paths, restage=restage)
 
     @_locked
+    def add_recheck(
+        self, cause: str, before: str, after: str, units: Iterable[tuple[str, str]]
+    ) -> list[RecheckUnit]:
+        """Record the units to judge again after the contract of `cause` changed.
+
+        A later change of the same unit replaces what an earlier one recorded, and the units
+        keep the contract they were judged against before the first change. If the contract
+        is now back to that one, nothing is recorded: the units were judged against exactly
+        this contract.
+
+        Args:
+            cause: The changed unit, as "path:dotted.name".
+            before: Its contract before this change.
+            after: Its contract now.
+            units: (path, dotted name or "") of each unit that uses it. A unit in a file
+                that is left out of the honesty checks or generated is skipped, and so is the
+                changed unit itself.
+
+        Returns:
+            The units recorded now.
+        """
+        earlier = [unit for unit in self.recheck if unit.cause == cause]
+        if earlier:
+            before = earlier[0].before
+        self.recheck = [unit for unit in self.recheck if unit.cause != cause]
+        if before == after:
+            return []
+        added: list[RecheckUnit] = []
+        seen: set[tuple[str, str]] = set()
+        for path, symbol in units:
+            key = self.key(path)
+            if (key, symbol) in seen or f"{key}:{symbol}" == cause:
+                continue
+            if self.left_out(key) or self.generated.file_reason(self.workspace, key):
+                continue
+            seen.add((key, symbol))
+            unit = RecheckUnit(self.shared.next_id, key, symbol, cause, before, after)
+            self.shared.next_id += 1
+            added.append(unit)
+        self.recheck.extend(added)
+        return added
+
+    @_locked
     def snapshot(self) -> HonestySnapshot:
         """Compute the state as it is now.
 
@@ -2961,6 +3079,7 @@ class HonestyState:
             marks=tuple(self.open_marks),
             unreviewed=self.unreviewed(),
             review_required=self.review_required,
+            recheck=tuple(self.recheck),
         )
 
     @_locked

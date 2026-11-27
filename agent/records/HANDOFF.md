@@ -25,19 +25,19 @@ it. Its section 7 quotes the owner's seven answers.
   `tests/unit/test_honesty_session.py`); calu's mark notices, the skill `honest-code` and
   `DOCUMENTATION.md` name it. Not tried with a real Claude Code or in a UI. Section 1 of the
   note says what differs from the proposal.
-- **The index is built behind an interface** (requirement 52): `calu.refindex.ReferenceIndex`
-  (async). Built, with unit tests: `SearchIndex` (the slow and complete word search),
-  `lsp.LspIndex` (a language server; basedpyright by default, found on the path, not a
-  dependency of calu), `judge.MatchJudge` (the model that reads a place with 12 lines around
-  it) and `combined.CombinedIndex` (search, then the fast index, then the judge). With the
-  real basedpyright on calu's code `LspIndex` found 111 of the 115 reference files of the
-  spike's sample (`spikes/RESULTS.md`, last section). **Not run with a real model:** the
-  judge. **Not run with a real server:** `LspIndex.resolve` and the combined index.
-  **Next:** the owner prefers a self-contained fast stage over a language-server setup; a
-  `CbmIndex` on codebase-memory-mcp is proposed (the note's section 4, last part), then a
-  measurement of what each fast stage leaves for the judge, then the stale part of the
-  honesty state on top of the interface (the note's section 3). Nothing of `calu.refindex`
-  is used by the honesty state yet.
+- **Code to judge again is built (D294), behind `honesty.dependents`, off by default.** An
+  edit that changes a Python unit's signature or doc comment makes the code that uses it
+  "to judge again" (`HonestyState.recheck`); the honesty review or a checked edit of that
+  file settles it. Pieces: `calu.dependents`, `calu.refindex` (word search with the method
+  rule, the minimal `CodeNavigator` interface with the language server behind it, the judge
+  with its cache, the combined index), the settings `honesty.dependents*`, the section "Code
+  that uses a changed unit" in `DOCUMENTATION.md`. The design note's section 4, "As built",
+  says what differs. **Not done:** a run with a real model (the judge and the reviewer's new
+  part); the clients show no list yet (VSCode has the fields in `protocol.generated.ts`, the
+  PyCharm plugin's Kotlin types lack them); worktrees; other languages.
+- **Haiku key:** the owner allowed Haiku with the key in `/etc/calu/.env` for spikes
+  (2026-11-27) and `sudo` only for the log investigation. Whether `sudo -n` may read that
+  key line was asked several times and is not answered; nothing was read.
 - **Not decided or built for the index:** as which user and in which sandbox the session
   starts the language server (it parses files the supervised agent writes); how the session
   tells it about changed files (`LspIndex.changed`); a setting for the server's command;
@@ -1584,8 +1584,8 @@ inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
 **2713 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
---wait`. about 470 commits, ~83k lines of Python in `src` (~88k with the SQL, templates and
-default instructions), ~66k of tests, 3 migration files (the baseline of D266, `0002_temporary_rules.sql` and
+--wait`. about 470 commits, ~111k lines of Python in `src` (counted 2026-11-27; the other counts
+of this line are older), ~66k of tests, 3 migration files (the baseline of D266, `0002_temporary_rules.sql` and
 `0003_temporary_rules_no_lifting.sql`), 30 CLI commands (29 in `calu --help` and the hidden easter egg
 `calu lightcycles`), 29 protocol requests,
 22 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and

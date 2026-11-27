@@ -1502,3 +1502,100 @@ async def test_the_marker_does_nothing_with_the_mode_off(repo: Path):
     )
     await run_turns(session, rec)
     assert seen == [] and notes(rec) == ""
+
+
+# ------------------------------------------------------------------ code to judge again (D294)
+
+APP = "from src.parser import fields\n\n\ndef main(line):\n    return fields(line)\n"
+
+CHANGED_DOC = PARSER.replace("sorted.", "sorted, and send them to the server.")
+
+
+def with_caller(repo: Path) -> Path:
+    """Add a caller of `fields` to the test repository and certify the new commit's tree.
+
+    Args:
+        repo: The repository of the `repo` fixture.
+
+    Returns:
+        The repository.
+    """
+    (repo / "src" / "app.py").write_text(APP, encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "caller")
+    return repo
+
+
+async def test_a_changed_doc_comment_makes_its_callers_code_to_judge_again(repo: Path):
+    """D294: an edit that changes the doc comment of `fields` records `main`, which calls it,
+    as code to judge again; the state is not clean until it is judged. The word search alone
+    finds it here (no language server, no model)."""
+    with_caller(repo)
+    session, rec, _store = await session_on(
+        repo,
+        [[write("src/parser.py", CHANGED_DOC)]],
+        mode="track",
+        models={"honesty": honesty_answering(honest=["src/parser.py"])},
+        dependents=True,
+        dependents_judge=False,
+    )
+    await run_turns(session, rec)
+    snapshot = await session.honesty_snapshot()
+    assert [(unit.path, unit.symbol, unit.cause) for unit in snapshot.recheck] == [
+        ("src/app.py", "main", "src/parser.py:fields")
+    ]
+    assert not snapshot.clean
+    assert "send them to the server" in snapshot.recheck[0].after
+    assert "1 unit(s) to judge again" in logs(rec)
+    assert "Code to judge again" in snapshot.note()
+
+
+async def test_the_review_judges_the_code_again_and_settles_it(repo: Path):
+    """The honesty review gets the unit to judge again with the contract before and now, and
+    its verdict settles it, so the command that needed a clean state runs."""
+    with_caller(repo)
+    seen: list[str] = []
+    session, rec, _store = await session_on(
+        repo,
+        [[write("src/parser.py", CHANGED_DOC), bash("make test")]],
+        models={
+            "honesty": honesty_answering(honest=["src/parser.py"]),
+            "honesty-review": fake_reviewer(seen=seen),
+        },
+        dependents=True,
+        dependents_judge=False,
+    )
+    await run_turns(session, rec)
+    assert seen and "To judge again: main uses src/parser.py:fields" in seen[0]
+    assert "send them to the server" in seen[0]
+    assert checks(rec)[-1].decision is Decision.PASS
+    assert (await session.honesty_snapshot()).recheck == ()
+
+
+async def test_a_contract_changed_back_leaves_nothing_to_judge_again(repo: Path):
+    """When the doc comment is back to what the callers were judged against, the units to
+    judge again are dropped without a review."""
+    with_caller(repo)
+    session, rec, _store = await session_on(
+        repo,
+        [[write("src/parser.py", CHANGED_DOC), write("src/parser.py", PARSER)]],
+        mode="track",
+        models={"honesty": honesty_answering(honest=["src/parser.py"])},
+        dependents=True,
+        dependents_judge=False,
+    )
+    await run_turns(session, rec)
+    assert (await session.honesty_snapshot()).recheck == ()
+
+
+async def test_without_the_setting_no_code_is_judged_again(repo: Path):
+    """`honesty.dependents` is off by default."""
+    with_caller(repo)
+    session, rec, _store = await session_on(
+        repo,
+        [[write("src/parser.py", CHANGED_DOC)]],
+        mode="track",
+        models={"honesty": honesty_answering(honest=["src/parser.py"])},
+    )
+    await run_turns(session, rec)
+    assert (await session.honesty_snapshot()).recheck == ()

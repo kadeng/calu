@@ -375,6 +375,34 @@ Built: `SearchIndex.same_language`, on by default. A unit is looked for only in 
 own language. The cross-language parts of this note (the section on language boundaries,
 further names of a unit) describe the later step.
 
+### As built (2026-11-27)
+
+The owner agreed to Claude's recommendation: the word search in the unit's own language, a
+rule for methods, a language server as an optional accelerator behind a minimal interface,
+the judge for the rest, and the wiring into the honesty state. Built, with unit tests only:
+
+- `calu.refindex.navigator.CodeNavigator`: the four questions a code navigator answers
+  (references, definitions, implementations, symbols) and its bookkeeping. `NavigatorIndex`
+  is the index on any navigator; `lsp.LspNavigator` is the language server behind it. The
+  owner asked for this interface so that the language server can be exchanged.
+- `SearchIndex` drops, for a method of a Python class, the bare uses of its name in other
+  files. For the spike's sample this cut the Python candidates from 3,868 to 2,248.
+- `calu.dependents`: the contract changes of an edit at the gate, and the units around the
+  places the index reports. Places in `import` statements are left out.
+- `HonestyState.recheck` (`RecheckUnit`): the units to judge again. They make the state not
+  clean, are named in the checkers' note and in `honesty.update`, go into the honesty review
+  with the contract before and now, and are settled by the review or by a checked edit of
+  their file. A contract that goes back to what the units were judged against drops them.
+- Settings `honesty.dependents` (off by default), `dependents_judge`,
+  `dependents_navigator`, `dependents_timeout_s`. If the language server and the judge do not
+  finish in time, every hit of the word search counts.
+
+What differs from section 3: a unit to judge again is settled by a checked edit of its
+**file**, like a mark; and the session's worktrees are not covered, only the session
+directory. Not done: a run with a real model; the clients show the count but no list (the
+VSCode chat gets the fields in `protocol.generated.ts`, the PyCharm plugin's types do not
+have them yet).
+
 ## 5. How calu and Claude Code use the index
 
 **What the owner has fixed (2026-11-27):** "I would like the honesty checker to still work

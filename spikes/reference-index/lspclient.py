@@ -4,6 +4,7 @@ Usage: lspclient.py OUT.json [--root DIR] [--sample FILE] [--ids S01,S02] [--raw
                     [--settle SECONDS] -- SERVER ARGS...
 Prints timings (measured, wall clock) and the server's resident memory to stderr.
 """
+
 import argparse
 import json
 import os
@@ -14,12 +15,14 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from enclosing import enclosing  # noqa: E402
+from enclosing import enclosing
 
 
 class Server:
     def __init__(self, cmd, root, log):
-        self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, cwd=root)
+        self.p = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, cwd=root
+        )
         self.id = 0
         self.t0 = time.time()
         self.pending = {}
@@ -89,7 +92,9 @@ class Server:
         """Sum of VmRSS and VmHWM of the server process and its children, in kB."""
         pids = [self.p.pid]
         try:
-            kids = subprocess.run(["pgrep", "-P", str(self.p.pid)], capture_output=True, text=True).stdout.split()
+            kids = subprocess.run(
+                ["pgrep", "-P", str(self.p.pid)], capture_output=True, text=True
+            ).stdout.split()
             pids += [int(k) for k in kids]
         except OSError:
             pass
@@ -156,7 +161,9 @@ def main():
         end = time.time() + 300
         while time.time() < end and t_ready is None:
             for t, m in list(srv.notes):
-                if m["method"] == "window/logMessage" and re.search(a.ready_log, m["params"]["message"]):
+                if m["method"] == "window/logMessage" and re.search(
+                    a.ready_log, m["params"]["message"]
+                ):
                     t_ready = t
             time.sleep(0.01)
     if a.settle:
@@ -171,14 +178,27 @@ def main():
         if uri not in opened:
             srv.notify(
                 "textDocument/didOpen",
-                {"textDocument": {"uri": uri, "languageId": {".ts": "typescript", ".sh": "shellscript"}.get(os.path.splitext(path)[1], "python"), "version": 1, "text": open(path, encoding="utf-8").read()}},
+                {
+                    "textDocument": {
+                        "uri": uri,
+                        "languageId": {".ts": "typescript", ".sh": "shellscript"}.get(
+                            os.path.splitext(path)[1], "python"
+                        ),
+                        "version": 1,
+                        "text": open(path, encoding="utf-8").read(),
+                    }
+                },
             )
             opened.add(uri)
         q0 = time.time()
         try:
             res = srv.request(
                 a.method,
-                {"textDocument": {"uri": uri}, "position": {"line": s["line"] - 1, "character": s["col"]}, "context": {"includeDeclaration": a.include_declaration}},
+                {
+                    "textDocument": {"uri": uri},
+                    "position": {"line": s["line"] - 1, "character": s["col"]},
+                    "context": {"includeDeclaration": a.include_declaration},
+                },
             )
         except (RuntimeError, TimeoutError) as e:
             print(s["id"], "ERROR", e, file=sys.stderr)

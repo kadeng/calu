@@ -11,8 +11,14 @@ Prints, summed over the samples: the search's candidates, the places the fast st
 and explained away, and the places left over, split into Python and other files.
 """
 
-import ast, json, sys, time, anyio
+import ast
+import json
+import sys
+import time
 from pathlib import Path
+
+import anyio
+
 from calu.refindex import SearchIndex, Unit
 from calu.refindex.combined import CombinedIndex
 

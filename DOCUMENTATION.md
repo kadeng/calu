@@ -2098,6 +2098,55 @@ git lists, up to the cap. If every file `HEAD` records is then verified and the 
 holds nothing else, Calu certifies `HEAD` and it becomes the baseline. A review that Calu
 starts by itself never certifies a commit.
 
+### Code that uses a changed unit (optional)
+
+A unit's **contract** is its name, its signature and its doc comment. Code that calls a
+unit was judged honest against that contract. When an edit changes the contract, the caller
+may no longer say what it does:
+
+```python
+def sync(cache):
+    """Synchronise the local cache."""
+    upload_key(cache.host)        # upload_key's doc comment now says: "sends the SSH key"
+```
+
+`sync` did not change, but its documentation no longer covers what it does. With
+`honesty.dependents` on, Calu notices this:
+
+1. Before an edit runs, Calu compares the file before and after it. It notes each function,
+   method or class whose signature or doc comment changes. A change of the body alone
+   concerns only that unit.
+2. After the edit, Calu searches the project's files of the same language for the unit's
+   name. A language server (optional) and a model then drop the hits that do not use the
+   unit.
+3. The function, method or class around each remaining hit is **to judge again**. The state
+   is not clean while such code exists.
+4. An honesty review judges it: it sees the code with the unit's contract before and now. A
+   checked edit of the file settles it too. If the contract goes back to what it was, nothing
+   is left to judge again.
+
+The change can travel up: if `sync` now has to document the upload, its own callers are to
+be judged again after that edit. It stops where the documentation already covers the effect.
+
+```bash
+calu config set honesty.dependents true
+calu config set honesty.dependents_navigator '["basedpyright-langserver", "--stdio"]'
+```
+
+| Setting | Effect |
+|---|---|
+| `honesty.dependents` | on or off (default off) |
+| `honesty.dependents_judge` | let a model read each hit of the word search (default on). Off: every hit counts, which means more code to judge again |
+| `honesty.dependents_navigator` | the command of a language server for Python. It settles most hits without a model call. Calu does not install it |
+| `honesty.dependents_timeout_s` | how long the search may take after an edit (120 s). Calu holds back the edit's result until the search has ended, so Claude does not go on before that. When the time is up, Calu stops asking the language server and the model, and every hit of the word search counts |
+
+Limits:
+
+- Python files only.
+- Calls from another language are not followed.
+- A removed or renamed unit is not followed. Its callers then use a name that no longer
+  exists, and running the code shows that.
+
 ### Certifying by hand
 
 In a client attached to the session:

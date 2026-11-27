@@ -536,6 +536,8 @@ export interface HonestyInfo {
   clean?: boolean;
   marks?: HonestyMarkInfo[];
   mode?: string;
+  recheck?: string[];
+  recheck_count?: number;
   review_required?: boolean;
   review_running?: boolean;
   unreviewed?: string[];
@@ -605,6 +607,8 @@ export interface HonestyUpdate {
   clean?: boolean;
   marks?: HonestyMarkInfo[];
   mode?: string;
+  recheck?: string[];
+  recheck_count?: number;
   review_required?: boolean;
   review_running?: boolean;
   seq?: number;

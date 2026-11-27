@@ -705,8 +705,9 @@ class HonestyConfig(ConfigModel):
     Code is honest when its names and documentation say what it does (the honesty rules).
     calu tracks which code is verified: a trusted commit is the baseline, the checkers record
     dishonest spots as marks, a checked edit verifies a file's content, and every other
-    changed file is unreviewed. The state is clean when there is a baseline, no open mark, no
-    unreviewed file and no review is required.
+    changed file is unreviewed. With `dependents` on, code that uses a unit whose signature or
+    doc comment changed is to be judged again. The state is clean when there is a baseline, no
+    open mark, no code to judge again, no unreviewed file, and no review is required.
     """
 
     mode: HonestyMode = "off"
@@ -803,6 +804,29 @@ class HonestyConfig(ConfigModel):
     most as long as the check of one step may take (seven minutes, less the time its checkers
     took); a review that needs longer goes on, the step is escalated meanwhile, and the
     review's result is there when the step is tried again."""
+    dependents: bool = False
+    """Judge again the code that uses a unit whose signature or doc comment an edit changed.
+    Python files only. How it works:
+
+    1. A word search finds the unit's name in the files of the same language.
+    2. A language server and a model drop the hits that do not use the unit
+       (`dependents_navigator`, `dependents_judge`).
+    3. The code around each remaining hit is recorded as "to judge again".
+
+    The state is not clean until an honesty review, or a checked edit of that file, has judged
+    it."""
+    dependents_judge: bool = True
+    """Let a model read each hit of the word search and drop the ones that do not use the
+    changed unit. Off: every hit counts. That is safe, and makes more code to judge again. The
+    model is `honesty.reviewer_model` (blank: the default model)."""
+    dependents_navigator: list[str] = Field(default_factory=list)
+    """The command line of a language server that answers questions about Python code, for
+    example `["basedpyright-langserver", "--stdio"]`. It settles most hits without a model
+    call. Empty: none is used. calu does not install it; it runs as the session's user."""
+    dependents_timeout_s: float = Field(default=120.0, gt=0)
+    """Seconds the search for the code that uses a changed unit may take after an edit. The
+    agent waits meanwhile. If the language server and the model take longer, every hit of the
+    word search counts."""
 
     @field_validator("generated_paths", "generated_contents")
     @classmethod
