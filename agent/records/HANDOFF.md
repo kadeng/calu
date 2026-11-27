@@ -49,30 +49,32 @@ feature must work end to end in the Cua desktop before the owner tests by hand.
     `remove_rule`) and `/rule`, `/rules`, `/rule-remove` in the chat host shared by the
     VSCode extension and the web chat pane (`acdf294`). Seen in the Cua desktop's VSCode
     with the scripted server (test plan, section P).
-  - **Still open in step 3,** the same three commands in three more places:
-    - `calu attach`, full-screen and line client (through `AdminAccess` in
-      `src/calu/tui/adminaccess.py`);
-    - the PyCharm plugin. The owner asked for rules that are "creatable and manageable in
-      the web UI, terminal and IDE extensions alike" (design section 7, item 8);
-    - the web chat pane, which has them from the shared chat host but was not looked at
-      in a browser.
-  - Then the report to the owner that the plan promises after step 3.
-- Steps 4 to 6 as in the design's section 8.
+  - the full-screen `calu attach` (`AdminAccess`, `ccaf403`); the line client prints the
+    `calu rule` command, because it has no database login;
+  - the PyCharm plugin, with `/btw` as a side question (`f92c7a5`). Kotlin tests pass; not
+    tried in the IDE, because PyCharm in the recreated desktop asks for the JetBrains user
+    agreement again, which is the owner's to accept;
+  - the web chat pane (`bcbe07d`: its request list lacked the rule requests; seen working
+    in Chromium after the fix).
+  - Step 3 is done. The report to the owner that the plan promises after step 3 was given
+    on 2026-11-27.
+- Next: steps 4 to 6 as in the design's section 8 (the settings panes, the suggested rule in
+  the escalation dialogs, documentation and the PLAN decision).
 
-**The owner's list of 2026-11-26 evening, not started:**
+**The owner's list of 2026-11-26 evening:**
 
-- VSCode: after `calu serve` is stopped and restarted, the chat does not pick its session
-  up smoothly. The owner: "it should be able to just pick up again more or less
-  automatically". To be tested in the Cua desktop.
-- Web interface: the owner could resume a session only from the "history" view; "the other
-  ones ( live view, chat, resume button ) did not work for me". Reproduce each in a browser
-  and fix.
+- VSCode after a restart of `calu serve`: it resumed by itself in the Cua desktop, and the
+  owner saw it work on 2026-11-27 ("maybe I did something wrong last time. Test it on
+  occasion"). Keep an eye on it.
+- Web interface resume: fixed in `1aa22b2` (live view of an ended session, the session list,
+  the pane of `calu web --sudo`); test plan section Q.
 
 **For the owner's installation:** D290 (a PNG in an escalated commit) is fixed in the
 repository only. Until `/usr/local/lib/calu` is reinstalled from `main`, a commit with a
 binary file that the changeset checker escalates is denied with "calu could not record this
-step". For that reason `agent/records/notes/screenshots/vscode-rules-chat.png` (named in the
-test plan's section P) is in the working tree of `calu2` and not committed yet.
+step". For that reason two screenshots named in the test plan are in the working tree of
+`calu2` and not committed yet: `agent/records/notes/screenshots/vscode-rules-chat.png`
+(section P) and `web-pane-rules.png` (section P, the pane).
 
 Also open from today: the length guard of the checker instructions has allowances for the
 generated-code sections and the owner's AI-slop rule (`tests/unit/test_instructions.py`); a
