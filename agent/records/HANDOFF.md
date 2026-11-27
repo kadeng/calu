@@ -35,6 +35,35 @@ A restart of `calu serve` ended it. After an update that carries a migration, re
 server. `agent/records/notes/unchecked-level-design.md` section 4 has the details and the
 two fixes.
 
+**The honesty graph after the owner's first test** (late evening, `9dc70dc`): changed units
+now get their callers and the units they use as grey `related` nodes, with at most 12 clean
+callers per unit. Section 9 of `notes/honesty-graph-design.md` has the owner's words, what
+"as far as known" covers and the measured times (12.4 s the first request, 3.7 s a repeated
+one, on calu). Next for speed: keep the parsed files per file state between requests, as the
+search results are kept. Not seen in a UI.
+
+**Open request of the owner, not built** (2026-11-27, late evening): "At the moment, failed
+honesty reviews seem to escalate. They should fail and be sent back to the agent with an
+annotation, so it can make the codebase honest before retrying. Why do I see so many
+escalations when a command is being run while code is unreviewed? The review should be
+triggered and happen before the command runs."
+
+- What the traces of the day show (`agent/traces/2026-11-27/`): all 16 honesty escalations
+  have one cause. The built bundle `src/calu/web/static/pane/pane.js` was unreviewed and its
+  change is larger than `review_file_bytes`, so the review could not judge it and every
+  command that runs project code was escalated. The review did run before the command.
+- For the owner's installation: set `honesty.generated_paths` to
+  `^src/calu/web/static/pane/` for this project. The owner has to do that; an agent may not
+  run `calu config`.
+- The change to build, in `StepGate._needs_clean` (`src/calu/gate.py`): today a state that
+  is not clean after the review is denied only when there are marks and the review reported
+  no problem; everything else is escalated. Proposed: deny with the reason whenever the
+  agent can act on it (marks, also together with a problem; a review that failed, was
+  still running, or dropped files that changed meanwhile). Keep the escalation where only a
+  person can settle it (no baseline, `sufficient_trust` "user", a file the review cannot
+  judge). The owner has not confirmed that split. `HonestyReviewResult` has only a text
+  for the problem today; the gate needs to know which kind it is.
+
 **What the owner still has to decide** (ask once; do not decide for the owner):
 
 1. Subagent results: the shipped rule now gives a result that asks for more work a remark,
