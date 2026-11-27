@@ -131,9 +131,10 @@ class CbmIndex:
         Returns:
             One place for each edge this index believes, and no unclear places. It believes
             every edge of a kind in `EDGES`, except a call edge whose way of finding the
-            target is in `UNPROVEN` or not given. If the program is not installed, fails, or
-            has no node
-            for the unit, the answer is marked as not complete and says why.
+            target is in `UNPROVEN` or not given.
+
+            If the program is not installed, fails, or has no node for the unit, the answer
+            is marked as not complete and says why.
         """
         try:
             if not self._fresh:

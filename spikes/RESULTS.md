@@ -1574,3 +1574,44 @@ spike's server could not resolve without pytest installed.
 
 Not done: a run on a second, larger repository with Rust; Graphify's report; pyrefly's and
 ty's freshness.
+
+### What each fast stage leaves for the judge (2026-11-27, `reference-index/measure_fast.py`)
+
+The combined index (`calu.refindex.combined`) on the same 50 units, on the checkout of the
+evening. The word search reads every file git lists, without prose files. A candidate is a
+place where the unit's bare name occurs outside comments and strings.
+
+| Fast stage | Candidates | Confirmed | Left for the judge | of them in Python files | Time |
+|---|---|---|---|---|---|
+| none | 6,287 | 0 | 6,287 | | |
+| codebase-memory-mcp 0.12.1 (`CbmIndex`) | 6,287 | 59 | 6,228 | not counted in this run | 11 min |
+| basedpyright 1.40.2 (`LspIndex`) | 6,287 | 338 | 2,725 | 253 | 4.6 min |
+
+Left for the judge by group, with the language server: 81 for the 20 functions, 1,376 for
+the 20 methods, 1,268 for the 10 common names.
+
+What the numbers mean:
+
+- **The total is dominated by a few names.** 12 of the 50 units hold 92 % of the candidates.
+  Their names are ordinary words: `request` (1,865 candidates, 13 real references), `code`
+  (973, 3), `info` (654, 1), `close` (640, 10), `snapshot`, `record`, `limits`, `load`,
+  `release`. The median unit has 12.5 candidates, and 33 of the 50 have 20 or fewer.
+- **The code graph saves almost nothing as a fast stage.** It confirms the calls it resolved
+  and cannot say that a place means something else, so every other candidate stays.
+- **The language server settles Python.** It confirms its references and explains away the
+  places whose name resolves to another definition. 253 Python places are left, about 5 per
+  unit.
+- **What is left is other languages.** 2,472 of the 2,725 places are in files the Python
+  server does not read: Kotlin 927 candidates, TypeScript 763, JavaScript 360, JSON 132,
+  YAML 87 (counted before the fast stage). calu's extensions use the same words for their
+  own things.
+- **Prose files** held a further 1,764 candidates before the search left them out.
+
+For the 29 methods of the sample, by the text around the name (regular expressions,
+approximate): 39 % a bare word (an argument, a variable, a key), 36 % a member access
+`x.name`, 12 % assigned or annotated (`name =`, `name:`), 7 % in quotes, 2 % a bare call,
+1 % another definition. A method is reached through a member access or through its name in a
+string, so a rule on the syntax could drop about half of a method's candidates before any
+index is asked. Not built.
+
+The judge itself has not run with a model.
