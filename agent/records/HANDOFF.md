@@ -25,10 +25,27 @@ it. Its section 7 quotes the owner's seven answers.
   `tests/unit/test_honesty_session.py`); calu's mark notices, the skill `honest-code` and
   `DOCUMENTATION.md` name it. Not tried with a real Claude Code or in a UI. Section 1 of the
   note says what differs from the proposal.
-- The indexer spike (section 6 of the note) was started on 2026-11-27 as three subagents,
-  each with its own container (`calu-spike-lsp`, `calu-spike-cbm`, `calu-spike-graphify`),
-  on a common sample of 50 functions in `/tmp/claude-1000/spike/`. Its result belongs in
-  `spikes/RESULTS.md`.
+- **The index is built behind an interface** (requirement 52): `calu.refindex.ReferenceIndex`.
+  Built: `SearchIndex`, the slow and complete word search (`tests/unit/test_refindex.py`).
+  Next: a fast index on a language server. Then the combination "search first, then explain
+  away" (the owner's idea, in the note's section 4; the owner is for it, after the two base
+  ones work). Nothing of `calu.refindex` is used by the honesty state yet.
+- **The indexer spike** (section 6 of the note) ran on 2026-11-27 as three subagents, each
+  with its own container, on 50 sample functions. The language-server part and the
+  codebase-memory-mcp part are complete for calu; Graphify's numbers are preliminary (its
+  subagent was stopped by an interruption). Results: `/tmp/claude-1000/spike/*/RESULTS.md`
+  and `refs.json`, **not yet copied to `spikes/RESULTS.md`**, and `/tmp` does not survive a
+  reboot. Share of the real referring files found: pyrefly 90 %, ty 88 %, basedpyright's
+  plain references 90 % (the rest needs "find implementations", for calls through a base
+  class or Protocol), codebase-memory-mcp 67 % (methods 63 %), Graphify 46 %, the word
+  search 100 % with 898 wrong files. A language server asked before it is ready answers
+  with an empty list.
+- The run on the owner's second repository (`~/projects/trading`, Python and Rust) was
+  started and stopped by the same interruption. A filtered copy with sources only is in
+  `/tmp/claude-1000/spike/trading-src`; remove it when the run is done or given up. The
+  containers `calu-spike-*` are stopped, not removed.
+- Open: which language server calu starts (basedpyright bundles Node; pyrefly and ty are
+  single binaries), and whether it is a dependency of calu or a program found on the path.
 - D294: a contract change makes the referrers of a unit stale. Verdicts belong to nodes of
   the graph where the index allows it; the project as a whole is clean or not, as today.
 - calu's checkers use the index on their own, with nothing added to Claude Code's

@@ -222,7 +222,13 @@ away because the LSP or code index tells us this is an add_user with a different
 name. The rest separates in clear cases ( LSP agrees ) and unclear cases. Only the latter
 need to be looked at in detail."
 
-Claude's reading and proposal, not yet decided by the owner. The index is asked the forward
+The owner on this the same day: it is a third implementation behind the index's interface,
+one that combines the slow, thorough one and the fast one. "I'm for it, but let's build the
+base ones first and get it to work." So the order is: the word search (built,
+`calu.refindex.SearchIndex`), a fast index on a language server or a code index, then the
+combination below. The interface is `calu.refindex.ReferenceIndex` (requirement 52).
+
+Claude's reading of the combination, for when it is built. The index is asked the forward
 question about each hit of the word search ("what does the name at this place resolve to"),
 and never the reverse question ("list the referrers"):
 

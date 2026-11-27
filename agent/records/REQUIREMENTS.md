@@ -415,6 +415,14 @@ broken down or extended. Derived requirements and design decisions belong in
     instructions* are different, these can be handed back to the main agent for
     reformulation." On Claude's first draft with an answer of its own for that: "We don't
     need a separate REVISE, a DENY on a subagent launch can be given a reason and retried."
+52. The code index sits under an abstraction (stated 2026-11-27): "Generally speaking, the
+    code-graph index implementation must be sitting under an abstraction layer. It must be
+    possible to plug or exchange one implementation with another. We can begin with two
+    implementations, a reliable slow one ( grep or fulltext index ) and a fast one (LSP or
+    code index )." On combining them (the owner's idea of the same day, quoted in the design
+    note): "This would be another possible implementation that combines the slow / thorough
+    and the fast ones into a combined one, no? I'm for it, but let's build the base ones
+    first and get it to work."
 
 ## Soft goals and priorities
 
