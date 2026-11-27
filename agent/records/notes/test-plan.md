@@ -1379,3 +1379,22 @@ Cua desktop, VSCode chat, scripted server from the working tree, first message
 | The checker denies a handed-back report | ok: the main agent gets the checker's note and "refused this report, so you do not get it"; nobody was asked. The note was headed "a reminder and suggestions; ... the decision is yours"; fixed, a refusal now has its own heading (unit test; not looked at again in the desktop) |
 | "New session" right after the server was started again | the panel showed "No answer yet: maybe no calu server is running" with "Start calu server" for a few seconds, then attached. This belongs to the owner's stop-and-resume report |
 | A real model with the fix of the failed checks (`note` required) | not run |
+
+### V. The honesty graph in the chat pane (2026-11-27)
+
+Cua desktop, VSCode chat with the extension built from the working tree, scripted server,
+honesty checker enabled and `honesty.mode` track in the container, `HEAD` of the demo
+project trusted. One round. The web pane was not looked at.
+
+| Case | Result |
+|---|---|
+| The "Graph" button in the header opens the view in place of the chat | ok (`screenshots/vscode-honesty-graph.png`) |
+| Unreviewed files and changed units as yellow nodes; files square, units as pills | ok. The demo project has no `.gitignore`, so its `.pyc` files are unreviewed and appear as nodes |
+| A mark appears as a red node while the view is open (`scenario: honesty`) | ok: the node appeared without a click, and the chip changed to "1 mark, 7 unreviewed" |
+| Hover shows the id, the state in words and the detail | ok |
+| Right click: "Mark as honest" and "Open the source" on a dishonest node | ok (`screenshots/vscode-honesty-graph-menu.png`) |
+| "Mark as honest" clears the mark; the node turns green, then vanishes | ok (`screenshots/vscode-honesty-graph-settled.png`) |
+| The view stays open across "New session…" | ok |
+| Edges, callers of a dishonest unit, code to judge again | not seen: the scripted honesty checker marks the whole file, so there is no unit to find callers of. Covered by unit tests only |
+| Click opens the source; "Mark as dishonest…" with its prompt; zoom with Ctrl and the wheel; pan; the "N callers" group | not tried in the desktop |
+| The web chat pane | not tried |

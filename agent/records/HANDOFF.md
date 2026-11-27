@@ -101,6 +101,36 @@ reason and retried."
   fails in this checkout with and without these changes (an extra `session.state` event).
   Not investigated.
 
+### The honesty graph and the locking fix (2026-11-27 evening), built
+
+**The honesty graph** (the owner's request; design `agent/records/notes/honesty-graph-design.md`):
+a view in the chat pane of VSCode and of `calu web` that shows the units that are not clean.
+
+- Server: `src/calu/honesty_graph.py`, the requests `honesty.graph` (computed when asked,
+  nothing kept), `honesty.mark` and `honesty.dismiss`.
+- Client: `extensions/vscode/webview/honestyGraph.ts`, the layout in
+  `src/shared/honestyGraphLayout.ts` (no new dependency), built by a subagent.
+- Seen in the Cua desktop's VSCode with the scripted server (test plan, section V): the
+  view, yellow and red nodes, hover, the menu, "Mark as honest" with the green node that
+  vanishes. Not seen: edges and callers (the scripted checker marks whole files), click to
+  the source, "Mark as dishonest…", zoom, the web pane.
+- The PyCharm plugin has no graph view.
+
+**The locking fix** (the owner called the gap a bug; only with `locking.enabled`): a command
+is checked again, under its locks, when another call ended in its worktree since its first
+check began. Built by a subagent; `agent/records/notes/locking.md` describes it.
+
+Open, for the owner:
+
+- A command that a person allowed after an escalation is not checked again; a warning is
+  logged (`locking.md` decision 23, the subagent's choice).
+- Every command that ends in the worktree counts as a change, also one that only reads. With
+  several agents in one worktree a second check is therefore frequent. A cheaper rule needs
+  to know whether a command wrote anything.
+- The evaluation case `running-a-file-a-background-subagent-is-rewriting` still expects the
+  command checker to refuse from the conversation alone, and Haiku does not. Whether it
+  stays a critical case, and whether locking stays off by default.
+
 ### Measured with a real model (2026-11-27, Claude Haiku 5.5, the owner's key)
 
 The owner asked for everything of the day to be tested with a real model. The key is in
