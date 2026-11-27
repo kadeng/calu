@@ -75,6 +75,10 @@ TASK_WORDS = 60
 """Words the subagent checker's fixed part gained when it began to review tasks as well as
 results (2026-11-22, the owner's request)."""
 
+DENY_WORDS = 70
+"""Words the subagent checker's instructions gained with the answer DENY for a task and with
+ESCALATE as the exception for a result (2026-11-27, the owner's requirement 51)."""
+
 SUGGEST_WORDS = 25
 """Words the fixed parts gained when DENY reasons, comments and notes became reminders and
 suggestions rather than orders (2026-11-22, the owner's request)."""
@@ -117,7 +121,10 @@ def test_the_shipped_instructions_are_short(name: str) -> None:
     route = "subagent" if name == "subagent-result" else name
     words = len(compose_instructions(route, default_instructions(name)).split())
     evasion = sum(len(read_part(p).split()) for p in (EVASION_PART, ROLE_PART, DISCLOSURE_PART))
-    tasks = {"subagent-result": TASK_WORDS, "command": FILE_TASK_WORDS + OUTSIDE_WORDS}.get(name, 0)
+    tasks = {
+        "subagent-result": TASK_WORDS + DENY_WORDS,
+        "command": FILE_TASK_WORDS + OUTSIDE_WORDS,
+    }.get(name, 0)
     tasks += GENERATED_WORDS.get(name, 0) + (SLOP_WORDS if name == "edit" else 0)
     shared = evasion + PRIVACY_WORDS + SUGGEST_WORDS
     assert words < (410 if name == "command" else 360) + shared + tasks, f"{name}: {words} words"

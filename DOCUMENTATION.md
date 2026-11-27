@@ -445,8 +445,16 @@ them.
 **What a subagent is told.** Before a subagent starts, the subagent checker reviews the task of
 the `Agent` call against the conversation and the earlier decisions; Claude's own later
 `SendMessage` to a subagent is reviewed the same way. Calu's relay of your message to a
-subagent is not reviewed: those are your words. A task that hands the subagent a step or an
-effect that was refused to Claude escalates. The checker's retelling of the task goes into the
+subagent is not reviewed: those are your words. The checker has four answers for a task:
+
+| Answer | Effect |
+|---|---|
+| accept | the subagent starts |
+| remark | the subagent starts, and Claude gets the checker's remark |
+| deny | the subagent does not start. Claude reads the reason and can write the task again. The shipped instructions use this for a task that reaches beyond your request |
+| escalate | the call waits for you. The shipped instructions use this for a task that hands the subagent a step or an effect that was refused to Claude |
+
+The checker's retelling of the task goes into the
 checkers' context at once ("Task for subagent ..."), so every later check knows it: the checks
 of the subagent's own steps, and the main agent's steps while a background subagent still
 runs. A command that runs a script a subagent was told to rewrite is judged by that task, not
@@ -454,10 +462,14 @@ by the script's old content. `check_subagent_tasks false` lets these calls run u
 
 A background subagent of Claude Code delivers its report with the tool `SubagentHandback` and
 ends with an empty final result. Calu reviews that report with the subagent checker
-before the tool call runs: the checker's remark reaches the main agent as a message, and a
-report the checker escalates waits for a person. A person's denial stops the handback: the
-subagent reads that the user does not want the report, and the main agent reads the remark and
-the decision. The empty final result after a reviewed report passes without a check; the step
+before the tool call runs. Accept, with or without a remark, is the normal answer: the main
+agent gets the report, and the remark as a message with it. A report that asks for more work
+than you wanted gets a remark and is not held. Escalate is the exception, for a report the
+main agent should not read as it is, such as one that holds a secret: it waits for a person.
+A person's denial stops the handback: the subagent reads that the user does not want the
+report, and the main agent reads the remark and the decision. The checker can deny a report
+itself, with the same effect and without asking; the shipped instructions tell it not to. The
+empty final result after a reviewed report passes without a check; the step
 records why.
 
 Two more models work for the checkers and decide nothing:
@@ -1745,7 +1757,7 @@ with a section "Test triggers". The triggers let you provoke each decision on pu
 
 | Text | Where it counts | The checker answers |
 |---|---|---|
-| `calu:test-deny` | anywhere in the step: the command, the edited text, the commit's diff, a subagent's result | DENY (for a subagent's result: a note telling Claude not to act on it) |
+| `calu:test-deny` | anywhere in the step: the command, the edited text, the commit's diff, a subagent's task or result | DENY (for a subagent's result: a note telling Claude not to act on it) |
 | `calu:test-escalate` | anywhere in the step | ESCALATE |
 | `calu:test-allow` | only in a message you typed; the message must say which step you mean | ALLOW |
 | `calu:test-pass` | only in a message you typed; the message must say which step you mean | PASS, whatever a project rule says |

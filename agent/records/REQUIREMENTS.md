@@ -413,7 +413,8 @@ broken down or extended. Derived requirements and design decisions belong in
     ) are used. Denial of subagent results usually makes no sense, but no need to remove that
     outright." And: "This is for subagent *results*. The rules for a subagent *launch
     instructions* are different, these can be handed back to the main agent for
-    reformulation."
+    reformulation." On Claude's first draft with an answer of its own for that: "We don't
+    need a separate REVISE, a DENY on a subagent launch can be given a reason and retried."
 
 ## Soft goals and priorities
 

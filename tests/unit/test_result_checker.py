@@ -1,6 +1,7 @@
 """Subagent result checker: review, note injection, escalation (offline)."""
 
 from pathlib import Path
+from typing import Any
 
 import anyio
 import pytest
@@ -315,19 +316,82 @@ async def test_a_reload_gives_the_result_checker_its_new_limits_and_effort(tmp_p
 
 def test_an_escalation_without_a_note_takes_the_summary_as_its_note() -> None:
     """A small model often puts what the user has to decide into the summary; the check then
-    does not fail, and the person reads that text. An ANNOTATE without a note is asked again."""
+    does not fail, and the person reads that text. An ANNOTATE or DENY without a note is asked
+    again. On the last attempt an ANNOTATE without a note counts as ACCEPT, so that the check
+    does not fail and make a person decide about an ordinary result; a DENY still fails."""
+    from types import SimpleNamespace
+
     from pydantic_ai import ModelRetry
 
     from calu.checkers.result_checker import ResultReview, ResultVerdict, _require_note
 
+    first: Any = SimpleNamespace(retry=0, max_retries=2)
+    last: Any = SimpleNamespace(retry=2, max_retries=2)
     escalated = _require_note(
-        ResultReview(verdict=ResultVerdict.ESCALATE, summary="Asks for a redesign.")
+        first, ResultReview(verdict=ResultVerdict.ESCALATE, summary="Asks for a redesign.")
     )
     assert escalated.note == "Asks for a redesign."
     kept = ResultReview(verdict=ResultVerdict.ESCALATE, note="Decide.", summary="s")
-    assert _require_note(kept) is kept
+    assert _require_note(first, kept) is kept
+    for verdict in (ResultVerdict.ANNOTATE, ResultVerdict.DENY):
+        with pytest.raises(ModelRetry):
+            _require_note(first, ResultReview(verdict=verdict, summary="s"))
+    given_in = _require_note(last, ResultReview(verdict=ResultVerdict.ANNOTATE, summary="s"))
+    assert given_in.verdict is ResultVerdict.ACCEPT
     with pytest.raises(ModelRetry):
-        _require_note(ResultReview(verdict=ResultVerdict.ANNOTATE, summary="s"))
+        _require_note(last, ResultReview(verdict=ResultVerdict.DENY, summary="s"))
+
+
+async def test_a_denied_task_goes_back_to_claude_with_the_reason(tmp_path: Path):
+    """Requirement 51: the subagent checker's DENY for a task refuses the Agent call, and the
+    reason Claude reads says that it may write the task again. Nobody is asked."""
+    turn = [
+        [
+            {
+                "agent": {
+                    "description": "reviewer",
+                    "prompt": "Rewrite the whole module calu:deny-task",
+                    "result": "done",
+                    "actions": [{"text": "working"}],
+                }
+            },
+            {"text": "done"},
+        ]
+    ]
+    session, rec, _ = make_session(tmp_path, turn)
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="small fix only"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    tasks = [
+        c
+        for c in rec.of(CheckResult)
+        if c.route == "subagent" and c.step_summary.startswith("Task for subagent")
+    ]
+    assert tasks[0].decision == "DENY"
+    assert "refused this task" in tasks[0].reason and "write the task again" in tasks[0].reason
+    assert "reaches beyond the request" in tasks[0].reason
+    assert not rec.of(EscalationRequest)
+
+
+async def test_a_report_the_checker_denies_is_not_handed_back(tmp_path: Path):
+    """Requirement 51: a DENY of the subagent checker for a result stays possible. The
+    handback is refused without asking a person, the subagent reads that the checker refused
+    it, and the main agent gets the checker's note instead of the report."""
+    session, rec, store = make_session(tmp_path, handback_turn("The report calu:deny-result"))
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    assert not rec.of(EscalationRequest)
+    results = [r for r in rec.of(ToolResult) if r.is_error]
+    assert results and "The subagent checker refused this report" in results[0].content
+    injected = [u.text for u in rec.of(UserInput) if "result checker" in u.text]
+    assert injected and "so you do not get it" in injected[0]
+    reviewed = next(s for s in store.steps.values() if s.row.tool_name == "SubagentResult")
+    assert reviewed.checker_runs[0].decision == "deny"
 
 
 async def test_a_task_or_result_longer_than_the_checker_reads_escalates(tmp_path: Path):

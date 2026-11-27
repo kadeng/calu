@@ -207,8 +207,13 @@ async def review_subagent_result(
     if failed:  # `ResultChecker.run` never raises; a failure has to count as one here
         raise RuntimeError(review.note)
     decision = CheckDecision(
-        decision=Decision.ESCALATE if review.verdict is ResultVerdict.ESCALATE else Decision.PASS,
-        reason=review.note if review.verdict is ResultVerdict.ESCALATE else "",
+        decision={
+            ResultVerdict.ESCALATE: Decision.ESCALATE,
+            ResultVerdict.DENY: Decision.DENY,
+        }.get(review.verdict, Decision.PASS),
+        reason=review.note
+        if review.verdict in (ResultVerdict.ESCALATE, ResultVerdict.DENY)
+        else "",
         comment=review.note if review.verdict is ResultVerdict.ANNOTATE else "",
         step_summary=review.summary,
     )

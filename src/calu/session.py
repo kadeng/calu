@@ -452,6 +452,11 @@ HANDBACK_REFUSED = (
     "now. {note}"
 )
 """The reason a subagent reads when a person denied its handed-back report (D252)."""
+HANDBACK_REFUSED_BY_CHECKER = (
+    "The subagent checker refused this report. Do not hand it back again; end your work now. {note}"
+)
+"""The reason a subagent reads when the subagent checker answered DENY for its handed-back
+report (requirement 51)."""
 HANDBACK_REPORT_CHARS = 240_000
 """The longest handed-back report the result checker reads, as for a final result
 (`calu.claude.sdk_runner.SUBAGENT_RESULT_CHARS`)."""
@@ -535,6 +540,21 @@ HONESTY_NOTICE = (
 )
 """The notice to Claude's main agent after `honesty.notify_after_dishonest_edits` dishonest
 steps (the owner, 2026-11-26)."""
+
+TASK_REFUSED = (
+    "The subagent checker refused this task: {note} You may write the task again without "
+    "what it objects to and start the subagent then."
+)
+"""The reason Claude reads when the subagent checker answers DENY for a task or a message to
+a subagent (the owner's requirement 51: launch instructions are handed back for
+reformulation)."""
+
+RESULT_REFUSED = (
+    "The subagent checker refused this report, so you do not get it. Tell the user what the "
+    "checker noted."
+)
+"""Added to the note for the main agent when the subagent checker answers DENY for a result.
+Its instructions do not ask for that answer; it stays possible (requirement 51)."""
 
 RULED_ROUTES = frozenset({"command", "edit", "changeset"})
 """The routes whose checkers read the temporary rules (`calu.temp_rules`; the owner chose the
@@ -4481,6 +4501,9 @@ class Session:
             escalated, nobody decided       PASS         the note: do not act on it yet
             escalated, person denied        DENY         the note and the decision; the
                                                          subagent reads `HANDBACK_REFUSED`
+            the checker answered DENY       DENY         the note and `RESULT_REFUSED`; the
+                                                         subagent reads
+                                                         `HANDBACK_REFUSED_BY_CHECKER`
             internal error                  ASK          ""
 
         Args:
@@ -4510,9 +4533,11 @@ class Session:
                 reason=f"Reviewing the handed-back report failed ({type(exc).__name__}: {exc}).",
             )
         if denied:
-            return GateResult(
-                Verdict.DENY, reason=HANDBACK_REFUSED.format(note=note).strip(), main_note=note
+            by_checker = RESULT_REFUSED in note
+            reason = (HANDBACK_REFUSED_BY_CHECKER if by_checker else HANDBACK_REFUSED).format(
+                note=note
             )
+            return GateResult(Verdict.DENY, reason=reason.strip(), main_note=note)
         return GateResult(Verdict.PASS, main_note=note)
 
     async def _review_subagent_result(self, result: SubagentResult) -> tuple[str, bool]:
@@ -4530,7 +4555,7 @@ class Session:
 
         Returns:
             (the note for the main agent, as `review_subagent_result` returns it; True if a
-            person denied the result after an escalation).
+            person denied the result after an escalation, or the checker answered DENY).
         """
         # The subagent's text after its last tool call is its result, reviewed below.
         self._run_state.claude_outputs.pop(result.agent_id, None)
@@ -4570,6 +4595,8 @@ class Session:
                 summary=review.summary,
             )
         escalated = review.verdict is ResultVerdict.ESCALATE
+        refused = review.verdict is ResultVerdict.DENY
+        stored = "escalate" if escalated else "deny" if refused else "pass"
         self.context.step(
             StepRecord(
                 tool_name="Agent result",
@@ -4588,7 +4615,7 @@ class Session:
                         checker_name="subagent-result",
                         checker_version=self.recorder.version("subagent-result"),
                         model=model_name(self.result_checker.model),
-                        decision="escalate" if escalated else "pass",
+                        decision=stored,
                         reason=review.note,
                         input_tokens=outcome.input_tokens,
                         output_tokens=outcome.output_tokens,
@@ -4602,7 +4629,7 @@ class Session:
                 self.store.decide_step(
                     step_id,
                     StepDecision(
-                        decision="escalate" if escalated else "pass",
+                        decision=stored,
                         reason=review.note,
                         summary=review.summary,
                     ),
@@ -4614,14 +4641,18 @@ class Session:
                 agent_id=result.agent_id,
                 tool_name="Agent",
                 route=Route.SUBAGENT,
-                decision=Decision.ESCALATE if escalated else Decision.PASS,
-                reason=review.note if escalated else "",
+                decision=(
+                    Decision.ESCALATE if escalated else Decision.DENY if refused else Decision.PASS
+                ),
+                reason=review.note if escalated or refused else "",
                 step_summary=review.summary,
-                comment="" if escalated else review.note,
+                comment="" if escalated or refused else review.note,
             )
         )
         note = review.note.strip()
-        denied = False
+        denied = refused
+        if refused:
+            note = f"{note}\n\n{RESULT_REFUSED}".strip()
         if step_id is not None and not escalated:
             await self.recorder.attempt(
                 "recording a step result",
@@ -4736,8 +4767,9 @@ class Session:
         """Review what Claude tells a subagent, before the subagent gets it; never raises.
 
         The subagent checker's verdict becomes the step's decision: ACCEPT -> PASS, ANNOTATE
-        -> PASS with the note as the comment to Claude, ESCALATE -> ESCALATE with the note as
-        the reason (`auto_escalate.subagents` covers results only, not tasks). The step
+        -> PASS with the note as the comment to Claude, DENY -> DENY with the note as the
+        reason, so Claude can write the task again (requirement 51), ESCALATE -> ESCALATE with
+        the note as the reason (`auto_escalate.subagents` covers results only, not tasks). The step
         summary is the checker's retelling of the task, headed "Task for subagent <id>" or
         "Message to subagent <id>", so that every later check, of the subagent's steps and of
         the main agent's, knows the task, also while a background subagent still runs.
@@ -4787,6 +4819,12 @@ class Session:
             return CheckDecision(
                 decision=Decision.ESCALATE,
                 reason=review.note.strip() or "The subagent checker escalated the task.",
+                step_summary=summary,
+            )
+        if review.verdict is ResultVerdict.DENY:
+            return CheckDecision(
+                decision=Decision.DENY,
+                reason=TASK_REFUSED.format(note=review.note.strip()),
                 step_summary=summary,
             )
         comment = review.note.strip() if review.verdict is ResultVerdict.ANNOTATE else ""

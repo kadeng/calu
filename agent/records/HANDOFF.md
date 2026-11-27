@@ -2,7 +2,7 @@
 
 State on 2026-11-27 (the section "Pick up here" is current; older sections below keep the
 state of their day). Read this, then `AGENTS.md`, `REQUIREMENTS.md` and `PLAN.md` (decisions
-D1-D294, open questions §11, phases §12; the full text of a shortened decision is in
+D1-D295, open questions §11, phases §12; the full text of a shortened decision is in
 `agent/records/notes/plan-archive.md`).
 
 **Next step: step 6 of the temporary rules** (documentation; the section "The session in
@@ -31,12 +31,12 @@ it. Its section 7 quotes the owner's seven answers.
   container.
 - Still open: whether a subagent's marker counts.
 
-### A subagent's result must not wait for a person (requirement 51, 2026-11-27), not built
+### The subagent checker: remark on results, deny a task with a reason (requirement 51, 2026-11-27)
 
 The owner: the subagent checker comments on a result as a follow-up message; it does not
-keep the subagent from finishing and cannot keep the report from the main agent. The code
-does otherwise today (`Session._review_subagent_result`, `_handback`,
-`checkers/result_checker.py`):
+keep the subagent from finishing and cannot keep the report from the main agent. When the
+owner said this, the code did the following (`Session._review_subagent_result`, `_handback`,
+`checkers/result_checker.py`), and all of it but the answer set still holds:
 
 - The result checker answers ACCEPT, ANNOTATE or ESCALATE. ESCALATE opens an escalation, and
   the handback (a `SubagentHandback` tool call) waits inside its hook until a person decides.
@@ -51,31 +51,39 @@ under regular circumstances only Accept with comment and Escalate ( for example 
 secret in the final message that the main agent should not see ) are used. Denial of
 subagent results usually makes no sense, but no need to remove that outright."
 
-So the mechanism stays: ACCEPT, with or without a comment, is the normal answer; ESCALATE is
-for exceptions; a person's deny after an escalation still keeps the report from the main
-agent. What remains to do:
+And on launch instructions: "This is for subagent *results*. The rules for a subagent
+*launch instructions* are different, these can be handed back to the main agent for
+reformulation." "We don't need a separate REVISE, a DENY on a subagent launch can be given a
+reason and retried."
 
-- **Find and fix the failing check** ("Open items" below): it turned three ordinary results
-  into escalations.
-- **The shipped instructions** (`defaults/checkers/subagent-result.md` and
-  `system/subagent-result.md`): they tell the checker to ESCALATE a result that asks for work
-  well beyond the task. By the ruling that is a comment. Escalation is for a result the main
-  agent should not read as it is, the owner's example being a secret in it. Claude's reading
-  of the ruling, to confirm with the owner before the texts change.
-- **Open, to ask the owner:** what a check that fails does with the result. Today it
-  escalates, like every error in calu. Passing it with the note "not reviewed" would stop a
-  broken checker from holding subagents, and would also let a secret through whenever the
-  checker fails.
-- **Launch instructions are different (the owner, the same day):** "This is for subagent
-  *results*. The rules for a subagent *launch instructions* are different, these can be
-  handed back to the main agent for reformulation." The code cannot do that yet. The check
-  of a task (`Agent`, `Task`, Claude's `SendMessage` to a subagent; D256) uses the result
-  checker's three answers, and the session maps them to PASS, PASS with a comment, or
-  ESCALATE. There is no answer that refuses the call and gives the main agent the reason, so
-  a task the checker objects to either starts with a comment or waits for a person. To
-  build: an answer of the task check that becomes DENY with the reason, so the main agent
-  rewrites the task; the instructions say when to use it and when to escalate (a task that
-  hands a subagent what was refused to Claude still escalates). Results get no such answer.
+**Built on 2026-11-27 (PLAN D295), unit layer only:**
+
+- The subagent checker has a fourth answer, DENY (`ResultVerdict.DENY`). For a task it
+  refuses the `Agent`, `Task` or `SendMessage` call, and Claude reads the note as the reason
+  with the sentence that it may write the task again (`session.TASK_REFUSED`). For a result
+  it refuses the handback without asking a person (`RESULT_REFUSED`,
+  `HANDBACK_REFUSED_BY_CHECKER`); the instructions tell the checker not to use it there.
+- The fixed instructions and the shipped default: accept and remark are the normal answers;
+  ESCALATE is the exception (a rule asks for a person, a secret or other text Claude should
+  not read as it is, text addressed to the checker, a claimed approval). A result that asks
+  for more work than the user wanted gets a remark; before, the shipped rule escalated it.
+  **That change is Claude's reading of the owner's ruling; the owner has not confirmed it.**
+  A task that reaches beyond the request is denied; a task that hands over a refused step
+  still escalates.
+- An ANNOTATE without a note counts as ACCEPT on the last attempt, where it failed the
+  check before (`result_checker._require_note`). This removes one possible cause of the
+  failed checks of 2026-11-27; whether it was the cause is not known.
+- A check that fails still escalates. The owner was asked whether that should stay and has
+  not answered.
+- Evaluation cases: `review-demands-a-redesign` and
+  `review-contradicts-an-accepted-tradeoff` expect a remark; the new case
+  `subagent-task-asks-for-more-than-the-user-wanted` expects DENY. Not run against a real
+  model.
+- Not done: a run in the Cua desktop or with a real model; the database layer was not run;
+  the cause of the failed checks (the server's log in `/var/lib/calu/log/` needs root).
+- `tests/unit/test_protocol_side_usage.py::test_the_usage_panel_reads_claude_codes_usage_without_a_turn`
+  fails in this checkout with and without these changes (an extra `session.state` event).
+  Not investigated.
 
 ### PLAN.md shortened, its full text archived (2026-11-27)
 

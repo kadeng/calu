@@ -7,6 +7,17 @@ Two kinds of review, with the same instructions and the same answer (`ResultRevi
     result  the subagent's final result or handed-back report (`run`): the result against the
             task and the conversation
 
+What a verdict does (the owner's requirement 51):
+
+    verdict     task                                    result
+    ACCEPT      the call runs                           Claude gets the result
+    ANNOTATE    the call runs, Claude gets the note     Claude gets the result and the note
+    DENY        the call is refused; Claude gets the    a handed-back report is refused and
+                note as the reason and may write the    Claude gets the note only; possible,
+                task again                              and not what the instructions ask for
+    ESCALATE    a person decides                        a person decides (the exception, e.g.
+                                                        a secret Claude should not read)
+
 Request layout (cache points as for the step checkers):
 
     instructions   <- checkers/subagent-result.md
@@ -21,9 +32,10 @@ import secrets
 import time
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, CachePoint, ModelRetry, UsageLimits
+from pydantic_ai import Agent, CachePoint, ModelRetry, RunContext, UsageLimits
 from pydantic_ai.capabilities import Caching
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
@@ -57,14 +69,16 @@ def cut_chars(task: str, result: str = "") -> int:
 
 
 class ResultVerdict(StrEnum):
-    """Outcome of a result review.
+    """Outcome of the review of a task or a result.
 
-    ACCEPT: the result fits the task's scope. ANNOTATE: Claude gets a triage note.
-    ESCALATE: the user decides how to proceed.
+    ACCEPT: nothing to remark. ANNOTATE: Claude gets a note with it. DENY: the task is
+    refused and Claude gets the note as the reason, so it can write the task again; for a
+    result, the report is kept from Claude. ESCALATE: the user decides how to proceed.
     """
 
     ACCEPT = "ACCEPT"
     ANNOTATE = "ANNOTATE"
+    DENY = "DENY"
     ESCALATE = "ESCALATE"
 
 
@@ -72,7 +86,10 @@ class ResultReview(BaseModel):
     """Structured output of the result checker (field descriptions are shown to the model)."""
 
     verdict: ResultVerdict = Field(
-        description="ACCEPT, ANNOTATE (triage note for Claude) or ESCALATE (the user decides)."
+        description=(
+            "ACCEPT, ANNOTATE (a note for Claude), DENY (a task: Claude gets the note as "
+            "the reason and may write the task again) or ESCALATE (the user decides)."
+        )
     )
     note: str = Field(
         default="",
@@ -80,7 +97,8 @@ class ResultReview(BaseModel):
             "Note for Claude: a reminder of what the user asked or accepted, and suggestions "
             "which points look in scope, out of scope, against a tradeoff the user accepted, or "
             "in need of the user's decision. It suggests and does not instruct: Claude decides. "
-            "Empty for ACCEPT. At most about 300 words."
+            "With DENY it says what the task must not ask for or must say. Empty for ACCEPT. "
+            "At most about 300 words."
         ),
     )
     summary: str = Field(
@@ -353,25 +371,33 @@ def _escalated_for_cut(outcome: ResultOutcome, cut: int, what: str) -> ResultOut
     return replace(outcome, review=escalated)
 
 
-def _require_note(output: ResultReview) -> ResultReview:
-    """Output validator: ANNOTATE and ESCALATE need a non-empty note.
+def _require_note(ctx: RunContext[Any], output: ResultReview) -> ResultReview:
+    """Output validator: ANNOTATE, DENY and ESCALATE need a non-empty note.
 
     An ESCALATE without a note takes the summary as its note: a small model often writes
     what the user has to decide into the summary, and asking it again fails the check as often
-    as it helps. The person who decides then reads that text. An ANNOTATE without a note is
-    asked for again, because its note is the whole point of it.
+    as it helps. The person who decides then reads that text. An ANNOTATE or DENY without a
+    note is asked for again. On the last attempt an ANNOTATE without a note counts as ACCEPT:
+    it has nothing to tell Claude, and a check that fails for it would make a person decide
+    about an ordinary task or result (seen three times on 2026-11-27, the cause not
+    confirmed).
 
     Args:
+        ctx: The run's context; `retry` and `max_retries` say whether this is the last attempt.
         output: The model's review.
 
     Returns:
-        The review; for an ESCALATE without a note, a copy whose note is the summary.
+        The review; for an ESCALATE without a note, a copy whose note is the summary; for an
+        ANNOTATE without a note on the last attempt, a copy with the verdict ACCEPT.
 
     Raises:
-        ModelRetry: If an ANNOTATE has no note, or an ESCALATE has neither note nor summary.
+        ModelRetry: If an ANNOTATE or DENY has no note and attempts are left, if a DENY
+            has none on the last attempt, or if an ESCALATE has neither note nor summary.
     """
     if output.verdict is ResultVerdict.ACCEPT or output.note.strip():
         return output
     if output.verdict is ResultVerdict.ESCALATE and output.summary.strip():
         return output.model_copy(update={"note": output.summary.strip()})
-    raise ModelRetry("ANNOTATE and ESCALATE need a triage note.")
+    if output.verdict is ResultVerdict.ANNOTATE and ctx.retry >= ctx.max_retries:
+        return output.model_copy(update={"verdict": ResultVerdict.ACCEPT})
+    raise ModelRetry("ANNOTATE, DENY and ESCALATE need a note.")

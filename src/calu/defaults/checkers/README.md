@@ -34,7 +34,7 @@ Every shipped `<checker>.md` ends with a section "Test triggers", for trying cal
 
 | Text | Where it counts | Decision |
 |---|---|---|
-| `calu:test-deny` | anywhere in the step (command, edit, commit diff, subagent result) | DENY (a subagent result: ANNOTATE) |
+| `calu:test-deny` | anywhere in the step (command, edit, commit diff, subagent task or result) | DENY (a subagent result: ANNOTATE) |
 | `calu:test-escalate` | anywhere in the step | ESCALATE |
 | `calu:test-allow` | only in a message **you** typed that says which step it means | ALLOW (a subagent result: ACCEPT) |
 | `calu:test-pass` | only in a message you typed that says which step it means | PASS (a subagent result: ACCEPT) |

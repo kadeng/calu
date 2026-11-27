@@ -417,8 +417,10 @@ def fake_summarizer() -> Model:
 def _fake_result_review(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
     """Rule-based stand-in for the result checker.
 
-    A result: "calu:escalate-result" in it -> ESCALATE, "calu:scope" -> ANNOTATE, else ACCEPT.
-    A task ("# Task to review"): "calu:escalate-task" in it -> ESCALATE, else ACCEPT, with the
+    A result: "calu:escalate-result" in it -> ESCALATE, "calu:deny-result" -> DENY,
+    "calu:scope" -> ANNOTATE, else ACCEPT.
+    A task ("# Task to review"): "calu:escalate-task" in it -> ESCALATE, "calu:deny-task" ->
+    DENY, else ACCEPT, with the
     summary "Fake review of a subagent task."
 
     Args:
@@ -433,6 +435,8 @@ def _fake_result_review(messages: list[ModelMessage], info: AgentInfo) -> ModelR
         task = whole.rsplit("# Task to review", 1)[-1]
         if "calu:escalate-task" in task:
             verdict, note = "ESCALATE", "Fake subagent checker: the task asks for a refused step."
+        elif "calu:deny-task" in task:
+            verdict, note = "DENY", "Fake subagent checker: the task reaches beyond the request."
         else:
             verdict, note = "ACCEPT", ""
         args = {"verdict": verdict, "note": note, "summary": "Fake review of a subagent task."}
@@ -440,6 +444,8 @@ def _fake_result_review(messages: list[ModelMessage], info: AgentInfo) -> ModelR
     prompt = whole.rsplit("# Result to review", 1)[-1]
     if "calu:escalate-result" in prompt:
         verdict, note = "ESCALATE", "Fake result checker: the result expands the scope."
+    elif "calu:deny-result" in prompt:
+        verdict, note = "DENY", "Fake result checker: the report must not reach Claude."
     elif "calu:scope" in prompt:
         verdict, note = "ANNOTATE", "Fake result checker: points 2-3 are out of scope."
     else:
