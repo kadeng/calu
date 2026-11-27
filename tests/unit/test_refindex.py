@@ -72,7 +72,9 @@ def test_the_search_reports_every_code_occurrence_of_the_bare_name(project: Path
     and the shell script are all unclear. The definition, the comment, the docstrings, a
     string that only mentions the name, a longer identifier, the Markdown file, the ignored
     file and the binary file are left out."""
-    answer = SearchIndex(project).find(Unit("src/users.py", "Users.add_user", line=5))
+    answer = SearchIndex(project, same_language=False).find(
+        Unit("src/users.py", "Users.add_user", line=5)
+    )
     assert answer.referrers == ()
     assert [(p.path, p.line) for p in answer.unclear] == [
         ("run.sh", 1),
@@ -113,3 +115,10 @@ def test_a_directory_without_git_is_searched_whole(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("add_user()\n", encoding="utf-8")
     found = places(SearchIndex(tmp_path), Unit("b.py", "add_user"))
     assert found == [("a.py", 1)]
+
+
+def test_by_default_only_files_of_the_units_own_language_are_searched(project: Path) -> None:
+    """A Python unit is looked for in Python files only: the shell script that holds the same
+    word is not read. Whether another language calls the unit is left for later."""
+    found = places(SearchIndex(project), Unit("src/users.py", "Users.add_user", line=5))
+    assert ("run.sh", 1) not in found and ("src/main.py", 1) in found

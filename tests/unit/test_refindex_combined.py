@@ -124,7 +124,9 @@ async def test_each_stage_sees_only_what_the_one_before_could_not_settle(tmp_pat
     root = project(tmp_path)
     requests: list[str] = []
     fast = FastIndex()
-    index = CombinedIndex(SearchIndex(root), fast, MatchJudge(root, judging(requests)))
+    index = CombinedIndex(
+        SearchIndex(root, same_language=False), fast, MatchJudge(root, judging(requests))
+    )
     answer = await index.referrers(UNIT)
     assert [(p.path, p.line) for p in answer.referrers] == [
         ("far.py", CONTEXT_LINES + 5),
@@ -145,7 +147,7 @@ async def test_without_a_fast_index_and_a_judge_every_place_stays_unclear(tmp_pa
     """An index that knows nothing hides no referrer: the combination without its two
     optional stages is the word search."""
     root = project(tmp_path)
-    answer = await CombinedIndex(SearchIndex(root)).referrers(UNIT)
+    answer = await CombinedIndex(SearchIndex(root, same_language=False)).referrers(UNIT)
     assert answer.referrers == () and len(answer.unclear) == 4
 
 
@@ -156,7 +158,9 @@ async def test_a_judge_that_fails_leaves_its_places_unclear(tmp_path: Path) -> N
         raise RuntimeError("no model")
 
     root = project(tmp_path)
-    index = CombinedIndex(SearchIndex(root), FastIndex(), MatchJudge(root, FunctionModel(broken)))
+    index = CombinedIndex(
+        SearchIndex(root, same_language=False), FastIndex(), MatchJudge(root, FunctionModel(broken))
+    )
     answer = await index.referrers(UNIT)
     assert [p.path for p in answer.referrers] == ["typed.py"]
     assert sorted(p.path for p in answer.unclear) == ["far.py", "glue.rs"]
@@ -182,7 +186,7 @@ async def test_a_fast_index_that_is_not_ready_adds_its_problem_and_loses_nothing
             return Referrers(complete=False, problem="The language server is not ready.")
 
     root = project(tmp_path)
-    answer = await CombinedIndex(SearchIndex(root), NotReady()).referrers(UNIT)
+    answer = await CombinedIndex(SearchIndex(root, same_language=False), NotReady()).referrers(UNIT)
     assert len(answer.unclear) == 4 and answer.complete
     assert "The fast index: The language server is not ready." in answer.problem
 

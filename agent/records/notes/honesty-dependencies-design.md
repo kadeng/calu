@@ -365,6 +365,16 @@ against 67 % of the files) and writes its graph into the project.
 Next step proposed: a `CbmIndex` behind the same interface, so that both fast stages can be
 measured on the same sample by the number of places they leave for the judge.
 
+### Same language first (the owner, 2026-11-27)
+
+After the measurement of what each fast stage leaves for the judge (`spikes/RESULTS.md`), the
+owner: "we should not invoke the judge to determine whether a non-python file calls a python
+function here. We can go cross-language later."
+
+Built: `SearchIndex.same_language`, on by default. A unit is looked for only in files of its
+own language. The cross-language parts of this note (the section on language boundaries,
+further names of a unit) describe the later step.
+
 ## 5. How calu and Claude Code use the index
 
 **What the owner has fixed (2026-11-27):** "I would like the honesty checker to still work

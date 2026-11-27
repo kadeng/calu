@@ -12,6 +12,11 @@ Which files it reads:
   skipped.
 - Outside a git repository: every file below the project directory.
 
+By default only files of the unit's own language are read (`same_language`): for a Python
+unit the Python files. Whether code in one language calls code in another is a harder
+question, left for later (the owner, 2026-11-27). On calu, 40 % of all hits for Python units
+were unrelated uses of the same word in the Kotlin and TypeScript extensions.
+
 What counts as a hit: the unit's bare name as a whole word. `add_user` is found in
 `x.add_user(1)`, and not in `add_user_later`.
 
@@ -52,6 +57,19 @@ PROSE_SUFFIXES = (".md", ".markdown", ".rst", ".txt", ".adoc")
 """File names that hold prose, not code. A project's documents name its functions all the
 time: on calu more than half of all hits were in such files."""
 
+LANGUAGES: tuple[tuple[str, ...], ...] = (
+    (".py", ".pyi"),
+    (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"),
+    (".kt", ".kts"),
+    (".java",),
+    (".rs",),
+    (".go",),
+    (".c", ".h", ".cc", ".cpp", ".cxx", ".hpp"),
+    (".sh", ".bash"),
+)
+"""File name endings that belong to one language, for `SearchIndex.same_language`. JavaScript
+and TypeScript count as one, and so do C and C++, because they call each other directly."""
+
 GIT_TIMEOUT_S = 20.0
 """Longest the listing of the files may take."""
 
@@ -62,6 +80,9 @@ class SearchIndex:
 
     root: Path
     """The project directory."""
+    same_language: bool = True
+    """Read only files of the unit's own language (`LANGUAGES`). A unit in a file of no listed
+    language is searched for in every file. False reads every file for every unit."""
 
     async def referrers(self, unit: Unit) -> Referrers:
         """Find every place that holds the bare name of `unit`, in a worker thread.
@@ -94,7 +115,10 @@ class SearchIndex:
         unclear: list[Place] = []
         dismissed = 0
         skipped = 0
+        own = next((group for group in LANGUAGES if unit.path.endswith(group)), None)
         for name in files:
+            if self.same_language and own is not None and not name.endswith(own):
+                continue
             text = self._read(name)
             if text is None:
                 skipped += 1
