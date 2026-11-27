@@ -1416,3 +1416,16 @@ checker can now mark one unit (`calu.testing.honesty_answering`).
 | The web pane's text prompt said "A reason is needed." in red before anything was typed | **fixed** (`pane/dialogs.ts`: the problem shows after typing or Enter; OK is disabled from the start) |
 | A compound `git add ... && git commit` in the first version of the scenario was refused by calu's commit rule | correct behaviour; the scenario was split into two commands |
 | The PyCharm plugin | n/a: it has no graph view |
+
+### W. The supervision level "Unchecked / Claude Code only" (2026-11-27)
+
+Cua desktop, VSCode, scripted server, `scenario: tour`.
+
+| Case | Result |
+|---|---|
+| The level selector lists "Unchecked / Claude Code only" first; choosing it reaches the session | ok |
+| The tour's steps that the scripted checkers deny or escalate (`rm -rf build`, `git push`) pass to Claude Code; the subagents' tasks and results pass too | ok (`screenshots/vscode-level-unchecked.png`) |
+| A question to the user still waits for the user | ok |
+| Back to "Checkers decide" | ok |
+| The empty chat still says "Checkers review its commands and edits" while the level is unchecked | open (wording; not changed) |
+| A rule of the deny list with the level unchecked | not tried in the UI; unit test `test_a_deny_rule_still_asks_a_person` |
