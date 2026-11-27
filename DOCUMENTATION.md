@@ -2086,6 +2086,7 @@ guarantee. This repository's `pane.test.ts` does that for the chat pane's bundle
 | Aspect | Detail |
 |---|---|
 | Start | Under `enforce`, Calu starts a review by itself when a step needs a clean state and the only problem is unreviewed files or a required review. In `track` and `enforce` mode, you start one with `/honesty-review` or "Review now" |
+| Asked for by Claude | Claude, or a subagent, writes `#do-honesty-review` anywhere in its text, and Calu starts a review of the unreviewed and the marked files in the background. Use: a mark that a change in another file settled, which otherwise only an edit of the marked file would close. The review is Calu's own: it certifies no commit and does not run without a baseline. It runs although the last review read the same files. A second marker starts no review until a tool call has finished. Claude's main agent reads the outcome with one of its next tool calls. `honesty.mode` `track` or `enforce` |
 | Frequency | One review at a time. Calu starts none by itself while nothing changed since the last, and none within 60 seconds after a failed one. `/honesty-review` always runs one |
 | A step's waiting time | A step waits for the review for at most about seven minutes minus the time its checkers took. A review that takes longer continues to run. The step then waits for a person, and the review's result is available when Claude tries the step again |
 | The step goes to a person | The review fails; more files than `honesty.review_max_files` (300); files the review cannot judge |

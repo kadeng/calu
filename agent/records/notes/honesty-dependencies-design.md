@@ -40,6 +40,20 @@ Proposed details:
 6. **How Claude learns it.** From the texts calu already sends about marks (`HONESTY_MARKS`
    in `gate.py`, `HONESTY_NOTICE` in `session.py`) and from the skill `honest-code`.
 
+**As built on 2026-11-27** (`Session._marker_seen`, `_marker_review`; unit tests only), with
+what differs from the proposal:
+
+- The outcome goes to the **main agent**, with its next checked tool call after the review
+  ended, also when a subagent wrote the marker. No tool call waits for the review; under
+  `enforce` a step that needs a clean state joins the running review at the gate anyway.
+- The review **runs although the last one read the same files** (`ReviewRun.again`): the
+  marker's use is a mark that a change in another file settled, and the files of the plan
+  are then unchanged. The proposal's "none while nothing changed" would have stopped exactly
+  that review.
+- The limit against repeated or planted markers is therefore a different one: a marker
+  starts no review until a tool call has finished since the last marker's review, and none
+  while one is running. Within 60 seconds of a failed review none is started, as proposed.
+
 Once stale marks are judged again by calu itself (section 3), Claude needs the marker less
 often. It remains the way to ask under `track`, and when the index missed a dependency.
 

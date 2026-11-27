@@ -71,6 +71,15 @@ you changed honest again: name, documentation and behaviour agree, and so do the
 contracts your change affected. Whether an action is permitted is decided from the contract,
 so a contract that is wrong at that moment makes the decision wrong.
 
+## When calu records a mark you think is settled
+
+In a calu session with code honesty on, a checker may record a unit as dishonest (a *mark*).
+An edit of that file that makes name, documentation and behaviour agree closes it. When a
+change in another file settled it, for example a callee went back to what its caller's
+documentation says, write `#do-honesty-review` in your text. calu then reviews the marked and
+the unreviewed files again and tells you the outcome with one of your next tool calls. Do not
+touch a docstring only to have a file judged again.
+
 ## Before you run or test, check each changed unit
 
 - Does the name still fit what the body does?

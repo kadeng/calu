@@ -1425,3 +1425,80 @@ async def test_files_of_a_write_set_reach_the_state_with_its_next_computation(re
     state = await session.honesty_snapshot()
     assert session.honesty.watched == {"build/gen.py"}
     assert state.unreviewed.paths == ("build/gen.py",)
+
+
+# ------------------------------------------------------------------ the review marker (D293)
+
+
+def notes(rec: Recorder) -> str:
+    """Return every text Claude received that calu wrote about a review asked for by marker.
+
+    Args:
+        rec: The event recorder.
+
+    Returns:
+        The texts, one per line.
+    """
+    return "\n".join(u.text for u in rec.of(UserInput) if "#do-honesty-review" in u.text)
+
+
+async def test_the_marker_in_an_agents_text_starts_a_review_that_can_close_a_mark(repo: Path):
+    """Requirement 49: `#do-honesty-review` anywhere in Claude's text starts calu's own review
+    of the marked files, without an edit of them. The reviewer finds the file honest, the mark
+    closes, and the main agent reads the outcome with a later checked tool call. `track` mode:
+    calu starts no review by itself there."""
+    seen: list[str] = []
+    turn = [
+        {"text": "The caller is settled by the other change. #do-honesty-review now."},
+        {"sleep": 0.3},
+        bash("ls"),
+        bash("ls -a"),
+    ]
+    session, rec, _store = await session_on(
+        repo, [turn], mode="track", models={"honesty-review": fake_reviewer(seen=seen)}
+    )
+    mark(session)
+    await run_turns(session, rec)
+    assert len(seen) == 1 and "src/parser.py" in seen[0]
+    assert session.honesty.open_marks == []
+    assert "an agent asked for a review (#do-honesty-review)" in logs(rec)
+    assert "ran. The honesty state is clean." in notes(rec)
+
+
+async def test_a_repeated_marker_with_nothing_done_in_between_starts_no_second_review(repo: Path):
+    """The limit of D293: planted or repeated text costs one review per tool result at most.
+    The findings of the first review are passed on, and the second marker is answered without
+    a model call."""
+    seen: list[str] = []
+    reviewer = fake_reviewer(
+        {"src/parser.py": [("fields", "returns the fields unsorted")]}, seen=seen
+    )
+    turn = [
+        {"text": "#do-honesty-review"},
+        {"sleep": 0.3},
+        {"text": "Once more: #do-honesty-review"},
+        {"sleep": 0.1},
+        bash("ls"),
+        bash("ls -a"),
+    ]
+    session, rec, _store = await session_on(
+        repo, [turn], mode="track", models={"honesty-review": reviewer}
+    )
+    mark(session)
+    await run_turns(session, rec)
+    assert len(seen) == 1
+    assert "no tool call has finished since the last one" in notes(rec)
+    assert session.honesty.open_marks[0].opened_by == "the honesty review"
+
+
+async def test_the_marker_does_nothing_with_the_mode_off(repo: Path):
+    """D293: with `honesty.mode` off nothing of the honesty feature runs, the marker included."""
+    seen: list[str] = []
+    session, rec, _store = await session_on(
+        repo,
+        [[{"text": "#do-honesty-review"}, {"sleep": 0.2}, bash("ls")]],
+        mode="off",
+        models={"honesty-review": fake_reviewer(seen=seen)},
+    )
+    await run_turns(session, rec)
+    assert seen == [] and notes(rec) == ""

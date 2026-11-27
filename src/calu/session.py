@@ -496,8 +496,12 @@ class ReviewRun:
     """The honesty review in flight (`Session._run_review`)."""
 
     fresh: bool = False
-    """True if a person asked for this review. Only such a review runs although the last one
-    looked at the same files, and only such a review certifies HEAD without a baseline."""
+    """True if a person asked for this review. Such a review runs although the last one looked
+    at the same files, and only such a review certifies HEAD without a baseline."""
+    again: bool = False
+    """True if an agent asked for this review with `REVIEW_MARKER`. It runs although the last
+    one looked at the same files, because code those files rely on may have changed, and has
+    nothing else of `fresh`."""
     checkouts: tuple[Checkout, ...] | None = None
     """The checkouts whose files the review judges (a step's, D251); None for every known
     checkout."""
@@ -541,7 +545,9 @@ HONESTY_NOTICE = (
     "calu's honesty checker found {count} of the recent steps dishonest. In each, the code "
     "does something other than its name or documentation says. Open marks: {marks}. Decide "
     "for each mark which behaviour is intended. Then change the code, or change the name and "
-    "documentation; neither is preferred. An edit that makes them agree closes the mark."
+    "documentation; neither is preferred. An edit that makes them agree closes the mark. If "
+    "a change elsewhere settled one, write #do-honesty-review in your text: calu then reviews "
+    "the marked files again."
 )
 """The notice to Claude's main agent after `honesty.notify_after_dishonest_edits` dishonest
 steps (the owner, 2026-11-26)."""
@@ -560,6 +566,28 @@ RESULT_REFUSED = (
 )
 """Added to the note for the main agent when the subagent checker answers DENY for a result.
 Its instructions do not ask for that answer; it stays possible (requirement 51)."""
+
+REVIEW_MARKER = "#do-honesty-review"
+"""Text with which an agent asks for an honesty review (the owner's requirement 49, D293). It
+counts anywhere in a text message of the main agent or a subagent, not in thinking, tool input
+or tool output."""
+
+MARKER_CLEAN = (
+    "The honesty review you asked for with #do-honesty-review ran. The honesty state is clean."
+)
+"""The note to the main agent after a review asked for with `REVIEW_MARKER` left nothing."""
+
+MARKER_OPEN = "The honesty review you asked for with #do-honesty-review ran. {state}"
+"""The note after such a review when the state is not clean; `state` names what is left."""
+
+MARKER_NOT_RUN = "You asked for an honesty review with #do-honesty-review. {problem}"
+"""The note when such a review did not run or did not judge every file."""
+
+MARKER_UNCHANGED = (
+    "You asked for an honesty review with #do-honesty-review again, and no tool call has "
+    "finished since the last one you asked for, so none was started."
+)
+"""The note when the marker is repeated with nothing done in between."""
 
 RULED_ROUTES = frozenset({"command", "edit", "changeset"})
 """The routes whose checkers read the temporary rules (`calu.temp_rules`; the owner chose the
@@ -780,6 +808,14 @@ class Session:
         self._notice_due = False
         """Whether Claude's main agent is to be told about the open marks with the next
         checked tool call (`_honesty_notice`)."""
+        self._marker_note = ""
+        """What the main agent is told with its next checked tool call about the review an
+        agent asked for with `REVIEW_MARKER` (`_marker_review`); "" for nothing."""
+        self._marker_running = False
+        """Whether a review asked for with `REVIEW_MARKER` has not ended yet."""
+        self._results_since_marker = 1
+        """Tool results since the last review an agent asked for; 0 means nothing was done
+        since, and a repeated marker then starts no review."""
         self.pause = Pause(self._emit_safely)
         """The user's pause (`pause.set`): approved checked calls wait while it lasts
         (`calu.pause`); it outlives runs."""
@@ -1464,6 +1500,7 @@ class Session:
         asked: bool,
         wait_s: float | None = None,
         checkouts: Sequence[Checkout] | None = None,
+        again: bool = False,
     ) -> HonestyReviewResult:
         """Run one honesty review, or say why none runs (specification section 4).
 
@@ -1521,6 +1558,9 @@ class Session:
             wait_s: The longest time to wait for the review's end, in seconds; None waits
                 until it ends.
             checkouts: The checkouts whose files are judged; None for every known checkout.
+            again: True when an agent asked with `REVIEW_MARKER`: the review runs although
+                the last one looked at the same files. It applies to a review this call
+                starts, not to one it finds running.
 
         Returns:
             `ran` says whether the reviewer's result was applied; `problem` is "" if every
@@ -1536,7 +1576,7 @@ class Session:
             joined = run is not None
             if run is None:
                 scope = None if checkouts is None else tuple(checkouts)
-                run = self._review_run = ReviewRun(fresh=asked, checkouts=scope)
+                run = self._review_run = ReviewRun(fresh=asked, checkouts=scope, again=again)
                 running = not self._run_state.run_done.is_set()
                 tasks = self._run_state.tg if running else None
                 if tasks is None:
@@ -1596,7 +1636,9 @@ class Session:
         Args:
             run: The record of this review. `run.fresh` (a person asked) runs the review also
                 when the last one looked at the same files, within `REVIEW_RETRY_S` of a
-                failed one, and without a baseline. A review that was started without a
+                failed one, and without a baseline. `run.again` (an agent asked with
+                `REVIEW_MARKER`) runs it when the last one looked at the same files, and
+                nothing more. A review that was started without a
                 person's request stays that: it certifies no commit, also when a person
                 waits for it meanwhile.
 
@@ -1647,7 +1689,7 @@ class Session:
             return HonestyReviewResult(
                 ran=False, problem=f"The honesty review did not run: {plan.problem}."
             )
-        if not fresh and self._last_review is not None:
+        if not fresh and not run.again and self._last_review is not None:
             reviewed, last = self._last_review
             if reviewed.covers(plan):
                 if not last.problem:
@@ -2533,6 +2575,77 @@ class Session:
         marks = list(self._honesty_sent.marks)
         if not marks:
             return ""
+        return self._marks_notice(marks)
+
+    def _marker_seen(self) -> None:
+        """Start the honesty review an agent asked for with `REVIEW_MARKER` (D293).
+
+        Nothing happens with `honesty.mode` off, outside a run, or while such a review still
+        runs. A marker that follows the last one with no tool result in between starts no
+        review; the main agent is told so (`MARKER_UNCHANGED`).
+
+        Side effects: starts `_marker_review` as a background task of the run, or sets the
+        note for the main agent's next checked tool call.
+        """
+        if self.config.honesty.mode == "off" or self._marker_running:
+            return
+        if self._run_state.tg is None:
+            return
+        if self._results_since_marker == 0:
+            self._marker_note = MARKER_UNCHANGED
+            return
+        self._results_since_marker = 0
+        self._marker_running = True
+        self._spawn(self._marker_review)
+
+    async def _marker_review(self) -> None:
+        """Run the review an agent asked for and keep its outcome for the main agent.
+
+        The review is calu's own, not a person's: it judges the unreviewed and the marked
+        files, certifies no commit, does not run without a baseline or with
+        `honesty.sufficient_trust` "user", and not within `REVIEW_RETRY_S` of a failed one. It
+        does run when the last review looked at the same files (`ReviewRun.again`).
+
+        Side effects: as `_run_review`; sets `_marker_note` (`MARKER_CLEAN`, `MARKER_OPEN`
+        with the state, or `MARKER_NOT_RUN` with the reason), which the main agent reads with
+        its next checked tool call; emits a `log` line.
+        """
+        try:
+            await self._emit_safely(
+                Log(level="info", message=f"honesty: an agent asked for a review ({REVIEW_MARKER})")
+            )
+            result = await self._run_review(asked=False, again=True)
+            if result.problem:
+                self._marker_note = MARKER_NOT_RUN.format(problem=result.problem)
+                return
+            snapshot = await self.honesty_snapshot()
+            if snapshot.clean:
+                self._marker_note = MARKER_CLEAN
+            else:
+                self._marker_note = MARKER_OPEN.format(state=snapshot.note())
+        finally:
+            self._marker_running = False
+
+    def _take_marker_note(self) -> str:
+        """Take the note about the review an agent asked for with `REVIEW_MARKER`.
+
+        Side effect: clears the note.
+
+        Returns:
+            The text for the main agent; "" if there is none.
+        """
+        note, self._marker_note = self._marker_note, ""
+        return note
+
+    def _marks_notice(self, marks: Sequence[HonestyMarkInfo]) -> str:
+        """Word the notice about open marks (`HONESTY_NOTICE`).
+
+        Args:
+            marks: The open marks, at least one.
+
+        Returns:
+            The notice with at most `NOTICE_MARKS` marks listed.
+        """
         listed = "; ".join(f"{mark.label()} ({mark.reason})" for mark in marks[:NOTICE_MARKS])
         if len(marks) > NOTICE_MARKS:
             listed += f"; and {len(marks) - NOTICE_MARKS} more"
@@ -4060,7 +4173,9 @@ class Session:
             verdict=verdict,
             reason=result.reason,
             context="\n\n".join(notes),
-            main_note=self._honesty_notice(),
+            main_note="\n\n".join(
+                note for note in (self._take_marker_note(), self._honesty_notice()) if note
+            ),
         )
 
     async def _held_late(
@@ -4950,6 +5065,9 @@ class Session:
         and the messages calu held during the turn are written to Claude Code then
         (`_release_held`, D283).
 
+        A text of an agent that holds `REVIEW_MARKER` starts an honesty review in the
+        background (`_marker_seen`, D293), and every tool result is counted for it.
+
         Args:
             event: The event from the runner.
 
@@ -4957,6 +5075,10 @@ class Session:
             Exception: Whatever the handling of the event itself raised (recording it in the
                 context or the store); the forwarding and the state update have happened then.
         """
+        if isinstance(event, AssistantText) and REVIEW_MARKER in event.text:
+            self._marker_seen()
+        elif isinstance(event, ToolResult):
+            self._results_since_marker += 1
         if isinstance(event, PermissionModeChanged):
             # Claude Code's report of its mode; no work of Claude, and repeated reports of the
             # same mode are not passed on.

@@ -12,7 +12,7 @@ the review marker and the indexer spike. The owner set this order on 2026-11-27.
 
 ## Pick up here
 
-### Honesty across units: designed and decided (2026-11-27), nothing built
+### Honesty across units: designed and decided (2026-11-27); the marker is built
 
 The owner's requirements 49 and 50. The design note is
 `agent/records/notes/honesty-dependencies-design.md`; PLAN D293, D294 and phase 11 point at
@@ -21,6 +21,14 @@ it. Its section 7 quotes the owner's seven answers.
 - **Order of work (the owner): finish the old work first.** Step 6 of the temporary rules,
   then the stop-and-resume issue report below, then this design.
 - D293: the marker `#do-honesty-review` anywhere in an agent's text starts an honesty review.
+  **Built on 2026-11-27** (`Session._marker_seen`, `_marker_review`, three tests in
+  `tests/unit/test_honesty_session.py`); calu's mark notices, the skill `honest-code` and
+  `DOCUMENTATION.md` name it. Not tried with a real Claude Code or in a UI. Section 1 of the
+  note says what differs from the proposal.
+- The indexer spike (section 6 of the note) was started on 2026-11-27 as three subagents,
+  each with its own container (`calu-spike-lsp`, `calu-spike-cbm`, `calu-spike-graphify`),
+  on a common sample of 50 functions in `/tmp/claude-1000/spike/`. Its result belongs in
+  `spikes/RESULTS.md`.
 - D294: a contract change makes the referrers of a unit stale. Verdicts belong to nodes of
   the graph where the index allows it; the project as a whole is clean or not, as today.
 - calu's checkers use the index on their own, with nothing added to Claude Code's

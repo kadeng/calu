@@ -223,7 +223,8 @@ HONESTY_MARKS = (
     "(honesty.mode is enforce), and {what}. Recorded as dishonest: {spots}. Make the code and "
     "its documentation agree in each of these files. You may change the code, or the name and "
     "documentation; which behaviour is intended is your decision. The check of that edit "
-    "closes the mark.{review}"
+    "closes the mark. If a change elsewhere settled a mark, write #do-honesty-review in your "
+    "text: calu then reviews the marked files again.{review}"
 )
 """Reason of the denial of a step that needs a clean honesty state while marks are open."""
 
