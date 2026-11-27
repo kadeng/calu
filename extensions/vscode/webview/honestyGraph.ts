@@ -29,6 +29,7 @@ import {
   STATE_TEXTS,
   graphNotes,
   graphNotice,
+  hiddenCallersText,
   nodeLabel,
   nodeMenu,
   readGraph,
@@ -751,7 +752,8 @@ export class HonestyGraphView {
   }
 
   /**
-   * Show the tooltip of a node: its full id, its state in words and its detail text.
+   * Show the tooltip of a node: its full id, its state in words, its detail text and how
+   * many of its callers the graph leaves out.
    *
    * @param placed The node.
    * @param x Left edge of the tooltip in the window, before it is moved into the window.
@@ -767,6 +769,8 @@ export class HonestyGraphView {
       const lines = [el('div', 'hg-tip-id', node.id), el('div', 'hg-tip-state', `${texts.word}: ${texts.meaning}`)];
       if (node.reviewing) lines.push(el('div', '', 'A running honesty review reads this file.'));
       if (node.detail) lines.push(el('div', 'hg-tip-detail', node.detail));
+      const hidden = hiddenCallersText(node);
+      if (hidden) lines.push(el('div', '', `${hidden}.`));
       tip.replaceChildren(...lines);
     } else if (placed.group) {
       const target = this.nodes.get(placed.group.target);

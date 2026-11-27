@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   EVERYTHING_TEXT,
   GraphRefresh,
+  PARTIAL_TEXT,
   REFRESH_DEBOUNCE_MS,
   REFRESH_GAP_MS,
   REFRESH_STALE_MS,
@@ -12,6 +13,7 @@ import {
   STATE_TEXTS,
   graphNotes,
   graphNotice,
+  hiddenCallersText,
   nodeLabel,
   nodeMenu,
   readGraph,
@@ -51,7 +53,7 @@ describe('readGraph', () => {
       review_running: true,
     });
     expect(graph.nodes[0]).toEqual({
-      id: 'a.py:f', path: 'a.py', line: 3, name: 'f', kind: 'unit', state: 'dishonest', detail: '', reviewing: false, markIds: [4, 5], recheckIds: [], count: 1,
+      id: 'a.py:f', path: 'a.py', line: 3, name: 'f', kind: 'unit', state: 'dishonest', detail: '', reviewing: false, markIds: [4, 5], recheckIds: [], count: 1, hiddenCallers: 0,
     });
     expect(graph.nodes[1]).toMatchObject({ id: 'b.py', path: '', line: 1, name: 'b.py', kind: 'file', count: 3 });
     expect(graph.edges.map((e) => e.certain)).toEqual([true, false]);
@@ -59,7 +61,7 @@ describe('readGraph', () => {
   });
 
   it('leaves out what it cannot read and never throws', () => {
-    expect(readGraph(null)).toEqual({ nodes: [], edges: [], byFile: false, everything: false, mode: 'off', reviewRunning: false });
+    expect(readGraph(null)).toEqual({ nodes: [], edges: [], byFile: false, everything: false, partial: false, mode: 'off', reviewRunning: false });
     const graph = readGraph({ nodes: [null, { id: 3, state: 'changed' }, { id: 'x', state: 'purple' }, 'text'], edges: [{ source: 'a' }, 4], mode: 5 });
     expect(graph.nodes).toEqual([]);
     expect(graph.edges).toEqual([]);
@@ -97,6 +99,27 @@ describe('graphNotice', () => {
       'Too many units: one node per file.',
       EVERYTHING_TEXT,
     ]);
+    expect(graphNotes(graphOf([raw('a.py:f', 'changed')], [], { partial: true }), false)).toEqual([PARTIAL_TEXT]);
+  });
+
+  it('says how many callers of a node are left out', () => {
+    const graph = graphOf([raw('a.py:f', 'changed', { hidden_callers: 30 }), raw('a.py:g', 'changed', { hidden_callers: 1 }), raw('a.py:h', 'changed')], []);
+    expect(graph.nodes.map((n) => n.hiddenCallers)).toEqual([30, 1, 0]);
+    expect(graph.nodes.map(hiddenCallersText)).toEqual(['30 more unchanged callers are not shown', '1 more unchanged caller is not shown', '']);
+    expect(nodeLabel(graph.nodes[0])).toContain('30 more unchanged callers are not shown');
+    expect(nodeLabel(graph.nodes[2])).not.toContain('not shown');
+    expect(readGraph({ nodes: [raw('a.py:f', 'changed', { hidden_callers: 'many' })] }).nodes[0].hiddenCallers).toBe(0);
+  });
+
+  it('reads a related node: an unchanged unit next to a changed one', () => {
+    const graph = graphOf([raw('a.py:f', 'changed'), raw('b.py:g', 'related')], [{ source: 'a.py:f', target: 'b.py:g' }]);
+    expect(graph.nodes.map((n) => n.state)).toEqual(['changed', 'related']);
+    expect(STATE_TEXTS.related.meaning).toContain('This blocks nothing.');
+    // Nothing to settle by hand on it; a person can still mark it.
+    expect(nodeMenu(graph.nodes[1]).map((item) => item.label)).toEqual(['Mark as dishonest…', 'Open the source']);
+    // It leaves without a ghost when the changed unit it stood next to is gone.
+    const after = graphOf([], []);
+    expect(settle(graph, after, [], 0).map((g) => g.node.id)).toEqual(['a.py:f']);
   });
 });
 
@@ -162,7 +185,7 @@ describe('nodeMenu', () => {
   });
 
   it('sends only messages that the host accepts', () => {
-    for (const state of ['dishonest', 'recheck', 'changed', 'caller', 'honest']) {
+    for (const state of ['dishonest', 'recheck', 'changed', 'caller', 'honest', 'related']) {
       for (const item of nodeMenu(one('src/a.py:f', state, { mark_ids: [1], recheck_ids: [2] }))) {
         for (const message of item.messages) expect(parseWebviewMessage(message), item.label).toEqual(message);
       }

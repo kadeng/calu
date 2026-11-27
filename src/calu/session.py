@@ -244,7 +244,7 @@ from calu.honesty import (
     run_git,
     shown,
 )
-from calu.honesty_graph import add_callers, build_graph
+from calu.honesty_graph import add_neighbours, build_graph
 from calu.logfile import one_line
 from calu.models import resolve_model
 from calu.pause import Pause
@@ -305,6 +305,7 @@ from calu.refindex.combined import CombinedIndex
 from calu.refindex.judge import MatchJudge
 from calu.refindex.lsp import LspNavigator, lsp_index
 from calu.refindex.navigator import NavigatorIndex
+from calu.refindex.search import SearchMemo
 from calu.run_state import STEP_TIMES_KEPT as STEP_TIMES_KEPT
 from calu.run_state import PendingHonesty, RunState
 from calu.steps import files_before as files_before
@@ -642,10 +643,6 @@ MARKER_UNCHANGED = (
 )
 """The note when the marker is repeated with nothing done in between."""
 
-GRAPH_CALLERS_TIMEOUT_S = 20.0
-"""Longest the search for the callers of dishonest units may take for one `honesty.graph`
-request; after it the graph is sent without them."""
-
 DEPENDENTS_FALLBACK = (
     "honesty: the search for the code that uses {cause} did not finish in time or failed "
     "({why}); every hit of the word search counts"
@@ -876,6 +873,11 @@ class Session:
         """Whether Claude's main agent is to be told about the open marks with the next
         checked tool call (`_honesty_notice`)."""
         self._navigator: NavigatorIndex | None = None
+        self._graph_memo = SearchMemo()
+        """What the word search of the honesty graph keeps between requests: its results per
+        file, for as long as the file has the same modification time and size."""
+        self._graph_lock = anyio.Lock()
+        """Held while the units around the graph's units are looked up (`honesty_graph`)."""
         """The language server that settles hits for `_judge_dependents`
         (`honesty.dependents_navigator`); None while none was asked for."""
         self._judge: MatchJudge | None = None
@@ -1279,14 +1281,27 @@ class Session:
         """Build the honesty graph for a client that shows it (`honesty.graph`).
 
         The graph holds the units that are not clean and what uses what
-        (`calu.honesty_graph`). It is computed when asked; nothing is kept between requests,
-        so a client that does not show the graph costs nothing.
+        (`calu.honesty_graph`). It is computed only when asked, so a client that does not
+        show the graph costs nothing.
 
-        The callers of dishonest units are found with the word search, and with the language
-        server if `honesty.dependents_navigator` names one. No model is asked.
+        The clean units around the dishonest and the changed units are added for the view
+        (`add_neighbours`): what each of them uses, read from its syntax, and what uses it,
+        found with the word search and with the language server if
+        `honesty.dependents_navigator` names one. No model is asked. If that step fails, the
+        graph is sent without them and the error is logged.
 
-        Side effects: reads git and the project's files in a worker thread; may start the
-        language server.
+        Two things are kept on the session between requests:
+
+        - the word search's result per file (`SearchMemo`). It is reused while the file's
+          modification time and size stay the same, so a file changed without a new time or
+          size is not searched again;
+        - the language server, if one is configured. It is started at the first request and
+          reused; a changed command starts a new one.
+
+        One request is answered at a time; another waits.
+
+        Side effects: reads git and the project's files in worker threads; may start the
+        language server; adds to the kept search results.
 
         Returns:
             The graph; empty with `honesty.mode` "off".
@@ -1322,17 +1337,21 @@ class Session:
         ):
             self._close_navigator()
             self._navigator = lsp_index(self.workspace, command)
-        index = CombinedIndex(SearchIndex(self.workspace), self._navigator if command else None)
-        try:
-            with anyio.fail_after(GRAPH_CALLERS_TIMEOUT_S):
-                graph = await add_callers(graph, self.workspace, index)
-        except Exception:
-            log.exception("finding the callers of dishonest units for the honesty graph failed")
+        # One request at a time: a second client then finds the search results of the first.
+        async with self._graph_lock:
+            self._graph_memo.begin()
+            search = SearchIndex(self.workspace, memo=self._graph_memo)
+            index = CombinedIndex(search, self._navigator if command else None)
+            try:
+                graph = await add_neighbours(graph, self.workspace, index)
+            except Exception:
+                log.exception("finding the units around the honesty graph's units failed")
         return HonestyGraphResult(
             nodes=[HonestyGraphNode(**asdict(node)) for node in graph.nodes],
             edges=[HonestyGraphEdge(**asdict(edge)) for edge in graph.edges],
             by_file=graph.by_file,
             everything=graph.everything,
+            partial=graph.partial,
             mode=mode,
             review_running=self._review_running,
         )

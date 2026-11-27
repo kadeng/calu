@@ -5,44 +5,60 @@ The chat pane can show the honesty state as a graph
 It draws nothing; layout and drawing are the client's.
 
 A node is a unit of code: a function, a method or a class, or a whole file where no unit can
-be named. Only units that are not clean are in the graph:
+be named. The units that are not clean are in the graph:
 
 - `dishonest`: a checker or a review found it dishonest. It has an open mark.
 - `changed`: its file changed and nobody verified the file. These are the definitions of
   an unreviewed file that differ from the file's earlier text.
 - `recheck`: it uses a unit whose signature or doc comment changed
   (`HonestyState.recheck`).
-- `caller`: it uses a dishonest unit and is itself unchanged. A reference index finds
-  these for the view only (`add_callers`); they block nothing.
+
+Next to them the graph shows clean units, so that a reader sees where the units above sit
+in the code. `add_neighbours` finds them for the view only; they block nothing:
+
+- `caller`: it uses a dishonest unit and is itself unchanged.
+- `related`: it uses a changed unit, or a changed or a dishonest unit uses it, and it is
+  itself unchanged.
 - `honest`: the unit whose changed contract caused a `recheck`. It is shown so that the
   edge has an end.
 
 An edge goes from a unit to a unit it uses.
 
 If a unit has several states, the first of this order wins: dishonest, recheck, changed,
-caller, honest.
+caller, honest, related.
 
 Units are named per definition only in Python files. Any other file is one node.
 """
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
+import anyio
+
+from calu.callees import Callees
 from calu.checkers.symbols import changed_definitions, definition_lines
-from calu.dependents import enclosing_unit
+from calu.dependents import ParsedFiles, enclosing_units
 from calu.honesty import HonestySnapshot
 from calu.refindex import ReferenceIndex, Unit
 
-NodeState = Literal["dishonest", "recheck", "changed", "caller", "honest"]
+NodeState = Literal["dishonest", "recheck", "changed", "caller", "honest", "related"]
 """The states of a node, strongest first (`ORDER`)."""
 
-ORDER: tuple[NodeState, ...] = ("dishonest", "recheck", "changed", "caller", "honest")
+ORDER: tuple[NodeState, ...] = (
+    "dishonest",
+    "recheck",
+    "changed",
+    "caller",
+    "honest",
+    "related",
+)
 """Which state wins when a unit has several: the earlier one."""
 
 MAX_NODES = 150
-"""With more nodes than this the graph is reduced to one node per file (`by_file`)."""
+"""The most nodes of a graph by unit. `build_graph` reduces a larger graph to one node per
+file (`by_file`); `add_neighbours` stops adding clean units at this number."""
 
 MAX_FILE_BYTES = 2_000_000
 """A larger file is one node; it is not read."""
@@ -75,6 +91,8 @@ class GraphNode:
     """The ids of the recheck entries of the unit, for dismissing one by hand."""
     count: int = 1
     """How many units the node stands for; more than 1 only in a graph by file."""
+    hidden_callers: int = 0
+    """How many clean callers of the unit the graph leaves out (`MAX_CALLERS`)."""
 
 
 @dataclass(frozen=True)
@@ -98,6 +116,9 @@ class HonestyGraph:
     everything: bool = False
     """True if every file counts as unreviewed (no baseline); the graph then holds only the
     marks and the recheck entries."""
+    partial: bool = False
+    """True if `add_neighbours` left callers or used units out: its time ran out, or the
+    graph reached `MAX_NODES`."""
 
 
 @dataclass
@@ -125,6 +146,58 @@ class _Builder:
             text = read_text(self.root, path)
             self._lines[path] = None if text is None else definition_lines(text, path)
         return self._lines[path]
+
+    def id_of(self, path: str, symbol: str) -> str:
+        """Return the id of the node that stands for a unit.
+
+        Args:
+            path: The file, relative to the project directory.
+            symbol: The dotted name in the file; "" for the whole file.
+
+        Returns:
+            `path:symbol` if the file defines the symbol, else the path: the whole file.
+        """
+        known = self.lines(path)
+        return f"{path}:{symbol}" if symbol and known is not None and symbol in known else path
+
+    def beside(self, path: str, symbol: str, state: NodeState, detail: str) -> str | None:
+        """Add a clean unit that stands next to one that is not clean, if there is room.
+
+        A unit that is in the graph already keeps its place and its stronger state.
+
+        Args:
+            path: The file, relative to the project directory.
+            symbol: The dotted name in the file; "" for the whole file.
+            state: `caller` or `related`.
+            detail: The text for the hover.
+
+        Returns:
+            The node's id; None if the unit is not in the graph and the graph has
+            `MAX_NODES` nodes already.
+        """
+        if self.id_of(path, symbol) not in self.nodes and len(self.nodes) >= MAX_NODES:
+            return None
+        return self.add(path, symbol, state, detail)
+
+    def link(self, source: str, target: str, certain: bool) -> None:
+        """Add a "uses" edge between two nodes, once.
+
+        An edge from a node to itself is left out. A certain edge replaces an uncertain one
+        between the same nodes, and an uncertain one does not replace a certain one.
+
+        Args:
+            source: The id of the node that uses.
+            target: The id of the node that is used.
+            certain: False if a reference index only suspects the link.
+        """
+        if source == target:
+            return
+        edge = GraphEdge(source, target, certain)
+        if certain:
+            self.edges.discard(replace(edge, certain=False))
+            self.edges.add(edge)
+        elif replace(edge, certain=True) not in self.edges:
+            self.edges.add(edge)
 
     def add(
         self,
@@ -247,54 +320,163 @@ def build_graph(
     return per_file(graph) if len(graph.nodes) > MAX_NODES else graph
 
 
-async def add_callers(graph: HonestyGraph, root: Path, index: ReferenceIndex) -> HonestyGraph:
-    """Add the units that use a dishonest unit, as `caller` nodes.
+NEIGHBOURS_BUDGET_S = 20.0
+"""How long `add_neighbours` asks the reference index for callers before it stops."""
 
-    This is for the view only: a caller of a dishonest unit blocks nothing. The index should
-    be a cheap one (the word search, a code navigator), because the view must cost no model
-    call.
+MAX_CALLERS = 12
+"""The most clean callers `add_neighbours` shows for one unit."""
 
-    Side effects: those of the index; reads the files of the places it reports.
+CLEAN_STATES: tuple[NodeState, ...] = ("caller", "honest", "related")
+"""The states of units that are in the graph only for the picture."""
+
+
+def _units_around(
+    root: Path, places: Sequence[tuple[str, int, bool]], parsed: ParsedFiles
+) -> list[tuple[str, str, bool]]:
+    """Name the unit around each place a reference index reported.
+
+    Side effects: reads and parses the files of the places that `parsed` does not hold, and
+    adds them to it.
+
+    Args:
+        root: The project directory.
+        places: (path, 1-based line, whether the index is certain) per place.
+        parsed: The files parsed so far in this request.
+
+    Returns:
+        (path, dotted name of the unit, certain) per place; "" as the name for the top level
+        of a file. A place inside an `import` statement is left out.
+    """
+    units = enclosing_units(root, [(path, line) for path, line, _certain in places], parsed)
+    return [
+        (path, unit, certain)
+        for (path, _line, certain), unit in zip(places, units, strict=True)
+        if unit is not None
+    ]
+
+
+async def add_neighbours(
+    graph: HonestyGraph,
+    root: Path,
+    index: ReferenceIndex,
+    budget_s: float = NEIGHBOURS_BUDGET_S,
+) -> HonestyGraph:
+    """Add the clean units around the dishonest and the changed units, with "uses" edges.
+
+    This is for the view only: what it adds blocks nothing. For every dishonest and every
+    changed unit (not for a whole file) it adds:
+
+    - the units it uses, read from its own syntax (`calu.callees`), as `related`;
+    - the units that use it, from the reference index: as `caller` for a dishonest unit,
+      as `related` for a changed one.
+
+    A unit that is in the graph already keeps its state and only gets the edge. So two
+    changed units of which one uses the other are connected, too.
+
+    The index should be a cheap one (the word search, a code navigator), because the view
+    must cost no model call.
+
+    At most `MAX_CALLERS` clean callers are shown per unit (the owner, 2026-11-27). A caller
+    that is itself dishonest, changed or to judge again is always connected. The unit's
+    `hidden_callers` says how many clean callers were left out.
+
+    Two more limits, each of which sets `partial` on the result:
+
+    - The index is asked for at most `budget_s` seconds in total, dishonest units first. The
+      units after that get no callers.
+    - No clean unit is added once the graph has `MAX_NODES` nodes.
+
+    Side effects: those of the index; reads the files of the units, of what they import and
+    of the places the index reports, in worker threads.
 
     Args:
         graph: The graph of `build_graph`. A graph by file is returned unchanged.
         root: The project directory.
-        index: The reference index to ask about each dishonest unit.
+        index: The reference index to ask about each unit.
+        budget_s: The seconds the index may take in total.
 
     Returns:
-        The graph with the callers and an edge from each to the unit it uses. A place the
-        index only suspects gives an edge that is not `certain`.
+        The graph with the added units and edges. A place the index only suspects gives an
+        edge that is not `certain`; an edge to a used unit is certain.
     """
     if graph.by_file:
         return graph
     builder = _Builder(root, nodes={node.id: node for node in graph.nodes}, edges=set(graph.edges))
-    for node in graph.nodes:
-        if node.state != "dishonest" or node.kind != "unit":
-            continue
-        symbol = node.id.partition(":")[2]
-        found = await index.referrers(Unit(node.path, symbol, node.line))
-        for places, certain in ((found.referrers, True), (found.unclear, False)):
-            for place in places:
-                unit = enclosing_unit(root, place.path, place.line)
-                if unit is None:
+    subjects = sorted(
+        (
+            node
+            for node in graph.nodes
+            if node.kind == "unit" and node.state in ("dishonest", "changed")
+        ),
+        key=lambda node: (ORDER.index(node.state), node.id),
+    )
+
+    def add_used() -> bool:
+        """Add what each subject uses.
+
+        Returns:
+            True if a used unit was left out because the graph is full.
+        """
+        callees = Callees(lambda path: read_text(root, path))
+        full = False
+        for node in subjects:
+            for used in callees.of(node.path, node.id.partition(":")[2]):
+                target = builder.beside(used.path, used.symbol, "related", f"Used by {node.name}.")
+                if target is None:
+                    full = True
+                else:
+                    builder.link(node.id, target, True)
+        return full
+
+    partial = await anyio.to_thread.run_sync(add_used)
+    parsed: ParsedFiles = {}
+    deadline = anyio.current_time() + budget_s
+    for node in subjects:
+        left = deadline - anyio.current_time()
+        if left <= 0:
+            partial = True
+            break
+        found = None
+        with anyio.move_on_after(left):
+            found = await index.referrers(Unit(node.path, node.id.partition(":")[2], node.line))
+        if found is None:
+            partial = True
+            break
+        places = [
+            (place.path, place.line, certain)
+            for group, certain in ((found.referrers, True), (found.unclear, False))
+            for place in group
+        ]
+        state: NodeState = "caller" if node.state == "dishonest" else "related"
+        shown: set[str] = set()
+        hidden: set[str] = set()
+        around = await anyio.to_thread.run_sync(_units_around, root, places, parsed)
+        for path, unit, certain in around:
+            caller = builder.id_of(path, unit)
+            known = builder.nodes.get(caller)
+            if known is None or known.state in CLEAN_STATES:
+                # A clean caller is shown for the picture only, so their number is limited.
+                if caller not in shown and len(shown) >= MAX_CALLERS:
+                    if caller != node.id:
+                        hidden.add(caller)
                     continue
-                source = builder.add(place.path, unit, "caller", f"Uses {node.name}.")
-                if source == node.id:
-                    continue
-                edge = GraphEdge(source, node.id, certain)
-                if certain:
-                    builder.edges.discard(replace(edge, certain=False))
-                    builder.edges.add(edge)
-                elif replace(edge, certain=True) not in builder.edges:
-                    builder.edges.add(edge)
-    result = replace(
+                if caller != node.id:
+                    shown.add(caller)
+            source = builder.beside(path, unit, state, f"Uses {node.name}.")
+            if source is None:
+                partial = True
+            else:
+                builder.link(source, node.id, certain)
+        if hidden:
+            builder.nodes[node.id] = replace(builder.nodes[node.id], hidden_callers=len(hidden))
+    return replace(
         graph,
         nodes=tuple(
             sorted(builder.nodes.values(), key=lambda node: (node.path, node.line, node.id))
         ),
         edges=tuple(sorted(builder.edges, key=lambda edge: (edge.source, edge.target))),
+        partial=partial,
     )
-    return per_file(result) if len(result.nodes) > MAX_NODES else result
 
 
 def changed_units(root: Path, path: str, before: str | None) -> list[tuple[str, str]]:

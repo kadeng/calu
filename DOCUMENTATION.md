@@ -2295,6 +2295,18 @@ judge again or a caller of a dishonest unit, green a unit that was just settled.
 node opens its source. A right click offers "Mark as honest" and "Mark as dishonest…"; for a
 yellow node "Mark as honest" trusts the whole file, after a question.
 
+Grey nodes are unchanged units next to a changed or a dishonest one: the units that call it
+and the units it calls. They are there for orientation and block nothing.
+
+- What a unit calls is read from its Python code: names of the same file, methods on `self`,
+  and names imported from files of the project. A call on another object is not followed.
+- What calls a unit comes from a search for its name, so such a line is dashed: possible,
+  not confirmed.
+- At most 12 unchanged callers are shown per unit. The tooltip says how many more there
+  are. A caller that is itself changed or dishonest is always shown.
+- A note above the graph says when callers are missing because the search took too long or
+  the graph is full (150 nodes).
+
 ### Judging the honesty checker before enforcing
 
 `track` keeps the state without blocking, so you can measure the checker before it can stop

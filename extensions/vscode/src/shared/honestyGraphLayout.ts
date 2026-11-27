@@ -31,7 +31,7 @@ export interface LayoutNodeInput {
   id: string;
   /** The short name to show. */
   name: string;
-  /** The node's state; only "caller" matters here (callers can collapse). */
+  /** The node's state; only "caller" and "related" matter here (such callers can collapse). */
   state: string;
   /** "file" for a whole file; such a node shows `count`. */
   kind?: string;
@@ -225,8 +225,8 @@ function compare(a: string, b: string): number {
 /**
  * Replace many callers of one unit by one group node.
  *
- * A caller can collapse if its state is "caller", it uses exactly one node, and no node uses
- * it. If more than `GROUP_LIMIT` such callers use the same target, and the target is not in
+ * A caller can collapse if its state is "caller" or "related", it uses exactly one node, and
+ * no node uses it. If more than `GROUP_LIMIT` such callers use the same target, and the target is not in
  * `expanded`, they become one node "N callers" with one edge to the target. That edge is
  * certain if the edge of one member is.
  *
@@ -249,7 +249,7 @@ function collapseCallers(
   const callers = new Map<string, string[]>();
   for (const node of nodes) {
     const out = uses.get(node.id) ?? [];
-    if (node.state !== 'caller' || out.length !== 1 || used.has(node.id)) continue;
+    if ((node.state !== 'caller' && node.state !== 'related') || out.length !== 1 || used.has(node.id)) continue;
     callers.set(out[0].target, [...(callers.get(out[0].target) ?? []), node.id]);
   }
   const collapsible = new Map<string, string[]>();

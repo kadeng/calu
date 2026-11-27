@@ -49,7 +49,7 @@ import os
 import re
 import subprocess
 import tokenize
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import anyio
@@ -84,6 +84,95 @@ GIT_TIMEOUT_S = 20.0
 
 
 @dataclass
+class _Lexed:
+    """The tokens of a Python source that `_outside` needs, for any name."""
+
+    names: dict[str, list[tuple[tuple[int, int], bool]]]
+    """Per name its occurrences in the code: (line, column), and whether it comes right
+    after a dot."""
+    texts: list[tuple[bool, str, tuple[int, int]]]
+    """The comments and strings: whether it is a comment, its text, and where it starts."""
+
+
+MAX_KEPT_HITS = 200_000
+"""The most per-file results a `SearchMemo` keeps; at this number it forgets all of them."""
+
+type _FileState = tuple[int, int]
+"""A file's modification time in nanoseconds and its size: equal means "not changed"."""
+
+type _HitKey = tuple[str, _FileState, str, bool, int]
+"""What one per-file result depends on: the file, its state, the searched name, whether only
+uses after a dot count, and the unit's own line if the file is the unit's (else 0)."""
+
+
+@dataclass
+class SearchMemo:
+    """What a `SearchIndex` keeps between lookups, so that many lookups in a row are cheap.
+
+    The honesty graph asks about many units at once, and again after every tool call. Without
+    this, each lookup lists the files, reads all of them and tokenizes the ones that hold
+    the name.
+
+    Two kinds of memory:
+
+    - **Per pass** (cleared by `begin`): the file list, each file's state and text, and each
+      Python file's tokens. A pass is one row of lookups during which the caller accepts
+      that a file changed meanwhile is read as it was at its first read.
+    - **Across passes**: the result of searching one file for one name (`hits`). It is kept
+      with the file's modification time and size, so a changed file is searched again and an
+      unchanged one is not even read.
+
+    A file changed without a new modification time or size is not noticed. That is the
+    price; the index is used this way only for a view.
+    """
+
+    hits: dict[_HitKey, tuple[tuple[Place, ...], int]] = field(
+        default_factory=dict[_HitKey, tuple[tuple[Place, ...], int]]
+    )
+    """Per file and name: the kept places and the number of hits left out."""
+    listed: tuple[list[str], str] | None = None
+    """The file list of this pass with its problem text; None until it was listed."""
+    states: dict[str, _FileState | None] = field(default_factory=dict[str, _FileState | None])
+    """Per file of this pass its state; None for a file that cannot be read as one."""
+    texts: dict[str, str | None] = field(default_factory=dict[str, str | None])
+    """Per file read in this pass what `SearchIndex._read` returned."""
+    lexed: dict[str, _Lexed | None] = field(default_factory=dict[str, _Lexed | None])
+    """Per Python file tokenized in this pass its tokens; None if it cannot be tokenized."""
+
+    def begin(self) -> None:
+        """Start a pass: forget the file list, the states, the texts and the tokens.
+
+        The per-file results stay, unless there are `MAX_KEPT_HITS` of them: then they are
+        forgotten too.
+        """
+        self.listed = None
+        self.states = {}
+        self.texts = {}
+        self.lexed = {}
+        if len(self.hits) >= MAX_KEPT_HITS:
+            self.hits = {}
+
+    def state(self, root: Path, name: str) -> _FileState | None:
+        """Return a file's state, asked from the file system once per pass.
+
+        Args:
+            root: The project directory.
+            name: The file, relative to it.
+
+        Returns:
+            (modification time in nanoseconds, size); None for a file that is gone or cannot
+            be asked.
+        """
+        if name not in self.states:
+            try:
+                stat = (root / name).stat()
+                self.states[name] = (stat.st_mtime_ns, stat.st_size)
+            except OSError:
+                self.states[name] = None
+        return self.states[name]
+
+
+@dataclass
 class SearchIndex:
     """A word search over the files of one project directory (see the module docstring)."""
 
@@ -92,6 +181,9 @@ class SearchIndex:
     same_language: bool = True
     """Read only files of the unit's own language (`LANGUAGES`). A unit in a file of no listed
     language is searched for in every file. False reads every file for every unit."""
+    memo: SearchMemo | None = None
+    """What to keep between lookups; None keeps nothing, so every lookup reads the files as
+    they are at that moment."""
 
     async def referrers(self, unit: Unit) -> Referrers:
         """Find every place that holds the bare name of `unit`, in a worker thread.
@@ -120,7 +212,13 @@ class SearchIndex:
             exist, or a file was too large or unreadable; `problem` then says which.
         """
         word = re.compile(rf"(?<![\w]){re.escape(unit.name)}(?![\w])")
-        files, problem = self._files()
+        memo = self.memo
+        if memo is None:
+            files, problem = self._files()
+        else:
+            if memo.listed is None:
+                memo.listed = self._files()
+            files, problem = memo.listed
         unclear: list[Place] = []
         dismissed = 0
         skipped = 0
@@ -129,33 +227,91 @@ class SearchIndex:
         for name in files:
             if self.same_language and own is not None and not name.endswith(own):
                 continue
-            text = self._read(name)
+            member_only = method and name != unit.path and name.endswith((".py", ".pyi"))
+            key: _HitKey | None = None
+            if memo is not None:
+                state = memo.state(self.root, name)
+                if state is not None:
+                    own_line = unit.line if name == unit.path else 0
+                    key = (name, state, unit.name, member_only, own_line)
+                    kept = memo.hits.get(key)
+                    if kept is not None:
+                        unclear.extend(kept[0])
+                        dismissed += kept[1]
+                        continue
+            text = self._text(name)
             if text is None:
                 skipped += 1
                 continue
-            if unit.name not in text:
-                continue
-            if name.lower().endswith(PROSE_SUFFIXES):
-                dismissed += sum(len(word.findall(line)) for line in text.splitlines())
-                continue
-            outside = None
-            if name.endswith((".py", ".pyi")):
-                member_only = method and name != unit.path
-                outside = _not_code(text, unit.name, member_only=member_only)
-            for number, line in enumerate(text.splitlines(), start=1):
-                for found in word.finditer(line):
-                    if name == unit.path and number == unit.line:
-                        dismissed += 1
-                    elif outside is not None and (number, found.start()) in outside:
-                        dismissed += 1
-                    else:
-                        shown = line.strip()[:PLACE_TEXT_CHARS]
-                        unclear.append(Place(name, number, found.start(), shown))
+            places, left_out = self._search_file(name, text, unit, word, member_only)
+            unclear.extend(places)
+            dismissed += left_out
+            if memo is not None and key is not None:
+                memo.hits[key] = (tuple(places), left_out)
         if skipped:
             problem = f"{problem} {skipped} file(s) were too large or unreadable.".strip()
         return Referrers(
             unclear=tuple(unclear), dismissed=dismissed, complete=not problem, problem=problem
         )
+
+    def _text(self, name: str) -> str | None:
+        """Read one file as `_read` does, once per pass if there is a memo.
+
+        Args:
+            name: The path relative to the project directory.
+
+        Returns:
+            What `_read` returns.
+        """
+        if self.memo is None:
+            return self._read(name)
+        if name not in self.memo.texts:
+            self.memo.texts[name] = self._read(name)
+        return self.memo.texts[name]
+
+    def _search_file(
+        self, name: str, text: str, unit: Unit, word: re.Pattern[str], member_only: bool
+    ) -> tuple[list[Place], int]:
+        """Search one file's text for the unit's bare name.
+
+        Args:
+            name: The file, relative to the project directory.
+            text: Its text.
+            unit: The unit.
+            word: The pattern of the unit's name as a whole word.
+            member_only: Whether only a use right after a dot counts in this file (a method,
+                searched in another Python file).
+
+        Returns:
+            (the places that may refer to the unit; the number of hits left out: the unit's
+            own definition line, hits in prose files, and in Python the hits in comments, in
+            other strings and, with `member_only`, the bare ones).
+        """
+        if unit.name not in text:
+            return [], 0
+        if name.lower().endswith(PROSE_SUFFIXES):
+            return [], sum(len(word.findall(line)) for line in text.splitlines())
+        outside = None
+        if name.endswith((".py", ".pyi")):
+            if self.memo is None:
+                lexed = _lex(text)
+            else:
+                if name not in self.memo.lexed:
+                    self.memo.lexed[name] = _lex(text)
+                lexed = self.memo.lexed[name]
+            outside = None if lexed is None else _outside(lexed, unit.name, member_only)
+        places: list[Place] = []
+        left_out = 0
+        for number, line in enumerate(text.splitlines(), start=1):
+            for found in word.finditer(line):
+                if name == unit.path and number == unit.line:
+                    left_out += 1
+                elif outside is not None and (number, found.start()) in outside:
+                    left_out += 1
+                else:
+                    shown = line.strip()[:PLACE_TEXT_CHARS]
+                    places.append(Place(name, number, found.start(), shown))
+        return places, left_out
 
     def _files(self) -> tuple[list[str], str]:
         """List the files to search, relative to the project directory.
@@ -268,31 +424,61 @@ def _not_code(source: str, name: str, member_only: bool = False) -> set[tuple[in
         (line, column) of each such occurrence, 1-based line and 0-based column; None if the
         text cannot be tokenized.
     """
-    word = re.compile(rf"(?<![\w]){re.escape(name)}(?![\w])")
-    found: set[tuple[int, int]] = set()
+    lexed = _lex(source)
+    return None if lexed is None else _outside(lexed, name, member_only)
+
+
+def _lex(source: str) -> _Lexed | None:
+    """Tokenize a Python source once, for the searches of any number of names.
+
+    Args:
+        source: The file's text.
+
+    Returns:
+        The names in the code and the comments and strings; None if the text cannot be
+        tokenized.
+    """
+    names: dict[str, list[tuple[tuple[int, int], bool]]] = {}
+    texts: list[tuple[bool, str, tuple[int, int]]] = []
+    previous = ""
     try:
-        tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
+        for token in tokenize.generate_tokens(io.StringIO(source).readline):
+            if token.type == tokenize.NAME:
+                names.setdefault(token.string, []).append((token.start, previous == "."))
+            elif token.type == tokenize.COMMENT:
+                texts.append((True, token.string, token.start))
+            elif token.type in (tokenize.STRING, tokenize.FSTRING_MIDDLE):
+                texts.append((False, token.string, token.start))
+            if token.type not in (tokenize.NL, tokenize.NEWLINE, tokenize.COMMENT):
+                previous = token.string
     except tokenize.TokenError, SyntaxError, ValueError:
         return None
-    previous = ""
-    for token in tokens:
-        if token.type == tokenize.NAME and token.string == name:
-            if member_only and previous != ".":
-                found.add(token.start)
-            previous = token.string
+    return _Lexed(names, texts)
+
+
+def _outside(lexed: _Lexed, name: str, member_only: bool) -> set[tuple[int, int]]:
+    """Find the occurrences of `name` that cannot refer to the unit, as `_not_code` says.
+
+    Args:
+        lexed: The tokens of the file.
+        name: The bare name.
+        member_only: Whether the unit is a method and the file is not the unit's own.
+
+    Returns:
+        (line, column) of each such occurrence, 1-based line and 0-based column.
+    """
+    word = re.compile(rf"(?<![\w]){re.escape(name)}(?![\w])")
+    found: set[tuple[int, int]] = set()
+    if member_only:
+        found.update(start for start, after_dot in lexed.names.get(name, ()) if not after_dot)
+    for comment, text, (row, column) in lexed.texts:
+        if name not in text:
             continue
-        if token.type not in (tokenize.NL, tokenize.NEWLINE, tokenize.COMMENT):
-            previous = token.string
-        if token.type == tokenize.COMMENT:
-            pass
-        elif token.type in (tokenize.STRING, tokenize.FSTRING_MIDDLE):
-            inner = token.string.strip("rbfuRBFU").strip("\"'")
+        if not comment:
+            inner = text.strip("rbfuRBFU").strip("\"'")
             if inner == name or inner.endswith(f".{name}"):
                 continue
-        else:
-            continue
-        row, column = token.start
-        for offset, line in enumerate(token.string.split("\n")):
+        for offset, line in enumerate(text.split("\n")):
             base = column if offset == 0 else 0
             found.update((row + offset, base + hit.start()) for hit in word.finditer(line))
     return found

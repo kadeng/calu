@@ -77,11 +77,12 @@ As built:
 | yellow | `changed` | Δ | a unit that changed and nobody verified | the definitions of an unreviewed Python file that differ from the file's earlier text; the whole file for other languages |
 | orange, thin border, pale fill | `caller` | ↑ | an unchanged caller of a unit with an open mark | found for the view only; it blocks nothing |
 | green | `honest` | ✓ | the unit whose changed contract made another unit `recheck` | shown so that the edge has an end |
+| grey, pale fill | `related` | · | an unchanged unit that uses a changed unit, or that a changed or dishonest unit uses | found for the view only; it blocks nothing (section 9) |
 | green, faded | settled | ✓ | a unit that just left the graph | the client, for 2.5 seconds |
 | a pulse | | | a unit in a file that a running review reads | the files of the review in flight |
 
 If a unit has several states, the first of this order wins: dishonest, recheck, changed,
-caller, honest.
+caller, honest, related.
 
 An edge that the reference index only suspected (found by the name alone, nothing confirmed
 it) is dashed.
@@ -89,9 +90,10 @@ it) is dashed.
 ## 4. What the client gets
 
 There is no subscription. The client asks for the graph with the request `honesty.graph`
-(read-only, also allowed for a read-only client). The server computes it when asked and
-keeps nothing. So a hidden view costs nothing, and a client that disconnects leaves nothing
-behind.
+(read-only, also allowed for a read-only client). The server computes it only when asked.
+So a hidden view costs nothing, and a client that disconnects leaves nothing behind. Between
+requests the session keeps the word search's results per file (section 9) and the language
+server, if one is configured.
 
 The client asks:
 
@@ -132,12 +134,19 @@ Above 150 nodes the server sends one node per file.
   read at every request. A file over 2 MB is one node and is not read.
 - **Without a baseline** every file counts as unreviewed. The graph then holds only the marks
   and the recheck entries (`everything`), and the bar says so.
-- **Orange, thin**: one reference search per dishonest unit (`add_callers`). It uses the word
-  search, and the language server if `honesty.dependents_navigator` names one, never the
-  judge, so the view costs no model call. Each place is mapped to the unit around it. A place
-  nothing confirmed gives an uncertain edge. Not cached. The search has 20 seconds
-  (`GRAPH_CALLERS_TIMEOUT_S`); after that, or on an error, the graph comes without callers and
-  the session logs the error.
+- **The clean units around** (`add_neighbours`; section 9 has the owner's words). For every
+  dishonest and every changed unit, never for a whole file:
+  - what uses it: one reference search with the word search, and the language server if
+    `honesty.dependents_navigator` names one, never the judge, so the view costs no model
+    call. Each place is mapped to the unit around it. A caller of a dishonest unit is
+    orange with a thin border (`caller`); a caller of a changed unit is grey (`related`). A
+    place nothing confirmed gives an uncertain edge.
+  - what it uses: read from its own syntax (`calu.callees`), grey (`related`), with a
+    certain edge.
+  - A unit that is in the graph already keeps its state and only gets the edge.
+  - Limits: 12 clean callers per unit (`hidden_callers` counts the rest), 20 seconds for all
+    searches together (`NEIGHBOURS_BUDGET_S`), 150 nodes. The last two set `partial`. On an
+    error the graph comes without these units and the session logs the error.
 - **Review**: the files of the review in flight set `reviewing`.
 
 The graph is built in a worker thread, only when a client asks.
@@ -202,8 +211,7 @@ Not seen in a UI yet:
 Not built:
 
 - The PyCharm plugin has no graph view.
-- Neither the changed units nor the callers are cached. A cache keyed by the file's content
-  hash would help a large project.
+- The changed units are not cached. For the callers see section 9.
 - No animation when a node appears or moves; only the settled node fades and a reviewed node
   pulses.
 
@@ -211,3 +219,46 @@ For the owner to decide:
 
 - Whether compiled files (`.pyc` in a project without `.gitignore`) are left out of the
   graph. In the Cua demo project they appear as unreviewed files.
+
+## 9. Callers and used units of unreviewed nodes (2026-11-27, late evening)
+
+The owner tested the view and saw only unconnected yellow nodes: "Show callers and callees
+of unreviewed nodes ( as far as known ) as well." And: "If a node has too many callers,
+let's limit how many are shown, I would say, by default we don't show more than 12 callers
+of a node unless it's dishonest or unreviewed itself".
+
+Before, only two kinds of edges existed: from a unit to judge again to the unit whose
+contract changed, and from a caller to a dishonest unit. A changed unit had none.
+
+Built (`calu.honesty_graph.add_neighbours`, `calu.callees`):
+
+- A changed unit gets its callers and the units it uses, as grey `related` nodes. A
+  dishonest unit gets the units it uses as well.
+- Two changed units of which one uses the other are connected.
+- "As far as known": the used units come from the unit's own Python syntax. Followed are
+  names of the same file, methods on `self` and `cls`, and names imported from files of
+  the project. A call on another object (`reader.read()`) is not followed. With a language
+  server configured, the callers are confirmed; the used units are not asked from it yet.
+- At most 12 clean callers per unit. A caller that is itself dishonest, changed or to
+  judge again is always connected. The tooltip of the unit says how many are left out.
+  "By default" in the owner's words: there is no way to see the others yet.
+
+Speed, measured on calu itself (17 changed files, 42 changed units, 145 nodes, 173 edges):
+
+| Request | Time |
+|---|---|
+| building the graph without neighbours | 1.2 s |
+| the neighbours, first request | 12.4 s |
+| the neighbours, a repeated request with no file changed | 3.7 s |
+
+- Before the work on speed the first request took 14 s for 25 units, and hit the 20 second
+  limit for 76.
+- The word search keeps its result per file and name while the file's modification time
+  and size stay the same (`SearchMemo` on the session). A changed file is searched again.
+- Within one request each file is read, tokenized and parsed once.
+- What is left of a repeated request is parsing: every file that holds a caller, and every
+  file a unit imports from, is parsed again per request. Keeping those per file state, as
+  the search results are, is the next step. The view is still too slow to follow every tool
+  call on a project of calu's size.
+
+Not done: nothing of this was seen in a UI.

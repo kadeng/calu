@@ -146,6 +146,26 @@ def definition_names(source: str, path: str) -> list[str] | None:
         return None
 
 
+def parsed_definitions(source: str, path: str) -> tuple[ast.Module, dict[str, Definition]] | None:
+    """Parse a Python file and map its functions, methods and classes to their syntax nodes.
+
+    Args:
+        source: The file's content.
+        path: The file's name; only `.py` and `.pyi` files are read.
+
+    Returns:
+        The module's syntax tree and dotted name -> node. None in the cases where
+        `definition_names` returns None.
+    """
+    if not path.endswith((".py", ".pyi")) or len(source) > MAX_SOURCE_CHARS:
+        return None
+    try:
+        tree = ast.parse(source)
+        return tree, _definitions(tree)
+    except SyntaxError, ValueError, RecursionError:
+        return None
+
+
 def definition_lines(source: str, path: str) -> dict[str, int] | None:
     """Map the functions, methods and classes of a Python file to the lines they start on.
 

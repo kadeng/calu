@@ -31,6 +31,7 @@ What it does not cover yet:
 """
 
 import ast
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -180,6 +181,87 @@ def enclosing_unit(root: Path, path: str, line: int) -> str | None:
     if tree is not None and _in_import(tree, line):
         return None
     return enclosing(tree, line)
+
+
+type ParsedFiles = dict[str, tuple[list[str], list[tuple[int, int]]]]
+"""Per file what `enclosing_units` needs of it:
+
+- the unit around each line (`_line_units`); empty for a file that cannot be parsed;
+- the first and the last line of each of its import statements."""
+
+
+def _line_units(tree: ast.Module) -> list[str]:
+    """Name the innermost function, method or class around every line of a file.
+
+    Args:
+        tree: The parsed file.
+
+    Returns:
+        Entry `line - 1` is what `enclosing(tree, line)` returns. Lines after the last
+        definition have no entry; they are at the top level.
+    """
+    names: list[str] = []
+
+    def fill(scope: ast.AST, prefix: str) -> None:
+        """Write the names of the definitions directly in a scope, then of those inside.
+
+        Args:
+            scope: A module, function or class.
+            prefix: The dotted name of the scope with a trailing dot; "" for the module.
+        """
+        stack = list(ast.iter_child_nodes(scope))
+        while stack:
+            node = stack.pop()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                name = prefix + node.name
+                end = node.end_lineno or node.lineno
+                if len(names) < end:
+                    names.extend([""] * (end - len(names)))
+                names[node.lineno - 1 : end] = [name] * (end - node.lineno + 1)
+                # After the outer name, so that the inner one replaces it on its lines.
+                fill(node, f"{name}.")
+            elif not isinstance(node, ast.expr):
+                stack.extend(ast.iter_child_nodes(node))
+
+    fill(tree, "")
+    return names
+
+
+def enclosing_units(
+    root: Path, places: Sequence[tuple[str, int]], parsed: ParsedFiles | None = None
+) -> list[str | None]:
+    """Name the unit around each of many lines; each file is read and parsed once.
+
+    Side effects: reads and parses the files of the places that `parsed` does not hold, and
+    adds them to `parsed`.
+
+    Args:
+        root: The project directory.
+        places: (path relative to the project directory, 1-based line) per place.
+        parsed: Files parsed by earlier calls, to reuse. The caller keeps it only as long
+            as it accepts that a file changed meanwhile is read as it was. None reads every
+            file of this call once.
+
+    Returns:
+        Per place what `enclosing_unit` returns for it, in the same order.
+    """
+    known: ParsedFiles = {} if parsed is None else parsed
+    found: list[str | None] = []
+    for path, line in places:
+        if path not in known:
+            tree = _parse(root, path)
+            spans = [
+                (node.lineno, node.end_lineno or node.lineno)
+                for node in (ast.walk(tree) if tree is not None else ())
+                if isinstance(node, (ast.Import, ast.ImportFrom))
+            ]
+            known[path] = ([] if tree is None else _line_units(tree), spans)
+        units, spans = known[path]
+        if any(first <= line <= last for first, last in spans):
+            found.append(None)
+        else:
+            found.append(units[line - 1] if 1 <= line <= len(units) else "")
+    return found
 
 
 def _definition_at(scope: ast.AST, line: int) -> DEFINITION | None:

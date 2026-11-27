@@ -573,6 +573,7 @@ export interface HonestyGraphEdge {
 export interface HonestyGraphNode {
   count?: number;
   detail?: string;
+  hidden_callers?: number;
   id: string;
   kind: "unit" | "file";
   line: number;
@@ -581,7 +582,7 @@ export interface HonestyGraphNode {
   path: string;
   recheck_ids?: number[];
   reviewing?: boolean;
-  state: "dishonest" | "recheck" | "changed" | "caller" | "honest";
+  state: "dishonest" | "recheck" | "changed" | "caller" | "honest" | "related";
 }
 /**
  * Result of `honesty.graph`: the units that are not clean, and what uses what.
@@ -595,6 +596,7 @@ export interface HonestyGraphResult {
   everything?: boolean;
   mode?: string;
   nodes?: HonestyGraphNode[];
+  partial?: boolean;
   review_running?: boolean;
 }
 /**

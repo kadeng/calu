@@ -342,11 +342,12 @@ class HonestyGraphNode(BaseModel):
     name: str
     """The short name to show: `parse`, `Parser.parse`, or the file's name."""
     kind: Literal["unit", "file"]
-    state: Literal["dishonest", "recheck", "changed", "caller", "honest"]
+    state: Literal["dishonest", "recheck", "changed", "caller", "honest", "related"]
     """`dishonest`: an open mark. `recheck`: it uses a unit whose signature or doc comment
     changed and is to be judged again. `changed`: its file changed and nobody verified it.
     `caller`: it uses a dishonest unit and is itself unchanged; this blocks nothing.
-    `honest`: the unit whose changed contract caused a `recheck`."""
+    `honest`: the unit whose changed contract caused a `recheck`. `related`: it is unchanged,
+    and it uses a changed unit or a changed or dishonest unit uses it; this blocks nothing."""
     detail: str = ""
     """Text for a hover: the reason of a mark, what changed, or what the unit uses."""
     reviewing: bool = False
@@ -357,6 +358,8 @@ class HonestyGraphNode(BaseModel):
     """The unit's entries of code to judge again, for `honesty.dismiss`."""
     count: int = 1
     """How many units the node stands for; more than 1 only when `by_file` is set."""
+    hidden_callers: int = 0
+    """How many unchanged callers of the unit the graph leaves out; it shows at most 12."""
 
 
 class HonestyGraphEdge(BaseModel):
@@ -382,6 +385,9 @@ class HonestyGraphResult(BaseModel):
     everything: bool = False
     """True if every file counts as unreviewed (no baseline); the unreviewed files are then
     not listed."""
+    partial: bool = False
+    """True if callers or used units are missing: the search for them ran out of time, or
+    the graph reached its largest size."""
     mode: str = "off"
     """`honesty.mode`; with "off" the graph is empty."""
     review_running: bool = False

@@ -128,6 +128,14 @@ describe('collapsed callers', () => {
     expect(layout.collapsible.get('t')).toHaveLength(7);
   });
 
+  it('groups the related callers of a changed unit the same way', () => {
+    const { nodes, edges } = manyCallers();
+    const related = nodes.map((n) => (n.id === 't' ? node('t', 'changed') : node(n.id, 'related')));
+    const layout = layoutGraph(related, edges);
+    expect(layout.nodes).toHaveLength(2);
+    expect(layout.nodes.find((n) => n.group)?.label).toBe('7 callers');
+  });
+
   it('leaves five callers alone', () => {
     const { nodes, edges } = manyCallers(GROUP_LIMIT);
     const layout = layoutGraph(nodes, edges);

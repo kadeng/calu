@@ -13,7 +13,7 @@
 import type { WebviewMessage } from './messages';
 
 /** The states a node of `honesty.graph` can have, strongest first. */
-export const GRAPH_STATES = ['dishonest', 'recheck', 'changed', 'caller', 'honest'] as const;
+export const GRAPH_STATES = ['dishonest', 'recheck', 'changed', 'caller', 'honest', 'related'] as const;
 /** A state of a node of `honesty.graph`. */
 export type GraphState = (typeof GRAPH_STATES)[number];
 /** A state as the view shows it: "settled" is a node that just left the graph. */
@@ -26,6 +26,7 @@ export const STATE_TEXTS: Record<ShownState, { word: string; glyph: string; mean
   changed: { word: 'changed', glyph: 'Δ', meaning: 'It changed and nobody verified it yet.' },
   caller: { word: 'caller', glyph: '↑', meaning: 'It uses a dishonest unit and is itself unchanged. This blocks nothing.' },
   honest: { word: 'honest', glyph: '✓', meaning: 'It is shown because a unit to judge again uses it.' },
+  related: { word: 'related', glyph: '·', meaning: 'It is unchanged. It uses a changed unit, or a changed or dishonest unit uses it. This blocks nothing.' },
   settled: { word: 'settled', glyph: '✓', meaning: 'It was just settled and leaves the graph.' },
 };
 
@@ -51,6 +52,8 @@ export interface GraphNode {
   recheckIds: number[];
   /** How many units the node stands for. */
   count: number;
+  /** How many unchanged callers of the unit the graph leaves out. */
+  hiddenCallers: number;
 }
 
 /** An edge of the graph: `source` uses `target`. */
@@ -69,6 +72,8 @@ export interface GraphData {
   byFile: boolean;
   /** True if every file counts as unreviewed (no trusted commit). */
   everything: boolean;
+  /** True if callers or used units are missing (the search ran out of time, or the graph is full). */
+  partial: boolean;
   /** `honesty.mode` of the session. */
   mode: string;
   reviewRunning: boolean;
@@ -111,6 +116,7 @@ export function readGraph(raw: unknown): GraphData {
       markIds: integers(n.mark_ids),
       recheckIds: integers(n.recheck_ids),
       count: typeof n.count === 'number' && Number.isInteger(n.count) && n.count >= 1 ? n.count : 1,
+      hiddenCallers: typeof n.hidden_callers === 'number' && Number.isInteger(n.hidden_callers) && n.hidden_callers > 0 ? n.hidden_callers : 0,
     });
   }
   const edges: GraphEdge[] = [];
@@ -125,6 +131,7 @@ export function readGraph(raw: unknown): GraphData {
     edges,
     byFile: r.by_file === true,
     everything: r.everything === true,
+    partial: r.partial === true,
     mode: typeof r.mode === 'string' ? r.mode : 'off',
     reviewRunning: r.review_running === true,
   };
@@ -140,6 +147,9 @@ export type GraphNotice =
 
 /** The line shown above a graph that leaves the unreviewed files out. */
 export const EVERYTHING_TEXT = 'There is no trusted commit, so every file counts as unreviewed. Only marks and code to judge again are shown.';
+
+/** The line shown above a graph that lacks callers or used units. */
+export const PARTIAL_TEXT = 'Not every caller or used unit is shown: the search ran out of time, or the graph is full.';
 
 /**
  * Decide what the view shows.
@@ -169,13 +179,15 @@ export function graphNotice(attached: boolean, mode: string | undefined, graph: 
  *
  * @param graph The graph.
  * @param reviewRunning Whether an honesty review runs.
- * @returns Zero to three lines: a running review, one node per file, no trusted commit.
+ * @returns Zero to four lines: a running review, one node per file, no trusted commit,
+ *   callers or used units missing.
  */
 export function graphNotes(graph: GraphData, reviewRunning: boolean): string[] {
   return [
     ...(reviewRunning ? ['Honesty review running…'] : []),
     ...(graph.byFile ? ['Too many units: one node per file.'] : []),
     ...(graph.everything ? [EVERYTHING_TEXT] : []),
+    ...(graph.partial ? [PARTIAL_TEXT] : []),
   ];
 }
 
@@ -213,13 +225,27 @@ export function sourceHref(path: string, line: number): string {
  * Describe a node for a screen reader.
  *
  * @param node The node.
- * @returns The name, the state in words, a running review, the count of a file node, the id.
+ * @returns The name, the state in words, a running review, the count of a file node, the
+ *   callers left out, the id.
  */
 export function nodeLabel(node: GraphNode): string {
   const parts = [node.name, STATE_TEXTS[node.state].word];
   if (node.reviewing) parts.push('a review reads it now');
   if (node.kind === 'file') parts.push(node.count > 1 ? `a file with ${node.count} units` : 'a whole file');
+  const hidden = hiddenCallersText(node);
+  if (hidden) parts.push(hidden);
   return `${parts.join(', ')}. ${node.id}`;
+}
+
+/**
+ * Say how many callers of a node the graph leaves out.
+ *
+ * @param node The node.
+ * @returns "" if none is left out; else e.g. "30 more unchanged callers are not shown".
+ */
+export function hiddenCallersText(node: Pick<GraphNode, 'hiddenCallers'>): string {
+  if (node.hiddenCallers <= 0) return '';
+  return node.hiddenCallers === 1 ? '1 more unchanged caller is not shown' : `${node.hiddenCallers} more unchanged callers are not shown`;
 }
 
 /** An entry of a node's context menu. */
@@ -240,7 +266,7 @@ export interface NodeMenuItem {
  *     dishonest   Mark as honest                              honestyClear, once per open mark
  *     recheck     Mark as honest                              honestyDismiss {recheckIds}
  *     changed     Mark as honest: trust the whole file…       honestyTrust {path} (the host asks first)
- *     caller, honest, settled    none
+ *     caller, related, honest, settled    none
  *
  * "Mark as dishonest…" (`honestyMark`; the host asks for the reason) is there unless the node
  * is dishonest or settled. "Open the source" is always there.
@@ -311,8 +337,8 @@ export interface Ghost {
  * Find the nodes to show once more after a new graph arrived.
  *
  * A node of the graph before that is dishonest, changed or to judge again, and that the new
- * graph does not have, was settled: it becomes a ghost for `SETTLED_MS`. Callers and honest
- * nodes are only there for another node and leave without a ghost. Ghosts from before stay
+ * graph does not have, was settled: it becomes a ghost for `SETTLED_MS`. Callers, related and
+ * honest nodes are only there for another node and leave without a ghost. Ghosts from before stay
  * until their time, unless the new graph has their node again. There are no new ghosts when
  * one of the two graphs has one node per file and the other has not: the ids differ then.
  *

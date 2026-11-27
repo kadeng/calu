@@ -1418,13 +1418,14 @@ pre { unicode-bidi: isolate; text-align: left; }
 .hg-node.changed, .hg-key.changed { --hg-c: var(--hg-yellow); }
 .hg-node.recheck, .hg-key.recheck { --hg-c: var(--hg-orange); }
 .hg-node.caller, .hg-key.caller { --hg-c: var(--hg-orange); }
+.hg-node.related, .hg-key.related { --hg-c: var(--calu-muted); }
 .hg-node.honest, .hg-node.settled, .hg-key.honest { --hg-c: var(--hg-green); }
 .hg-node { cursor: pointer; }
 .hg-node:focus { outline: none; }
 .hg-back { fill: var(--vscode-sideBar-background, var(--vscode-editor-background, Canvas)); stroke: none; }
 .hg-shape { fill: var(--hg-c); fill-opacity: 0.22; stroke: var(--hg-c); stroke-width: 1.5; }
 .hg-node.recheck .hg-shape { stroke-width: 2; }
-.hg-node.caller .hg-shape { fill-opacity: 0.08; stroke-width: 1; }
+.hg-node.caller .hg-shape, .hg-node.related .hg-shape { fill-opacity: 0.08; stroke-width: 1; }
 .hg-node.group .hg-shape { stroke-dasharray: 2 2; }
 .hg-node.settled { opacity: 0.75; }
 .hg-node:hover .hg-shape { fill-opacity: 0.36; }
