@@ -2323,8 +2323,12 @@ async def escalations(request: Request, state: _State) -> Response:
 async def escalation_page(request: Request, state: _State) -> Response:
     """Show one escalation with what the checker saw when it asked.
 
+    An open escalation has a form with Allow and Deny and a field for a temporary rule
+    (`escalation.html`, field `rule`), filled with the rule a checker suggested.
+
     Args:
-        request: The request; its path holds the escalation id.
+        request: The request; its path holds the escalation id, `?rule=` what `resolve` did
+            with a rule sent with the last decision.
         state: The shared state.
 
     Returns:
@@ -2347,6 +2351,10 @@ async def escalation_page(request: Request, state: _State) -> Response:
             # What each checker decided, which the escalation's own reason does not say when a
             # category held the step back (D42, D53).
             "runs": await herd.escalation_runs(state.db, escalation_id),
+            # The rule a checker suggested, for the form's rule field (design section 5), and
+            # what became of a rule sent with the last decision (`resolve`).
+            "suggested_rule": str(context.get("suggested_rule") or ""),
+            "rule_message": request.query_params.get("rule", ""),
         },
     )
 
@@ -2354,13 +2362,22 @@ async def escalation_page(request: Request, state: _State) -> Response:
 async def resolve(request: Request, state: _State) -> Response:
     """Allow or deny an open escalation; the waiting session continues within a second.
 
+    If the form's `rule` field is not empty, the temporary rule is added first
+    (`temp_rules.add_from_client` for the escalation's session, with `rule_for` and
+    `rule_scope`). A rule that is refused does not stop the decision; the redirect then goes
+    to the escalation's page, which says why.
+
+    Side effects: resolves the escalation; may insert a `temporary_rules` row.
+
     Args:
-        request: The request; its form holds `decision` ("allow" or "deny") and a `note`.
+        request: The request; its form holds `decision` ("allow" or "deny"), a `note`, and
+            optionally `rule`, `rule_for`, `rule_scope`.
         state: The shared state.
 
     Returns:
-        A redirect to the page the form was submitted from, or a 400 page if the decision is
-        not "allow" or "deny".
+        A redirect to the page the form was submitted from (with a rule, to the escalation's
+        page with `?rule=` saying what was done), or a 400 page if the decision is not "allow"
+        or "deny".
     """
     escalation_id = int(request.path_params["escalation_id"])
     form = await request.form()
@@ -2368,6 +2385,24 @@ async def resolve(request: Request, state: _State) -> Response:
     note = str(form.get("note") or "")
     if decision not in ("allow", "deny"):
         return _bad(request, f"{decision!r} is neither allow nor deny")
+    rule_message = ""
+    rule_text = str(form.get("rule") or "").strip()
+    row = await herd.escalation(state.db, escalation_id) if rule_text else None
+    if rule_text and row is not None:
+        from calu.web import start
+
+        try:
+            added, _conversation = await temp_rules.add_from_client(
+                state.db,
+                str(row.session_id),
+                rule_text,
+                str(form.get("rule_for") or "") or None,
+                str(form.get("rule_scope") or "session"),
+                f"web:{start.web_user()}",
+            )
+            rule_message = f"Added temporary rule #{added.id}."
+        except temp_rules.RuleError as error:
+            rule_message = f"The temporary rule was not added: {error}"
     # Who decided, as `calu resolve` records it: the role and `<os user>@<host>` of this
     # `calu web` (schema 37), whose login token the browser holds.
     resolved = await herd.resolve(state.db, escalation_id, decision, note, actor=herd.caller())
@@ -2380,6 +2415,9 @@ async def resolve(request: Request, state: _State) -> Response:
     local = back.startswith("/") and not back.startswith("//") and "\\" not in back
     if not local and (target.scheme, target.netloc) != here:
         back = str(request.url_for("escalations"))
+    if rule_message:
+        page = request.url_for("escalation", escalation_id=escalation_id)
+        back = str(page.include_query_params(rule=rule_message))
     return RedirectResponse(back, 303)
 
 

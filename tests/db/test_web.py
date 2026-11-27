@@ -292,6 +292,36 @@ async def test_an_escalation_can_be_resolved_from_the_page(db_url: str) -> None:
         await conn.close()
 
 
+async def test_a_decision_on_the_escalation_page_can_add_a_temporary_rule(db_url: str) -> None:
+    """Design section 5: the field holds the checker's suggestion; a refused rule is said and
+    the decision still goes."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        session_id, escalation = await populate(db)
+        await db.execute(
+            "UPDATE sessions SET claude_session_id = 'c1' WHERE id = %s::uuid", (session_id,)
+        )
+        await db.execute(
+            "UPDATE escalations SET context = context || %s::jsonb WHERE id = %s",
+            ('{"suggested_rule": "Claude may run ls."}', escalation),
+        )
+        async with await client_for(db) as client:
+            page = (await client.get(f"/escalations/{escalation}")).text
+            assert 'name="rule"' in page and 'value="Claude may run ls."' in page
+            answered = await client.post(
+                f"/escalations/{escalation}/resolve",
+                data={"decision": "allow", "rule": "Claude may run ls.", "rule_for": "1h"},
+            )
+            assert "Added temporary rule #" in answered.text
+            (rule,) = await temp_rules.listed(db)
+            assert (rule.scope, rule.conversation) == ("session", "c1")
+            assert await herd.escalations(db) == []
+    finally:
+        await conn.close()
+
+
 def area(page: str, name: str) -> str:
     """Return the text of the editor with the given form name on the settings page.
 

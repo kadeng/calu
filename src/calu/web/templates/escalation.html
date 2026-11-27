@@ -19,8 +19,16 @@
   <input type="text" name="note" placeholder="note for Claude (optional)">
   <button class="allow" name="decision" value="allow">Allow</button>
   <button class="danger" name="decision" value="deny">Deny</button>
+  <p class="muted">
+    <label>Temporary rule (optional; added with your decision if not empty)
+      <input type="text" name="rule" class="wide" maxlength="1000" value="{{ suggested_rule }}"
+             placeholder="e.g. Claude may run the database tests."></label>
+    for <select name="rule_for">{% for d in ['30m', '1h', '1d', '3d', '7d'] %}<option{{ ' selected' if d == '1d' }}>{{ d }}</option>{% endfor %}</select>
+    applies to <select name="rule_scope"><option value="session">this session</option><option value="project">this project</option><option value="global">every project</option></select>
+  </p>
 </form>
 {% endif %}
+{% if rule_message %}<p class="notice" role="status">{{ rule_message }}</p>{% endif %}
 {% if escalation.unanswerable %}
 <p class="muted">The session's process is gone (no heartbeat). Answering is recorded for the
   history, but the step will not run and the session will not continue.</p>
