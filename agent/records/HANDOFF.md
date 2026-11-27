@@ -31,6 +31,29 @@ it. Its section 7 quotes the owner's seven answers.
   container.
 - Still open: whether a subagent's marker counts.
 
+### A subagent's result must not wait for a person (requirement 51, 2026-11-27), not built
+
+The owner: the subagent checker comments on a result as a follow-up message; it does not
+keep the subagent from finishing and cannot keep the report from the main agent. The code
+does otherwise today (`Session._review_subagent_result`, `_handback`,
+`checkers/result_checker.py`):
+
+- The result checker answers ACCEPT, ANNOTATE or ESCALATE. ESCALATE opens an escalation, and
+  the handback (a `SubagentHandback` tool call) waits inside its hook until a person decides.
+- A person's "deny" on it denies the handback: the main agent gets the note, not the report.
+- A checker that fails (as three times on 2026-11-27, see "Open items") becomes ESCALATE,
+  so a defect of the checker held three finished subagents.
+- `auto_escalate.subagents` (the supervision level `everything`) turns every result into an
+  escalation.
+
+To build, and to ask the owner first: whether the level `everything` keeps holding results
+(the owner chose that level's meaning earlier), and whether the check of a subagent's
+**task** before it starts (D256), which is a tool call like any other, stays able to
+escalate. Claude's proposal: the result checker answers ACCEPT or ANNOTATE only; a result
+never waits; a failed check passes the result with the note that it was not reviewed; what
+the checker would have escalated goes to the main agent as a note and to the clients as a
+notice. The documentation ("The checkers", "What a subagent is told") changes with it.
+
 ### PLAN.md shortened, its full text archived (2026-11-27)
 
 The owner found `PLAN.md` too large; it went from 543 KB to 251 KB. The full text of every

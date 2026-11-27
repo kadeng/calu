@@ -401,6 +401,12 @@ broken down or extended. Derived requirements and design decisions belong in
     likely want to utilize LSPs and preexisting code indexing / code graph / call graph
     solutions that (ideally) also have MCP support so we can (also) make the index available
     to the main coding agent."
+51. The subagent checker comments, it does not hold or refuse a result (stated 2026-11-27,
+    after three results waited for a decision because the checker itself had failed): "Wait,
+    why is the subagent checker *denying* subagent results? That's not how this is intended
+    to work. The subagent checker should at best comment on results as a followup message,
+    it's not supposed to keep the subagent from finishing nor should it be able to deny the
+    main agent access to the subagent report."
 
 ## Soft goals and priorities
 
