@@ -1,16 +1,89 @@
 # Handoff
 
-State on 2026-11-27 (the section "Pick up here" is current; older sections below keep the
-state of their day). Read this, then `AGENTS.md`, `REQUIREMENTS.md` and `PLAN.md` (decisions
-D1-D295, open questions §11, phases §12; the full text of a shortened decision is in
-`agent/records/notes/plan-archive.md`).
-
-**Next step: step 6 of the temporary rules** (documentation; the section "The session in
-`~/projects/calu2`" below says what it covers). After it, the owner's issue report on
-stopping and resuming sessions, then the honesty design of the next section, starting with
-the review marker and the indexer spike. The owner set this order on 2026-11-27.
+State on 2026-11-27, late evening (the section "Pick up here" is current; older sections
+below keep the state of their day). Read this, then `AGENTS.md`, `REQUIREMENTS.md` and
+`PLAN.md` (decisions D1-D298, open questions §11, phases §12; the full text of a shortened
+decision is in `agent/records/notes/plan-archive.md`).
 
 ## Pick up here
+
+### Where the work stands (end of 2026-11-27)
+
+Everything below is committed and pushed to `main` (last commit of the day: this handoff).
+The owner's installation in `/usr/local/lib/calu` has none of it until it is reinstalled
+(`sudo bash install.sh --source ~/projects/calu2 --ref main`), `calu serve` is restarted and
+the extension is rebuilt and installed.
+
+**Built on this day, each with its own section below:**
+
+| What | Decision | State |
+|---|---|---|
+| The subagent checker denies a task with a reason; a result gets a remark; its failed checks are fixed | D295, requirement 51 | unit tests; 20 checks and 14 cases with Haiku |
+| The review marker `#do-honesty-review` | D293, requirement 49 | unit tests; not tried with a real Claude Code |
+| The reference index: word search, code navigator with a language server behind it, judge with a cache, combined index, an adapter for codebase-memory-mcp | D296, requirement 52 | unit tests; the judge and the language server measured for real (`spikes/RESULTS.md`) |
+| Code that uses a changed unit is judged again (`honesty.dependents`, off by default) | D294, requirement 50 | unit tests; one end-to-end test with Haiku |
+| The honesty graph in the chat pane of VSCode and `calu web` | D297 | unit tests; seen in VSCode in the Cua desktop (test plan V) |
+| Locking: a command is checked again when its worktree changed since its check | D298 | unit tests and the fuzz harness; only with `locking.enabled` |
+| `PLAN.md` shortened to 251 kB, full texts in `notes/plan-archive.md` | | done |
+
+**What the owner still has to decide** (ask once; do not decide for the owner):
+
+1. Subagent results: the shipped rule now gives a result that asks for more work a remark,
+   where it escalated before. That is Claude's reading of requirement 51; not confirmed.
+2. Whether a failed subagent check keeps escalating (it does today).
+3. Whether a subagent's `#do-honesty-review` counts (it does today, as Claude's assumption).
+4. Locking: a command a person allowed is not checked again, only logged
+   (`locking.md` decision 23). Every finished command counts as a change of the worktree,
+   also one that only reads, so second checks are frequent with several agents.
+5. Whether the evaluation case `running-a-file-a-background-subagent-is-rewriting` stays a
+   critical case for the command checker (Haiku answers PASS), and whether locking stays off
+   by default.
+6. Whether compiled files (`.pyc` in a project without `.gitignore`) are left out of the
+   honesty graph.
+
+**Next steps, in this order:**
+
+1. The honesty graph, what was not seen in a UI: edges and callers (give the scripted
+   honesty checker of `uitest/fake_server.py` a mark on a unit, not on the whole file), click
+   to the source, "Mark as dishonest…", zoom with Ctrl and the wheel, the web pane. The
+   owner said they will test by hand too.
+2. Whatever the owner finds in that test.
+3. The older work the owner put first on the morning of this day and that is still open:
+   step 6 of the temporary rules (documentation; see "The session in `~/projects/calu2`"
+   below), then the owner's issue report on stopping and resuming sessions (same section).
+   The owner then changed the order during the day by asking for the honesty work; ask which
+   comes first now.
+4. Honesty across units, what is left: the clients do not list the code to judge again
+   (VSCode has the fields, the PyCharm plugin's Kotlin types lack them); worktrees; other
+   languages than Python; cross-language references (the owner: later); the advisor model
+   (backlog below).
+
+**How to work here (learned on this day):**
+
+- Real model: the owner allowed Claude Haiku with the key in `/home/klondenberg/.env`, for
+  testing and debugging, also in follow-up sessions of this one. Never print the key.
+
+      export ANTHROPIC_API_KEY="$(sed -n 's/^ANTHROPIC_API_KEY=//p' ~/.env | head -1)"
+      CALU_TEST_CHECKER_MODEL=anthropic:claude-haiku-5-5 uv run pytest -m live <file>
+
+- `sudo` was allowed for one thing only: reading the server's log in `/var/lib/calu/log/`.
+- The owner wants file changes made with the Edit tool. Much of this day was done with
+  scripts anyway, and calu's checkers remarked on it every time. Use Edit.
+- Docstrings and notes: plain, short sentences and lists. The owner called a dense module
+  docstring "nearly unreadable".
+- A design change gets its own note under `agent/records/notes/`; `PLAN.md` gets a short row.
+- Subagents: the owner asked for Sonnet for bulk rewriting and Opus for one analysis. Two
+  subagents edited this checkout at the same time as the lead, each confined to its files;
+  that worked. No git worktrees.
+- Ask the owner open questions one at a time, each with its context, through the question
+  tool.
+- Uv is `~/.local/bin/uv`; Node 24 is in `~/.nvm/versions/node/`; the extension's
+  `npm run gen:protocol` needs both on the `PATH`.
+- Containers left stopped: `calu-spike-lsp`, `calu-spike-cbm`, `calu-spike-cbm-try`,
+  `calu-spike-cbm-trading`, `calu-spike-graphify`, `calu-spike-index`, and the image
+  `calu-spike-cbm-img`. They can be removed. The Cua desktop `calu-uitest` runs with the
+  scripted server from the evening's working tree, the honesty checker enabled and
+  `honesty.mode` track in its own database.
 
 ### Honesty across units: designed and decided (2026-11-27); the marker is built
 
