@@ -269,6 +269,41 @@ large groups as round figures, so about 390 of the hits are not assigned to a gr
 Not measured: how many of the
 hits in strings are the name itself or a dotted path, and the time of one resolution per hit.
 
+### Language boundaries (the owner, 2026-11-27)
+
+The owner: "what happens at language boundaries. A python class becoming dishonest through a
+change in a rust library that it calls. I guess an LLM which inspects grep results figures
+this out. A LSP? Hard, it would have to trace through things like symbol declarations and
+obscure C preprocessor definitions. Maybe using grep and an LLM actually *is* the best way
+for things that cannot easily be explained away. I don't think we can get to the 100% without
+it."
+
+Claude's reading, not decided: this is the division of work of the combination above.
+
+    word search      finds the candidates, in every language
+    language server  confirms or explains away the hits of its own language (in the spike
+                     about 5,300 of 5,700 hits that were no reference)
+    checker (LLM)    reads what is left: unresolved receivers, strings, and every hit in a
+                     file of another language
+
+A hit in a file the server does not cover is unclear by construction, so a Python caller of
+a Rust function reaches the checker without any rule about language pairs.
+
+**The word search finds a boundary only where the name survives it.** It does when Python
+calls a PyO3 function or a C function by the name it is defined under. It does not when the
+binding renames it (`#[pyo3(name = "add")]`), a macro builds the name, a program is started
+with a sub-command (`tool add-user` for `add_user`), or the link is a route, a topic or a
+method string (calu's own clients call `chat.send`, which `send_chat` serves). So the checker
+has a second task at a contract change: to say under which other names the changed unit is
+reached from outside its file (it reads the unit with its decorators and registration), and
+calu searches for those names as well. Proposed as one more field of the honesty checker's
+answer about a changed unit.
+
+No procedure reaches 100 %: a name built at run time appears nowhere. The aim stays the one
+of the honesty spec, an agent that drifts. What this division buys is that an error becomes
+"one place too many was read" where a tool cannot decide, and that the checker's share stays
+small enough to pay for at every contract change.
+
 ## 5. How calu and Claude Code use the index
 
 **What the owner has fixed (2026-11-27):** "I would like the honesty checker to still work
