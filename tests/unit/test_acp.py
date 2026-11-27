@@ -741,6 +741,10 @@ def test_the_mode_ladder_maps_each_rung_to_its_categories() -> None:
                 assert getattr(stricter.settings, field), f"{stricter.id} is not stricter"
     assert modes.mode_of(AutoEscalate(commands=True)) == modes.CUSTOM
     assert modes.mode_of(AutoEscalate(subagents=True)) == modes.CUSTOM
+    # Only the first rung runs no checker (requirement 53); with a category it is off the ladder.
+    assert [mode.settings.unchecked for mode in modes.LADDER] == [True, False, False, False, False]
+    assert modes.mode_of(AutoEscalate(unchecked=True)) == "unchecked"
+    assert modes.mode_of(AutoEscalate(unchecked=True, edits=True)) == modes.CUSTOM
 
 
 def test_custom_is_offered_only_while_it_is_the_state_and_cannot_be_chosen() -> None:
@@ -768,6 +772,7 @@ def test_a_boolean_option_is_offered_only_to_a_client_that_takes_one() -> None:
         "auto_escalate_commands": "boolean",
         "auto_escalate_edits": "boolean",
         "auto_escalate_subagents": "boolean",
+        "auto_escalate_unchecked": "boolean",
     }
     values = {option["id"]: option["currentValue"] for option in with_booleans}
     assert values["auto_escalate_edits"] is True
@@ -809,8 +814,8 @@ async def test_a_new_session_reports_the_mode_in_both_apis() -> None:
         assert [entry["id"] for entry in result["modes"]["availableModes"]] == [
             mode.id for mode in modes.LADDER
         ]
-        # The client advertised boolean options, so the three switches are offered as such.
-        assert len(result["configOptions"]) == 4
+        # The client advertised boolean options, so the four switches are offered as such.
+        assert len(result["configOptions"]) == 5
 
     await run_adapter(calu, body)
 
@@ -839,7 +844,7 @@ async def test_set_mode_asks_the_session_and_refuses_an_unknown_mode() -> None:
         )
         assert answer["result"] == {}
         assert h.calu.sent("auto_escalate.set") == [
-            {"commands": True, "edits": True, "subagents": True}
+            {"commands": True, "edits": True, "subagents": True, "unchecked": False}
         ]
         refused = await h.editor.call("session/set_mode", {"sessionId": session, "modeId": "nope"})
         assert refused["error"]["code"] == -32602
@@ -876,13 +881,13 @@ async def test_set_config_option_answers_with_every_option_and_its_new_value() -
             },
         )
         options = set_answer["result"]["configOptions"]
-        assert len(options) == 4
+        assert len(options) == 5
         values = {option["id"]: option["currentValue"] for option in options}
         assert values["auto_escalate_commands"] is True
         # Only commands are on, which is not a rung of the ladder.
         assert values[modes.MODE_OPTION_ID] == modes.CUSTOM
         assert h.calu.sent("auto_escalate.set") == [
-            {"commands": True, "edits": False, "subagents": False}
+            {"commands": True, "edits": False, "subagents": False, "unchecked": False}
         ]
         refused = await h.editor.call(
             "session/set_config_option",

@@ -1,12 +1,13 @@
 /**
- * Supervision levels: the three auto-escalation switches of a session as one of four named
- * levels (the ladder of `calu.acp.modes`, also used by `calu attach`). Pure.
+ * Supervision levels: the auto-escalation switches of a session as one of five named levels
+ * (the ladder of `calu.acp.modes`, also used by `calu attach`). Pure.
  *
- *     level        commands  edits  subagents
- *     checkers     off       off    off        only a checker's escalation waits for a human
- *     edits        off       on     off
- *     writes       on        on     off
- *     everything   on        on     on
+ *     level        unchecked  commands  edits  subagents
+ *     unchecked    on         off       off    off        no checker runs; calu's rules still ask
+ *     checkers     off        off       off    off        only a checker's escalation waits for a human
+ *     edits        off        off       on     off
+ *     writes       off        on        on     off
+ *     everything   off        on        on     on
  *     custom       any other combination (shown, cannot be chosen)
  *
  * Port of `extensions/vscode/src/shared/levels.ts`.
@@ -21,16 +22,18 @@ import kotlinx.serialization.Serializable
  * @property commands Every command waits for a human, even one the command checker approved.
  * @property edits Every file edit waits for a human, even one the edit checker approved.
  * @property subagents Every subagent's final result waits for a human.
+ * @property unchecked No checker runs: Claude Code decides by itself; calu's rules still apply.
  */
 @Serializable
 data class AutoEscalateFlags(
     val commands: Boolean = false,
     val edits: Boolean = false,
     val subagents: Boolean = false,
+    val unchecked: Boolean = false,
 )
 
 /** Ids of the levels a user can choose, from the least to the most strict. */
-val LEVEL_IDS: List<String> = listOf("checkers", "edits", "writes", "everything")
+val LEVEL_IDS: List<String> = listOf("unchecked", "checkers", "edits", "writes", "everything")
 
 /** The result of `levelOf` for a combination of switches that is none of the levels. */
 const val LEVEL_CUSTOM: String = "custom"
@@ -53,6 +56,12 @@ data class Level(
 
 /** The levels from the least to the most strict. */
 val LEVELS: List<Level> = listOf(
+    Level(
+        id = "unchecked",
+        name = "Unchecked / Claude Code only",
+        description = "No checker runs: Claude Code decides by itself. calu's rules still ask you.",
+        flags = AutoEscalateFlags(unchecked = true),
+    ),
     Level(
         id = "checkers",
         name = "Checkers decide",
@@ -95,7 +104,7 @@ fun levelOf(flags: AutoEscalateFlags?): String {
  * Return the switches of a level, as the params of `auto_escalate.set`.
  *
  * @param id A level id.
- * @return The three switches of the level.
+ * @return The four switches of the level.
  * @throws IllegalArgumentException if `id` is not one of `LEVEL_IDS`.
  */
 fun flagsForLevel(id: String): AutoEscalateFlags =
@@ -107,7 +116,8 @@ fun flagsForLevel(id: String): AutoEscalateFlags =
  *
  * @param flags The switches; `null` counts as all off.
  * @return The level's name, or for a combination outside the ladder e.g.
- *   "Custom: confirm commands, subagent results".
+ *   "Custom: confirm commands, subagent results", with "no checkers, " in front if no checker
+ *   runs.
  */
 fun levelLabel(flags: AutoEscalateFlags?): String {
     val id = levelOf(flags)
@@ -117,7 +127,8 @@ fun levelLabel(flags: AutoEscalateFlags?): String {
         if (flags?.commands == true) "commands" else "",
         if (flags?.subagents == true) "subagent results" else "",
     ).filter { it.isNotEmpty() }
-    return "Custom: confirm ${parts.joinToString(", ")}"
+    val unchecked = if (flags?.unchecked == true) "no checkers, " else ""
+    return "Custom: ${unchecked}confirm ${parts.joinToString(", ")}"
 }
 
 /**

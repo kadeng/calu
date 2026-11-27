@@ -78,14 +78,28 @@ export interface AssistantThinking {
   text: string;
 }
 /**
- * Categories whose steps always wait for the human, whatever the checker decided.
+ * How closely a session is supervised: what waits for the human, and whether checkers run.
  *
- * `commands`: Bash and other tool calls reviewed by the command checker. `edits`: file edits.
- * `subagents`: final results of subagents. The checker still runs; where it would have
- * approved (ALLOW / ACCEPT / ANNOTATE), the step is escalated instead, with the checker's
- * decision and reason in the escalation. A checker DENY stays a DENY. Read-only tools that the
- * policy allows without a check are not affected. With training mode on as well, the training
- * review (labelling the checker's decision) comes first, then the escalation (running the step).
+ * Three categories whose steps always wait for the human, whatever the checker decided:
+ * `commands` (Bash and other tool calls reviewed by the command checker), `edits` (file
+ * edits) and `subagents` (final results of subagents). The checker still runs; where it
+ * would have approved (ALLOW / ACCEPT / ANNOTATE), the step is escalated instead, with the
+ * checker's decision and reason in the escalation. A checker DENY stays a DENY. Read-only
+ * tools that the policy allows without a check are not affected. With training mode on as
+ * well, the training review (labelling the checker's decision) comes first, then the
+ * escalation (running the step).
+ *
+ * `unchecked` is the other end (requirement 53, PLAN D299): no checker runs at all.
+ *
+ * - A step that a checker would judge passes to Claude Code's own decision (its permission
+ *   mode and its sandbox).
+ * - calu's rules still apply: the rule lists, the built-in rules, the tool policy, the rule
+ *   for generated files, and questions to the user.
+ * - Nothing is judged after a step either: no review of what a command wrote, no review of
+ *   a subagent's task or result, no honesty check, and `honesty.mode` "enforce" stops
+ *   nothing.
+ * - The three categories above still hold: with `edits` and `unchecked`, every edit waits
+ *   for the human, without a checker's opinion.
  */
 export interface AutoEscalate {
   /**
@@ -100,6 +114,11 @@ export interface AutoEscalate {
    * Every subagent's final result waits for a human, even an accepted one.
    */
   subagents?: boolean;
+  /**
+   * No checker runs: a step the rules do not stop passes to Claude Code's own decision.
+   * calu's rule lists and built-in rules still apply.
+   */
+  unchecked?: boolean;
 }
 /**
  * The auto-escalation categories of the session changed (`AutoEscalate`).
@@ -130,6 +149,11 @@ export interface AutoEscalateSetParams {
    * Every subagent's final result waits for a human, even an accepted one.
    */
   subagents?: boolean;
+  /**
+   * No checker runs: a step the rules do not stop passes to Claude Code's own decision.
+   * calu's rule lists and built-in rules still apply.
+   */
+  unchecked?: boolean;
 }
 /**
  * An image a user attached to a chat message (agent/records/PLAN.md D220).

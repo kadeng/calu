@@ -305,7 +305,7 @@ describe('attaching', () => {
     expect(s.focus?.tab).toBe(MAIN);
     expect(s.agents).toHaveLength(1);
     expect(s.queue).toHaveLength(1);
-    expect(s.autoEscalate).toEqual({ commands: false, edits: true, subagents: false });
+    expect(s.autoEscalate).toEqual({ commands: false, edits: true, subagents: false, unchecked: false });
     expect(s.honesty).toMatchObject({ mode: 'warn', clean: true });
     expect(s.usage.rateLimits).toHaveLength(1);
     expect(s.lastSeq).toBe(9);

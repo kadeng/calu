@@ -295,6 +295,12 @@ HONESTY_ALSO = (
 """Addition to the reason of an escalation by the checkers, for a step that executes project
 code while the honesty state is not clean."""
 
+UNCHECKED_REASON = (
+    "No checker ran: the supervision level is unchecked (auto_escalate.unchecked). "
+    "Claude Code decides by itself."
+)
+"""Reason of the PASS of a step that a checker would judge, while no checker runs."""
+
 NEVER_EXECUTES = READ_PATH_TOOLS | {"WebFetch", "WebSearch"}
 """Tools on the command route that read and cannot execute code of the project. The honesty
 state does not stop them, whatever a checker answers."""
@@ -322,7 +328,8 @@ class Decided:
     `source` is who decided: "rules", "policy", "checker", "auto", "held", "changeset" (the
     deterministic refusal of a compound commit line, or of a commit whose diff calu could not read),
     "honesty" (the honesty state stops a step that executes project code or commits), "clock",
-    "question" or "internal". `rules` is what the allow and deny lists found ("deny", "allow",
+    "question", "internal" or "unchecked" (no checker ran, because `auto_escalate.unchecked`
+    is on). `rules` is what the allow and deny lists found ("deny", "allow",
     "unlisted") or None for a tool the lists do not cover. `runs` holds one model call per checker
     that ran, in the order of the route's checkers (agent/records/PLAN.md D81) -- for a commit
     followed by the changeset checkers -- and is empty when no checker ran.
@@ -877,6 +884,12 @@ class StepGate:
         If a checker runs, narrates `pending` first (sets `pending.text`) and passes the
         narration to the checker. A `pending` that is narrated already is not narrated again.
 
+        With `auto_escalate.unchecked`, no checker runs and no honesty state is computed. A
+        step that the rules and the tool policy do not stop passes with the source
+        "unchecked", without waiting behind an open escalation. The categories of
+        `auto_escalate` and the rule for generated files still turn that pass into an
+        escalation.
+
         Args:
             step: The tool call.
             pending: Claude's thinking and text before the call, or None.
@@ -945,6 +958,23 @@ class StepGate:
             # What Claude tells a subagent is reviewed before the subagent gets it: a subagent
             # must not be handed what was refused to Claude itself.
             route = Route.SUBAGENT
+        if self._config().auto_escalate.unchecked and route not in (
+            Route.ALLOW,
+            Route.DENY,
+            Route.ESCALATE,
+        ):
+            # No checker runs (requirement 53): the rules and the tool policy above had their
+            # say, and the step passes to Claude Code's own decision. It does not wait behind
+            # an open escalation. `_auto_escalate` still applies the categories that always
+            # wait for a human, and the rule for generated files.
+            unchecked = CheckDecision(
+                decision=Decision.PASS, reason=UNCHECKED_REASON, step_summary=label
+            )
+            return self._auto_escalate(
+                Decided(route=route, decision=unchecked, source="unchecked", rules=rules),
+                "",
+                step,
+            )
         if outcome.notes:
             step = step.model_copy(update={"notes": [*step.notes, *outcome.notes]})
         held = ""
@@ -1432,9 +1462,7 @@ class StepGate:
                     f"This edit changes generated code by hand ({generated}). Generated files "
                     "are not judged for honesty and are meant to be written by their build "
                     "only, so a person decides whether this edit may run. "
-                    + (f"The {route.value} checker" if source == "checker" else "The rules")
-                    + f" decided {decided.decision.decision.value}"
-                    + (f": {decided.decision.reason}" if decided.decision.reason else ".")
+                    + _who_approved(route, source, decided.decision)
                 ),
                 step_summary=decided.decision.step_summary,
             )
@@ -1450,9 +1478,7 @@ class StepGate:
                 decision=Decision.ESCALATE,
                 reason=(
                     f"Auto-escalation for {kind} is on. "
-                    + (f"The {route.value} checker" if source == "checker" else "The rules")
-                    + f" decided {decided.decision.decision.value}"
-                    + (f": {decided.decision.reason}" if decided.decision.reason else ".")
+                    + _who_approved(route, source, decided.decision)
                 ),
                 step_summary=decided.decision.step_summary,
             )
@@ -1609,6 +1635,27 @@ class StepGate:
         except Exception as exc:
             log.exception("collecting the changeset failed")
             return Changeset(problem=f"{type(exc).__name__}: {exc}")
+
+
+def _who_approved(route: Route, source: str, approval: CheckDecision) -> str:
+    """Say who approved a step, for the reason of an escalation that replaces the approval.
+
+    Args:
+        route: The step's route.
+        source: Who decided (`Decided.source`).
+        approval: The approval that is replaced.
+
+    Returns:
+        One sentence: the checker of the route or the rules with their decision and reason,
+        or, for the source "unchecked", that no checker ran.
+    """
+    if source == "unchecked":
+        return "No checker ran: the supervision level is unchecked."
+    who = f"The {route.value} checker" if source == "checker" else "The rules"
+    return (
+        f"{who} decided {approval.decision.value}"
+        + (f": {approval.reason}" if approval.reason else ".")
+    )
 
 
 def _held_out(result: CheckDecision, source: str, held: str) -> CheckDecision:

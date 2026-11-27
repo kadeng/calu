@@ -2,7 +2,8 @@
 
 An editor shows a picker for how much the agent may do on its own. calu's equivalent is
 `AutoEscalate` (agent/records/PLAN.md D21, D38): three independent switches that make every command,
-every edit or every subagent result wait for a human, whatever the checker decided.
+every edit or every subagent result wait for a human, whatever the checker decided. A fourth
+switch, `unchecked`, runs no checker at all (requirement 53, PLAN D299).
 
 ACP has two APIs for this. **Session modes** (`modes`, `session/set_mode`,
 `current_mode_update`) are one flat list of named modes, and the newer **session config
@@ -10,18 +11,19 @@ options** (`configOptions`, `session/set_config_option`, `config_option_update`)
 typed options that supersede them; the specification asks an agent to offer both during the
 transition and keep them in sync, because a client may understand only one.
 
-The two APIs fit calu's three switches differently:
+The two APIs fit calu's switches differently:
 
 * A boolean config option is an exact fit -- one option per switch -- but a client must
   advertise `session.configOptions.boolean` before an agent may send one.
-* A mode, and a select option, is one value out of a list, so the eight combinations of three
-  switches have to be flattened. `LADDER` is that flattening: four modes of increasing
-  strictness, each a superset of the one before. The combinations that are not on the ladder
+* A mode, and a select option, is one value out of a list, so the combinations of the
+  switches have to be flattened. `LADDER` is that flattening: five modes of increasing
+  strictness. The first runs no checker; each of the other four is a superset of the one
+  before. The combinations that are not on the ladder
   (commands without edits, for instance) are reachable with `calu config set` and the web
   interface, so the state of a running session need not be on it; `mode_of` then answers
   `CUSTOM`, which is offered as a mode only while it is the current one and cannot be selected.
 
-So a client that supports boolean options gets the three switches themselves, and one that does
+So a client that supports boolean options gets the switches themselves, and one that does
 not gets the ladder.
 
 Claude Code's own permission mode (default, acceptEdits, auto; agent/records/PLAN.md D247) is a
@@ -58,6 +60,12 @@ class Mode:
 
 LADDER: tuple[Mode, ...] = (
     Mode(
+        "unchecked",
+        "Unchecked / Claude Code only",
+        "No checker runs: Claude Code decides by itself. calu's rules still ask a human.",
+        AutoEscalate(unchecked=True),
+    ),
+    Mode(
         "checkers",
         "Checkers decide",
         "Only a checker's escalation waits for a human; what the checkers approve runs.",
@@ -88,6 +96,7 @@ SWITCHES: dict[str, str] = {
     "auto_escalate_commands": "commands",
     "auto_escalate_edits": "edits",
     "auto_escalate_subagents": "subagents",
+    "auto_escalate_unchecked": "unchecked",
 }
 """Boolean config option id -> field of `AutoEscalate`."""
 
@@ -103,6 +112,10 @@ SWITCH_NAMES: dict[str, tuple[str, str]] = {
     "auto_escalate_subagents": (
         "Confirm every subagent result",
         "The final result of every subagent waits for a human.",
+    ),
+    "auto_escalate_unchecked": (
+        "Run no checkers",
+        "No checker runs: Claude Code decides by itself. calu's rules still ask a human.",
     ),
 }
 """Boolean config option id -> (name, description) the client shows."""

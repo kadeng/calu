@@ -722,6 +722,7 @@ class ChatController(
         val f = flagsForLevel(level)
         supervisor.session("auto_escalate.set", buildJsonObject {
             put("commands", JsonPrimitive(f.commands)); put("edits", JsonPrimitive(f.edits)); put("subagents", JsonPrimitive(f.subagents))
+            put("unchecked", JsonPrimitive(f.unchecked))
         })
     }
 

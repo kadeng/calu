@@ -423,6 +423,10 @@ broken down or extended. Derived requirements and design decisions belong in
     note): "This would be another possible implementation that combines the slow / thorough
     and the fast ones into a combined one, no? I'm for it, but let's build the base ones
     first and get it to work."
+53. A supervision level without calu's checks (stated 2026-11-27): "In addition to Checkers
+    decide and Confirm everything, we need to have a mode where we do not have any checks
+    beyond what Claude Code does itself. Let's call it "Unchecked / Claude Code only". If it's
+    enabled, we just pass through every check and go with claude's decision."
 
 ## Soft goals and priorities
 

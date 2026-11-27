@@ -186,6 +186,7 @@ from calu.config import (
     PROVIDER_KEYS,
     PROVIDER_KEYS_BY_PREFIX,
     AutoEscalate,
+    ChangesConfig,
     CheckerConfig,
     Effort,
     default_model,
@@ -461,6 +462,10 @@ HANDED_BACK_EMPTY = (
 )
 """Why an empty final result of a subagent that handed its report back is not reviewed (the
 step's recorded reason, D252)."""
+RESULT_UNCHECKED = (
+    "Subagent result accepted without a check: the supervision level is unchecked."
+)
+"""The summary of a subagent result that no checker read (`auto_escalate.unchecked`)."""
 HANDBACK_POINTER = re.compile(r"This agent's report was delivered to you as a message from\b")
 """The start of the final result Claude Code (2.1.327) gives a foreground subagent that handed
 its report back: a pointer to the report, which counts as an empty result."""
@@ -742,7 +747,9 @@ class Session:
         self.transcript_inputs = transcript_inputs
         self.workspace = workspace
         self.settings = settings
-        self.config = settings.config
+        # A copy: `set_auto_escalate` changes the session's categories, and `settings` has
+        # to keep the stored ones so that `apply_settings` can tell whether they changed.
+        self.config = settings.config.model_copy()
         self.store = store
         self.project = project
         self.runner_factory = runner_factory
@@ -915,7 +922,7 @@ class Session:
             store,
             lambda: self._run_state,
             snapshot_root=lambda: self.snapshot_root,
-            changes=lambda: self.config.changes,
+            changes=self._changes_config,
             emit=self._emit_safely,
             store_call=self.recorder.attempt,
             add_checker_run=self.recorder.add_checker_run,
@@ -2797,10 +2804,23 @@ class Session:
             return ""
         return self._marks_notice(marks)
 
+    def _changes_config(self) -> ChangesConfig:
+        """Return the write-set settings as the write-set review has to read them now.
+
+        Returns:
+            `config.changes`; with `auto_escalate.unchecked` the same with `review` off,
+            because no checker runs then. The write set is still measured and recorded.
+        """
+        changes = self.config.changes
+        if self.config.auto_escalate.unchecked and changes.review:
+            return changes.model_copy(update={"review": False})
+        return changes
+
     def _marker_seen(self) -> None:
         """Start the honesty review an agent asked for with `REVIEW_MARKER` (D293).
 
-        Nothing happens with `honesty.mode` off, outside a run, or while such a review still
+        Nothing happens with `honesty.mode` off, with `auto_escalate.unchecked` (no checker
+        runs then, and this review is calu's own), outside a run, or while such a review still
         runs. A marker that follows the last one with no tool result in between starts no
         review; the main agent is told so (`MARKER_UNCHANGED`).
 
@@ -2808,6 +2828,8 @@ class Session:
         note for the main agent's next checked tool call.
         """
         if self.config.honesty.mode == "off" or self._marker_running:
+            return
+        if self.config.auto_escalate.unchecked:
             return
         if self._run_state.tg is None:
             return
@@ -3003,7 +3025,9 @@ class Session:
 
         Takes effect from the next check on: a step already waiting for a decision keeps the
         escalation it has. The change lives in the running session only -- it is not written to the
-        project's settings -- so a restart goes back to what `calu config` holds. Switching a
+        project's settings -- so a restart goes back to what `calu config` holds. A reload of the
+        settings keeps it, unless the stored categories themselves changed (`apply_settings`).
+        Switching a
         category off weakens the session, so the change goes into the audit log with the name of the
         client that asked for it (agent/records/PLAN.md D43); a change that changes nothing is not
         recorded.
@@ -3066,13 +3090,20 @@ class Session:
         `start`. A changed `traces` section ends the running trace file and, if tracing is on,
         starts a new one (`_follow_traces`).
 
+        The auto-escalation categories follow the stored ones only when the stored ones
+        changed. A client may have chosen other categories for this session
+        (`set_auto_escalate`), and a reload for another setting must not undo that choice.
+
         Args:
             settings: The newly loaded settings.
         """
         claude = self.config.claude
         traced = self._trace_settings()
+        auto = self.config.auto_escalate
+        if settings.config.auto_escalate != self.settings.config.auto_escalate:
+            auto = settings.config.auto_escalate
         self.settings = settings
-        self.config = settings.config.model_copy(update={"claude": claude})
+        self.config = settings.config.model_copy(update={"claude": claude, "auto_escalate": auto})
         self.rules = settings.rules
         self.policy = ToolPolicy(
             overrides=self.config.tool_routes, default=self.config.default_route
@@ -5000,6 +5031,10 @@ class Session:
         Args:
             result: The subagent's task and final result.
 
+        With `auto_escalate.unchecked` the result checker does not run and no checker run is
+        recorded: the result is accepted with the summary `RESULT_UNCHECKED`, or escalated if
+        `auto_escalate.subagents` is on as well.
+
         Returns:
             The note for the main agent ("" if the result was accepted without remarks or the
             review is disabled by `check_subagent_results = false`).
@@ -5126,16 +5161,28 @@ class Session:
         ):
             await self._pass_handed_back(step, step_id)
             return "", False
-        outcome = await self._review(result)
+        unchecked = self.config.auto_escalate.unchecked
+        if unchecked:
+            # No checker runs (requirement 53): the result is accepted as it is.
+            outcome = ResultOutcome(
+                review=ResultReview(
+                    verdict=ResultVerdict.ACCEPT, note="", summary=RESULT_UNCHECKED
+                )
+            )
+        else:
+            outcome = await self._review(result)
         review = outcome.review
         if self.config.auto_escalate.subagents and review.verdict is not ResultVerdict.ESCALATE:
             note = review.note.strip()
+            decided = (
+                "No checker ran: the supervision level is unchecked."
+                if unchecked
+                else f"The result checker decided {review.verdict.value}"
+                + (f": {note}" if note else ".")
+            )
             review = ResultReview(
                 verdict=ResultVerdict.ESCALATE,
-                note=(
-                    "Auto-escalation for subagent results is on. The result checker decided "
-                    f"{review.verdict.value}" + (f": {note}" if note else ".")
-                ),
+                note=f"Auto-escalation for subagent results is on. {decided}",
                 summary=review.summary,
             )
         escalated = review.verdict is ResultVerdict.ESCALATE
@@ -5150,7 +5197,7 @@ class Session:
             )
         )
         self._fold_if_due()
-        if step_id is not None:
+        if step_id is not None and not unchecked:
             await self.recorder.attempt(
                 "recording a checker run",
                 self.store.add_checker_run(

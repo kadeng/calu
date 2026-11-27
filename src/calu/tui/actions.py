@@ -242,7 +242,7 @@ class Actions:
         """Set the supervision level to a ladder mode of `calu.acp.modes`.
 
         Args:
-            mode_id: "checkers", "edits", "writes" or "everything".
+            mode_id: "unchecked", "checkers", "edits", "writes" or "everything".
 
         Returns:
             The outcome; not `ok` without a request for an unknown mode.

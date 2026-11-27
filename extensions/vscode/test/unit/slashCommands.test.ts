@@ -44,7 +44,7 @@ describe('completions', () => {
     expect(model).toMatchObject({ label: '/model', insert: '/model ', submit: false, kind: 'calu' });
     expect(completions('/model ', table).map((c) => c.label)).toEqual(['default', 'fable', 'opus', 'sonnet', 'haiku']);
     expect(completions('/model so', table)).toEqual([expect.objectContaining({ label: 'sonnet', insert: '/model sonnet', submit: true, kind: 'value' })]);
-    expect(completions('/level ', table).map((c) => c.label)).toEqual(['checkers', 'edits', 'writes', 'everything']);
+    expect(completions('/level ', table).map((c) => c.label)).toEqual(['unchecked', 'checkers', 'edits', 'writes', 'everything']);
     // Claude Code's permission mode (D247), in the order of its Shift+Tab.
     expect(completions('/mode ', table).map((c) => c.label)).toEqual(['default', 'acceptEdits', 'auto']);
     expect(completions('/mode acc', table)).toEqual([expect.objectContaining({ insert: '/mode acceptEdits', submit: true })]);

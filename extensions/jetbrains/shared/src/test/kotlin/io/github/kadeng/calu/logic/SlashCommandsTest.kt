@@ -50,7 +50,7 @@ class SlashCommandsTest {
         assertEquals(listOf("/model", "/model ", false, "calu"), listOf(model.label, model.insert, model.submit, model.kind))
         assertEquals(listOf("default", "fable", "opus", "sonnet", "haiku"), completions("/model ", table).map { it.label })
         assertEquals(listOf(Completion("sonnet", "The latest sonnet model", "value", "/model sonnet", true)), completions("/model so", table))
-        assertEquals(listOf("checkers", "edits", "writes", "everything"), completions("/level ", table).map { it.label })
+        assertEquals(listOf("unchecked", "checkers", "edits", "writes", "everything"), completions("/level ", table).map { it.label })
         // Claude Code's permission mode (D247), in the order of its Shift+Tab.
         assertEquals(listOf("default", "acceptEdits", "auto"), completions("/mode ", table).map { it.label })
     }

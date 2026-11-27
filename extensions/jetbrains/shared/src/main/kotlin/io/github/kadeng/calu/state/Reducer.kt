@@ -420,7 +420,7 @@ private fun reduceSession(state: ViewState, method: String, p: JsonObject): View
     }
     "auto_escalate.changed" -> {
         val s = p.objOrEmpty("settings")
-        state.copy(autoEscalate = AutoEscalateFlags(commands = s.bool("commands"), edits = s.bool("edits"), subagents = s.bool("subagents")))
+        state.copy(autoEscalate = AutoEscalateFlags(commands = s.bool("commands"), edits = s.bool("edits"), subagents = s.bool("subagents"), unchecked = s.bool("unchecked")))
     }
     "permission_mode.changed" -> p.str("mode")?.takeIf { it.isNotEmpty() }?.let { state.copy(permissionMode = it) } ?: state
     "honesty.update" -> state.copy(honesty = parseHonesty(p))

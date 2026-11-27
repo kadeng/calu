@@ -445,7 +445,7 @@ function buildQuickRow(): HTMLElement[] {
   const chip = honestyChip(view.honesty);
   const stored = honestyStoredNote(view.honesty, view.honestyStored);
   const storedTip = stored
-    ? ` calu's settings store the mode "${view.honestyStored}", which this session does not use (yet): a session reads a changed mode by itself; sessions started from now on use it.`
+    ? ` calu's settings store the mode "${view.honestyStored}", which this session does not use (yet). A session reads a changed mode by itself within seconds; if it does not, its settings could not be reloaded (after an update of calu, restart calu serve). Sessions started from now on use it.`
     : '';
   const honesty = actionButton('', 'honestyMenu', {
     class: `quiet-button honesty ${chip.kind}`,
@@ -568,7 +568,7 @@ function buildHonestyMenu(): HTMLElement {
       'div',
       'menu-note',
       stored
-        ? `calu's settings store "${view.honestyStored}"; this session still uses "${mode}". Sessions started from now on use the stored mode.`
+        ? `calu's settings store "${view.honestyStored}"; this session still uses "${mode}". If that stays so for more than a few seconds, the session could not reload its settings (after an update of calu, restart calu serve). Sessions started from now on use the stored mode.`
         : "The mode is stored in calu's settings; the running session reads the change and reports it here.",
       { role: 'presentation' },
     ),

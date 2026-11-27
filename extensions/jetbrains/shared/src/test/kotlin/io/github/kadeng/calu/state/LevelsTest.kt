@@ -1,4 +1,4 @@
-// Supervision levels: the auto-escalation switches as one of four named levels.
+// Supervision levels: the auto-escalation switches as one of five named levels.
 // Port of extensions/vscode/test/unit/levels.test.ts (same cases, same order).
 package io.github.kadeng.calu.state
 
@@ -9,10 +9,19 @@ import org.junit.jupiter.api.Test
 /** `LEVELS`, `levelOf`, `flagsForLevel` and `levelLabel`. */
 class LevelsTest {
     @Test
-    fun `are a ladder, each level includes the one before`() {
+    fun `are a ladder, no checkers first, then each level includes the one before`() {
         assertEquals(LEVEL_IDS, LEVELS.map { it.id })
         val count = { l: Level -> listOf(l.flags.commands, l.flags.edits, l.flags.subagents).count { it } }
-        assertEquals(listOf(0, 1, 2, 3), LEVELS.map(count))
+        assertEquals(listOf(0, 0, 1, 2, 3), LEVELS.map(count))
+        assertEquals(listOf(true, false, false, false, false), LEVELS.map { it.flags.unchecked })
+    }
+
+    @Test
+    fun `name the level without checkers, and tell it from Checkers decide`() {
+        assertEquals(AutoEscalateFlags(unchecked = true), flagsForLevel("unchecked"))
+        assertEquals("Unchecked / Claude Code only", levelLabel(AutoEscalateFlags(unchecked = true)))
+        assertEquals("custom", levelOf(AutoEscalateFlags(unchecked = true, edits = true)))
+        assertEquals("Custom: no checkers, confirm edits", levelLabel(AutoEscalateFlags(unchecked = true, edits = true)))
     }
 
     @Test

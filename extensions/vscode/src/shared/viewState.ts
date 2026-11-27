@@ -668,7 +668,7 @@ export function initialViewState(): ViewState {
     sessions: { list: [], attachedId: null, loaded: false },
     serverHelp: null,
     hints: [],
-    autoEscalate: { commands: false, edits: false, subagents: false },
+    autoEscalate: { commands: false, edits: false, subagents: false, unchecked: false },
     permissionMode: null,
     pause: { paused: false, until: null },
     honesty: null,
@@ -1886,7 +1886,7 @@ function reduce(state: ViewState, method: string, p: Record<string, unknown>): V
       const s = p.settings && typeof p.settings === 'object' ? (p.settings as Record<string, unknown>) : {};
       return {
         ...state,
-        autoEscalate: { commands: s.commands === true, edits: s.edits === true, subagents: s.subagents === true },
+        autoEscalate: { commands: s.commands === true, edits: s.edits === true, subagents: s.subagents === true, unchecked: s.unchecked === true },
       };
     }
     case 'pause.changed':

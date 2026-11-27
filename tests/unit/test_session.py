@@ -1475,8 +1475,8 @@ async def test_changing_the_auto_escalation_categories_is_recorded_with_who_aske
     assert store.setting_changes == [
         (
             "auto_escalate",
-            {"commands": False, "edits": False, "subagents": False},
-            {"commands": False, "edits": True, "subagents": False},
+            {"commands": False, "edits": False, "subagents": False, "unchecked": False},
+            {"commands": False, "edits": True, "subagents": False, "unchecked": False},
             "zed on the laptop",
         )
     ]
@@ -1511,6 +1511,44 @@ async def test_a_reloaded_configuration_records_the_categories_it_changed(tmp_pa
     # A reload that leaves them alone records nothing.
     await session.announce_auto_escalate(session.config.auto_escalate)
     assert len(store.setting_changes) == 1
+
+
+async def test_a_reload_for_another_setting_keeps_the_categories_a_client_chose(
+    tmp_path: Path,
+) -> None:
+    """A client's choice for the session survives a reload unless the stored categories changed.
+
+    The owner chose "Checkers decide" in the chat, then changed `honesty.mode`: the reload
+    for the mode put the stored categories back.
+    """
+    stored = AutoEscalate(commands=True, edits=True, subagents=True)
+    session, _rec, _store = make_session(tmp_path, [])
+    session.apply_settings(default_settings(tmp_path, Config(auto_escalate=stored)))
+    await session.set_auto_escalate(AutoEscalate(), client="vscode")
+
+    # Another setting changes: the session keeps what the client chose.
+    session.apply_settings(
+        default_settings(
+            tmp_path, Config(auto_escalate=stored, context=ContextConfig(narrate=False))
+        )
+    )
+    assert session.config.auto_escalate == AutoEscalate()
+    assert session.config.context.narrate is False
+
+    # The stored categories change: the session follows them.
+    session.apply_settings(
+        default_settings(tmp_path, Config(auto_escalate=AutoEscalate(edits=True)))
+    )
+    assert session.config.auto_escalate == AutoEscalate(edits=True)
+
+
+async def test_a_choice_made_before_the_first_reload_is_kept(tmp_path: Path) -> None:
+    """The session's categories are its own from the start, not the stored object."""
+    session, _rec, _store = make_session(tmp_path, [])
+    await session.set_auto_escalate(AutoEscalate(edits=True), client="vscode")
+    assert session.settings.config.auto_escalate == AutoEscalate()
+    session.apply_settings(default_settings(tmp_path, Config()))
+    assert session.config.auto_escalate == AutoEscalate(edits=True)
 
 
 async def test_the_session_beats_until_it_is_cancelled(tmp_path: Path) -> None:

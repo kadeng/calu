@@ -644,7 +644,9 @@ export class ChatHost implements Disposable {
       this.notice(
         'warning',
         `Honesty mode "${mode}" is stored in ${where}, but this session still reports "${this.chat.state.honesty?.mode ?? 'off'}": ` +
-          'it has not read the change. Sessions started from now on use the stored mode.',
+          'it has not read the change. A running session normally reads it within seconds. If it does not, ' +
+          'its settings could not be reloaded (the chat then shows an error line; after an update of calu, ' +
+          'restart `calu serve`). Sessions started from now on use the stored mode.',
       );
     }
   }

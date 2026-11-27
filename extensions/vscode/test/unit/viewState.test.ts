@@ -300,7 +300,7 @@ describe('header state', () => {
       ev('ui.model', { model: 'sonnet' }),
       ev('ui.usage', { context: { tokens: 50, max_tokens: 200, model: 'm' }, cost_usd: 1.5, num_turns: 4 }),
     ]);
-    expect(s.autoEscalate).toEqual({ commands: false, edits: true, subagents: false });
+    expect(s.autoEscalate).toEqual({ commands: false, edits: true, subagents: false, unchecked: false });
     expect(s.honesty).toMatchObject({
       mode: 'enforce',
       clean: false,

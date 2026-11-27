@@ -483,6 +483,7 @@ async def test_setting_the_auto_escalation_categories_tells_every_client(tmp_pat
                     "commands": True,
                     "edits": False,
                     "subagents": True,
+                    "unchecked": False,
                 }
                 # The running session really uses them, and the setter hears it too.
                 assert run.session.config.auto_escalate.commands is True

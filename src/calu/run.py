@@ -1132,13 +1132,26 @@ async def _run(
     )
     session.add_trace_secret(login_password, "password")
 
+    held_from: AutoEscalate | None = None
+    """What waited for a human before failed reloads held every checked step; None while no
+    such hold is in force."""
+
     async def on_settings(new: ProjectSettings) -> None:
         """Apply reloaded settings and report it.
+
+        A hold that failed reloads put on the session ends here: what waits for a human goes
+        back to what it was before the hold, or to the stored categories if those changed.
 
         Args:
             new: The newly loaded settings.
         """
+        nonlocal held_from
         before = session.config.auto_escalate
+        if held_from is not None and before == HOLD_ALL:
+            # The hold of the failed reloads ends: back to what the session had before it.
+            # `announce_auto_escalate` below records and announces the change.
+            session.config.auto_escalate = held_from
+        held_from = None
         session.apply_settings(new)
         # A client may offer the categories as a setting of its own (the ACP adapter maps them
         # to ACP's session modes), so it has to hear about a change made elsewhere -- and the
@@ -1161,7 +1174,8 @@ async def _run(
         The session keeps the settings it has, which may be laxer than what the database holds
         now. Invalid stored settings and a vanished project row hold the session at once, any
         other error after `HOLD_AFTER_FAILED_RELOADS` failures in a row: every checked step
-        then waits for a human until a reload succeeds (fail closed).
+        then waits for a human until a reload succeeds (fail closed). The categories the
+        session had before are remembered in `held_from`, and `on_settings` restores them.
 
         Args:
             exc: Why the reload failed.
@@ -1185,6 +1199,8 @@ async def _run(
             await emit(Log(level="error", message=message))
         if not hold or session.config.auto_escalate == HOLD_ALL:
             return
+        nonlocal held_from
+        held_from = session.config.auto_escalate
         try:
             await session.set_auto_escalate(HOLD_ALL, "session: configuration reload failed")
         except Exception:
