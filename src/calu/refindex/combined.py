@@ -34,7 +34,7 @@ class CombinedIndex:
     search: ReferenceIndex
     """The complete index, usually a `SearchIndex`; its unclear places are the candidates."""
     fast: ReferenceIndex | None = None
-    """An index whose confirmed referrers are taken as they are, e.g. an `LspIndex`. If it
+    """An index whose confirmed referrers are taken as they are, e.g. a `NavigatorIndex`. If it
     is a `Resolver` too, it is asked about every other candidate."""
     judge: MatchJudge | None = None
     """The model that reads what is left over."""

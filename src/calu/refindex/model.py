@@ -58,8 +58,9 @@ class Referrers:
     """Places that hold the unit's name and that the index could neither confirm nor dismiss.
     A checker has to read them."""
     dismissed: int = 0
-    """How many occurrences of the name the index left out: the definition itself, and the
-    ones in a comment or a string."""
+    """How many occurrences of the name the index left out, because they cannot refer to the
+    unit: the definition itself, mentions in comments, strings and documents, and the other
+    cases an index explains away."""
     complete: bool = True
     """False if the index did not look at every file (a limit was reached, or files could not
     be listed or read). Places may then be missing, and `problem` says why."""

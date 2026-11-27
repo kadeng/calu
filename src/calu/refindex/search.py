@@ -30,11 +30,20 @@ Hits it leaves out, and only counts:
   the name, or a dotted path ending with it ("pkg.mod.add_user"), is kept: that is how
   `getattr` and configuration files refer to code.
 
+For a method of a Python class there is one more rule. In another file, a method can only be
+reached through an object or a class: `store.save()`, `Store.save`, `super().save()`. A bare
+word `save` there is something else: a variable, a parameter, a keyword argument, another
+function. So in files other than the unit's own, a hit is kept only when a dot comes right
+before the name, or when it is a string that names the method. In the unit's own file every
+hit is kept: a class body can use its own methods by their bare name (`@save.setter`). On
+calu this rule removed about half of the hits for methods.
+
 Comments and strings are recognised only in Python files, with the standard library's
 `tokenize`. A Python file that cannot be tokenized, and every file of another language, is
 searched as plain text. No project code is imported or run.
 """
 
+import ast
 import io
 import os
 import re
@@ -116,6 +125,7 @@ class SearchIndex:
         dismissed = 0
         skipped = 0
         own = next((group for group in LANGUAGES if unit.path.endswith(group)), None)
+        method = is_method(self.root, unit)
         for name in files:
             if self.same_language and own is not None and not name.endswith(own):
                 continue
@@ -128,7 +138,10 @@ class SearchIndex:
             if name.lower().endswith(PROSE_SUFFIXES):
                 dismissed += sum(len(word.findall(line)) for line in text.splitlines())
                 continue
-            outside = _not_code(text, unit.name) if name.endswith((".py", ".pyi")) else None
+            outside = None
+            if name.endswith((".py", ".pyi")):
+                member_only = method and name != unit.path
+                outside = _not_code(text, unit.name, member_only=member_only)
             for number, line in enumerate(text.splitlines(), start=1):
                 for found in word.finditer(line):
                     if name == unit.path and number == unit.line:
@@ -197,16 +210,59 @@ class SearchIndex:
         return data.decode("utf-8", errors="replace")
 
 
-def _not_code(source: str, name: str) -> set[tuple[int, int]] | None:
-    """Find the occurrences of `name` in a Python source that are no code.
+def is_method(root: Path, unit: Unit) -> bool:
+    """Say whether a unit is a method of a class, by reading its Python file.
 
-    Those are the occurrences in a comment, and the ones in a string that is neither the name
+    Args:
+        root: The project directory.
+        unit: The unit.
+
+    Returns:
+        True if the unit's file is a Python file that parses, and the definition the unit's
+        dotted name names is directly inside a class. False otherwise, also for a function
+        nested in a function, which can be called by its bare name.
+    """
+    if not unit.path.endswith((".py", ".pyi")) or "." not in unit.qualname:
+        return False
+    try:
+        tree = ast.parse((root / unit.path).read_text("utf-8", errors="replace"))
+    except OSError, SyntaxError, ValueError:
+        return False
+    *parents, last = unit.qualname.split(".")
+    scope: ast.AST = tree
+    for part in parents:
+        found = next(
+            (
+                node
+                for node in getattr(scope, "body", [])
+                if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == part
+            ),
+            None,
+        )
+        if found is None:
+            return False
+        scope = found
+    return isinstance(scope, ast.ClassDef) and any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == last
+        for node in scope.body
+    )
+
+
+def _not_code(source: str, name: str, member_only: bool = False) -> set[tuple[int, int]] | None:
+    """Find the occurrences of `name` in a Python source that cannot refer to the unit.
+
+    Always: the occurrences in a comment, and the ones in a string that is neither the name
     itself nor a dotted path ending with it. A string that is the name can be a reference
     (`getattr(x, "name")`, a path in a configuration), so it stays.
+
+    With `member_only` also every occurrence in the code that does not come right after a
+    dot: the bare word `name` cannot reach a method from another file.
 
     Args:
         source: The file's text.
         name: The bare name.
+        member_only: Whether the unit is a method and the file is not the unit's own.
 
     Returns:
         (line, column) of each such occurrence, 1-based line and 0-based column; None if the
@@ -218,7 +274,15 @@ def _not_code(source: str, name: str) -> set[tuple[int, int]] | None:
         tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
     except tokenize.TokenError, SyntaxError, ValueError:
         return None
+    previous = ""
     for token in tokens:
+        if token.type == tokenize.NAME and token.string == name:
+            if member_only and previous != ".":
+                found.add(token.start)
+            previous = token.string
+            continue
+        if token.type not in (tokenize.NL, tokenize.NEWLINE, tokenize.COMMENT):
+            previous = token.string
         if token.type == tokenize.COMMENT:
             pass
         elif token.type in (tokenize.STRING, tokenize.FSTRING_MIDDLE):

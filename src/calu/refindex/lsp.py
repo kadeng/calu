@@ -1,35 +1,39 @@
-"""The fast reference index: it asks a language server.
+"""A code navigator that asks a language server (`calu.refindex.navigator.CodeNavigator`).
 
-A language server is the program an editor uses for "find all references". It understands
-one language well, including the types of variables, so its answers are exact. This module
-starts such a server and asks it which code refers to a given function, method or class.
-The default server is basedpyright, for Python.
+A language server is the program an editor uses for "find all references" and "go to
+definition". It understands one language well, including the types of variables. The
+default here is basedpyright, for Python.
 
-How it works:
+`LspNavigator` starts the server as a child process and talks to it in the Language Server
+Protocol over its standard input and output. It answers the navigator's questions with these
+requests:
 
-1. It starts the server as a child process and talks to it over its standard input and
-   output, in the Language Server Protocol.
-2. It waits until the server says that it has read the project (`LspIndex.ready_log`).
-3. For a question it asks the server for the references of the unit.
-4. It also asks for the references of every base-class or Protocol method that the unit
-   implements. The server files a call like `store.save()` under the base method when
-   `store` is only known by its base type, so those calls would otherwise be missed.
+| Question | Request of the protocol |
+|---|---|
+| `references` | `textDocument/references`, without the declaration |
+| `definitions` | `textDocument/definition` |
+| `implementations` | `textDocument/implementation` |
+| `symbols` | `workspace/symbol`, keeping functions and methods of exactly that name |
+| `changed` | `workspace/didChangeWatchedFiles` |
+
+Before each question about a file the server gets the file's present text
+(`textDocument/didOpen`, and `didClose` after the answer), so the answer is about the file as
+it is on disk now, also when it changed since the server read it.
 
 Two things were measured with basedpyright 1.40.2 on calu's own code and shaped this module
 (`spikes/RESULTS.md`, "The reference index"):
 
-- A server that has not finished reading the project answers with an empty list, and no
-  error. The same happens for about two seconds after it was told about a new file. An
-  empty list could be mistaken for "nothing refers to this". So this module marks an answer
-  as not complete when the server never reported that it was ready, and it waits `SETTLE_S`
-  after `changed`.
-- The server never says "I could not work this out". A call on a variable of unknown type,
-  a name inside a string, and code in another language are simply absent from its answer.
-  The word search (`calu.refindex.search`) is the index that misses nothing.
+- A server that has not finished reading the project answers with an empty list and no
+  error. So the navigator is only `ready` after the server's log message that it has read
+  the project (`ready_log`).
+- For about two seconds after it was told about a new file, the server still answers without
+  it. So after `changed` the next question waits `SETTLE_S`.
 
-Safety: the server reads files that the supervised coding agent writes. This module runs
-the command it is given and nothing more. Whoever creates an `LspIndex` decides which user
-and which sandbox the server runs in.
+`lsp_index` builds the reference index on this navigator (`NavigatorIndex`).
+
+Safety: the server reads files that the supervised coding agent writes. This module runs the
+command it is given and nothing more. Whoever creates the navigator decides which user and
+which sandbox the server runs in.
 """
 
 import json
@@ -44,9 +48,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-import anyio
-
-from calu.refindex.model import PLACE_TEXT_CHARS, Place, Referrers, Resolution, Unit
+from calu.refindex.navigator import NavigatorError, NavigatorIndex, Position, name_column
 
 BASEDPYRIGHT = ("basedpyright-langserver", "--stdio")
 """The command of the Python language server the index was measured with."""
@@ -69,7 +71,7 @@ METHOD_KINDS = frozenset({6, 12})
 """`SymbolKind` Method and Function of the protocol."""
 
 
-class LspError(Exception):
+class LspError(NavigatorError):
     """The language server did not answer a request, or answered with an error."""
 
 
@@ -260,11 +262,11 @@ class LspClient:
 
 
 @dataclass
-class LspIndex:
-    """A reference index that asks a language server (see the module docstring).
+class LspNavigator:
+    """A code navigator on a language server (see the module docstring).
 
-    The server is started with the first question and kept until `close`. Use it as a context
-    manager, or call `close`.
+    The server is started by `start` and kept until `close`. The methods block; they must not
+    be called from two threads at once (`NavigatorIndex` calls them one at a time).
     """
 
     root: Path
@@ -273,47 +275,144 @@ class LspIndex:
     """The server's command line; it must speak the protocol on stdin and stdout."""
     ready_log: str = BASEDPYRIGHT_READY
     """A regular expression for the log message with which the server says that it has read
-    the project; "" for a server without such a message, whose answers are then never called
-    complete."""
+    the project. "" for a server without such a message: it is then never `ready`."""
     language: str = "python"
     """The protocol's language id of the files the server reads."""
     suffixes: tuple[str, ...] = (".py", ".pyi")
-    """The file names the server covers; a place in another file is never resolved."""
+    """The endings of the file names the server understands."""
     _client: LspClient | None = field(default=None, init=False, repr=False)
     _ready: bool = field(default=False, init=False, repr=False)
     _quiet_until: float = field(default=0.0, init=False, repr=False)
-    _problem: str = field(default="", init=False, repr=False)
-    _one_at_a_time: anyio.Lock = field(default_factory=anyio.Lock, init=False, repr=False)
 
-    def __enter__(self) -> LspIndex:
-        """Enter the context; the server starts with the first question.
+    @property
+    def ready(self) -> bool:
+        """Say whether the server runs and has reported that it has read the project.
 
         Returns:
-            The index.
+            True when both hold.
         """
-        return self
+        return self._client is not None and self._ready
 
-    def __exit__(self, *_exc: object) -> None:
-        """End the server process.
+    def covers(self, path: str) -> bool:
+        """Say whether the server understands a file, by the ending of its name.
 
         Args:
-            *_exc: The exception of the block, unused.
-        """
-        self.close()
+            path: The file, relative to the project directory.
 
-    def close(self) -> None:
-        """End the server process, if one runs. Never raises."""
-        if self._client is not None:
-            self._client.close()
-        self._client = None
-        self._ready = False
+        Returns:
+            True if the name ends with one of `suffixes`.
+        """
+        return path.endswith(self.suffixes)
+
+    def start(self) -> None:
+        """Start and initialize the server if it does not run, then wait for it to be ready.
+
+        Side effects: starts the process, sends `initialize` and `initialized`, waits up to
+        `START_TIMEOUT_S` for the ready message. A server that does not send it keeps
+        running and is not `ready`. Also waits until `SETTLE_S` after the last `changed`.
+
+        Raises:
+            LspError: If the server is not installed, cannot be started or does not answer
+                `initialize`.
+        """
+        if self._client is None:
+            if shutil.which(self.command[0]) is None:
+                raise LspError(f"The language server {self.command[0]} is not installed.")
+            client = LspClient(self.command, self.root)
+            client.start()
+            try:
+                client.request("initialize", self._initialize(), timeout=START_TIMEOUT_S)
+                client.notify("initialized", {})
+            except LspError:
+                client.close()
+                raise
+            self._client = client
+            self._ready = bool(self.ready_log) and client.wait_for_log(
+                self.ready_log, START_TIMEOUT_S
+            )
+        wait = self._quiet_until - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+
+    def references(self, at: Position) -> list[Position]:
+        """List the uses of the name at `at`, without its definition.
+
+        Args:
+            at: The position of a name.
+
+        Returns:
+            The positions inside the project.
+
+        Raises:
+            LspError: If the file cannot be read or the server fails.
+        """
+        answer = self._ask(
+            "textDocument/references", at, {"context": {"includeDeclaration": False}}
+        )
+        return [spot for spot in self._positions(answer) if not spot.outside]
+
+    def definitions(self, at: Position) -> list[Position]:
+        """List where the name at `at` is defined.
+
+        Args:
+            at: The position of a name.
+
+        Returns:
+            The definitions, inside or outside the project.
+
+        Raises:
+            LspError: If the file cannot be read or the server fails.
+        """
+        return self._positions(self._ask("textDocument/definition", at))
+
+    def implementations(self, at: Position) -> list[Position]:
+        """List the methods that implement or override the method defined at `at`.
+
+        Args:
+            at: The position of a method's name in its definition.
+
+        Returns:
+            The positions inside the project.
+
+        Raises:
+            LspError: If the file cannot be read or the server fails.
+        """
+        answer = self._ask("textDocument/implementation", at)
+        return [spot for spot in self._positions(answer) if not spot.outside]
+
+    def symbols(self, name: str) -> list[Position]:
+        """List the functions and methods whose name is exactly `name`.
+
+        The server answers with the line of each definition. The column of the name on that
+        line is looked up in the file.
+
+        Args:
+            name: The bare name.
+
+        Returns:
+            The positions of their names inside the project.
+
+        Raises:
+            LspError: If the server fails.
+        """
+        found: list[Position] = []
+        for symbol in self._client_or_fail().request("workspace/symbol", {"query": name}) or []:
+            if symbol.get("name") != name or symbol.get("kind") not in METHOD_KINDS:
+                continue
+            spots = self._positions([symbol.get("location") or {}])
+            if not spots or spots[0].outside:
+                continue
+            column = name_column(self.root, spots[0].path, spots[0].line, name)
+            if column is not None:
+                found.append(Position(spots[0].path, spots[0].line, column))
+        return found
 
     def changed(self, paths: list[str]) -> None:
         """Tell the server that files were written, created or deleted.
 
-        Side effects: sends `workspace/didChangeWatchedFiles` if the server runs, and makes
-        the next question wait until `SETTLE_S` after now. Never raises: a server that
-        cannot be told is started again with the next question.
+        Side effects: sends `workspace/didChangeWatchedFiles` if the server runs; the next
+        question waits until `SETTLE_S` after now. A server that cannot be told is stopped
+        and started again with the next question. Never raises.
 
         Args:
             paths: The files, relative to the project directory.
@@ -331,306 +430,120 @@ class LspIndex:
             self.close()
         self._quiet_until = time.monotonic() + SETTLE_S
 
-    async def referrers(self, unit: Unit) -> Referrers:
-        """Ask the server for the places that reference `unit`, in a worker thread.
+    def close(self) -> None:
+        """Stop the server, if it runs. Never raises."""
+        if self._client is not None:
+            self._client.close()
+        self._client = None
+        self._ready = False
 
-        Side effects: those of `find`. One question at a time: the conversation with the
-        server is not shared between threads.
-
-        Args:
-            unit: The unit.
-
-        Returns:
-            As `find`.
-        """
-        async with self._one_at_a_time:
-            return await anyio.to_thread.run_sync(self.find, unit)
-
-    def find(self, unit: Unit) -> Referrers:
-        """Ask the server for the places that reference `unit`; blocks while it waits.
-
-        Side effects: starts the server if it does not run, waits for it to be ready and for
-        `SETTLE_S` after the last `changed`, opens the unit's file in the server with its
-        present text, and reads files of the project for the text of each place.
-
-        Args:
-            unit: The unit; its `line` must be known.
+    def _initialize(self) -> dict[str, Any]:
+        """Build the parameters of the `initialize` request.
 
         Returns:
-            The places the server reports as references, also through a base class or
-            Protocol method that the unit implements; none unclear. Not `complete`, with the
-            reason, when the server is not installed, did not start, did not report ready,
-            failed, or the unit's name is not on its line.
+            The process id, the project directory and the client's capabilities: the four
+            requests the navigator uses.
         """
-        try:
-            client = self._started()
-            wait = self._quiet_until - time.monotonic()
-            if wait > 0:
-                time.sleep(wait)
-            column = self._column(unit)
-            found = self._references(client, unit.path, unit.line, column)
-            for path, line, col in self._bases(client, unit, column):
-                found |= self._references(client, path, line, col)
-        except LspError as exc:
-            return Referrers(complete=False, problem=str(exc))
-        found.discard((unit.path, unit.line, column))
-        places = tuple(self._place(*spot) for spot in sorted(found))
-        if not self._ready:
-            return Referrers(referrers=places, complete=False, problem=self._problem)
-        return Referrers(referrers=places)
+        return {
+            "processId": os.getpid(),
+            "rootUri": self.root.as_uri(),
+            "workspaceFolders": [{"uri": self.root.as_uri(), "name": self.root.name}],
+            "capabilities": {
+                "textDocument": {"references": {}, "implementation": {}, "definition": {}},
+                "workspace": {"symbol": {}, "workspaceFolders": True},
+            },
+        }
 
-    async def resolve(self, place: Place, unit: Unit) -> Resolution:
-        """Say what the name at `place` resolves to, in a worker thread.
-
-        Side effects: those of `resolve_blocking`. One question at a time.
-
-        Args:
-            place: An occurrence of the unit's name.
-            unit: The unit that was asked about.
-
-        Returns:
-            As `resolve_blocking`.
-        """
-        async with self._one_at_a_time:
-            return await anyio.to_thread.run_sync(self.resolve_blocking, place, unit)
-
-    def resolve_blocking(self, place: Place, unit: Unit) -> Resolution:
-        """Ask the server where the name at `place` is defined, and compare with `unit`.
-
-        Side effects: starts the server if it does not run, and sends the file's present
-        text to it (`textDocument/didOpen`, then `didClose`).
-
-        Args:
-            place: An occurrence of the unit's name.
-            unit: The unit that was asked about; its `line` must be known.
-
-        Returns:
-            `UNIT` if a definition the server names is the unit's; `OTHER` if it names
-            definitions and none is the unit's (also one outside the project); `UNKNOWN` if
-            it names none, the file is not one the server covers, the server is not ready
-            or fails. A call through a base class resolves to the base method and is
-            therefore `OTHER` here: `find` is what reports those calls.
-        """
-        if not place.path.endswith(self.suffixes):
-            return Resolution.UNKNOWN
-        try:
-            client = self._started()
-            if not self._ready:
-                return Resolution.UNKNOWN
-            uri = (self.root / place.path).as_uri()
-            text = (self.root / place.path).read_text("utf-8", errors="replace")
-            document = {"uri": uri, "languageId": self.language, "version": 1, "text": text}
-            client.notify("textDocument/didOpen", {"textDocument": document})
-            try:
-                answer = client.request(
-                    "textDocument/definition",
-                    {
-                        "textDocument": {"uri": uri},
-                        "position": {"line": place.line - 1, "character": place.column},
-                    },
-                )
-            finally:
-                client.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
-        except LspError, OSError:
-            return Resolution.UNKNOWN
-        items = answer if isinstance(answer, list) else [answer] if answer else []
-        if not items:
-            return Resolution.UNKNOWN
-        for item in items:
-            spot = self._spot(item)
-            if spot is not None and spot[:2] == (unit.path, unit.line):
-                return Resolution.UNIT
-        return Resolution.OTHER
-
-    def _started(self) -> LspClient:
-        """Return the running server, starting and initializing it first if needed.
-
-        Side effects: starts the process, sends `initialize` and `initialized`, waits for the
-        ready message; sets `_ready` and `_problem`.
+    def _client_or_fail(self) -> LspClient:
+        """Return the running server.
 
         Returns:
             The client.
 
         Raises:
-            LspError: If the server is not installed, cannot be started or does not answer
-                `initialize`.
+            LspError: If the server was not started.
         """
-        if self._client is not None:
-            return self._client
-        if shutil.which(self.command[0]) is None:
-            raise LspError(f"No fast index: {self.command[0]} is not installed.")
-        client = LspClient(self.command, self.root)
-        client.start()
-        try:
-            client.request(
-                "initialize",
-                {
-                    "processId": os.getpid(),
-                    "rootUri": self.root.as_uri(),
-                    "workspaceFolders": [{"uri": self.root.as_uri(), "name": self.root.name}],
-                    "capabilities": {
-                        "textDocument": {
-                            "references": {},
-                            "implementation": {},
-                            "definition": {},
-                        },
-                        "workspace": {"symbol": {}, "workspaceFolders": True},
-                    },
-                },
-                timeout=START_TIMEOUT_S,
-            )
-            client.notify("initialized", {})
-        except LspError:
-            client.close()
-            raise
-        self._client = client
-        self._ready = bool(self.ready_log) and client.wait_for_log(self.ready_log, START_TIMEOUT_S)
-        self._problem = (
-            ""
-            if self._ready
-            else "The language server did not report that it has read the project, so "
-            "references may be missing."
-        )
-        return client
+        if self._client is None:
+            raise LspError("The language server is not running.")
+        return self._client
 
-    def _column(self, unit: Unit) -> int:
-        """Find the column of the unit's name on the line of its definition.
+    def _ask(self, method: str, at: Position, extra: dict[str, Any] | None = None) -> Any:
+        """Ask one question about a position, with the file's present text sent first.
+
+        Side effects: `textDocument/didOpen` with the file's text before the request and
+        `textDocument/didClose` after it.
 
         Args:
-            unit: The unit.
+            method: The protocol method.
+            at: The position.
+            extra: Further parameters of the request.
 
         Returns:
-            The 0-based column.
-
-        Raises:
-            LspError: If the file cannot be read or the name is not on that line.
-        """
-        try:
-            lines = (self.root / unit.path).read_text("utf-8", errors="replace").splitlines()
-            found = re.search(rf"(?<![\w]){re.escape(unit.name)}(?![\w])", lines[unit.line - 1])
-        except OSError, IndexError:
-            found = None
-        if found is None or unit.line < 1:
-            raise LspError(f"{unit.name} is not on line {unit.line} of {unit.path}.")
-        return found.start()
-
-    def _references(
-        self, client: LspClient, path: str, line: int, column: int
-    ) -> set[tuple[str, int, int]]:
-        """Ask for the references of the name at one position.
-
-        Side effects: sends the file's present text to the server (`textDocument/didOpen`,
-        then `didClose`), so that the answer is about the file as it is now.
-
-        Args:
-            client: The server.
-            path: The file, relative to the project directory.
-            line: The 1-based line.
-            column: The 0-based column.
-
-        Returns:
-            (path, 1-based line, 0-based column) of each reference inside the project.
+            The `result` of the answer.
 
         Raises:
             LspError: If the file cannot be read or the server fails.
         """
-        uri = (self.root / path).as_uri()
+        client = self._client_or_fail()
+        uri = (self.root / at.path).as_uri()
         try:
-            text = (self.root / path).read_text("utf-8", errors="replace")
+            text = (self.root / at.path).read_text("utf-8", errors="replace")
         except OSError as exc:
-            raise LspError(f"{path} cannot be read ({exc}).") from exc
+            raise LspError(f"{at.path} cannot be read ({exc}).") from exc
         document = {"uri": uri, "languageId": self.language, "version": 1, "text": text}
         client.notify("textDocument/didOpen", {"textDocument": document})
         try:
-            answer = client.request(
-                "textDocument/references",
+            return client.request(
+                method,
                 {
                     "textDocument": {"uri": uri},
-                    "position": {"line": line - 1, "character": column},
-                    "context": {"includeDeclaration": False},
+                    "position": {"line": at.line - 1, "character": at.column},
+                    **(extra or {}),
                 },
             )
         finally:
             client.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
-        return {spot for item in answer or [] if (spot := self._spot(item)) is not None}
 
-    def _bases(self, client: LspClient, unit: Unit, column: int) -> list[tuple[str, int, int]]:
-        """Find the base-class and Protocol methods that the unit implements.
-
-        The server counts a call through a base class or a Protocol as a reference of the
-        base method. So every other method or function of the same bare name is asked for
-        its implementations, and one that names the unit is such a base.
+    def _positions(self, answer: Any) -> list[Position]:
+        """Turn the locations of an answer into positions.
 
         Args:
-            client: The server.
-            unit: The unit.
-            column: The column of the unit's name on its line.
+            answer: A `Location`, a `LocationLink`, a list of them, or null.
 
         Returns:
-            (path, 1-based line, 0-based column) of each such base method.
-
-        Raises:
-            LspError: If the server fails.
+            One position per location with a file URI; a location outside the project gets
+            its absolute path and `outside` set.
         """
-        own = (unit.path, unit.line, column)
-        bases: list[tuple[str, int, int]] = []
-        for symbol in client.request("workspace/symbol", {"query": unit.name}) or []:
-            if symbol.get("name") != unit.name or symbol.get("kind") not in METHOD_KINDS:
+        items = answer if isinstance(answer, list) else [answer] if answer else []
+        found: list[Position] = []
+        for item in items:
+            uri = item.get("uri") or item.get("targetUri") or ""
+            span = item.get("range") or item.get("targetSelectionRange") or {}
+            parsed = urlparse(uri)
+            if parsed.scheme != "file" or "start" not in span:
                 continue
-            spot = self._spot(symbol.get("location") or {})
-            if spot is None or spot == own:
-                continue
-            path, line, _ = spot
+            line, column = int(span["start"]["line"]) + 1, int(span["start"]["character"])
+            path = Path(unquote(parsed.path)).resolve()
             try:
-                at = self._column(Unit(path, unit.name, line))
-            except LspError:
-                continue
-            answer = client.request(
-                "textDocument/implementation",
-                {
-                    "textDocument": {"uri": (self.root / path).as_uri()},
-                    "position": {"line": line - 1, "character": at},
-                },
-            )
-            if any(self._spot(item) == own for item in answer or []):
-                bases.append((path, line, at))
-        return bases
+                found.append(Position(str(path.relative_to(self.root.resolve())), line, column))
+            except ValueError:
+                found.append(Position(str(path), line, column, outside=True))
+        return found
 
-    def _spot(self, location: dict[str, Any]) -> tuple[str, int, int] | None:
-        """Turn a protocol location into a place inside the project.
 
-        Args:
-            location: A `Location` or `LocationLink` of the protocol.
+def lsp_index(
+    root: Path,
+    command: tuple[str, ...] = BASEDPYRIGHT,
+    ready_log: str = BASEDPYRIGHT_READY,
+) -> NavigatorIndex:
+    """Build the reference index on a language server.
 
-        Returns:
-            (path relative to the project directory, 1-based line, 0-based column); None for
-            a location outside the project or without a file URI.
-        """
-        uri = location.get("uri") or location.get("targetUri") or ""
-        span = location.get("range") or location.get("targetSelectionRange") or {}
-        parsed = urlparse(uri)
-        if parsed.scheme != "file" or "start" not in span:
-            return None
-        try:
-            path = Path(unquote(parsed.path)).resolve().relative_to(self.root.resolve())
-        except ValueError:
-            return None
-        return str(path), int(span["start"]["line"]) + 1, int(span["start"]["character"])
+    Args:
+        root: The project directory.
+        command: The server's command line.
+        ready_log: Its ready message (`LspNavigator.ready_log`).
 
-    def _place(self, path: str, line: int, column: int) -> Place:
-        """Build the place of one reference, with the text of its line.
-
-        Args:
-            path: The file, relative to the project directory.
-            line: The 1-based line.
-            column: The 0-based column.
-
-        Returns:
-            The place; its text is "" if the file or the line cannot be read.
-        """
-        try:
-            lines = (self.root / path).read_text("utf-8", errors="replace").splitlines()
-            text = lines[line - 1].strip()[:PLACE_TEXT_CHARS]
-        except OSError, IndexError:
-            text = ""
-        return Place(path, line, column, text)
+    Returns:
+        The index; the server starts with its first question.
+    """
+    return NavigatorIndex(root, LspNavigator(root, command, ready_log))

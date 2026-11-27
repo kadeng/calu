@@ -10,8 +10,12 @@ that one can be exchanged for another (the owner's requirement 52):
 - `SearchIndex` (`search.py`): a word search over the project's files. Slow, and it misses
   nothing. It cannot tell which occurrences really mean the unit, so it reports them all as
   "unclear".
-- `LspIndex` (`lsp.py`): asks a language server. Fast and exact for one language. What the
-  server cannot work out is silently missing.
+- `NavigatorIndex` (`navigator.py`): asks a code navigator, a program that answers
+  "where is this name used, where is it defined" for one language. The interface
+  `CodeNavigator` names only those questions, so the program can be exchanged.
+  `lsp.LspNavigator` is the one built: a language server, basedpyright by default
+  (`lsp.lsp_index`). Fast and exact for one language; what it cannot work out is silently
+  missing.
 - `CbmIndex` (`cbm.py`): asks the code graph of codebase-memory-mcp. No setup, many
   languages, and it finds fewer referrers than a language server.
 - `CombinedIndex` (`combined.py`): the word search first, then a fast index, then a model

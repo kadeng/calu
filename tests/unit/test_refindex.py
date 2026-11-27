@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from calu.refindex import SearchIndex, Unit
+from calu.refindex.search import is_method
 
 MODULE = '''"""Users. add_user is described here."""
 
@@ -122,3 +123,51 @@ def test_by_default_only_files_of_the_units_own_language_are_searched(project: P
     word is not read. Whether another language calls the unit is left for later."""
     found = places(SearchIndex(project), Unit("src/users.py", "Users.add_user", line=5))
     assert ("run.sh", 1) not in found and ("src/main.py", 1) in found
+
+
+def test_a_method_is_looked_for_only_after_a_dot_or_in_a_string_in_other_files(
+    tmp_path: Path,
+) -> None:
+    """In another file a method is reached as `x.name`, `Class.name` or by its name in a
+    string; the bare word there is a variable, a keyword argument or another function, and is
+    left out. In the method's own file every use stays, because a class body can use its own
+    methods by their bare name."""
+    (tmp_path / "store.py").write_text(
+        "class Store:\n"
+        "    @property\n"
+        "    def save(self):\n"
+        "        return 1\n"
+        "    @save.setter\n"
+        "    def save(self, value): ...\n",
+        "utf-8",
+    )
+    (tmp_path / "use.py").write_text(
+        "save = 1\n"
+        "store.save()\n"
+        "run(save=True)\n"
+        "Store.save\n"
+        "getattr(store, 'save')\n"
+        "def save(): ...\n",
+        "utf-8",
+    )
+    answer = SearchIndex(tmp_path).find(Unit("store.py", "Store.save", line=3))
+    assert [(p.path, p.line) for p in answer.unclear] == [
+        ("store.py", 5),
+        ("store.py", 6),
+        ("use.py", 2),
+        ("use.py", 4),
+        ("use.py", 5),
+    ]
+    function = SearchIndex(tmp_path).find(Unit("use.py", "save", line=6))
+    assert ("use.py", 1) in [(p.path, p.line) for p in function.unclear]
+
+
+def test_only_a_method_directly_in_a_class_counts_as_a_method(tmp_path: Path) -> None:
+    """A function nested in a function is called by its bare name, so it is no method."""
+    (tmp_path / "m.py").write_text(
+        "class A:\n    def f(self):\n        def g(): ...\n        return g()\n", "utf-8"
+    )
+    assert is_method(tmp_path, Unit("m.py", "A.f"))
+    assert not is_method(tmp_path, Unit("m.py", "A.f.g"))
+    assert not is_method(tmp_path, Unit("m.py", "A.missing"))
+    assert not is_method(tmp_path, Unit("m.py", "f"))
