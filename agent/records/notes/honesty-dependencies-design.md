@@ -213,6 +213,54 @@ Known gaps of every static index: dynamic dispatch, `getattr`, dependency inject
 started by name from another language. The threat model is an agent that drifts, not a
 determined attacker (honesty spec, section 1). The name search covers part of these gaps.
 
+### Search first, then explain away (the owner's idea, 2026-11-27)
+
+The owner: "How about combining free-form search and an LSP or other kind of index in a novel
+way. If we have a method called SomeClass.add_user. We can now do a fulltext search for all
+definitions and uses of it, but immediately remove everything we find where we can explain it
+away because the LSP or code index tells us this is an add_user with a different qualified
+name. The rest separates in clear cases ( LSP agrees ) and unclear cases. Only the latter
+need to be looked at in detail."
+
+Claude's reading and proposal, not yet decided by the owner. The index is asked the forward
+question about each hit of the word search ("what does the name at this place resolve to"),
+and never the reverse question ("list the referrers"):
+
+    hits = every place the bare name occurs as a word            (complete, far too many)
+    for each hit:
+        resolves to the changed unit                             -> referrer
+        resolves to a unit the changed one overrides or
+          implements (a base class, a Protocol)                  -> referrer
+        resolves to another unit                                 -> explained away
+        in a comment or a docstring                              -> explained away
+        in a string that is the name or a dotted path to it      -> unclear
+        no resolution (unknown receiver, missing dependency,
+          no index for the language, index not ready)            -> unclear
+    unclear hits go to the checker with the unit around them
+
+What this changes against sections 3 and 4:
+
+- **A weak or missing index fails safe.** An index is used to dismiss a hit or to confirm
+  it, so an index that knows nothing leaves the hit unclear. Today's design reads a missing
+  edge, or the empty list of a language server that is not ready, as "no referrer".
+- **One procedure for every language.** With a language server the unclear rest is small.
+  With a graph tool it is larger. With no index every hit is unclear, which is the name
+  search of the owner's decision 3.
+- **A dismissal needs proof.** Only a resolution by scope or type counts. A graph tool's
+  match by bare name (41 of 100 call edges of codebase-memory-mcp in the spike) proves
+  nothing and leaves the hit unclear. A wrong resolution is the one way this procedure
+  misses a referrer.
+- **Strings are where configuration lives.** A Hydra `_target_: pkg.mod.Class` is a dotted
+  path in a YAML string, so it comes out unclear and the checker reads it. No tool of the
+  spike links it.
+
+The spike's numbers for the 50 sample functions (basedpyright, word search over `src/` and
+`tests/`): 6,015 hits. 284 are references the server confirms, and 27 more go through a base
+class or a Protocol. About 2,400 resolve to another unit of the same name and about 2,490 are
+in strings or docstrings: both explained away. 445 have an unresolved receiver: unclear,
+about 9 per function, most of them on the ten common names. Not measured: how many of the
+hits in strings are the name itself or a dotted path, and the time of one resolution per hit.
+
 ## 5. How calu and Claude Code use the index
 
 **What the owner has fixed (2026-11-27):** "I would like the honesty checker to still work
