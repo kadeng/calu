@@ -130,6 +130,12 @@ one:
   escalation page, and the full-screen terminal client. The line client and ACP show the
   suggestions as text and offer `/rule`.
 
+As built (2026-11-27): the VSCode chat, the web pane and the escalation page have the field
+with duration and scope. The full-screen client's cards have no form fields, so it shows the
+suggestion as the `/rule` command that adds it; the line client prints it with the
+escalation. The PyCharm card has the field, always for this session and one day. ACP is not
+changed.
+
 ## 6. The built-in protections (the owner chose B)
 
 The owner's example asks for something the rules cannot give as designed above. calu escalates

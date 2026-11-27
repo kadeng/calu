@@ -63,9 +63,12 @@ feature must work end to end in the Cua desktop before the owner tests by hand.
 - Step 4 is done: the pane "Temporary rules" in the web settings (`228949d`, POST
   `/temporary-rules`) and the card in the VSCode settings dialog (`684b406`); both tried in
   the Cua desktop (test plan, section S).
-- Next: step 5 (a suggested rule in the checkers' answer and in the escalation dialogs of the
-  VSCode chat, the web pane, the escalation page and the full-screen client; report to the
-  owner after it), then step 6 (documentation), then the owner's issue report below.
+- Step 5 is done (`a88f5c9` server, `853e15c` chat, `e650e3b` escalation page, `c696e2d`
+  terminal clients, `c134966` PyCharm): `StepVerdict.suggested_rule`,
+  `EscalationRequest.suggested_rule`, and a rule field in the escalation dialogs. What
+  differs from the design is at the end of the design's section 5. Tried in the Cua desktop
+  in the VSCode chat (test plan, section T); the PyCharm card not in the IDE.
+- Next: step 6 (documentation, the PLAN decision), then the owner's issue report below.
 
 **The owner's list of 2026-11-26 evening:**
 
