@@ -69,6 +69,25 @@ feature must work end to end in the Cua desktop before the owner tests by hand.
 - Web interface resume: fixed in `1aa22b2` (live view of an ended session, the session list,
   the pane of `calu web --sudo`); test plan section Q.
 
+**The owner's issue report of 2026-11-27, to fix after the temporary rules (their order):**
+"Did you test and improve session stop and resume behavior? Both if an escalation times out
+or when a calu serve process was ended and started again, sessions in the IDE had issues to
+resume. I sometimes got this to work, but it was not smooth, and it's not clear to me why
+some methods worked while others refused to. There are a lot of ways to resume sessions, and
+this is also confusing." In detail:
+
+- The session list of the web interface has "history", "chat", "live" and "resume"; the
+  difference between "chat" and "live" (two live interfaces) is not clear, and "resume" never
+  worked for the owner. The most reliable resume was the history page's.
+- Resuming in the IDE: the session is picked from a dropdown by id; there is no way to start
+  the session, only to start the server, which the owner does not want from there (their
+  `calu serve` runs in a tmux session of theirs).
+- To do: test both cases (escalation timeout, D282; `calu serve` stopped and started again)
+  in the Cua desktop with the VSCode chat and the web interface; reduce the ways to resume to
+  few that always work; name sessions so a person recognises them; never offer to start the
+  server where a server runs or will be started by hand. The owner's installation had none of
+  `1aa22b2` when they reported this.
+
 **For the owner's installation:** D290 (a PNG in an escalated commit) is fixed in the
 repository only. Until `/usr/local/lib/calu` is reinstalled from `main`, a commit with a
 binary file that the changeset checker escalates is denied with "calu could not record this
