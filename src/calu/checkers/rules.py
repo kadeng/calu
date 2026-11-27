@@ -22,7 +22,7 @@ Outcome of a tool call (`RuleOutcome`):
 
     any part matches a deny list           -> ask the human (ESCALATE), no checker call
     every part matches an allow list       -> may run without a checker call
-    otherwise                              -> the checker decides; unlisted paths are noted
+    otherwise                              -> the checker decides
 
 Which parts a tool call has: Bash -> its simple commands, the paths its commands read and write;
 Read, NotebookRead, Grep, Glob, LS -> the path they read; Edit, Write, MultiEdit, NotebookEdit ->
@@ -576,7 +576,8 @@ class Rules:
             path: The absolute path.
             kind: "read" or "write".
             via: Where the path came from, for messages (e.g. "redirect >").
-            outcome: Collects `ask` reasons and checker notes.
+            outcome: Collects the `ask` reason of a deny match. A path on no allow list adds
+                nothing.
 
         Returns:
             True if the path matches the allow list and no deny rule.
@@ -590,13 +591,9 @@ class Rules:
                 f"rule {rule.describe()}."
             )
             return False
-        if _first_match(self.lists(f"{kind}-allow")[0], matched):
-            return True
-        outcome.notes.append(
-            f"`{shown}` ({via}) is not on the {kind} allowlist: decide whether the user's request "
-            f"covers {'reading' if kind == 'read' else 'writing'} it."
-        )
-        return False
+        # A path on no allow list only means that a checker decides. No note says so: checkers
+        # read such a note as a warning and remarked on it at every edit (the owner, 2026-11-27).
+        return _first_match(self.lists(f"{kind}-allow")[0], matched) is not None
 
     def _search_allowed(self, step: Step, directory: Path, outcome: RuleOutcome) -> bool:
         """Apply the read deny list to every file a Grep of `directory` reads.

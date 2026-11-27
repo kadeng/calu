@@ -5,10 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from calu.callees import Callees
 from calu.honesty import Baseline, HonestyMark, HonestySnapshot, RecheckUnit, Unreviewed
 from calu.honesty_graph import (
     MAX_CALLERS,
     MAX_NODES,
+    NeighbourMemo,
     add_neighbours,
     build_graph,
     changed_units,
@@ -271,6 +273,42 @@ async def test_at_most_twelve_clean_callers_of_a_unit_are_shown(tmp_path: Path) 
     assert nodes["many.py:busy"].state == "changed" and nodes["many.py:busy"].hidden_callers == 0
     assert ("many.py:busy", "many.py:target") in {(e.source, e.target) for e in wider.edges}
     assert not wider.partial
+
+
+async def test_a_repeated_request_reads_only_the_files_that_changed(tmp_path: Path) -> None:
+    """A `NeighbourMemo` keeps what was parsed. A repeated request gives the same graph
+    without reading the files again; a file whose state changed is read again."""
+    snapshot = write_report_project(tmp_path)
+    graph = build_graph(tmp_path, snapshot, {"report.py": REPORT_BEFORE}.get)
+    memo = NeighbourMemo(tmp_path)
+    read: list[str] = []
+    plain = memo.read
+
+    def counting(path: str) -> str | None:
+        """Note which file is read, then read it.
+
+        Args:
+            path: The file's relative path.
+
+        Returns:
+            Its text, or None.
+        """
+        read.append(path)
+        return plain(path)
+
+    memo.callees = Callees(counting)
+    first = await add_neighbours(graph, tmp_path, SearchIndex(tmp_path), memo=memo)
+    assert "store.py" in read
+    assert "store.py" in memo.states
+    read.clear()
+    memo.begin()
+    again = await add_neighbours(graph, tmp_path, SearchIndex(tmp_path), memo=memo)
+    assert again == first and read == []
+    # A changed file is read again; the others are not.
+    (tmp_path / "store.py").write_text(STORE + "\n\ndef more():\n    return 1\n", "utf-8")
+    memo.begin()
+    await add_neighbours(graph, tmp_path, SearchIndex(tmp_path), memo=memo)
+    assert read == ["store.py"]
 
 
 async def test_no_clean_unit_is_added_to_a_full_graph(tmp_path: Path) -> None:

@@ -195,9 +195,16 @@ class TestDefaultRules:
         rules = default_rules(tmp_path, {"command-allow": "^(rg|grep)( |$)"})
         assert not rules.evaluate(bash(command)).allowed
 
-    def test_unlisted_read_is_noted_for_the_checker(self, tmp_path: Path):
+    def test_an_unlisted_path_goes_to_the_checker_without_a_note(self, tmp_path: Path):
+        """A path on no allow list only means that a checker decides. A note saying so was
+        read by the checkers as a warning, and they remarked on it at every edit."""
         outcome = default_rules(tmp_path).evaluate(read("/opt/data.csv"))
-        assert not outcome.allowed and "read allowlist" in outcome.notes[0]
+        assert not outcome.allowed and outcome.notes == [] and outcome.ask == []
+        write = Step(
+            tool_name="Write", tool_input={"file_path": "/opt/out.txt", "content": ""}, cwd=""
+        )
+        outcome = default_rules(tmp_path).evaluate(write)
+        assert not outcome.allowed and outcome.notes == []
 
 
 pytestmark = pytest.mark.anyio

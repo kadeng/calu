@@ -256,9 +256,10 @@ Speed, measured on calu itself (17 changed files, 42 changed units, 145 nodes, 1
 - The word search keeps its result per file and name while the file's modification time
   and size stay the same (`SearchMemo` on the session). A changed file is searched again.
 - Within one request each file is read, tokenized and parsed once.
-- What is left of a repeated request is parsing: every file that holds a caller, and every
-  file a unit imports from, is parsed again per request. Keeping those per file state, as
-  the search results are, is the next step. The view is still too slow to follow every tool
-  call on a project of calu's size.
+- What a file parses to (the unit around each line, its definitions and imports) is kept per
+  file state as well (`NeighbourMemo` on the session). Measured after that, 14 changed
+  units: 11.7 s the first request, 1.7 s a repeated one.
+- What is left is the first request: the word search reads every file once per unit. One
+  pass over the files for all names of a request would remove that; not built.
 
 Not done: nothing of this was seen in a UI.

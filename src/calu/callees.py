@@ -25,7 +25,7 @@ Only Python files are read. Nothing is imported or run.
 """
 
 import ast
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 from calu.checkers.symbols import Definition, parsed_definitions
@@ -208,7 +208,10 @@ def _own_class(symbol: str, definitions: dict[str, Definition]) -> str | None:
 
 
 class Callees:
-    """Answers `used_units` for many units and reads each file of the project once."""
+    """Answers `used_units` for many units and reads each file of the project once.
+
+    A file is read again only after `forget` named it.
+    """
 
     def __init__(self, read: Read) -> None:
         """Start with no file read.
@@ -223,7 +226,7 @@ class Callees:
         """List the units a Python unit calls, as `used_units` does.
 
         Side effects: reads the unit's file and the files it imports from, each once per
-        `Callees` object.
+        `Callees` object, and again after `forget` named it.
 
         Args:
             path: The unit's file, relative to the project directory.
@@ -233,6 +236,16 @@ class Callees:
             What `used_units` returns.
         """
         return _used(self._files, path, symbol)
+
+    def forget(self, paths: Iterable[str]) -> None:
+        """Forget what was read of some files, so that the next lookup reads them again.
+
+        Args:
+            paths: The files, relative to the project directory.
+        """
+        for path in paths:
+            self._files.seen.pop(path, None)
+            self._files.bound.pop(path, None)
 
 
 def used_units(read: Read, path: str, symbol: str) -> list[UsedUnit]:

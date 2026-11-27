@@ -244,7 +244,7 @@ from calu.honesty import (
     run_git,
     shown,
 )
-from calu.honesty_graph import add_neighbours, build_graph
+from calu.honesty_graph import NeighbourMemo, add_neighbours, build_graph
 from calu.logfile import one_line
 from calu.models import resolve_model
 from calu.pause import Pause
@@ -876,6 +876,9 @@ class Session:
         self._graph_memo = SearchMemo()
         """What the word search of the honesty graph keeps between requests: its results per
         file, for as long as the file has the same modification time and size."""
+        self._graph_files = NeighbourMemo(workspace)
+        """What the honesty graph keeps parsed of the project's files between requests, for as
+        long as each file has the same modification time and size."""
         self._graph_lock = anyio.Lock()
         """Held while the units around the graph's units are looked up (`honesty_graph`)."""
         """The language server that settles hits for `_judge_dependents`
@@ -1288,18 +1291,20 @@ class Session:
         `honesty.dependents_navigator` names one. No model is asked. If that step fails, the
         graph is sent without them and the error is logged.
 
-        Two things are kept on the session between requests:
+        Three things are kept on the session between requests:
 
-        - the word search's result per file (`SearchMemo`). It is reused while the file's
-          modification time and size stay the same, so a file changed without a new time or
-          size is not searched again;
+        - the word search's result per file (`SearchMemo`);
+        - what was parsed of each file: the unit around each line, and the definitions and
+          imports the used units are read from (`NeighbourMemo`);
         - the language server, if one is configured. It is started at the first request and
           reused; a changed command starts a new one.
 
-        One request is answered at a time; another waits.
+        The first two are reused while the file's modification time and size stay the same,
+        so a file changed without a new time or size is not read again. One request is
+        answered at a time; another waits.
 
         Side effects: reads git and the project's files in worker threads; may start the
-        language server; adds to the kept search results.
+        language server; adds to the kept search results and parsed files.
 
         Returns:
             The graph; empty with `honesty.mode` "off".
@@ -1338,10 +1343,11 @@ class Session:
         # One request at a time: a second client then finds the search results of the first.
         async with self._graph_lock:
             self._graph_memo.begin()
+            await anyio.to_thread.run_sync(self._graph_files.begin)
             search = SearchIndex(self.workspace, memo=self._graph_memo)
             index = CombinedIndex(search, self._navigator if command else None)
             try:
-                graph = await add_neighbours(graph, self.workspace, index)
+                graph = await add_neighbours(graph, self.workspace, index, memo=self._graph_files)
             except Exception:
                 log.exception("finding the units around the honesty graph's units failed")
         return HonestyGraphResult(

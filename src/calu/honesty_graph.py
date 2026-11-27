@@ -320,6 +320,98 @@ def build_graph(
     return per_file(graph) if len(graph.nodes) > MAX_NODES else graph
 
 
+MAX_KEPT_FILES = 20_000
+"""The most files a `NeighbourMemo` keeps; at this number it forgets all of them."""
+
+type FileState = tuple[int, int] | None
+"""A file's modification time in nanoseconds and its size; None for a file that is missing
+or cannot be asked. Equal means "not changed"."""
+
+
+def file_state(root: Path, path: str) -> FileState:
+    """Ask the file system for a file's state.
+
+    Args:
+        root: The project directory.
+        path: The file, relative to it.
+
+    Returns:
+        (modification time in nanoseconds, size); None for a missing file or one that cannot
+        be asked.
+    """
+    try:
+        stat = (root / path).stat()
+    except OSError:
+        return None
+    return stat.st_mtime_ns, stat.st_size
+
+
+@dataclass
+class NeighbourMemo:
+    """What `add_neighbours` keeps between requests, so that a repeated request is cheap.
+
+    It keeps, per file, what was parsed of it: the unit around each line (`parsed`) and the
+    definitions and imports `calu.callees` read (`callees`). Each file is kept with its state
+    as it was before it was read. `begin` forgets every file whose state changed since. A
+    file changed without a new modification time or size is not noticed; the memo serves a
+    view only.
+    """
+
+    root: Path
+    """The project directory."""
+    states: dict[str, FileState] = field(default_factory=dict[str, FileState])
+    """Per kept file its state before it was read."""
+    parsed: ParsedFiles = field(default_factory=dict[str, tuple[list[str], list[tuple[int, int]]]])
+    """The kept results of `enclosing_units`."""
+    callees: Callees = field(init=False)
+    """The kept reads of `calu.callees`."""
+
+    def __post_init__(self) -> None:
+        """Create the callee lookup, which reads through `read`."""
+        self.callees = Callees(self.read)
+
+    def begin(self) -> None:
+        """Start a request: forget the files that changed since they were read.
+
+        Side effects: asks the file system for the state of every kept file. With
+        `MAX_KEPT_FILES` files kept, forgets all of them.
+        """
+        if len(self.states) >= MAX_KEPT_FILES:
+            self.states.clear()
+            self.parsed.clear()
+            self.callees = Callees(self.read)
+            return
+        changed = [
+            path for path, state in self.states.items() if file_state(self.root, path) != state
+        ]
+        for path in changed:
+            del self.states[path]
+            self.parsed.pop(path, None)
+        self.callees.forget(changed)
+
+    def note(self, paths: Iterable[str]) -> None:
+        """Record the state of files that are about to be read, if they are not kept yet.
+
+        Args:
+            paths: The files, relative to the project directory.
+        """
+        for path in paths:
+            if path not in self.states:
+                self.states[path] = file_state(self.root, path)
+
+    def read(self, path: str) -> str | None:
+        """Read a file for `calu.callees`, after recording its state.
+
+        Args:
+            path: The file, relative to the project directory.
+
+        Returns:
+            What `read_text` returns.
+        """
+        self.note((path,))
+        return read_text(self.root, path)
+
+
 NEIGHBOURS_BUDGET_S = 20.0
 """How long `add_neighbours` asks the reference index for callers before it stops."""
 
@@ -331,23 +423,30 @@ CLEAN_STATES: tuple[NodeState, ...] = ("caller", "honest", "related")
 
 
 def _units_around(
-    root: Path, places: Sequence[tuple[str, int, bool]], parsed: ParsedFiles
+    root: Path,
+    places: Sequence[tuple[str, int, bool]],
+    parsed: ParsedFiles,
+    memo: NeighbourMemo | None = None,
 ) -> list[tuple[str, str, bool]]:
     """Name the unit around each place a reference index reported.
 
     Side effects: reads and parses the files of the places that `parsed` does not hold, and
-    adds them to it.
+    adds them to it. With a `memo`, records the state of those files there first.
 
     Args:
         root: The project directory.
         places: (path, 1-based line, whether the index is certain) per place.
-        parsed: The files parsed so far in this request.
+        parsed: The files parsed so far; the memo's `parsed` when a memo is given.
+        memo: What is kept between requests, or None.
 
     Returns:
         (path, dotted name of the unit, certain) per place; "" as the name for the top level
         of a file. A place inside an `import` statement is left out.
     """
-    units = enclosing_units(root, [(path, line) for path, line, _certain in places], parsed)
+    lines = [(path, line) for path, line, _certain in places]
+    if memo is not None:
+        memo.note(path for path, _line in lines if path not in parsed)
+    units = enclosing_units(root, lines, parsed)
     return [
         (path, unit, certain)
         for (path, _line, certain), unit in zip(places, units, strict=True)
@@ -360,6 +459,7 @@ async def add_neighbours(
     root: Path,
     index: ReferenceIndex,
     budget_s: float = NEIGHBOURS_BUDGET_S,
+    memo: NeighbourMemo | None = None,
 ) -> HonestyGraph:
     """Add the clean units around the dishonest and the changed units, with "uses" edges.
 
@@ -387,13 +487,16 @@ async def add_neighbours(
     - No clean unit is added once the graph has `MAX_NODES` nodes.
 
     Side effects: those of the index; reads the files of the units, of what they import and
-    of the places the index reports, in worker threads.
+    of the places the index reports, in worker threads. With a `memo`, a file the memo
+    holds is not read again, and what is read is added to it. The caller calls
+    `memo.begin` first, so that changed files are read again.
 
     Args:
         graph: The graph of `build_graph`. A graph by file is returned unchanged.
         root: The project directory.
         index: The reference index to ask about each unit.
         budget_s: The seconds the index may take in total.
+        memo: What is kept between requests; None reads every file once in this call.
 
     Returns:
         The graph with the added units and edges. A place the index only suspects gives an
@@ -417,7 +520,7 @@ async def add_neighbours(
         Returns:
             True if a used unit was left out because the graph is full.
         """
-        callees = Callees(lambda path: read_text(root, path))
+        callees = memo.callees if memo is not None else Callees(lambda p: read_text(root, p))
         full = False
         for node in subjects:
             for used in callees.of(node.path, node.id.partition(":")[2]):
@@ -429,7 +532,7 @@ async def add_neighbours(
         return full
 
     partial = await anyio.to_thread.run_sync(add_used)
-    parsed: ParsedFiles = {}
+    parsed: ParsedFiles = memo.parsed if memo is not None else {}
     deadline = anyio.current_time() + budget_s
     for node in subjects:
         left = deadline - anyio.current_time()
@@ -450,7 +553,7 @@ async def add_neighbours(
         state: NodeState = "caller" if node.state == "dishonest" else "related"
         shown: set[str] = set()
         hidden: set[str] = set()
-        around = await anyio.to_thread.run_sync(_units_around, root, places, parsed)
+        around = await anyio.to_thread.run_sync(_units_around, root, places, parsed, memo)
         for path, unit, certain in around:
             caller = builder.id_of(path, unit)
             known = builder.nodes.get(caller)
