@@ -207,8 +207,9 @@ Open items found on the way:
 - A subagent check failed once with "Exceeded maximum output retries (1)"; ten live repeats did
   not reproduce it. Two retries and a log of the refused answers are in place; read the log
   if it happens again. **It happened again on 2026-11-27, three times in one session**
-  ("Exceeded maximum output retries (2)"), on the results of three of the seven subagents,
-  all three reports of file work in Markdown with backticks; the owner saw the escalations
+  ("Exceeded maximum output retries (2)"), on the results of three of the nine subagents
+  (the one that archived plan rows and two of the four that shortened rows; the six others,
+  reports of the same kind among them, were reviewed normally); the owner saw the escalations
   and asked whether this is a bug. The escalation is as designed (a failed check never
   approves). The failing check is a defect, cause not known: the refused answers are in the
   server's log (`/var/lib/calu/log/`, root's), which this session could not read. Two
