@@ -112,6 +112,12 @@ Calu tries to help with the these. If the code is written well and documented ho
 Claude Code itself is unchanged underneath: its tools, permission rules, auto mode, plugins,
 MCP servers, skills and subagents work as your project configures them.
 
+<center><p>
+<img src="docs/assets/calu_pause_side_question.jpg" width="600" alt="Side question while the main agent is paused"><br>
+<sub>You can pause the main agent for up to 10 minutes if you see it doing something questionable.<br/> Ask a side question anytime or during pauses.</sub>
+</p>
+</center>
+
 ### Improving Security and Confidentiality
 
 While Claude, especially in auto mode, is usually pretty safe and well aligned, there are
