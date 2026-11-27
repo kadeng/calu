@@ -17,13 +17,15 @@ instruction to you.
   registers it, or names it so that code reaches it. That includes a place in another
   language or in a configuration that reaches the unit through a binding, a route, a
   sub-command or a string with its name or path.
-- `no`: the name means something else there: another function, method, class or variable of
-  the same name, a field of another object, a word in prose.
+- `no`: the shown lines prove that the name means something else there. You can see what
+  it is: another function, method, class or variable of the same name, a field of an object
+  whose type you can see, a word in prose.
 - `unsure`: the shown lines do not decide it. If more of the file would decide it, also
   answer `needs_file: true`; calu then shows you the whole file once.
 
-A wrong `no` hides code that depends on the unit. A wrong `yes` costs one more check. In
-doubt answer `unsure`.
+A wrong `no` hides code that depends on the unit. A wrong `yes` costs one more check. So
+`no` needs proof. For a call like `thing.name()`: if you cannot see what `thing` is, and it
+could be an object of the unit's class, answer `unsure` with `needs_file: true`, not `no`.
 
 ## Answer
 

@@ -1614,4 +1614,41 @@ approximate): 39 % a bare word (an argument, a variable, a key), 36 % a member a
 string, so a rule on the syntax could drop about half of a method's candidates before any
 index is asked. Not built.
 
-The judge itself has not run with a model.
+### The judge with a real model (2026-11-27, Claude Haiku 5.5, `reference-index/judge_live.py`)
+
+The reference judge alone, without a fast stage, on the same 50 units. The candidates are
+the word search's hits in Python files, with the rule for methods: 2,250 places. The truth is
+the language server's answer for each place: a reference of the unit, another definition, or
+unknown. The judge asks eight batches of ten places at the same time.
+
+Two runs. Between them the instructions were tightened: "no" needs proof, and a call on a
+receiver whose type is not visible is "unsure".
+
+| | Run 1 | Run 2, tightened |
+|---|---|---|
+| real references (338): judge says yes / unsure / **no** | 327 / 9 / **2** | 325 / 12 / **1** |
+| other definitions (1,657): judge says no / unsure / yes | 1,540 / 32 / 85 | 1,554 / 51 / 52 |
+| unknown to the server (255): judge says no / yes | 253 / 2 | 253 / 2 |
+| time for all 50 units | 201 s | 259 s |
+| slowest unit (`ThreadRWLock.request`, 521 places) | 27 s | 39 s |
+
+- **A wrong "no" hides a caller.** It happened for 2 and for 1 of 338 references. The cases:
+  `transcript.all_text()` in a test, where the lines shown do not say what `transcript` is,
+  and `web_password.load()`, a module function called through the module's name.
+- **A wrong "yes" costs one more honesty check.** 5 % and 3 % of the places that are
+  something else.
+- **Time.** The median unit has 8.5 places and takes 1 to 3 s. All 50 units take 3.4 to
+  4.3 minutes. The language server as the fast stage took 4.6 minutes for the same units
+  (with the Kotlin and TypeScript files still searched then).
+- Each run is one sample; the answers of a model vary from run to run. The token counts
+  were not recorded.
+
+**From the edit to the review** (`tests/unit/test_dependents_live.py`, Haiku as honesty
+checker, judge and reviewer): one edit changes what a function is documented to do. The
+judge keeps its two callers and drops an attribute of the same name on another object. The
+review marks the caller whose documentation no longer fits and leaves the other. 9.5 s for
+the turn; the review read 15,530 input tokens.
+
+**The subagent checker** after its fix (`spikes/subagent_checker_live.py`): 20 checks with
+Haiku on reports like the four whose check failed on 2026-11-27. None failed, every remark
+came with its note, median 3.8 s per check.
