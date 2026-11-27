@@ -1817,7 +1817,8 @@ function onRowClick(toolUseId: string): void {
 
 /**
  * Send the decision or the answer of an escalation card and disable the card's buttons until
- * the host's state arrives.
+ * the host's state arrives. A decision carries the card's temporary rule if its field is not
+ * empty (`rule`); the chat host (`ChatHost.handle`, case "decide") adds the rule first.
  *
  * @param key The escalation's key.
  * @param decision "allow" or "deny"; with `answer` true the answer text is built from the
@@ -1839,7 +1840,9 @@ function decide(key: string, decision: 'allow' | 'deny', answer: boolean, card: 
     }
     vscode.postMessage({ type: 'decide', escalationId: key, decision: 'allow', answer: text });
   } else {
-    vscode.postMessage({ type: 'decide', escalationId: key, decision, ...(note ? { note } : {}) });
+    // A temporary rule goes with the decision only if its field is not empty (design §5).
+    const rule = draft.rule.trim() ? { text: draft.rule.trim(), duration: draft.ruleFor, scope: draft.ruleScope } : undefined;
+    vscode.postMessage({ type: 'decide', escalationId: key, decision, ...(note ? { note } : {}), ...(rule ? { rule } : {}) });
   }
   card?.querySelectorAll('button').forEach((b) => (b.disabled = true));
 }
@@ -2197,12 +2200,18 @@ function onInput(event: Event): void {
     renderComposer();
     return;
   }
-  if (!(target instanceof HTMLInputElement)) return;
-  const key = target.dataset.escNote ?? target.dataset.escAnswer;
+  if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLSelectElement)) return;
+  const { escNote, escAnswer, escRule, escRuleFor, escRuleScope } = target.dataset;
+  const key = escNote ?? escAnswer ?? escRule ?? escRuleFor ?? escRuleScope;
   const esc = key !== undefined ? own(view.escalations, key) : undefined;
   if (!esc) return;
   const draft = draftOf(ctx, esc);
-  if (target.dataset.escNote !== undefined) draft.note = target.value;
+  if (escNote !== undefined) draft.note = target.value;
+  else if (escRule !== undefined) draft.rule = target.value;
+  else if (escRuleFor !== undefined) draft.ruleFor = target.value;
+  else if (escRuleScope !== undefined) {
+    draft.ruleScope = target.value === 'project' || target.value === 'global' ? target.value : 'session';
+  }
   else if (draft.choices[Number(target.dataset.q)]) draft.choices[Number(target.dataset.q)].text = target.value;
 }
 

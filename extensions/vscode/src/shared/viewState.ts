@@ -198,6 +198,12 @@ export interface EscalationView {
   questions: QuestionView[];
   /** ISO time the step began to wait; `null` if unknown. */
   openedAt: string | null;
+  /**
+   * A temporary rule a checker suggested (`escalation.request` `suggested_rule`, at most 1000
+   * characters); "" for none. The card (`ruleFields` in `webview/items.ts`) puts it into an
+   * editable field next to Allow and Deny.
+   */
+  suggestedRule?: string;
   /** "answered": closed by the user's answer to the agent's questions. */
   status: 'open' | 'allow' | 'deny' | 'cancelled' | 'answered';
   /** True after the user decided, until `escalation.resolved` or `ui.decisionFailed`. */
@@ -1452,6 +1458,7 @@ function addEscalation(state: ViewState, e: EscalationRequest, focus: boolean): 
     rendered: typeof e.rendered === 'string' ? truncate(e.rendered, 4 * MAX_STORED_TEXT) : '',
     questions: parseQuestions(e.questions),
     openedAt: typeof e.opened_at === 'string' ? e.opened_at : null,
+    suggestedRule: typeof e.suggested_rule === 'string' ? e.suggested_rule.slice(0, 1000) : '',
     status: 'open',
   };
   const next = { ...state, escalations: withEntry(state.escalations, escKey, view) };

@@ -55,6 +55,12 @@ export interface EscalationDraft {
   note: string;
   /** Per question: the chosen option labels and the free text. */
   choices: { labels: string[]; text: string }[];
+  /** The temporary rule to add with the decision; starts as the checker's suggestion. */
+  rule: string;
+  /** Its duration as `/rule` takes it ("1d"). */
+  ruleFor: string;
+  /** Its scope. */
+  ruleScope: 'session' | 'project' | 'global';
 }
 
 /** What the item renderers read. `main.ts` owns the object and replaces `view` on every event. */
@@ -88,7 +94,8 @@ const LONG_TEXT_PREVIEW_LINES = 12;
 const RESULT_PREVIEW_LINES = 12;
 
 /**
- * Return the draft of an escalation card, creating an empty one if needed.
+ * Return the draft of an escalation card, creating one if needed: no note, no choices, and as
+ * the rule the checker's suggestion (`suggestedRule`), for one day and this session.
  *
  * @param ctx The render context (its `escDrafts` may get a new entry).
  * @param esc The escalation.
@@ -97,7 +104,7 @@ const RESULT_PREVIEW_LINES = 12;
 export function draftOf(ctx: Ctx, esc: EscalationView): EscalationDraft {
   let draft = Object.hasOwn(ctx.escDrafts, esc.key) ? ctx.escDrafts[esc.key] : undefined;
   if (!draft) {
-    draft = { note: '', choices: [] };
+    draft = { note: '', choices: [], rule: esc.suggestedRule ?? '', ruleFor: '1d', ruleScope: 'session' };
     Object.defineProperty(ctx.escDrafts, esc.key, { value: draft, enumerable: true, writable: true, configurable: true });
   }
   while (draft.choices.length < esc.questions.length) draft.choices.push({ labels: [], text: '' });
@@ -653,7 +660,7 @@ function renderEscalation(esc: EscalationView | undefined, ctx: Ctx): HTMLElemen
   });
   note.value = draft.note;
   note.disabled = Boolean(esc.pending);
-  if (!asks) card.append(note);
+  if (!asks) card.append(note, ruleFields(esc, draft));
   const row = el('div', 'esc-actions');
   const disabled = Boolean(esc.pending) || !ctx.attached;
   if (asks) {
@@ -679,6 +686,41 @@ function renderEscalation(esc: EscalationView | undefined, ctx: Ctx): HTMLElemen
   else if (!ctx.attached) row.append(el('span', 'esc-pending', 'Not connected', { role: 'status' }));
   card.append(row);
   return card;
+}
+
+/**
+ * Build the temporary rule fields of an escalation card (design section 5): the rule, filled
+ * with the checker's suggestion, its duration and its scope. If the field is not empty,
+ * `decide` in `main.ts` sends the rule with the decision, and the chat host adds it
+ * (`ide.rules.add`) before it sends the decision.
+ *
+ * @param esc The escalation.
+ * @param draft Its draft (`rule`, `ruleFor`, `ruleScope`).
+ * @returns The fields, disabled while the decision is being sent.
+ */
+function ruleFields(esc: EscalationView, draft: EscalationDraft): HTMLElement {
+  const box = el('div', 'esc-rule', undefined, { 'data-testid': `escalation-rule-${esc.key}` });
+  const text = el('input', 'esc-note', undefined, {
+    type: 'text',
+    placeholder: 'Temporary rule (optional; added with your decision if not empty)',
+    'aria-label': 'Temporary rule',
+    'data-esc-rule': esc.key,
+    maxlength: '1000',
+  });
+  text.value = draft.rule;
+  const duration = el('select', '', undefined, { 'aria-label': 'For how long', 'data-esc-rule-for': esc.key });
+  for (const value of ['30m', '1h', '1d', '3d', '7d']) duration.append(el('option', '', value, { value }));
+  duration.value = draft.ruleFor;
+  const scope = el('select', '', undefined, { 'aria-label': 'Applies to', 'data-esc-rule-scope': esc.key });
+  for (const [value, label] of [['session', 'this session'], ['project', 'this project'], ['global', 'every project']]) {
+    scope.append(el('option', '', label, { value }));
+  }
+  scope.value = draft.ruleScope;
+  text.disabled = duration.disabled = scope.disabled = Boolean(esc.pending);
+  const line = el('div', 'esc-rule-line');
+  line.append(el('span', '', 'for'), duration, el('span', '', 'applies to'), scope);
+  box.append(text, line);
+  return box;
 }
 
 /**

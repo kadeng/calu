@@ -335,6 +335,14 @@ export class ChatHost implements Disposable {
         return;
       }
       case 'decide':
+        if (message.rule) {
+          // Added first, with the user login; a failure is said and the decision still goes.
+          const { text, duration, scope } = message.rule;
+          await this.run('Adding the temporary rule (the decision is sent anyway)', async () => {
+            const { rule } = await this.bridge.request('ide.rules.add', { text, duration, scope });
+            this.notice('info', `Temporary rule added: ${rule.line}`);
+          });
+        }
         await this.decide(message.escalationId, message.decision, message.note, message.answer);
         return;
       case 'ruleAdd':

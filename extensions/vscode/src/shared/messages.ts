@@ -64,7 +64,18 @@ export type WebviewMessage =
    * The user's decision on an open escalation (`escalationId` is `EscalationView.key`). With
    * `answer` (questions of the agent) the decision is ignored by calu and may be "allow".
    */
-  | { type: 'decide'; escalationId: string; decision: 'allow' | 'deny'; note?: string; answer?: string }
+  | {
+      type: 'decide';
+      escalationId: string;
+      decision: 'allow' | 'deny';
+      note?: string;
+      answer?: string;
+      /**
+       * A temporary rule (design section 5). `ChatHost.handle` adds it with `ide.rules.add`
+       * before it sends the decision; a failure is shown and the decision is sent anyway.
+       */
+      rule?: { text: string; duration: string; scope: 'session' | 'project' | 'global' };
+    }
   /** "Why?" on an escalation: open its stored context as a read-only document. */
   | { type: 'why'; escalationId: string }
   /** A question beside the running work (`side.ask`); the answer arrives as `ui.sideAnswer`. */
@@ -276,6 +287,23 @@ function parseImages(raw: unknown): OutgoingImage[] | undefined {
 }
 
 /**
+ * Read the temporary rule a decision carries.
+ *
+ * @param raw The `rule` member of a `decide` message.
+ * @returns `{text, duration, scope}` for a non-blank text of at most 1000 characters, a
+ *   duration like "30m", "1h" or "3d" and a known scope; `undefined` otherwise (the decision
+ *   is then sent without a rule).
+ */
+function decideRule(raw: unknown): { text: string; duration: string; scope: 'session' | 'project' | 'global' } | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const scope = (['session', 'project', 'global'] as const).find((s) => s === r.scope);
+  if (typeof r.text !== 'string' || !r.text.trim() || r.text.length > 1000 || !scope) return undefined;
+  if (typeof r.duration !== 'string' || !/^\d{1,6}[mhd]$/.test(r.duration)) return undefined;
+  return { text: r.text.trim(), duration: r.duration, scope };
+}
+
+/**
  * Validate a message received from the webview.
  *
  * @param raw The value passed to `onDidReceiveMessage` (any JSON value).
@@ -306,12 +334,14 @@ export function parseWebviewMessage(raw: unknown): WebviewMessage | undefined {
       if (m.decision !== 'allow' && m.decision !== 'deny') return undefined;
       const note = optional(m.note);
       const answer = optional(m.answer);
+      const rule = decideRule(m.rule);
       return {
         type: 'decide',
         escalationId: m.escalationId,
         decision: m.decision,
         ...(note !== undefined ? { note } : {}),
         ...(answer !== undefined ? { answer } : {}),
+        ...(rule ? { rule } : {}),
       };
     }
     case 'sendQueuedNow':

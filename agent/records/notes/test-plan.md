@@ -1329,6 +1329,20 @@ Cua desktop, scripted backend, VSCode extension built from the working tree afte
 | A duration over 7 days, an unknown id | refused with the reason on the page (database test) |
 | VSCode settings dialog, card "Temporary rules": add "Claude may run make." for this session, then for every project; remove each | ok. First round: the card showed nothing for some seconds while the dialog reloaded (looked like a lost click), and the text field was unstyled. Fixed: a progress line "Adding the rule…", the dialog's own field styles. Screenshot: `screenshots/vscode-settings-rules.png` |
 
+### T. Temporary rules, step 5: the suggested rule in the escalation card (2026-11-27)
+
+Scripted backend, `scenario: rule` (the fake checker escalates `make test` and suggests "Claude
+may run make in this project.").
+
+| Case | Result |
+|---|---|
+| VSCode chat: the approval card shows the suggestion in an editable field, "for 1d", "applies to this session" | ok. Screenshot: `screenshots/vscode-escalation-rule.png` |
+| Scope "this project", Allow | ok: "Temporary rule added: #7 project demo …", then the step ran ("Allowed") and the turn ended |
+| An empty field adds nothing | unit test (`messages.test.ts`: the decision goes without a rule) |
+| A refused rule still sends the decision | not tested: by reading, `ChatHost.handle` adds the rule inside `run`, which shows a failure and returns, and then decides |
+| Web pane | same code as the VSCode chat; not looked at in the browser |
+| Web escalation page, full-screen terminal client | open |
+
 ### R. The switches of calu's built-in rules (D291, 2026-11-27)
 
 | Case | Result |

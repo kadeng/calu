@@ -98,6 +98,16 @@ describe('parseWebviewMessage', () => {
     expect(parseWebviewMessage({ type: 'decide', escalationId: 'e', decision: 'allow', note: '', answer: ' SQLite ' })).toEqual({
       type: 'decide', escalationId: 'e', decision: 'allow', answer: 'SQLite',
     });
+    // A temporary rule goes with a decision only if it is complete; else the decision goes alone.
+    const rule = { text: ' Claude may run make. ', duration: '1d', scope: 'project' };
+    expect(parseWebviewMessage({ type: 'decide', escalationId: 'e', decision: 'allow', rule })).toEqual({
+      type: 'decide', escalationId: 'e', decision: 'allow', rule: { text: 'Claude may run make.', duration: '1d', scope: 'project' },
+    });
+    for (const bad of [{ ...rule, text: ' ' }, { ...rule, duration: 'soon' }, { ...rule, scope: 'team' }, 'text']) {
+      expect(parseWebviewMessage({ type: 'decide', escalationId: 'e', decision: 'deny', rule: bad })).toEqual({
+        type: 'decide', escalationId: 'e', decision: 'deny',
+      });
+    }
     expect(parseWebviewMessage({ type: 'why', escalationId: 'e' })).toEqual({ type: 'why', escalationId: 'e' });
     expect(parseWebviewMessage({ type: 'sendQueuedNow', id: 'q3', extra: 1 })).toEqual({ type: 'sendQueuedNow', id: 'q3' });
     expect(parseWebviewMessage({ type: 'retractQueued', id: 'q3' })).toEqual({ type: 'retractQueued', id: 'q3' });

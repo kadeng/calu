@@ -431,6 +431,7 @@ export interface EscalationRequest {
   reason: string;
   rendered: string;
   seq?: number;
+  suggested_rule?: string;
   tool_input: {
     [k: string]: unknown | undefined;
   };

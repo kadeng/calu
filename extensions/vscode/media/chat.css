@@ -736,6 +736,9 @@ a.tool-head.file-link { flex: 0 1 auto; margin-right: auto; color: var(--vscode-
 }
 .esc-note::placeholder, .question-other::placeholder, .input::placeholder { color: var(--vscode-input-placeholderForeground, var(--calu-muted)); }
 .esc-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+/* The temporary rule of an escalation card: its text, then "for [1d] applies to [this session]". */
+.esc-rule-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--calu-muted); font-size: 0.92em; }
+.esc-rule-line select { color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); }
 .esc-actions .primary, .esc-actions .secondary { min-width: 5.5em; padding: 4px 14px; }
 .esc-pending { color: var(--calu-muted); font-style: italic; }
 

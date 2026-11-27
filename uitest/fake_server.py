@@ -37,6 +37,8 @@ answered with "Echo: <message>".
                  command that runs for a minute. turn 3: a command that escalates.
     queue        for messages sent while Claude works. turns 1 to 3: five commands of 3 s
                  each; turn 4: a command that escalates.
+    rule         a command that escalates with a suggested temporary rule ("Claude may run
+                 make in this project."); turn 2: a command without markers.
     levels       for the supervision level. Every turn: a Read, an Edit and a command that
                  the checkers pass.
     edge         turn 1: a line of 3,000 characters, a tool result of 60,000 characters, a
@@ -445,6 +447,30 @@ def queue(_workspace: Path) -> FakeScript:
     return FakeScript(turns=[busy, busy, busy, waiting])
 
 
+def rule(_workspace: Path) -> FakeScript:
+    """Build the scenario `rule`: a command escalated with a suggested temporary rule.
+
+    The fake checker suggests "Claude may run make in this project." (`calu:suggest=make`),
+    which the approval card offers in its rule field. Turn 2 has a command without markers.
+
+    Args:
+        _workspace: The project directory of the session; unused.
+
+    Returns:
+        The script: two turns.
+    """
+    return FakeScript(
+        turns=[
+            [
+                {"text": "Building with make.", "stream": True},
+                bash("make test  # calu:escalate calu:suggest=make", "tests passed"),
+                {"text": "The tests pass."},
+            ],
+            [bash("make lint", "clean"), {"text": "Lint is clean."}],
+        ]
+    )
+
+
 def levels(workspace: Path) -> FakeScript:
     """Build the scenario `levels`: the same three checked steps in every turn.
 
@@ -748,6 +774,7 @@ SCENARIOS: dict[str, Callable[[Path], FakeScript]] = {
     "swarm": swarm,
     "nousage": levels,
     "honesty": honesty,
+    "rule": rule,
 }
 """The scenarios by the name a first message `scenario: <name>` chooses."""
 
