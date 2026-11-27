@@ -1319,6 +1319,15 @@ Cua desktop, scripted backend, VSCode extension built from the working tree afte
 | `calu attach --plain` | prints the `calu rule` command (no database login); unit test |
 | PyCharm plugin, `/rule`, `/rules`, `/rule-remove`, `/btw` | Kotlin tests pass, plugin builds; **not tried in the IDE**: PyCharm in the recreated desktop asks for the JetBrains user agreement again, which is the owner's to accept |
 
+### R. The switches of calu's built-in rules (D291, 2026-11-27)
+
+| Case | Result |
+|---|---|
+| Web settings, "Rules" section: "Built-in rules" with four switches, all on | ok (first under "Session"; moved to "Rules", `RULES_SECTIONS`). Screenshot: `screenshots/web-settings-built-in-rules.png` |
+| Switch "Calu commands" off and save | ok: `calu config get built_in_rules` showed `"calu_commands": false`; reset afterwards with `calu config unset` |
+| A session with the switch off lets `calu ...` go to the checkers | unit test only (`test_each_built_in_rule_asks_until_its_setting_is_switched_off`) |
+| The VSCode settings dialog | not looked at; it is generated from the same configuration |
+
 ### Q. Resuming after `calu serve` was stopped (2026-11-26 evening)
 
 Cua desktop, scripted server stopped and started again with `uitest/setup-demo.sh`, `calu web`

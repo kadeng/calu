@@ -437,6 +437,9 @@ def panes(src: Sources) -> list[Pane]:
     ]
     for pane in found:
         pane.groups = [group for group in pane.groups if group.fields]
+    # The sidebar lists each section once: a pane of a section placed later (`RULES_SECTIONS`)
+    # moves up to its section; the order within a section is kept.
+    found.sort(key=lambda pane: SIDEBAR_ORDER.index(pane.section))
     return [pane for pane in found if pane.groups or pane.facts or pane.links]
 
 
@@ -956,9 +959,23 @@ SECTION_PANES = {
         " they are recorded, where the files go, and how long a `.tmp.diff` file is kept.",
     ),
     "web": ("Web interface", "Settings of this interface."),
+    "built_in_rules": (
+        "Built-in rules",
+        "calu's own rules, tried before the lists: each makes a kind of step wait for you."
+        " Switched off, such a step goes to the lists and the checkers like any other, and a"
+        " temporary rule can allow it.",
+    ),
 }
 """Configuration section -> (pane title, description); a section not named here gets a pane
 titled after its field name."""
+
+SIDEBAR_ORDER = ("Checkers", "Rules", "Claude Code", "Session")
+"""The sidebar's sections in the order the page lists them: `panes` sorts its result by the
+index of each pane's section in this tuple, so it must name every section a pane has."""
+
+RULES_SECTIONS = frozenset({"built_in_rules"})
+"""Configuration sections whose pane belongs to the sidebar section "Rules", next to the
+allow and deny lists, instead of "Session"."""
 
 
 def _session_panes(src: Sources, used: set[str]) -> list[Pane]:
@@ -970,7 +987,8 @@ def _session_panes(src: Sources, used: set[str]) -> list[Pane]:
             has beyond them is placed here, so a new setting is never missing from the page.
 
     Returns:
-        The panes of the "Session" sidebar section.
+        The panes of the "Session" sidebar section, and those of `RULES_SECTIONS`, which
+        belong to the "Rules" section.
     """
     escalation = Pane(
         id="escalation",
@@ -1011,7 +1029,7 @@ def _session_panes(src: Sources, used: set[str]) -> list[Pane]:
         found.append(
             Pane(
                 id=name.replace("_", "-"),
-                section="Session",
+                section="Rules" if name in RULES_SECTIONS else "Session",
                 title=title,
                 description=description,
                 groups=[Group(title, _section_fields(src, name, used))],
