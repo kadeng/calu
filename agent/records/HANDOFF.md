@@ -46,14 +46,26 @@ does otherwise today (`Session._review_subagent_result`, `_handback`,
 - `auto_escalate.subagents` (the supervision level `everything`) turns every result into an
   escalation.
 
-To build, and to ask the owner first: whether the level `everything` keeps holding results
-(the documentation defines it as "also subagent results"; who decided that was not looked
-up), and whether the check of a subagent's
-**task** before it starts (D256), which is a tool call like any other, stays able to
-escalate. Claude's proposal: the result checker answers ACCEPT or ANNOTATE only; a result
-never waits; a failed check passes the result with the note that it was not reviewed; what
-the checker would have escalated goes to the main agent as a note and to the clients as a
-notice. The documentation ("The checkers", "What a subagent is told") changes with it.
+**The owner's ruling after seeing the above, the same day:** "Denying is still possible, but
+under regular circumstances only Accept with comment and Escalate ( for example if there's a
+secret in the final message that the main agent should not see ) are used. Denial of
+subagent results usually makes no sense, but no need to remove that outright."
+
+So the mechanism stays: ACCEPT, with or without a comment, is the normal answer; ESCALATE is
+for exceptions; a person's deny after an escalation still keeps the report from the main
+agent. What remains to do:
+
+- **Find and fix the failing check** ("Open items" below): it turned three ordinary results
+  into escalations.
+- **The shipped instructions** (`defaults/checkers/subagent-result.md` and
+  `system/subagent-result.md`): they tell the checker to ESCALATE a result that asks for work
+  well beyond the task. By the ruling that is a comment. Escalation is for a result the main
+  agent should not read as it is, the owner's example being a secret in it. Claude's reading
+  of the ruling, to confirm with the owner before the texts change.
+- **Open, to ask the owner:** what a check that fails does with the result. Today it
+  escalates, like every error in calu. Passing it with the note "not reviewed" would stop a
+  broken checker from holding subagents, and would also let a secret through whenever the
+  checker fails.
 
 ### PLAN.md shortened, its full text archived (2026-11-27)
 

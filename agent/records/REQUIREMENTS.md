@@ -407,6 +407,11 @@ broken down or extended. Derived requirements and design decisions belong in
     to work. The subagent checker should at best comment on results as a followup message,
     it's not supposed to keep the subagent from finishing nor should it be able to deny the
     main agent access to the subagent report."
+    Ruled the same day, after the present behaviour was described to the owner: "Denying is
+    still possible, but under regular circumstances only Accept with comment and Escalate (
+    for example if there's a secret in the final message that the main agent should not see
+    ) are used. Denial of subagent results usually makes no sense, but no need to remove that
+    outright."
 
 ## Soft goals and priorities
 
