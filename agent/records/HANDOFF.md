@@ -47,7 +47,8 @@ does otherwise today (`Session._review_subagent_result`, `_handback`,
   escalation.
 
 To build, and to ask the owner first: whether the level `everything` keeps holding results
-(the owner chose that level's meaning earlier), and whether the check of a subagent's
+(the documentation defines it as "also subagent results"; who decided that was not looked
+up), and whether the check of a subagent's
 **task** before it starts (D256), which is a tool call like any other, stays able to
 escalate. Claude's proposal: the result checker answers ACCEPT or ANNOTATE only; a result
 never waits; a failed check passes the result with the note that it was not reviewed; what
