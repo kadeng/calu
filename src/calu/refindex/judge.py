@@ -9,7 +9,8 @@ How a question is answered:
 
 1. The judge is shown the unit and the first lines of its definition.
 2. It is shown each place with `CONTEXT_LINES` lines before and after it, at most
-   `BATCH_PLACES` places per request.
+   `BATCH_PLACES` places per request. Up to `MatchJudge.concurrency` requests run at the
+   same time.
 3. It answers "yes", "no" or "unsure" for each place.
 4. If it is unsure and says that the whole file would help, it is shown that file once and
    asked again.
@@ -40,6 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol
 
+import anyio
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, UsageLimits
 from pydantic_ai.models import Model
@@ -150,6 +152,8 @@ class MatchJudge:
     )
     cache: JudgeCache = field(default_factory=MemoryJudgeCache)
     """Where the yes and no answers are kept."""
+    concurrency: int = 8
+    """How many requests run at the same time."""
     _agent: Agent[None, JudgeAnswer] | None = field(default=None, init=False, repr=False)
 
     @property
@@ -193,21 +197,44 @@ class MatchJudge:
                 open_places.append(place)
             else:
                 answers[place] = kept
-        for start in range(0, len(open_places), BATCH_PLACES):
-            batch = open_places[start : start + BATCH_PLACES]
+        limit = anyio.CapacityLimiter(self.concurrency)
+
+        async def first_round(batch: list[Place]) -> None:
+            """Ask about one batch from the excerpts and record the answers.
+
+            Args:
+                batch: At most `BATCH_PLACES` places.
+            """
             shown = [excerpts[place] for place in batch]
-            for place, verdict in (await self._ask(head, batch, shown)).items():
+            async with limit:
+                found = await self._ask(head, batch, shown)
+            for place, verdict in found.items():
                 self._answered(answers, keys[place], place, verdict.refers)
                 if verdict.refers == "unsure" and verdict.needs_file:
                     wanted.append(place)
-        for path in dict.fromkeys(place.path for place in wanted):
-            batch = [place for place in wanted if place.path == path]
-            whole = self._whole(path, batch)
-            if whole is None:
-                continue
-            for place, verdict in (await self._ask(head, batch, [whole] * len(batch))).items():
+
+        async def second_round(batch: list[Place], whole: str) -> None:
+            """Ask about the places of one file with the whole file shown.
+
+            Args:
+                batch: The places of that file the judge asked the file for.
+                whole: The fenced file.
+            """
+            async with limit:
+                found = await self._ask(head, batch, [whole] * len(batch))
+            for place, verdict in found.items():
                 # Kept under the key of the whole file: the excerpt alone did not decide it.
                 self._answered(answers, self._key(unit, place, whole), place, verdict.refers)
+
+        async with anyio.create_task_group() as requests:
+            for start in range(0, len(open_places), BATCH_PLACES):
+                requests.start_soon(first_round, open_places[start : start + BATCH_PLACES])
+        async with anyio.create_task_group() as requests:
+            for path in dict.fromkeys(place.path for place in wanted):
+                batch = [place for place in wanted if place.path == path]
+                whole = self._whole(path, batch)
+                if whole is not None:
+                    requests.start_soon(second_round, batch, whole)
         return answers
 
     def _answered(
