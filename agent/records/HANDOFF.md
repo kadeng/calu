@@ -2,7 +2,7 @@
 
 State on 2026-11-27, late evening (the section "Pick up here" is current; older sections
 below keep the state of their day). Read this, then `AGENTS.md`, `REQUIREMENTS.md` and
-`PLAN.md` (decisions D1-D298, open questions §11, phases §12; the full text of a shortened
+`PLAN.md` (decisions D1-D300, open questions §11, phases §12; the full text of a shortened
 decision is in `agent/records/notes/plan-archive.md`).
 
 ## Pick up here
@@ -25,6 +25,15 @@ the extension is rebuilt and installed.
 | The honesty graph in the chat pane of VSCode and `calu web` | D297 | unit tests; seen in VSCode in the Cua desktop (test plan V) |
 | Locking: a command is checked again when its worktree changed since its check | D298 | unit tests and the fuzz harness; only with `locking.enabled` |
 | `PLAN.md` shortened to 251 kB, full texts in `notes/plan-archive.md` | | done |
+| The supervision level "Unchecked / Claude Code only": no checker runs, calu's rules still apply | D299, requirement 53 | unit tests (Python, VSCode, Kotlin); not seen in a UI |
+| A session keeps the level a person chose: across a settings reload, and during the hold of failed reloads | D300 | unit tests and one database test |
+
+**Late evening, what the owner ran into:** calu was reinstalled (with migration `0003`)
+while the old `calu serve` kept running. Its sessions could not reload their settings, so a
+changed `honesty.mode` did not arrive and "Confirm everything" came back again and again.
+A restart of `calu serve` ended it. After an update that carries a migration, restart the
+server. `agent/records/notes/unchecked-level-design.md` section 4 has the details and the
+two fixes.
 
 **What the owner still has to decide** (ask once; do not decide for the owner):
 

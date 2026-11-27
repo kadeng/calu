@@ -350,7 +350,7 @@ This section defines the terms the rest of the document uses, in alphabetical or
 | **Side question** | A question that Claude answers while its running work continues. The question and its answer do not become part of the conversation. |
 | **Step** | One tool call of Claude: a command, an edit, a read, a subagent start, a question. |
 | **Subagent** | An agent that Claude Code's main agent starts for a sub-task. Its steps are checked like the main agent's, and its final result is checked too. |
-| **Supervision level** | A Calu setting that makes commands, edits or subagent results always wait for a person, whatever the checkers said: `checkers` (none), `edits`, `writes` (edits and commands), `everything` (also subagent results). Stored as the three `auto_escalate` switches. |
+| **Supervision level** | A Calu setting that makes commands, edits or subagent results always wait for a person, whatever the checkers said: `checkers` (none), `edits`, `writes` (edits and commands), `everything` (also subagent results). One more level, `unchecked`, runs no checker at all. Stored as the four `auto_escalate` switches. |
 | **Trace** | A Markdown file inside the project to which Calu appends a session's steps, redacted, for review with the code ([session traces](#session-traces)). |
 | **Trusted commit** | Code honesty: a commit that a person or Calu certified as honest. |
 | **Turn** | One message of the user and everything Claude does until it stops. |
@@ -639,20 +639,40 @@ commands, edits, subagent results, or any combination of them. Such a step waits
 checkers approved it. The checkers still run and record their decision. The supervision level
 is independent of Claude Code's permission mode.
 
-| Level | Commands | Edits | Subagent results |
-|---|---|---|---|
-| `checkers` ("Checkers decide") | - | - | - |
-| `edits` ("Confirm edits") | - | wait | - |
-| `writes` ("Confirm edits and commands") | wait | wait | - |
-| `everything` ("Confirm everything") | wait | wait | wait |
+| Level | Checkers | Commands | Edits | Subagent results |
+|---|---|---|---|---|
+| `unchecked` ("Unchecked / Claude Code only") | do not run | - | - | - |
+| `checkers` ("Checkers decide") | run | - | - | - |
+| `edits` ("Confirm edits") | run | - | wait | - |
+| `writes` ("Confirm edits and commands") | run | wait | wait | - |
+| `everything` ("Confirm everything") | run | wait | wait | wait |
 
 ```bash
 calu config set auto_escalate.edits true      # every edit waits, even an approved one
 calu config set auto_escalate.commands true   # ... and every command, commits included
 calu config set auto_escalate.subagents true  # ... and every subagent's result
+calu config set auto_escalate.unchecked true  # no checker runs at all
 ```
 
-- Other combinations of the three switches are possible; clients show them as "custom".
+**The level `unchecked`.** Calu runs no checker. A step that a checker would judge goes to
+Claude Code's own decision: its permission mode and its sandbox.
+
+- Calu's rules still apply: the deny, ask and allow lists, the built-in rules, the tool
+  policy, the rule for generated files, and questions to you. A step they stop still waits
+  for a person.
+- Nothing is judged after a step either: not what a command wrote, not a subagent's task or
+  result, not code honesty. `honesty.mode` `enforce` stops nothing, and edits leave their
+  files unreviewed. `#do-honesty-review` starts no review; "Review now" still does.
+- Steps are still recorded, with the note that no checker ran.
+- The level is meant for work where Claude Code's own supervision is enough for you. Its
+  switch is in the audit log like the others.
+
+Other points:
+
+- Other combinations of the switches are possible; clients show them as "custom". With
+  `unchecked` and `edits`, every edit waits for you without a checker's opinion.
+- A level chosen in a client holds for the running session. A reload of the settings for
+  another reason keeps it; it changes only when the stored switches themselves change.
 - A change made anywhere (a client, the web interface, `calu config set`) reaches every client
   of the session.
 - Switching one of the three switches off reduces the supervision of the session. Calu
@@ -662,7 +682,13 @@ calu config set auto_escalate.subagents true  # ... and every subagent's result
   person. A change made with `calu config set` is recorded when the session reloads its
   settings, without a client name. The session's page in the web interface lists these
   changes.
-- While a session cannot read its configuration, all three switches count as on.
+- While a session cannot read its configuration, the three waiting switches are on and
+  checkers run ("Confirm everything"). The session reports the reason to its clients as an
+  error message. The usual cause after an update of Calu is a `calu serve` that was not
+  restarted. The hold ends when a reload succeeds; the session then goes back to the level
+  it had. If you choose another level during the hold, your choice stands. Until a reload
+  succeeds, the session then keeps the settings it read last (rules, checker instructions,
+  models) and uses the level you chose.
 
 ### Locks between agents (optional)
 
