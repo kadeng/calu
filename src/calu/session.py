@@ -909,9 +909,7 @@ class Session:
             clock_alarm=self._clock_alarm,
             keep_changeset=self._keep_changeset,
             honesty=self._gate_honesty,
-            honesty_review=lambda step, wait_s: self.honesty_review(
-                wait_s=wait_s, checkouts=self.step_checkouts(step)
-            ),
+            honesty_review=self._gate_review,
             reviews_task=self._reviews_task,
             review_task=self._review_task,
         )
@@ -1719,6 +1717,23 @@ class Session:
         """
         return (await self._run_review(asked, wait_s, checkouts)).problem
 
+    async def _gate_review(self, step: Step, wait_s: float | None) -> tuple[str, bool]:
+        """Run the honesty review for a step that needs a clean state (the gate's callback).
+
+        Side effects: as `_run_review`, for the checkouts of the step.
+
+        Args:
+            step: The tool call.
+            wait_s: The longest time to wait for the review's end, in seconds; None waits
+                until it ends.
+
+        Returns:
+            (the problem as `honesty_review` returns it; True if only a person can settle
+            it, `HonestyReviewResult.needs_person`). Never raises.
+        """
+        result = await self._run_review(False, wait_s, self.step_checkouts(step))
+        return result.problem, result.needs_person
+
     async def _run_review(
         self,
         asked: bool,
@@ -1882,6 +1897,7 @@ class Session:
                     "No honesty review was started: honesty.sufficient_trust is 'user', so "
                     "only a person's certification verifies a file (`/trust`, `/trust-file`)."
                 ),
+                needs_person=True,
             )
         failed = self._review_failed
         if not fresh and failed is not None:
@@ -1908,10 +1924,13 @@ class Session:
                     "certifies a commit with `/trust` or asks for a review with "
                     "`/honesty-review`."
                 ),
+                needs_person=True,
             )
         if plan.problem:
             return HonestyReviewResult(
-                ran=False, problem=f"The honesty review did not run: {plan.problem}."
+                ran=False,
+                problem=f"The honesty review did not run: {plan.problem}.",
+                needs_person=True,
             )
         if not fresh and not run.again and self._last_review is not None:
             reviewed, last = self._last_review
@@ -1963,7 +1982,11 @@ class Session:
             self._review_failed = (anyio.current_time(), outcome.problem)
             await self._emit_safely(Log(level="warning", message=f"honesty: {outcome.problem}"))
             await self.announce_honesty()
-            return HonestyReviewResult(ran=False, problem=f"{outcome.problem} {outside}".strip())
+            return HonestyReviewResult(
+                ran=False,
+                problem=f"{outcome.problem} {outside}".strip(),
+                needs_person=bool(outside),
+            )
         self._review_failed = None
         async with self._honesty_lock:
             changes, store, seen = await anyio.to_thread.run_sync(
@@ -2000,7 +2023,9 @@ class Session:
                 f"{len(changes.dropped)} file(s) changed while the honesty review ran: "
                 f"{names}. The next review reads them; a step that needs it starts one."
             )
-        result = HonestyReviewResult(ran=True, problem=" ".join(parts))
+        result = HonestyReviewResult(
+            ran=True, problem=" ".join(parts), needs_person=bool(outside or left)
+        )
         self._last_review = (
             Reviewed(
                 baseline=base.commit_id if base else "",

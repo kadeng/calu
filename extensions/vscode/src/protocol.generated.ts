@@ -655,6 +655,7 @@ export interface HonestyMarkParams {
  * `honesty.update`.
  */
 export interface HonestyReviewResult {
+  needs_person?: boolean;
   problem?: string;
   ran: boolean;
 }

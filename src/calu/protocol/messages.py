@@ -481,6 +481,15 @@ class HonestyReviewResult(BaseModel):
     problem: str = ""
     """Why the review did not run or failed; for a review that ran, which files it could not
     judge and which changed while it ran; "" if it judged every file."""
+    needs_person: bool = False
+    """True if only a person can settle what `problem` names. That is the case for:
+
+    - a file the review cannot judge, or a file of a worktree outside the project;
+    - no baseline, or `honesty.sufficient_trust` "user";
+    - more files than one review may read, or git could not list the files.
+
+    False for what goes away when the agent tries again later: a review that failed or is
+    still running, and files that changed while it ran."""
 
 
 class SideExchange(BaseModel):

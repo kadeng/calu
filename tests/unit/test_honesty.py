@@ -225,7 +225,11 @@ def test_another_tool_counts_as_executing_only_if_a_checker_says_so(tmp_path: Pa
 
 
 async def needs_clean(
-    tmp_path: Path, before: HonestySnapshot, after: HonestySnapshot | None, problem: str = ""
+    tmp_path: Path,
+    before: HonestySnapshot,
+    after: HonestySnapshot | None,
+    problem: str = "",
+    needs_person: bool = False,
 ) -> tuple[CheckDecision | None, list[str]]:
     """Ask the gate about a step that needs a clean state, with a given state and review.
 
@@ -234,6 +238,7 @@ async def needs_clean(
         before: The state when the step reaches the gate.
         after: The state after the review ran.
         problem: What the review answers ("" for "it ran").
+        needs_person: Whether only a person can settle `problem`.
 
     Returns:
         (the gate's decision, None for "no objection"; one entry per review that was asked
@@ -242,14 +247,14 @@ async def needs_clean(
     gate = gate_of(tmp_path)
     asked: list[str] = []
 
-    async def review(_step: Step, wait_s: float | None) -> str:
+    async def review(_step: Step, wait_s: float | None) -> tuple[str, bool]:
         """Record that the review was asked for, with the time the gate waits for it.
 
         Returns:
-            `problem`.
+            (`problem`, `needs_person`).
         """
         asked.append("review" if wait_s is None else f"review within {wait_s:.0f} s")
-        return problem
+        return problem, needs_person
 
     async def now(_step: Step) -> HonestySnapshot | None:
         """Return the state after the review.
@@ -271,14 +276,14 @@ async def test_the_gate_waits_for_the_review_only_within_its_own_time(tmp_path: 
     gate = gate_of(tmp_path)
     waits: list[float | None] = []
 
-    async def review(_step: Step, wait_s: float | None) -> str:
+    async def review(_step: Step, wait_s: float | None) -> tuple[str, bool]:
         """Record the time the gate waits.
 
         Returns:
-            The answer of a review that is still running.
+            The answer of a review that is still running, which a person need not settle.
         """
         waits.append(wait_s)
-        return "The honesty review is still running."
+        return "The honesty review is still running.", False
 
     async def now(_step: Step) -> HonestySnapshot | None:
         """Return the unchanged state.
@@ -295,8 +300,10 @@ async def test_the_gate_waits_for_the_review_only_within_its_own_time(tmp_path: 
     decision, _state = await gate._needs_clean(
         step, state(unreviewed=("a.py",)), EXECUTES, "runs the tests", budget
     )
-    assert decision is not None and decision.decision is Decision.ESCALATE
+    # Claude tries the step again; no person is asked.
+    assert decision is not None and decision.decision is Decision.DENY
     assert "The honesty review is still running." in decision.reason
+    assert "try the step again" in decision.reason
     assert waits[0] is not None and 70 < waits[0] <= 80
 
 
@@ -321,11 +328,35 @@ async def test_unreviewed_files_run_the_review_and_follow_its_result(tmp_path: P
     decision, _ = await needs_clean(tmp_path, unreviewed, state(marks=(open_mark("a.py", ""),)))
     assert decision is not None and decision.decision is Decision.DENY and "a.py" in decision.reason
     decision, _ = await needs_clean(tmp_path, unreviewed, unreviewed, "The review failed.")
-    assert decision is not None and decision.decision is Decision.ESCALATE
+    assert decision is not None and decision.decision is Decision.DENY
     assert "The review failed." in decision.reason
     assert "1 unreviewed file(s) (a.py)" in decision.reason
+    assert "try the step again" in decision.reason
     decision, _ = await needs_clean(tmp_path, unreviewed, unreviewed)
-    assert decision is not None and decision.decision is Decision.ESCALATE, "still not clean"
+    assert decision is not None and decision.decision is Decision.DENY, "still not clean"
+
+
+async def test_a_failed_review_goes_back_to_claude_and_only_a_person_s_problem_escalates(
+    tmp_path: Path,
+):
+    """The owner: "failed honesty reviews ... should fail and be sent back to the agent with
+    an annotation, so it can make the codebase honest before retrying."
+
+    What Claude can act on is denied with the reason. What only a person can settle, such as
+    a file the review cannot judge, still escalates. Open marks are denied also when the
+    review reported a problem besides.
+    """
+    unreviewed = state(unreviewed=("a.py",))
+    too_large = "The honesty review could not judge 1 file(s): a.py (too large)."
+    decision, _ = await needs_clean(tmp_path, unreviewed, unreviewed, too_large, True)
+    assert decision is not None and decision.decision is Decision.ESCALATE
+    assert too_large in decision.reason and "certifies nothing" in decision.reason
+    marked = state(unreviewed=("b.py",), marks=(open_mark("a.py", ""),))
+    decision, _ = await needs_clean(tmp_path, unreviewed, marked, too_large, True)
+    assert decision is not None and decision.decision is Decision.DENY
+    assert "a.py" in decision.reason and f"The honesty review also said: {too_large}" in (
+        decision.reason
+    )
 
 
 async def test_a_required_review_runs_the_review_although_marks_are_open(tmp_path: Path):

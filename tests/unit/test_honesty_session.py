@@ -657,8 +657,10 @@ async def test_a_review_with_findings_denies_the_command_with_them(repo: Path):
     assert session.honesty.open_marks[0].opened_by == "the honesty review"
 
 
-async def test_a_failed_review_verifies_nothing_and_escalates(repo: Path):
-    """Section 4: a review whose answer is malformed verifies nothing; the step is escalated."""
+async def test_a_failed_review_verifies_nothing_and_goes_back_to_claude(repo: Path):
+    """Section 4: a review whose answer is malformed verifies nothing. The step is denied
+    with the reason, and no person is asked: Claude can make the code honest and try again.
+    """
     (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
     (repo / "README.md").write_text("# changed\n", encoding="utf-8")
     session, rec, store = await session_on(
@@ -667,13 +669,13 @@ async def test_a_failed_review_verifies_nothing_and_escalates(repo: Path):
     async with anyio.create_task_group() as tg:
         await session.start(tg)
         await session.send_chat(ChatSendParams(text="go"))
-        request = (await rec.wait_for(EscalationRequest))[0]
-        assert "The honesty review failed: batch 1 of 1 failed" in request.reason
-        assert "2 unreviewed file(s)" in request.reason
-        await session.decide_escalation(request.escalation_id, "deny", "no")
         await rec.wait_for(TurnResult)
         await session.stop()
-    assert rec.of(ToolResult)[-1].is_error
+    assert not rec.of(EscalationRequest)
+    result = rec.of(ToolResult)[-1]
+    assert result.is_error
+    assert "The honesty review failed: batch 1 of 1 failed" in result.content
+    assert "2 unreviewed file(s)" in result.content and "try the step again" in result.content
     assert store.trusted_files == {} and session.honesty.verified == {}
     assert not (await session.honesty_snapshot()).clean
 
@@ -801,13 +803,16 @@ async def test_a_commit_with_unreviewed_files_follows_the_review(repo: Path):
 
 async def test_a_person_s_allow_of_a_commit_certifies_nothing(repo: Path):
     """Section 5: a person's allow on an honesty escalation lets the commit run once; the
-    commit is not certified."""
+    commit is not certified. Two changed files and a review that reads at most one: only a
+    person can settle that, so the commit is escalated."""
     (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
+    (repo / "README.md").write_text("# changed\n", encoding="utf-8")
     git(repo, "add", "-A")
     session, rec, store = await session_on(
         repo,
         [[bash("git commit -m second", run=COMMIT)]],
-        models={"honesty-review": fake_reviewer(fails=True)},
+        models={"honesty-review": fake_reviewer()},
+        review_max_files=1,
     )
     first = git(repo, "rev-parse", "HEAD")
     async with anyio.create_task_group() as tg:
@@ -815,7 +820,7 @@ async def test_a_person_s_allow_of_a_commit_certifies_nothing(repo: Path):
         await session.send_chat(ChatSendParams(text="go"))
         request = (await rec.wait_for(EscalationRequest))[0]
         assert "this command is a commit" in request.reason
-        assert "The honesty review failed" in request.reason
+        assert "at most 1 (honesty.review_max_files)" in request.reason
         await session.decide_escalation(request.escalation_id, "allow", "this once")
         await rec.wait_for(TurnResult)
         await session.stop()
@@ -965,7 +970,7 @@ async def test_a_client_certifies_and_asks_for_a_review_over_the_protocol(repo: 
             assert snapshot["honesty"]["baseline"] == head and snapshot["honesty"]["clean"]
             assert snapshot["honesty_mode"] == "enforce"
             review = await zed.request("honesty.review")
-            assert review == {"ran": True, "problem": ""}
+            assert review == {"ran": True, "problem": "", "needs_person": False}
             with pytest.raises(RequestFailed, match="names no commit"):
                 await zed.request("honesty.trust", {"rev": "no-such-branch"})
             with anyio.fail_after(5):

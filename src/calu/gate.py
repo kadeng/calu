@@ -281,11 +281,22 @@ HONESTY_NO_BASELINE = (
 
 HONESTY_UNREVIEWED = (
     "calu runs and commits code only after it was verified to say what it does "
-    "(honesty.mode is enforce), and {what}. Not verified: {state}. {problem} Allowing this "
-    "step lets it run once and certifies nothing."
+    "(honesty.mode is enforce), and {what}. Not verified: {state}. {problem}"
 )
-"""Reason of the escalation of a step that needs a clean honesty state when the honesty review
-did not make the state clean."""
+"""Reason of the decision about a step that needs a clean honesty state when the honesty
+review did not make the state clean. `HONESTY_ALLOW_ONCE` or `HONESTY_TRY_AGAIN` follows."""
+
+HONESTY_ALLOW_ONCE = "Allowing this step lets it run once and certifies nothing."
+"""The end of that reason when a person decides (an escalation)."""
+
+HONESTY_TRY_AGAIN = (
+    "Make each unit's name, documentation and behaviour agree where they do not, then try "
+    "the step again: it starts the next review by itself. Do not touch a file only to have "
+    "it judged again."
+)
+"""The end of that reason when the step goes back to Claude (a denial): the review failed or
+is still running, or files changed while it ran. Claude can act on that; a person is not
+needed."""
 
 HONESTY_ALSO = (
     "calu runs code only after it was verified to say what it does (honesty.mode is enforce), "
@@ -525,7 +536,7 @@ class StepGate:
         clock_alarm: Callable[[], str | None],
         keep_changeset: Callable[[str, str], None],
         honesty: Callable[[Step], Awaitable[HonestySnapshot | None]],
-        honesty_review: Callable[[Step, float | None], Awaitable[str]],
+        honesty_review: Callable[[Step, float | None], Awaitable[tuple[str, bool]]],
         reviews_task: Callable[[Step], bool] = lambda step: False,
         review_task: Callable[[Step], Awaitable[CheckDecision]] | None = None,
     ) -> None:
@@ -555,11 +566,13 @@ class StepGate:
             honesty: Computes the honesty state for a step as it is now: the state of the
                 checkouts the step belongs to (D251); returns None while `honesty.mode` is
                 "off". It may raise; the step is then escalated (`decide`).
-            honesty_review: Runs the honesty review for a step that needs a clean state: (the
-                step, the longest time to wait for the review in seconds or None for no
-                limit). Returns "" if the review ran (the gate then reads the state again),
-                otherwise one sentence saying why it did not run, failed or is still running;
-                never raises.
+            honesty_review: Runs the honesty review for a step that needs a clean state. It
+                takes the step and the longest time to wait for the review in seconds (None:
+                no limit). It returns a pair and never raises:
+                - the problem: "" if the review judged every file; otherwise one sentence
+                  saying why it did not run, failed, is still running or left files
+                  unjudged;
+                - True if only a person can settle that problem.
             reviews_task: Says whether a step that the policy lets run unchecked tells a
                 subagent something that the subagent checker reviews first: an Agent call,
                 or Claude's own `SendMessage` to one of its subagents (not calu's relay of
@@ -1232,22 +1245,28 @@ class StepGate:
     ) -> tuple[CheckDecision | None, HonestySnapshot | None]:
         """Decide about a step that needs a clean honesty state while the state is not clean.
 
-        Specification section 5, for a command that executes project code and for a commit:
+        Specification section 5, for a command that executes project code and for a commit.
+        Before any review:
 
-            open marks, no review required      -> DENY with the marks and their reasons
-            no baseline                         -> ESCALATE
-            only files whose working content
-            is verified while the index holds
-            an earlier one (before or after
-            the review)                         -> DENY with the `git add` that settles it
-            otherwise (unreviewed files, or a
-            review is required)                 -> the honesty review runs, then by the new
-                                                   state: clean -> no objection; marks -> DENY;
-                                                   else ESCALATE with the review's problem
+        - Open marks and no review required: DENY with the marks and their reasons.
+        - No baseline: ESCALATE.
+        - Only files whose working content is verified while the git index holds an earlier
+          one: DENY with the `git add` that settles it.
+
+        Otherwise the honesty review runs. Then, by the new state:
+
+        - Clean: no objection.
+        - Open marks: DENY with the marks, and with the review's problem if it had one.
+        - Only the index is behind: DENY with the `git add`.
+        - A problem only a person can settle (a file the review cannot judge, see
+          `HonestyReviewResult.needs_person`): ESCALATE.
+        - Any other problem (the review failed or is still running, files changed while it
+          ran): DENY with the reason. Claude makes the code honest and tries again; the
+          next try starts the next review.
 
         The gate waits for the review until `REVIEW_MARGIN_S` before the end of its own
         time (`budget`). A review that takes longer goes on without the step: the step is
-        escalated with the note that the review is still running.
+        denied with the note that the review is still running, and Claude tries it again.
 
         Side effects: may run the honesty review (`honesty_review`), which takes time and
         changes the session's honesty state.
@@ -1280,27 +1299,41 @@ class StepGate:
         wait_s: float | None = None
         if budget is not None and budget.deadline != float("inf"):
             wait_s = max(0.0, budget.deadline - anyio.current_time() - REVIEW_MARGIN_S)
-        problem = await self._honesty_review(step, wait_s)
+        problem, needs_person = await self._honesty_review(step, wait_s)
         after = await self._honesty(step)
         if after is None or after.clean:
             return None, after
-        if not problem and after.marks:
-            return self._marks_denial(after, what, summary), after
+        if after.marks:
+            # Open marks are Claude's to settle first, also when the review reported more.
+            denial = self._marks_denial(after, what, summary)
+            if problem:
+                denial = denial.model_copy(
+                    update={"reason": f"{denial.reason}\n\nThe honesty review also said: {problem}"}
+                )
+            return denial, after
         if (restage := self._restage_denial(after, what, summary)) is not None:
             # The review verified the working files; only the index is behind.
             return restage, after
-        return (
-            CheckDecision(
-                decision=Decision.ESCALATE,
-                reason=HONESTY_UNREVIEWED.format(
-                    what=what,
-                    state=_unverified(after),
-                    problem=problem or "The honesty review ran and did not verify all of it.",
-                ),
-                step_summary=summary,
-            ),
-            after,
+        reason = HONESTY_UNREVIEWED.format(
+            what=what,
+            state=_unverified(after),
+            problem=problem or "The honesty review ran and did not verify all of it.",
         )
+        if needs_person:
+            decision = CheckDecision(
+                decision=Decision.ESCALATE,
+                reason=f"{reason} {HONESTY_ALLOW_ONCE}",
+                step_summary=summary,
+            )
+        else:
+            # The owner: a failed review is sent back to the agent with the reason, so that
+            # it can make the code honest before it tries again.
+            decision = CheckDecision(
+                decision=Decision.DENY,
+                reason=f"{reason} {HONESTY_TRY_AGAIN}",
+                step_summary=summary,
+            )
+        return decision, after
 
     def _marks_denial(self, state: HonestySnapshot, what: str, summary: str) -> CheckDecision:
         """Build the denial of a step that needs a clean state while marks are open.

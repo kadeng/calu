@@ -42,7 +42,7 @@ callers per unit. Section 9 of `notes/honesty-graph-design.md` has the owner's w
 one, on calu). Next for speed: keep the parsed files per file state between requests, as the
 search results are kept. Not seen in a UI.
 
-**Open request of the owner, not built** (2026-11-27, late evening): "At the moment, failed
+**The owner's request on failed honesty reviews, built** (2026-11-27, late evening): "At the moment, failed
 honesty reviews seem to escalate. They should fail and be sent back to the agent with an
 annotation, so it can make the codebase honest before retrying. Why do I see so many
 escalations when a command is being run while code is unreviewed? The review should be
@@ -55,14 +55,17 @@ triggered and happen before the command runs."
 - For the owner's installation: set `honesty.generated_paths` to
   `^src/calu/web/static/pane/` for this project. The owner has to do that; an agent may not
   run `calu config`.
-- The change to build, in `StepGate._needs_clean` (`src/calu/gate.py`): today a state that
-  is not clean after the review is denied only when there are marks and the review reported
-  no problem; everything else is escalated. Proposed: deny with the reason whenever the
-  agent can act on it (marks, also together with a problem; a review that failed, was
-  still running, or dropped files that changed meanwhile). Keep the escalation where only a
-  person can settle it (no baseline, `sufficient_trust` "user", a file the review cannot
-  judge). The owner has not confirmed that split. `HonestyReviewResult` has only a text
-  for the problem today; the gate needs to know which kind it is.
+- Built in `StepGate._needs_clean` (`src/calu/gate.py`), with the new field
+  `HonestyReviewResult.needs_person`. After the review, open marks are denied (also with a
+  problem besides), and so is any problem Claude can act on: a review that failed or is
+  still running, files that changed while it ran. The denial ends with `HONESTY_TRY_AGAIN`.
+  Escalated as before: what only a person can settle (no baseline, `sufficient_trust`
+  "user", a file the review cannot judge, a worktree outside the project, more files than
+  `review_max_files`, git failing to list files).
+- That split is Claude's reading of the request; the owner did not answer the question
+  about it before it was built. A failed review is denied again at every try for
+  `REVIEW_RETRY_S` (60 s); the denial says when the next review starts.
+- Unit tests only; not run with a real model or in a UI.
 
 **What the owner still has to decide** (ask once; do not decide for the owner):
 

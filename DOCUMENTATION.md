@@ -2044,9 +2044,17 @@ concerned.
         ├─ unreviewed files, or review required ► the honesty review runs
         │        ├─ clean afterwards ───────────► the step runs
         │        ├─ marks ──────────────────────► DENY with them
-        │        └─ failed or did not run ──────► ESCALATE
+        │        ├─ failed, still running, or ──► DENY with the reason; Claude makes the
+        │        │  files changed meanwhile        code honest and tries again, which
+        │        │                                 starts the next review
+        │        └─ only a person can settle it ► ESCALATE (a file the review cannot
+        │                                          judge, more files than one review reads)
         └─ no baseline ─────────────────────────► ESCALATE: a person certifies a commit
 ```
+
+- A file the review cannot judge is usually a large generated one, such as a built bundle.
+  List generated files in `honesty.generated_paths`: they are not judged at all, and steps
+  are not escalated because of them.
 
 - **"Executes project code"** means tests, a build that runs code, a script, an interpreter.
   The command checker makes that judgement. When the command checker gives no answer to this
