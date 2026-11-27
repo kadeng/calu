@@ -49,7 +49,7 @@ def test_the_index_reports_the_servers_references_and_those_of_a_base_method(
         "implementations": {"base.py:2": [["a.py", 2, 8]]},
     }
     with project(tmp_path, script) as index:
-        answer = index.referrers(Unit("a.py", "Store.save", line=2))
+        answer = index.find(Unit("a.py", "Store.save", line=2))
     assert [(p.path, p.line, p.column) for p in answer.referrers] == [
         ("b.py", 1, 6),
         ("b.py", 2, 5),
@@ -66,7 +66,7 @@ def test_a_server_that_never_reports_ready_gives_no_complete_answer(
     complete, so an empty list is not read as "no referrers"."""
     monkeypatch.setattr("calu.refindex.lsp.START_TIMEOUT_S", 0.5)
     with project(tmp_path, {"ready": False}) as index:
-        answer = index.referrers(Unit("a.py", "Store.save", line=2))
+        answer = index.find(Unit("a.py", "Store.save", line=2))
     assert answer.referrers == () and not answer.complete
     assert "did not report that it has read the project" in answer.problem
 
@@ -74,12 +74,12 @@ def test_a_server_that_never_reports_ready_gives_no_complete_answer(
 def test_a_missing_server_is_a_problem_not_an_empty_answer(tmp_path: Path) -> None:
     """Without the server's program there is no fast index; the answer says so."""
     index = LspIndex(tmp_path, command=("calu-no-such-language-server",))
-    answer = index.referrers(Unit("a.py", "Store.save", line=2))
+    answer = index.find(Unit("a.py", "Store.save", line=2))
     assert not answer.complete and "is not installed" in answer.problem
 
 
 def test_a_unit_whose_name_is_not_on_its_line_is_a_problem(tmp_path: Path) -> None:
     """The server is asked at the position of the name; a wrong line cannot be asked about."""
     with project(tmp_path, {"ready": True}) as index:
-        answer = index.referrers(Unit("a.py", "Store.save", line=1))
+        answer = index.find(Unit("a.py", "Store.save", line=1))
     assert not answer.complete and "is not on line 1 of a.py" in answer.problem

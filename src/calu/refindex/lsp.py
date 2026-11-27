@@ -37,7 +37,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from calu.refindex.model import PLACE_TEXT_CHARS, Place, Referrers, Unit
+import anyio
+
+from calu.refindex.model import PLACE_TEXT_CHARS, Place, Referrers, Resolution, Unit
 
 BASEDPYRIGHT = ("basedpyright-langserver", "--stdio")
 """The command of the Python language server the index was measured with."""
@@ -268,10 +270,13 @@ class LspIndex:
     complete."""
     language: str = "python"
     """The protocol's language id of the files the server reads."""
+    suffixes: tuple[str, ...] = (".py", ".pyi")
+    """The file names the server covers; a place in another file is never resolved."""
     _client: LspClient | None = field(default=None, init=False, repr=False)
     _ready: bool = field(default=False, init=False, repr=False)
     _quiet_until: float = field(default=0.0, init=False, repr=False)
     _problem: str = field(default="", init=False, repr=False)
+    _one_at_a_time: anyio.Lock = field(default_factory=anyio.Lock, init=False, repr=False)
 
     def __enter__(self) -> LspIndex:
         """Enter the context; the server starts with the first question.
@@ -319,8 +324,23 @@ class LspIndex:
             self.close()
         self._quiet_until = time.monotonic() + SETTLE_S
 
-    def referrers(self, unit: Unit) -> Referrers:
-        """Ask the server for the places that reference `unit`.
+    async def referrers(self, unit: Unit) -> Referrers:
+        """Ask the server for the places that reference `unit`, in a worker thread.
+
+        Side effects: those of `find`. One question at a time: the conversation with the
+        server is not shared between threads.
+
+        Args:
+            unit: The unit.
+
+        Returns:
+            As `find`.
+        """
+        async with self._one_at_a_time:
+            return await anyio.to_thread.run_sync(self.find, unit)
+
+    def find(self, unit: Unit) -> Referrers:
+        """Ask the server for the places that reference `unit`; blocks while it waits.
 
         Side effects: starts the server if it does not run, waits for it to be ready and for
         `SETTLE_S` after the last `changed`, opens the unit's file in the server with its
@@ -352,6 +372,69 @@ class LspIndex:
             return Referrers(referrers=places, complete=False, problem=self._problem)
         return Referrers(referrers=places)
 
+    async def resolve(self, place: Place, unit: Unit) -> Resolution:
+        """Say what the name at `place` resolves to, in a worker thread.
+
+        Side effects: those of `resolve_blocking`. One question at a time.
+
+        Args:
+            place: An occurrence of the unit's name.
+            unit: The unit that was asked about.
+
+        Returns:
+            As `resolve_blocking`.
+        """
+        async with self._one_at_a_time:
+            return await anyio.to_thread.run_sync(self.resolve_blocking, place, unit)
+
+    def resolve_blocking(self, place: Place, unit: Unit) -> Resolution:
+        """Ask the server where the name at `place` is defined, and compare with `unit`.
+
+        Side effects: starts the server if it does not run, and sends the file's present
+        text to it (`textDocument/didOpen`, then `didClose`).
+
+        Args:
+            place: An occurrence of the unit's name.
+            unit: The unit that was asked about; its `line` must be known.
+
+        Returns:
+            `UNIT` if a definition the server names is the unit's; `OTHER` if it names
+            definitions and none is the unit's (also one outside the project); `UNKNOWN` if
+            it names none, the file is not one the server covers, the server is not ready
+            or fails. A call through a base class resolves to the base method and is
+            therefore `OTHER` here: `find` is what reports those calls.
+        """
+        if not place.path.endswith(self.suffixes):
+            return Resolution.UNKNOWN
+        try:
+            client = self._started()
+            if not self._ready:
+                return Resolution.UNKNOWN
+            uri = (self.root / place.path).as_uri()
+            text = (self.root / place.path).read_text("utf-8", errors="replace")
+            document = {"uri": uri, "languageId": self.language, "version": 1, "text": text}
+            client.notify("textDocument/didOpen", {"textDocument": document})
+            try:
+                answer = client.request(
+                    "textDocument/definition",
+                    {
+                        "textDocument": {"uri": uri},
+                        "position": {"line": place.line - 1, "character": place.column},
+                    },
+                )
+            finally:
+                client.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
+        except LspError, OSError:
+            return Resolution.UNKNOWN
+        items = answer if isinstance(answer, list) else [answer] if answer else []
+        if not items:
+            return Resolution.UNKNOWN
+        for item in items:
+            spot = self._spot(item)
+            if spot is not None and spot[:2] == (unit.path, unit.line):
+                return Resolution.UNIT
+        return Resolution.OTHER
+
     def _started(self) -> LspClient:
         """Return the running server, starting and initializing it first if needed.
 
@@ -379,7 +462,11 @@ class LspIndex:
                     "rootUri": self.root.as_uri(),
                     "workspaceFolders": [{"uri": self.root.as_uri(), "name": self.root.name}],
                     "capabilities": {
-                        "textDocument": {"references": {}, "implementation": {}},
+                        "textDocument": {
+                            "references": {},
+                            "implementation": {},
+                            "definition": {},
+                        },
                         "workspace": {"symbol": {}, "workspaceFolders": True},
                     },
                 },

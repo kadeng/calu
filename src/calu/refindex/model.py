@@ -1,10 +1,11 @@
-"""The types every reference index shares, and the interface `ReferenceIndex`.
+"""The types every reference index shares, and the interfaces `ReferenceIndex` and `Resolver`.
 
 Nothing here reads a file or starts a program.
 """
 
 from dataclasses import dataclass
-from typing import Protocol
+from enum import StrEnum
+from typing import Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -66,14 +67,45 @@ class Referrers:
     """Why `complete` is False; "" otherwise."""
 
 
+class Resolution(StrEnum):
+    """What the name at one place resolves to, as a `Resolver` answers."""
+
+    UNIT = "unit"
+    """The unit that was asked about, or one that it overrides or implements."""
+    OTHER = "other"
+    """Another definition, proven by scope or type. A match by the bare name alone is no
+    proof and must be answered `UNKNOWN`."""
+    UNKNOWN = "unknown"
+    """The resolver cannot tell: the receiver's type is not known, the file's language is not
+    covered, or the resolver is not ready."""
+
+
+@runtime_checkable
+class Resolver(Protocol):
+    """Says what the name at a place resolves to: a language server, or a code index."""
+
+    async def resolve(self, place: Place, unit: Unit) -> Resolution:
+        """Resolve the name at `place` and compare it with `unit`.
+
+        Args:
+            place: An occurrence of `unit.name`.
+            unit: The unit that was asked about.
+
+        Returns:
+            `UNIT`, `OTHER` or `UNKNOWN`. Never raises: a failure is `UNKNOWN`.
+        """
+        ...
+
+
 class ReferenceIndex(Protocol):
     """An index of the references between the units of one project directory."""
 
-    def referrers(self, unit: Unit) -> Referrers:
+    async def referrers(self, unit: Unit) -> Referrers:
         """Find the places that reference `unit`, as the files are now.
 
         An implementation reads the working files, uncommitted changes and untracked files
-        included, at the time of the call.
+        included, at the time of the call. Work that blocks (reading files, waiting for a
+        language server) runs in a worker thread.
 
         Args:
             unit: The unit.

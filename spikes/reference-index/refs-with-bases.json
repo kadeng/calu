@@ -1,0 +1,1994 @@
+{
+ "S01": [
+  {
+   "file": "src/calu/cli.py",
+   "line": 5847,
+   "in": "cmd_config.work",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/ide/bridge.py",
+   "line": 1222,
+   "in": "Bridge._settings_set.work",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/web/settings.py",
+   "line": 514,
+   "in": "save",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_admin.py",
+   "line": 565,
+   "in": "test_switching_human_diffs_on_offers_the_traces_only_while_they_are_off",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_admin.py",
+   "line": 568,
+   "in": "test_switching_human_diffs_on_offers_the_traces_only_while_they_are_off",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_admin.py",
+   "line": 569,
+   "in": "test_switching_human_diffs_on_offers_the_traces_only_while_they_are_off",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_admin.py",
+   "line": 571,
+   "in": "test_switching_human_diffs_on_offers_the_traces_only_while_they_are_off",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_admin.py",
+   "line": 572,
+   "in": "test_switching_human_diffs_on_offers_the_traces_only_while_they_are_off",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_admin.py",
+   "line": 574,
+   "in": "test_switching_human_diffs_on_offers_the_traces_only_while_they_are_off",
+   "kind": "reference"
+  }
+ ],
+ "S02": [
+  {
+   "file": "src/calu/logfile.py",
+   "line": 211,
+   "in": "setup",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/logfile.py",
+   "line": 261,
+   "in": "_setup_refusals",
+   "kind": "reference"
+  }
+ ],
+ "S03": [
+  {
+   "file": "src/calu/serve.py",
+   "line": 304,
+   "in": "Server._beat",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/serve.py",
+   "line": 408,
+   "in": "Server._start_up",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_ide_bridge_db.py",
+   "line": 611,
+   "in": "test_the_status_counts_the_running_servers_and_a_change_needs_no_second_password",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_ide_bridge_db.py",
+   "line": 612,
+   "in": "test_the_status_counts_the_running_servers_and_a_change_needs_no_second_password",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_ide_bridge_db.py",
+   "line": 614,
+   "in": "test_the_status_counts_the_running_servers_and_a_change_needs_no_second_password",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_serve.py",
+   "line": 615,
+   "in": "test_a_request_through_the_relay_needs_a_valid_server_token",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_serve.py",
+   "line": 738,
+   "in": "test_requests_go_to_the_server_that_serves_their_directory",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_serve.py",
+   "line": 739,
+   "in": "test_requests_go_to_the_server_that_serves_their_directory",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_serve.py",
+   "line": 740,
+   "in": "test_requests_go_to_the_server_that_serves_their_directory",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_serve.py",
+   "line": 794,
+   "in": "test_a_dead_servers_directory_goes_to_another_server_once_it_is_stale_or_gone",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_serve.py",
+   "line": 795,
+   "in": "test_a_dead_servers_directory_goes_to_another_server_once_it_is_stale_or_gone",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_serve.py",
+   "line": 851,
+   "in": "test_a_dead_servers_directory_goes_to_another_server_once_it_is_stale_or_gone",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_serve.py",
+   "line": 876,
+   "in": "test_a_running_server_takes_the_requests_of_a_dead_one_at_once",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_web.py",
+   "line": 1565,
+   "in": "test_the_new_session_dialog_makes_a_folder_and_starts_a_session_there",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_web.py",
+   "line": 1715,
+   "in": "test_the_new_session_dialog_continues_a_conversation_of_the_folder",
+   "kind": "reference"
+  }
+ ],
+ "S04": [
+  {
+   "file": "src/calu/web/settings.py",
+   "line": 740,
+   "in": "_checker_panes",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/web/settings.py",
+   "line": 771,
+   "in": "_checker_panes",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/web/settings.py",
+   "line": 948,
+   "in": "_claude_panes",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/web/settings.py",
+   "line": 958,
+   "in": "_claude_panes",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/web/settings.py",
+   "line": 1028,
+   "in": "_session_panes",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/web/settings.py",
+   "line": 1040,
+   "in": "_session_panes",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/web/settings.py",
+   "line": 1060,
+   "in": "_session_panes",
+   "kind": "reference"
+  }
+ ],
+ "S05": [
+  {
+   "file": "src/calu/claude/fake_runner.py",
+   "line": 118,
+   "in": "<module>",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/claude/fake_runner.py",
+   "line": 315,
+   "in": "FakeRunner.run",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/claude/sdk_runner.py",
+   "line": 81,
+   "in": "<module>",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/claude/sdk_runner.py",
+   "line": 1493,
+   "in": "SdkRunner._user_source",
+   "kind": "reference"
+  }
+ ],
+ "S06": [
+  {
+   "file": "src/calu/db/local.py",
+   "line": 314,
+   "in": "up",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_local_db.py",
+   "line": 313,
+   "in": "test_container_data_reads_a_bind_source_with_a_space",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_local_db.py",
+   "line": 327,
+   "in": "test_container_data_reads_a_named_volume",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_local_db.py",
+   "line": 336,
+   "in": "test_container_data_without_a_data_mount_is_none",
+   "kind": "reference"
+  }
+ ],
+ "S07": [
+  {
+   "file": "src/calu/checkers/checker.py",
+   "line": 55,
+   "in": "<module>",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/checkers/checker.py",
+   "line": 362,
+   "in": "Checker.settings",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/checkers/honesty_review.py",
+   "line": 51,
+   "in": "<module>",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/checkers/honesty_review.py",
+   "line": 365,
+   "in": "HonestyReviewer.review",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/checkers/result_checker.py",
+   "line": 48,
+   "in": "<module>",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/checkers/result_checker.py",
+   "line": 276,
+   "in": "ResultChecker.settings",
+   "kind": "reference"
+  }
+ ],
+ "S08": [
+  {
+   "file": "src/calu/traces/finalize.py",
+   "line": 687,
+   "in": "apply",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/traces/finalize.py",
+   "line": 690,
+   "in": "apply",
+   "kind": "reference"
+  }
+ ],
+ "S09": [
+  {
+   "file": "src/calu/ide/link.py",
+   "line": 240,
+   "in": "SessionLink._connections",
+   "kind": "reference"
+  }
+ ],
+ "S10": [
+  {
+   "file": "src/calu/cli.py",
+   "line": 463,
+   "in": "load_credential",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/cli.py",
+   "line": 619,
+   "in": "_user_target",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/doctor.py",
+   "line": 239,
+   "in": "credential_findings",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/ide/access.py",
+   "line": 258,
+   "in": "Access._open",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/ide/access.py",
+   "line": 430,
+   "in": "Access._login",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_cli_and_setup.py",
+   "line": 87,
+   "in": "test_migrate_without_the_db_admin_login_says_how_to_create_one",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_cli_and_setup.py",
+   "line": 94,
+   "in": "test_run_without_a_user_login_says_how_to_create_one",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_cli_and_setup.py",
+   "line": 140,
+   "in": "test_herd_commands_need_a_user_login",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_cli_and_setup.py",
+   "line": 156,
+   "in": "test_the_configuration_commands_need_a_user_login",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_cli_and_setup.py",
+   "line": 188,
+   "in": "test_rules_arguments_are_interpreted_per_action",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_cli_and_setup.py",
+   "line": 836,
+   "in": "test_without_any_login_the_message_names_setup",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_doctor.py",
+   "line": 76,
+   "in": "test_the_credential_store_is_reported_without_decrypting_anything",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_ide_access.py",
+   "line": 212,
+   "in": "test_no_login_at_all_is_no_database_with_the_setup_command",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_ide_bridge.py",
+   "line": 311,
+   "in": "test_the_presets_need_no_database_and_hold_no_large_mistral_model",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_ide_bridge.py",
+   "line": 365,
+   "in": "test_the_status_reports_the_tools_and_a_missing_database",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_ide_bridge.py",
+   "line": 375,
+   "in": "test_an_unlock_without_a_login_says_there_is_none",
+   "kind": "reference"
+  }
+ ],
+ "S11": [
+  {
+   "file": "src/calu/checkers/changeset.py",
+   "line": 637,
+   "in": "_classify",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 18,
+   "in": "<module>",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 71,
+   "in": "test_the_options_that_change_the_diff_are_read_from_the_commits_own_words",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 72,
+   "in": "test_the_options_that_change_the_diff_are_read_from_the_commits_own_words",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 73,
+   "in": "test_the_options_that_change_the_diff_are_read_from_the_commits_own_words",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 74,
+   "in": "test_the_options_that_change_the_diff_are_read_from_the_commits_own_words",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 75,
+   "in": "test_the_options_that_change_the_diff_are_read_from_the_commits_own_words",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 76,
+   "in": "test_the_options_that_change_the_diff_are_read_from_the_commits_own_words",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 78,
+   "in": "test_the_options_that_change_the_diff_are_read_from_the_commits_own_words",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 79,
+   "in": "test_the_options_that_change_the_diff_are_read_from_the_commits_own_words",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 80,
+   "in": "test_the_options_that_change_the_diff_are_read_from_the_commits_own_words",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 81,
+   "in": "test_the_options_that_change_the_diff_are_read_from_the_commits_own_words",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 82,
+   "in": "test_the_options_that_change_the_diff_are_read_from_the_commits_own_words",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 83,
+   "in": "test_the_options_that_change_the_diff_are_read_from_the_commits_own_words",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 84,
+   "in": "test_the_options_that_change_the_diff_are_read_from_the_commits_own_words",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 85,
+   "in": "test_the_options_that_change_the_diff_are_read_from_the_commits_own_words",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 97,
+   "in": "test_the_options_that_change_the_diff_are_read_from_the_commits_own_words",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 111,
+   "in": "test_a_shortened_option_is_read_as_the_option_git_takes_it_for",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 112,
+   "in": "test_a_shortened_option_is_read_as_the_option_git_takes_it_for",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 113,
+   "in": "test_a_shortened_option_is_read_as_the_option_git_takes_it_for",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 114,
+   "in": "test_a_shortened_option_is_read_as_the_option_git_takes_it_for",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 115,
+   "in": "test_a_shortened_option_is_read_as_the_option_git_takes_it_for",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 126,
+   "in": "test_a_shortened_option_is_read_as_the_option_git_takes_it_for",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_changeset.py",
+   "line": 142,
+   "in": "test_a_shortened_option_is_read_as_the_option_git_takes_it_for",
+   "kind": "reference"
+  }
+ ],
+ "S12": [
+  {
+   "file": "src/calu/cli.py",
+   "line": 733,
+   "in": "cmd_db_up",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/cli.py",
+   "line": 1738,
+   "in": "_new_database",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_local_db.py",
+   "line": 88,
+   "in": "test_a_start_never_replaces_a_database_that_keeps_its_files_elsewhere",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_local_db.py",
+   "line": 199,
+   "in": "test_a_new_database_gets_a_private_directory_with_a_mountable_one_inside",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_local_db.py",
+   "line": 211,
+   "in": "test_a_new_database_gets_a_private_directory_with_a_mountable_one_inside",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_local_db.py",
+   "line": 213,
+   "in": "test_a_new_database_gets_a_private_directory_with_a_mountable_one_inside",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_local_db.py",
+   "line": 214,
+   "in": "test_a_new_database_gets_a_private_directory_with_a_mountable_one_inside",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_local_db.py",
+   "line": 217,
+   "in": "test_a_new_database_gets_a_private_directory_with_a_mountable_one_inside",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_local_db.py",
+   "line": 219,
+   "in": "test_a_new_database_gets_a_private_directory_with_a_mountable_one_inside",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_local_db.py",
+   "line": 223,
+   "in": "test_the_container_mounts_the_chosen_directory",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_local_db.py",
+   "line": 250,
+   "in": "test_a_stopped_local_database_is_started_when_it_is_needed",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_setup_dialog.py",
+   "line": 105,
+   "in": "test_db_up_takes_port_and_directory_from_the_stored_record",
+   "kind": "reference"
+  }
+ ],
+ "S13": [
+  {
+   "file": "src/calu/tui/render.py",
+   "line": 705,
+   "in": "step_lines",
+   "kind": "reference"
+  }
+ ],
+ "S14": [
+  {
+   "file": "src/calu/admin.py",
+   "line": 422,
+   "in": "set_setting",
+   "kind": "reference"
+  }
+ ],
+ "S15": [
+  {
+   "file": "src/calu/cli.py",
+   "line": 1701,
+   "in": "_first_start_local",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_local_db.py",
+   "line": 159,
+   "in": "test_the_owner_url_and_password_are_usable",
+   "kind": "reference"
+  }
+ ],
+ "S16": [
+  {
+   "file": "src/calu/evals/__init__.py",
+   "line": 10,
+   "in": "<module>",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/evals/__init__.py",
+   "line": 21,
+   "in": "<module>",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/evals/cli.py",
+   "line": 35,
+   "in": "<module>",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/evals/cli.py",
+   "line": 130,
+   "in": "collect_cases",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_herd.py",
+   "line": 15,
+   "in": "<module>",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_herd.py",
+   "line": 168,
+   "in": "test_resolved_escalations_become_evaluation_cases",
+   "kind": "reference"
+  }
+ ],
+ "S17": [
+  {
+   "file": "src/calu/cli.py",
+   "line": 5863,
+   "in": "cmd_config.work",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_admin.py",
+   "line": 310,
+   "in": "test_one_entry_of_a_list_setting_is_added_and_removed",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_admin.py",
+   "line": 321,
+   "in": "test_one_entry_of_a_list_setting_is_added_and_removed",
+   "kind": "reference"
+  }
+ ],
+ "S18": [
+  {
+   "file": "src/calu/tui/render.py",
+   "line": 2204,
+   "in": "honesty_page",
+   "kind": "reference"
+  }
+ ],
+ "S19": [
+  {
+   "file": "src/calu/context/__init__.py",
+   "line": 10,
+   "in": "<module>",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/context/__init__.py",
+   "line": 21,
+   "in": "<module>",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/gate.py",
+   "line": 143,
+   "in": "<module>",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/gate.py",
+   "line": 621,
+   "in": "StepGate.undecided",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/gate.py",
+   "line": 767,
+   "in": "StepGate.run_checkers.one",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/gate.py",
+   "line": 828,
+   "in": "StepGate.judge",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_turns.py",
+   "line": 5,
+   "in": "<module>",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_turns.py",
+   "line": 86,
+   "in": "test_an_unchecked_call_cannot_forge_a_turn_or_a_user_input",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_turns.py",
+   "line": 152,
+   "in": "test_random_tool_input_never_changes_the_structure_of_a_turn",
+   "kind": "reference"
+  }
+ ],
+ "S20": [
+  {
+   "file": "src/calu/cli.py",
+   "line": 5099,
+   "in": "cmd_summary.show",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/cli.py",
+   "line": 5118,
+   "in": "cmd_summary.read",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/web/app.py",
+   "line": 1790,
+   "in": "summary_page",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_cli_reports.py",
+   "line": 295,
+   "in": "test_the_editor_flow_stores_what_was_written",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_cli_reports.py",
+   "line": 305,
+   "in": "test_the_editor_flow_stores_what_was_written",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_cli_reports.py",
+   "line": 320,
+   "in": "test_the_editor_flow_stores_what_was_written",
+   "kind": "reference"
+  }
+ ],
+ "S21": [
+  {
+   "file": "src/calu/acp/adapter.py",
+   "line": 830,
+   "in": "Adapter.on_event",
+   "kind": "reference"
+  }
+ ],
+ "S22": [
+  {
+   "file": "tests/fuzz/locking_harness.py",
+   "line": 455,
+   "in": "take",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_call_locks.py",
+   "line": 353,
+   "in": "test_a_session_gives_back_its_locks_and_denies_a_command_whose_worktree_is_busy",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_call_locks.py",
+   "line": 502,
+   "in": "test_a_hold_after_a_lock_wait_ends_within_the_hooks_time",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 480,
+   "in": "test_a_call_waits_the_default_of_its_type_and_at_most_the_maximum",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 486,
+   "in": "test_a_call_waits_the_default_of_its_type_and_at_most_the_maximum",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 500,
+   "in": "test_a_call_refuses_an_unbounded_or_negative_timeout",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 512,
+   "in": "test_worktree_ids_paths_owners_and_agents_are_checked",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 566,
+   "in": "test_an_edit_waits_for_a_command_in_its_worktree_but_not_in_another",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 580,
+   "in": "test_a_command_waits_for_an_edit_in_its_worktree",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 583,
+   "in": "test_a_command_waits_for_an_edit_in_its_worktree",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 585,
+   "in": "test_a_command_waits_for_an_edit_in_its_worktree",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 602,
+   "in": "test_two_commands_never_run_in_one_worktree_at_once",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 604,
+   "in": "test_two_commands_never_run_in_one_worktree_at_once",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 607,
+   "in": "test_two_commands_never_run_in_one_worktree_at_once",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 613,
+   "in": "test_an_edit_outside_waits_for_every_command_and_keeps_new_commands_out",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 620,
+   "in": "test_an_edit_outside_waits_for_every_command_and_keeps_new_commands_out",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 626,
+   "in": "test_an_edit_outside_waits_for_every_command_and_keeps_new_commands_out",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 628,
+   "in": "test_an_edit_outside_waits_for_every_command_and_keeps_new_commands_out",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 633,
+   "in": "test_a_command_that_writes_outside_excludes_every_other_command",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 635,
+   "in": "test_a_command_that_writes_outside_excludes_every_other_command",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 640,
+   "in": "test_a_command_that_writes_outside_excludes_every_other_command",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 648,
+   "in": "test_an_operation_that_timed_out_keeps_none_of_its_locks",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 654,
+   "in": "test_an_operation_that_timed_out_keeps_none_of_its_locks",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 659,
+   "in": "test_a_lease_is_released_once_and_at_the_end_of_a_with_block",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 663,
+   "in": "test_a_lease_is_released_once_and_at_the_end_of_a_with_block",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 672,
+   "in": "test_the_lock_space_is_left_empty_after_every_lease_ended",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 725,
+   "in": "test_an_edit_a_command_and_an_edit_of_one_agent_run_in_issue_order",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 755,
+   "in": "test_a_call_whose_check_finished_first_waits_for_the_earlier_call_of_its_agent",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 795,
+   "in": "test_a_call_that_failed_on_its_locks_after_entering_keeps_the_order_moving",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 831,
+   "in": "test_an_owner_with_a_lease_is_refused_at_once",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 835,
+   "in": "test_an_owner_with_a_lease_is_refused_at_once",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 841,
+   "in": "test_two_calls_of_one_agent_wait_for_each_other_like_calls_of_two_agents",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 850,
+   "in": "test_a_release_from_another_thread_lets_the_next_call_of_the_agent_in",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 863,
+   "in": "test_the_fake_scheme_never_waits_and_keeps_the_owner_rule",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 864,
+   "in": "test_the_fake_scheme_never_waits_and_keeps_the_owner_rule",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 928,
+   "in": "test_one_ticket_serves_one_lock_call_at_a_time",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 944,
+   "in": "test_withdrawing_the_ticket_of_a_call_that_waits_for_a_lock_cancels_it",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 946,
+   "in": "test_withdrawing_the_ticket_of_a_call_that_waits_for_a_lock_cancels_it",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 963,
+   "in": "test_withdrawing_the_ticket_of_an_entered_call_cancels_its_wait_for_the_last_lock",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 979,
+   "in": "test_withdrawing_a_ticket_after_its_call_got_the_lease_does_nothing",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 1009,
+   "in": "test_generated_owners_never_collide_with_the_callers_owners",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 1010,
+   "in": "test_generated_owners_never_collide_with_the_callers_owners",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 1031,
+   "in": "test_an_edit_outside_waits_only_for_the_commands_that_run",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 1032,
+   "in": "test_an_edit_outside_waits_only_for_the_commands_that_run",
+   "kind": "reference"
+  }
+ ],
+ "S23": [
+  {
+   "file": "tests/unit/test_tui_app.py",
+   "line": 482,
+   "in": "test_new_output_does_not_move_what_is_read_further_up",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_app.py",
+   "line": 632,
+   "in": "test_typing_while_the_transcript_has_the_focus_lands_in_the_composer",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_app.py",
+   "line": 866,
+   "in": "test_the_connection_state_is_shown_and_sending_is_off_while_detached",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_more.py",
+   "line": 161,
+   "in": "test_another_stored_conversation_is_resumed_from_the_list",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_more.py",
+   "line": 179,
+   "in": "test_the_stored_history_stands_above_the_replayed_events",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_more.py",
+   "line": 203,
+   "in": "test_a_session_without_a_stored_history_attaches_as_before",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_process.py",
+   "line": 75,
+   "in": "test_a_turn_with_an_escalation_and_a_side_question_through_a_real_session",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_process.py",
+   "line": 98,
+   "in": "test_a_turn_with_an_escalation_and_a_side_question_through_a_real_session",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_review.py",
+   "line": 644,
+   "in": "test_the_client_attaches_again_after_a_long_stay_in_the_git_program",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_review.py",
+   "line": 647,
+   "in": "test_the_client_attaches_again_after_a_long_stay_in_the_git_program",
+   "kind": "reference"
+  }
+ ],
+ "S24": [
+  {
+   "file": "src/calu/evals/cli.py",
+   "line": 210,
+   "in": "run_evals",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/gate.py",
+   "line": 471,
+   "in": "route_checkers",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_store.py",
+   "line": 138,
+   "in": "test_disabled_checker_type_is_left_out",
+   "kind": "reference"
+  }
+ ],
+ "S25": [
+  {
+   "file": "src/calu/tui/widgets/transcript.py",
+   "line": 687,
+   "in": "Transcript.on_key",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/tui/widgets/transcript.py",
+   "line": 689,
+   "in": "Transcript.on_key",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/tui/widgets/transcript.py",
+   "line": 691,
+   "in": "Transcript.on_key",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/tui/widgets/transcript.py",
+   "line": 693,
+   "in": "Transcript.on_key",
+   "kind": "reference"
+  }
+ ],
+ "S26": [
+  {
+   "file": "src/calu/traces/writer.py",
+   "line": 290,
+   "in": "TraceWriter._append",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/traces/writer.py",
+   "line": 696,
+   "in": "TraceWriter._finish",
+   "kind": "reference"
+  }
+ ],
+ "S27": [
+  {
+   "file": "src/calu/tui/connection.py",
+   "line": 366,
+   "in": "Link._snapshot",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_model.py",
+   "line": 250,
+   "in": "test_a_snapshot_opens_escalations_the_events_did_not_carry_and_closes_stale_ones",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_model.py",
+   "line": 255,
+   "in": "test_a_snapshot_opens_escalations_the_events_did_not_carry_and_closes_stale_ones",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_render.py",
+   "line": 169,
+   "in": "test_the_status_bar_keeps_state_and_open_decisions_when_it_gets_narrow",
+   "kind": "reference"
+  }
+ ],
+ "S28": [
+  {
+   "file": "src/calu/tui/app.py",
+   "line": 4333,
+   "in": "CaluApp._launch",
+   "kind": "reference"
+  }
+ ],
+ "S29": [
+  {
+   "file": "src/calu/tui/fake.py",
+   "line": 607,
+   "in": "FakeSession.emit",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/tui/scenarios.py",
+   "line": 734,
+   "in": "preload",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_actions.py",
+   "line": 247,
+   "in": "test_a_client_that_fell_behind_reconnects_after_its_last_event",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_actions.py",
+   "line": 261,
+   "in": "test_an_incomplete_replay_rebuilds_the_model_from_the_snapshot",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_actions.py",
+   "line": 262,
+   "in": "test_an_incomplete_replay_rebuilds_the_model_from_the_snapshot",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_actions.py",
+   "line": 297,
+   "in": "test_a_broken_connection_is_opened_again_and_continues_after_the_last_event",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_app.py",
+   "line": 863,
+   "in": "test_the_connection_state_is_shown_and_sending_is_off_while_detached",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_model.py",
+   "line": 254,
+   "in": "test_a_snapshot_opens_escalations_the_events_did_not_carry_and_closes_stale_ones",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_review.py",
+   "line": 634,
+   "in": "test_the_client_attaches_again_after_a_long_stay_in_the_git_program.stay",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_review.py",
+   "line": 809,
+   "in": "test_a_close_while_the_attach_asks_for_the_state_is_followed_by_a_reconnect",
+   "kind": "reference"
+  }
+ ],
+ "S30": [
+  {
+   "file": "src/calu/cli.py",
+   "line": 6764,
+   "in": "_traces_finalize",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/session.py",
+   "line": 5639,
+   "in": "Session._start_traces",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/session.py",
+   "line": 5731,
+   "in": "Session._known_secrets",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_traces.py",
+   "line": 609,
+   "in": "test_the_secret_values_of_the_environment_are_collected",
+   "kind": "reference"
+  }
+ ],
+ "S31": [
+  {
+   "file": "src/calu/tui/model.py",
+   "line": 1447,
+   "in": "SessionModel.apply",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/tui/model.py",
+   "line": 1548,
+   "in": "SessionModel.apply",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/tui/model.py",
+   "line": 1552,
+   "in": "SessionModel.apply",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/tui/model.py",
+   "line": 1687,
+   "in": "SessionModel._invalid",
+   "kind": "reference"
+  }
+ ],
+ "S32": [
+  {
+   "file": "src/calu/setup.py",
+   "line": 355,
+   "in": "user_login",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_setup_variants.py",
+   "line": 205,
+   "in": "test_a_login_with_createrole_passes_and_one_that_cannot_manage_the_roles_does_not",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_cli_commands.py",
+   "line": 127,
+   "in": "test_setup_refuses_a_machine_that_has_only_the_user_login",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_local_db.py",
+   "line": 285,
+   "in": "test_the_owner_record_of_the_local_database_requires_proof_from_the_server",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_setup_dialog.py",
+   "line": 129,
+   "in": "test_calu_run_starts_a_stopped_local_database_after_the_password",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_target.py",
+   "line": 128,
+   "in": "test_another_role_takes_over_where_the_database_is_and_nothing_else",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_target.py",
+   "line": 138,
+   "in": "test_another_role_takes_over_where_the_database_is_and_nothing_else",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_target.py",
+   "line": 218,
+   "in": "test_only_what_an_earlier_calu_wrote_is_taken_for_calus_own_container",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_target.py",
+   "line": 224,
+   "in": "test_only_what_an_earlier_calu_wrote_is_taken_for_calus_own_container",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_target.py",
+   "line": 283,
+   "in": "test_a_remote_password_login_takes_only_scram_with_channel_binding",
+   "kind": "reference"
+  }
+ ],
+ "S33": [
+  {
+   "file": "src/calu/session.py",
+   "line": 2960,
+   "in": "Session.snapshot",
+   "kind": "reference"
+  }
+ ],
+ "S34": [
+  {
+   "file": "src/calu/tui/render.py",
+   "line": 568,
+   "in": "_right_of",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/tui/render.py",
+   "line": 569,
+   "in": "_right_of",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_actions.py",
+   "line": 72,
+   "in": "test_attaching_replays_the_history_and_takes_the_snapshot",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_model.py",
+   "line": 80,
+   "in": "test_a_turn_becomes_blocks_in_order_with_one_step_per_tool_call",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_model.py",
+   "line": 262,
+   "in": "test_replayed_events_get_no_times",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_tui_tools.py",
+   "line": 206,
+   "in": "test_the_stored_history_becomes_blocks_above_a_line_that_says_so",
+   "kind": "reference"
+  }
+ ],
+ "S35": [
+  {
+   "file": "src/calu/acp/adapter.py",
+   "line": 320,
+   "in": "Adapter.handle",
+   "kind": "reference"
+  }
+ ],
+ "S36": [
+  {
+   "file": "src/calu/store/config.py",
+   "line": 203,
+   "in": "ConfigStore.load",
+   "kind": "reference"
+  }
+ ],
+ "S37": [
+  {
+   "file": "src/calu/acp/adapter.py",
+   "line": 724,
+   "in": "Adapter._set_mode",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/acp/adapter.py",
+   "line": 757,
+   "in": "Adapter._set_config_option",
+   "kind": "reference"
+  }
+ ],
+ "S38": [
+  {
+   "file": "src/calu/ide/bridge.py",
+   "line": 994,
+   "in": "Bridge._call",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/ide/bridge.py",
+   "line": 1108,
+   "in": "Bridge._attach_to",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/tui/actions.py",
+   "line": 80,
+   "in": "Actions.request",
+   "kind": "reference"
+  }
+ ],
+ "S39": [
+  {
+   "file": "src/calu/tui/screens/checkers.py",
+   "line": 381,
+   "in": "CheckersScreen.save",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/tui/screens/checkers.py",
+   "line": 406,
+   "in": "CheckersScreen._store.store",
+   "kind": "reference"
+  }
+ ],
+ "S40": [
+  {
+   "file": "src/calu/session.py",
+   "line": 755,
+   "in": "Session.__init__",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/session.py",
+   "line": 3763,
+   "in": "Session.add_comment",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_session.py",
+   "line": 1333,
+   "in": "test_a_fork_before_a_turn_drops_that_turn_from_what_the_checkers_read",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_session.py",
+   "line": 1353,
+   "in": "test_a_fork_says_when_the_summary_covers_what_it_discards",
+   "kind": "reference"
+  }
+ ],
+ "S41": [
+  {
+   "file": "src/calu/locking/rwlock.py",
+   "line": 296,
+   "in": "LockSpace.snapshot",
+   "kind": "base-definition",
+   "base": null
+  },
+  {
+   "file": "tests/fuzz/locking_harness.py",
+   "line": 953,
+   "in": "Monitor._run",
+   "kind": "reference-to-base",
+   "base": "src/calu/locking/rwlock.py:296"
+  },
+  {
+   "file": "tests/fuzz/locking_harness.py",
+   "line": 1353,
+   "in": "run_load",
+   "kind": "reference-to-base",
+   "base": "src/calu/locking/rwlock.py:296"
+  },
+  {
+   "file": "tests/unit/test_call_locks.py",
+   "line": 248,
+   "in": "test_a_cancelled_wait_leaves_no_lock_and_no_ticket",
+   "kind": "reference-to-base",
+   "base": "src/calu/locking/rwlock.py:296"
+  },
+  {
+   "file": "tests/unit/test_call_locks.py",
+   "line": 381,
+   "in": "test_a_second_take_ends_when_its_caller_is_cancelled",
+   "kind": "reference-to-base",
+   "base": "src/calu/locking/rwlock.py:296"
+  },
+  {
+   "file": "tests/unit/test_call_locks.py",
+   "line": 478,
+   "in": "test_an_edit_that_lands_while_a_command_waits_is_not_counted_as_its_change",
+   "kind": "reference-to-base",
+   "base": "src/calu/locking/rwlock.py:296"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 201,
+   "in": "holders",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 217,
+   "in": "queue_of",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 252,
+   "in": "state",
+   "kind": "reference-to-base",
+   "base": "src/calu/locking/rwlock.py:296"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 678,
+   "in": "test_the_lock_space_is_left_empty_after_every_lease_ended",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 698,
+   "in": "test_opposite_orders_of_worktrees_do_not_deadlock",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 956,
+   "in": "test_withdrawing_the_ticket_of_a_call_that_waits_for_a_lock_cancels_it",
+   "kind": "reference"
+  }
+ ],
+ "S42": [
+  {
+   "file": "src/calu/session.py",
+   "line": 1707,
+   "in": "Session._review_once",
+   "kind": "reference-to-base",
+   "base": "src/calu/store/session.py:688"
+  },
+  {
+   "file": "src/calu/session.py",
+   "line": 2369,
+   "in": "Session._apply_record",
+   "kind": "reference-to-base",
+   "base": "src/calu/store/session.py:688"
+  },
+  {
+   "file": "src/calu/store/session.py",
+   "line": 688,
+   "in": "SessionStore.distrust_file",
+   "kind": "base-definition",
+   "base": null
+  },
+  {
+   "file": "tests/db/test_trust.py",
+   "line": 176,
+   "in": "test_a_session_withdraws_a_content_calu_verified_and_never_a_person_s",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_trust.py",
+   "line": 177,
+   "in": "test_a_session_withdraws_a_content_calu_verified_and_never_a_person_s",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_trust.py",
+   "line": 178,
+   "in": "test_a_session_withdraws_a_content_calu_verified_and_never_a_person_s",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/db/test_trust.py",
+   "line": 179,
+   "in": "test_a_session_withdraws_a_content_calu_verified_and_never_a_person_s",
+   "kind": "reference"
+  }
+ ],
+ "S43": [
+  {
+   "file": "src/calu/session.py",
+   "line": 5841,
+   "in": "Session._release_commit_hold",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_traces.py",
+   "line": 817,
+   "in": "test_settle_waits_for_the_blocks_queued_before_it",
+   "kind": "reference"
+  }
+ ],
+ "S44": [
+  {
+   "file": "src/calu/cli.py",
+   "line": 4582,
+   "in": "_load_web_password",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_web_password.py",
+   "line": 40,
+   "in": "test_the_file_holds_only_a_salted_hash_readable_by_its_owner",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_web_password.py",
+   "line": 51,
+   "in": "test_an_empty_choice_matches_anything_and_a_missing_file_is_no_choice",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_web_password.py",
+   "line": 54,
+   "in": "test_an_empty_choice_matches_anything_and_a_missing_file_is_no_choice",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_web_password.py",
+   "line": 64,
+   "in": "test_a_file_of_another_format_is_refused",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_web_password.py",
+   "line": 76,
+   "in": "test_store_replaces_a_symbolic_link_instead_of_writing_through_it",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_web_password.py",
+   "line": 125,
+   "in": "test_set_password_asks_twice_and_stores_the_hash",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_web_password.py",
+   "line": 141,
+   "in": "test_set_password_leaves_calu_web_open_only_after_a_yes",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_web_password.py",
+   "line": 146,
+   "in": "test_set_password_leaves_calu_web_open_only_after_a_yes",
+   "kind": "reference"
+  }
+ ],
+ "S45": [],
+ "S46": [
+  {
+   "file": "src/calu/session.py",
+   "line": 3037,
+   "in": "Session.history",
+   "kind": "reference-to-base",
+   "base": "src/calu/store/session.py:509"
+  },
+  {
+   "file": "src/calu/store/session.py",
+   "line": 509,
+   "in": "SessionStore.load_history",
+   "kind": "base-definition",
+   "base": null
+  },
+  {
+   "file": "tests/unit/test_session.py",
+   "line": 392,
+   "in": "test_the_input_of_a_turn_is_stored_when_the_turn_starts",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_session.py",
+   "line": 409,
+   "in": "test_a_finished_turn_replaces_the_row_of_its_start",
+   "kind": "reference"
+  }
+ ],
+ "S47": [
+  {
+   "file": "src/calu/locking/rwlock.py",
+   "line": 229,
+   "in": "RWLock.request",
+   "kind": "base-definition",
+   "base": null
+  },
+  {
+   "file": "src/calu/locking/rwlock.py",
+   "line": 276,
+   "in": "RWLock.acquire",
+   "kind": "reference-to-base",
+   "base": "src/calu/locking/rwlock.py:229"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 296,
+   "in": "test_requests_are_granted_in_the_order_they_were_made_not_waited_for",
+   "kind": "reference-to-base",
+   "base": "src/calu/locking/rwlock.py:229"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 297,
+   "in": "test_requests_are_granted_in_the_order_they_were_made_not_waited_for",
+   "kind": "reference-to-base",
+   "base": "src/calu/locking/rwlock.py:229"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 298,
+   "in": "test_requests_are_granted_in_the_order_they_were_made_not_waited_for",
+   "kind": "reference-to-base",
+   "base": "src/calu/locking/rwlock.py:229"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 350,
+   "in": "test_a_withdrawn_request_leaves_the_queue_or_gives_its_grant_back",
+   "kind": "reference-to-base",
+   "base": "src/calu/locking/rwlock.py:229"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 356,
+   "in": "test_a_withdrawn_request_leaves_the_queue_or_gives_its_grant_back",
+   "kind": "reference-to-base",
+   "base": "src/calu/locking/rwlock.py:229"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 360,
+   "in": "test_a_withdrawn_request_leaves_the_queue_or_gives_its_grant_back",
+   "kind": "reference-to-base",
+   "base": "src/calu/locking/rwlock.py:229"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 388,
+   "in": "test_an_owner_that_asks_again_for_a_lock_is_refused_at_once",
+   "kind": "reference-to-base",
+   "base": "src/calu/locking/rwlock.py:229"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 394,
+   "in": "test_an_owner_that_asks_again_for_a_lock_is_refused_at_once",
+   "kind": "reference-to-base",
+   "base": "src/calu/locking/rwlock.py:229"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 396,
+   "in": "test_an_owner_that_asks_again_for_a_lock_is_refused_at_once",
+   "kind": "reference-to-base",
+   "base": "src/calu/locking/rwlock.py:229"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 406,
+   "in": "test_owners_must_be_non_empty_strings",
+   "kind": "reference-to-base",
+   "base": "src/calu/locking/rwlock.py:229"
+  },
+  {
+   "file": "tests/unit/test_locking.py",
+   "line": 408,
+   "in": "test_owners_must_be_non_empty_strings",
+   "kind": "reference-to-base",
+   "base": "src/calu/locking/rwlock.py:229"
+  }
+ ],
+ "S48": [
+  {
+   "file": "src/calu/session.py",
+   "line": 3916,
+   "in": "Session.pre_tool_use",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/session.py",
+   "line": 4048,
+   "in": "Session._checked",
+   "kind": "reference"
+  },
+  {
+   "file": "src/calu/session.py",
+   "line": 4281,
+   "in": "Session.ask",
+   "kind": "reference"
+  }
+ ],
+ "S49": [
+  {
+   "file": "src/calu/session.py",
+   "line": 3259,
+   "in": "Session._run",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_call_locks.py",
+   "line": 284,
+   "in": "test_a_call_gives_its_locks_back_and_takes_them_again",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_call_locks.py",
+   "line": 410,
+   "in": "test_giving_back_never_raises_and_the_next_change_removes_what_failed",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_call_locks.py",
+   "line": 451,
+   "in": "test_a_cancelled_question_to_a_person_gives_up_the_calls_turn",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_call_locks.py",
+   "line": 530,
+   "in": "test_a_hold_after_a_lock_wait_ends_within_the_hooks_time",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_call_locks.py",
+   "line": 551,
+   "in": "test_a_command_that_writes_outside_takes_the_global_lock_exclusively",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_call_locks.py",
+   "line": 552,
+   "in": "test_a_command_that_writes_outside_takes_the_global_lock_exclusively",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_call_locks.py",
+   "line": 581,
+   "in": "test_the_command_checkers_flag_reaches_the_locks",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_call_locks.py",
+   "line": 610,
+   "in": "test_a_new_setting_applies_to_the_calls_issued_afterwards",
+   "kind": "reference"
+  },
+  {
+   "file": "tests/unit/test_call_locks.py",
+   "line": 642,
+   "in": "test_a_running_session_follows_a_changed_locking_setting",
+   "kind": "reference"
+  }
+ ],
+ "S50": [
+  {
+   "file": "src/calu/claude/runner.py",
+   "line": 416,
+   "in": "ClaudeRunner.set_model",
+   "kind": "base-definition",
+   "base": null
+  },
+  {
+   "file": "src/calu/session.py",
+   "line": 3415,
+   "in": "Session.set_model",
+   "kind": "reference-to-base",
+   "base": "src/calu/claude/runner.py:416"
+  },
+  {
+   "file": "tests/unit/test_sdk_translation.py",
+   "line": 352,
+   "in": "test_a_side_question_and_a_model_change_need_a_connected_client",
+   "kind": "reference"
+  }
+ ]
+}

@@ -6,7 +6,8 @@ by its first argument:
     {"ready": true,                      log "Found 3 source files" after `initialized`
      "references": {"a.py:5": [["b.py", 2, 6], ...]},      by "<file>:<1-based line>"
      "symbols": [["Base.save", "base.py", 3, 8], ...],     name is the part after the last dot
-     "implementations": {"base.py:3": [["a.py", 5, 8]]}}
+     "implementations": {"base.py:3": [["a.py", 5, 8]]},
+     "definitions": {"b.py:2": [["a.py", 5, 8]]}}        where the name on that line is defined
 
 It reads no file of the project and writes only its answers.
 """
@@ -68,10 +69,14 @@ def main() -> None:
         elif method == "initialized" and script.get("ready"):
             note = {"type": 3, "message": "Found 3 source files"}
             send({"jsonrpc": "2.0", "method": "window/logMessage", "params": note})
-        elif method in ("textDocument/references", "textDocument/implementation"):
+        elif method in (
+            "textDocument/references",
+            "textDocument/implementation",
+            "textDocument/definition",
+        ):
             name = params["textDocument"]["uri"].removeprefix(root + "/")
             key = f"{name}:{params['position']['line'] + 1}"
-            table = "references" if method.endswith("references") else "implementations"
+            table = method.rpartition("/")[2].removesuffix("s") + "s"
             result = [location(root, spot) for spot in script.get(table, {}).get(key, [])]
         elif method == "workspace/symbol":
             result = [

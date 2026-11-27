@@ -320,6 +320,51 @@ of the honesty spec, an agent that drifts. What this division buys is that an er
 "one place too many was read" where a tool cannot decide, and that the checker's share stays
 small enough to pay for at every contract change.
 
+### The judge, and what the fast stage may be (the owner, 2026-11-27)
+
+The owner on who reads the unclear places: "we basically need a new task for a specialized
+LLM ( similar in specialization degree to the narrator and such ), to look at a grep /
+fulltext search result and decide whether it's a match or not. To make this fast, we could
+just provide a certain context around each match ( say, 12 lines ) and only let the agent
+read the full file on demand if the context is insufficient." And: "It does not need to be
+invoked where we can explain a match away in a cheaper manner, with an LSP or one of the code
+indexers."
+
+Built the same day, unit tests only, no real model yet:
+
+- `calu.refindex.judge.MatchJudge`: one task, fixed instructions
+  (`defaults/checkers/system/reference-judge.md`), no tools. It answers yes, no or unsure per
+  place from 12 lines before and after it, up to 10 places per request, and gets the whole
+  file once where it asks for it. Unsure, no answer and a failed request leave the place
+  unclear.
+- `calu.refindex.combined.CombinedIndex`: the word search, then a fast index (confirms its
+  references; if it can resolve a name, explains other definitions away), then the judge for
+  what is left. Both later stages are optional.
+
+The owner on the fast stage: "It would be great if we don't need to have a full LSP setup,
+so if we can use something self-contained like codebase-memory-mcp or Graphiphy (not sure: Is
+Graphiphy standalone ?) that would be great. At that point it's about tradeoffs, a LSP needs
+to have proper setup and config, needs to know about search paths, source paths, test paths,
+library paths and all that, which makes it complicated to setup and pretty language
+specific."
+
+Claude's reading, not decided. With the search in front and the judge behind, the fast stage
+only saves model calls; it no longer decides what is found. So a weaker, self-contained index
+is a possible fast stage, at the price of more places for the judge:
+
+| Fast stage | Setup | Left for the judge, from the spike's 5,731 false hits |
+|---|---|---|
+| a language server | one program per language; basedpyright needed no configuration and no installed dependencies on calu, servers for Rust or Java need the project's build | about 445 (9 per function) |
+| codebase-memory-mcp | one binary for all languages, no configuration | not measured. It confirms the calls it resolves (67 % of the referring files) and has no question "what does this name resolve to", so it explains nothing away: the about 2,400 other symbols of the same name stay for the judge, less the strings the search drops |
+| none | nothing | every hit outside comments and strings |
+
+Graphify is a Python package with tree-sitter grammars and needs no model for code, so it
+is self-contained too; in the spike it found fewer referrers than codebase-memory-mcp (46 %
+against 67 % of the files) and writes its graph into the project.
+
+Next step proposed: a `CbmIndex` behind the same interface, so that both fast stages can be
+measured on the same sample by the number of places they leave for the judge.
+
 ## 5. How calu and Claude Code use the index
 
 **What the owner has fixed (2026-11-27):** "I would like the honesty checker to still work

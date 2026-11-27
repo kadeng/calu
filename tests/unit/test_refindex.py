@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from calu.refindex import ReferenceIndex, SearchIndex, Unit
+from calu.refindex import SearchIndex, Unit
 
 MODULE = '''"""Users. add_user is described here."""
 
@@ -52,7 +52,7 @@ def project(tmp_path: Path) -> Path:
     return root
 
 
-def places(index: ReferenceIndex, unit: Unit) -> list[tuple[str, int]]:
+def places(index: SearchIndex, unit: Unit) -> list[tuple[str, int]]:
     """Return the unclear places an index reports, as (file, line).
 
     Args:
@@ -62,7 +62,7 @@ def places(index: ReferenceIndex, unit: Unit) -> list[tuple[str, int]]:
     Returns:
         The places in the order of the answer.
     """
-    return [(place.path, place.line) for place in index.referrers(unit).unclear]
+    return [(place.path, place.line) for place in index.find(unit).unclear]
 
 
 def test_the_search_reports_every_code_occurrence_of_the_bare_name(project: Path) -> None:
@@ -71,7 +71,7 @@ def test_the_search_reports_every_code_occurrence_of_the_bare_name(project: Path
     and the shell script are all unclear. The definition, the comment, the docstrings, a
     string that only mentions the name, a longer identifier, the ignored file and the binary
     file are left out."""
-    answer = SearchIndex(project).referrers(Unit("src/users.py", "Users.add_user", line=5))
+    answer = SearchIndex(project).find(Unit("src/users.py", "Users.add_user", line=5))
     assert answer.referrers == ()
     assert [(p.path, p.line) for p in answer.unclear] == [
         ("run.sh", 1),
@@ -102,7 +102,7 @@ def test_a_file_too_large_to_search_makes_the_answer_incomplete(
     """A file over the size limit is not searched, and the answer says that it is not
     complete, so that nobody reads it as "no further referrer"."""
     monkeypatch.setattr("calu.refindex.search.MAX_FILE_BYTES", 30)
-    answer = SearchIndex(project).referrers(Unit("src/users.py", "Users.add_user", line=5))
+    answer = SearchIndex(project).find(Unit("src/users.py", "Users.add_user", line=5))
     assert not answer.complete and "too large or unreadable" in answer.problem
 
 

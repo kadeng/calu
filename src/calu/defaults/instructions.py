@@ -286,6 +286,16 @@ questions, a hard guardrail on security, the user's explicit rules and attempts 
 a safeguard (the owner's principle of 2026-11-22: a checker is usually a smaller model than
 Claude and is no final arbiter of complex questions)."""
 
+
+def reference_judge_instructions() -> str:
+    """Return the instructions of the reference judge (`calu.refindex.judge`).
+
+    Returns:
+        The fixed text `system/reference-judge.md`. It has no part a user edits.
+    """
+    return _read("system/reference-judge.md").strip()
+
+
 EVASION_PART = "system/evasion.md"
 """The fixed part every checker gets after its own system part: ESCALATE when Claude's narrated
 thinking or text shows that it knowingly tries to get around a safeguard or to deceive the

@@ -23,6 +23,8 @@ import tokenize
 from dataclasses import dataclass
 from pathlib import Path
 
+import anyio
+
 from calu.refindex.model import PLACE_TEXT_CHARS, Place, Referrers, Unit
 
 MAX_FILES = 50_000
@@ -42,8 +44,21 @@ class SearchIndex:
     root: Path
     """The project directory."""
 
-    def referrers(self, unit: Unit) -> Referrers:
-        """Find every place that holds the bare name of `unit`.
+    async def referrers(self, unit: Unit) -> Referrers:
+        """Find every place that holds the bare name of `unit`, in a worker thread.
+
+        Side effects: those of `find`.
+
+        Args:
+            unit: The unit.
+
+        Returns:
+            As `find`.
+        """
+        return await anyio.to_thread.run_sync(self.find, unit)
+
+    def find(self, unit: Unit) -> Referrers:
+        """Find every place that holds the bare name of `unit`; blocks while it reads.
 
         Side effects: runs `git ls-files` in the project directory and reads its files.
 
