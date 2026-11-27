@@ -19,8 +19,9 @@ Framing: only `/pane` may be shown in a frame, and only by the origins of
 `web.pane_frame_ancestors` (`SecurityHeaders`); every other page keeps `frame-ancestors 'none'`.
 
 What a pane may ask its bridge (`PANE_METHODS`): attaching, starting and renaming sessions,
-the session protocol except `shutdown`, the settings it changes (honesty mode, effort), and
-reading project files for its file view. Not: writing, deleting or renaming files
+the session protocol except `shutdown`, the settings it changes (honesty mode, effort), the
+temporary rules (`/rule`, `/rules`, `/rule-remove`; never one that lifts the built-in
+protections), and reading project files for its file view. Not: writing, deleting or renaming files
 (`ide.fs.write*`), attaching to an explicit address with a token, or anything else.
 """
 
@@ -76,6 +77,9 @@ PANE_METHODS = frozenset(
         "ide.settings.get",
         "ide.settings.set",
         "ide.settings.unset",
+        "ide.rules.list",
+        "ide.rules.add",
+        "ide.rules.remove",
         "ide.fs.read",
         "session.call",
     }

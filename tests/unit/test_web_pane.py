@@ -213,6 +213,22 @@ async def test_the_pane_may_not_write_files_end_the_session_or_attach_by_address
     assert asked == ["session.call", "ide.fs.read"]
 
 
+async def test_the_pane_may_add_list_and_remove_temporary_rules() -> None:
+    """The three requests reach the bridge. That the bridge refuses a rule that lifts the
+    built-in protections is tested in `tests/db/test_ide_bridge_db.py`, not here."""
+    asked: list[str] = []
+
+    async def bridge(method: str, params: dict[str, Any]) -> Any:
+        """Record what reached the bridge."""
+        asked.append(method)
+        return {}
+
+    handle = checked_handler(bridge)
+    for method in ("ide.rules.add", "ide.rules.list", "ide.rules.remove"):
+        await handle(method, {})
+    assert asked == ["ide.rules.add", "ide.rules.list", "ide.rules.remove"]
+
+
 def test_one_bridge_answers_over_the_pane_websocket(tmp_path: Path) -> None:
     """The pane's WebSocket carries the bridge's JSON-RPC, one message per frame."""
     store = CredentialStore(tmp_path / "credentials.json")

@@ -1314,7 +1314,7 @@ Cua desktop, scripted backend, VSCode extension built from the working tree afte
 | `/rule 9d too long` | ok: refused, "a rule lasts at most 7 days; a rule for longer belongs in the checker instructions" |
 | `/rule --lift-builtin calu may serve` | ok: refused; the message names the web settings and `calu rule add --lift-builtin` |
 | That a checker's prompt holds the rule | only in the unit tests: the scripted checkers do not read instructions |
-| The web chat pane | ok for the shared code; the commands themselves not typed in the pane yet |
+| The web chat pane, `/rule 1h --project …`, `/rules`, `/rule-remove 3` | was refused ("the chat pane may not ask 'ide.rules.add'"): the pane's list of bridge requests lacked them. Fixed (`PANE_METHODS`); then ok in Chromium, and `calu rule list` showed no rule left afterwards |
 | `calu attach`, full-screen client | unit test (`test_tui_many.py`) with the fake admin access; not run against a database |
 | `calu attach --plain` | prints the `calu rule` command (no database login); unit test |
 | PyCharm plugin, `/rule`, `/rules`, `/rule-remove`, `/btw` | Kotlin tests pass, plugin builds; **not tried in the IDE**: PyCharm in the recreated desktop asks for the JetBrains user agreement again, which is the owner's to accept |

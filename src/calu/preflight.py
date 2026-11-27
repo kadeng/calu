@@ -62,8 +62,9 @@ def sandbox_warnings(config: Config) -> list[str]:
     sandbox = config.claude.sandbox
     if not sandbox.enabled:
         return [
-            "The sandbox for Bash commands is off: commands run with calu's own rights "
-            "(agent/records/PLAN.md D4). Only the checkers and the deny lists protect this machine."
+            "The sandbox for Bash commands is off: commands run with the full rights of the "
+            "user Claude Code runs as (agent/records/PLAN.md D4). Only the checkers and the "
+            "deny lists protect this machine."
         ]
     missing = missing_sandbox_tools()
     if not missing:
