@@ -299,6 +299,22 @@ reached from outside its file (it reads the unit with its decorators and registr
 calu searches for those names as well. Proposed as one more field of the honesty checker's
 answer about a changed unit.
 
+The owner on this: "For the PyO3 rename, it would be found if we also look into generated
+code and search into strings that equal method or function names, no?" Yes for most of these
+cases, and without a model. Claude's proposal after that, not decided: the further names of a
+unit are found by rules first, and the checker's field is only for what the rules miss.
+
+| Rule | Finds | Does not find |
+|---|---|---|
+| A string in the unit's own decorators or attributes is a further name of the unit | `#[pyo3(name = "add")]`, `@app.route("/users/add")`, `@rpc("chat.send")`, a sub-command given as a string | a name the framework derives without a string (`add-user` from `add_user` in typer, from `AddUser` in clap) |
+| The same name in another spelling counts as a hit: `add_user`, `add-user`, `addUser`, `AddUser` | the derived sub-command, a camel-case binding, a JSON field | a name with a prefix or suffix added (`_wrap_add_user`, `"chat." + name`) |
+| A string that equals a name is a hit (already so in `SearchIndex`) | `getattr(x, "add_user")`, a registry, a Hydra `_target_` | a name built at run time |
+| Generated files are searched, also where the honesty checks leave them out | SWIG wrappers, cbindgen headers, protobuf and gRPC stubs, `.pyi` stubs | what a compiler generates in memory: PyO3's macros write no file, so there the first rule is the one that works |
+
+A generated file that git ignores (`target/`, `build/`) is not searched today; listing such
+directories for the search would be a setting. More spellings and more strings mean more
+hits, which is affordable because the language server explains most of them away.
+
 No procedure reaches 100 %: a name built at run time appears nowhere. The aim stays the one
 of the honesty spec, an agent that drifts. What this division buys is that an error becomes
 "one place too many was read" where a tool cannot decide, and that the checker's share stays
