@@ -85,6 +85,8 @@ describe('graphNotice', () => {
 
   it('says why an empty graph is empty', () => {
     expect(graphNotice(true, 'track', empty, undefined, true)).toEqual({ kind: 'clean', text: 'Nothing to show: the honesty state is clean.' });
+    // The last units were just settled: they are shown in green first, then the notice.
+    expect(graphNotice(true, 'track', empty, undefined, true, 2)).toEqual({ kind: 'graph' });
     expect(graphNotice(true, 'track', graphOf([], [], { everything: true }), undefined, false)).toEqual({ kind: 'clean', text: EVERYTHING_TEXT });
     // Not clean (a review is required, say), but no unit to draw: it does not claim "clean".
     const open = graphNotice(true, 'track', empty, undefined, false);

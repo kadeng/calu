@@ -159,16 +159,18 @@ export const PARTIAL_TEXT = 'Not every caller or used unit is shown: the search 
  * @param graph The last graph of the session, or `null` before the first answer.
  * @param error The error of the last request, if it failed.
  * @param clean Whether the session reports a clean honesty state.
+ * @param ghosts How many settled nodes are still shown in green (`settle`). While there are
+ *   any, the graph is drawn, also when the new graph is empty.
  * @returns "graph" if there are nodes to draw; else the text for the state.
  */
-export function graphNotice(attached: boolean, mode: string | undefined, graph: GraphData | null, error: string | undefined, clean: boolean): GraphNotice {
+export function graphNotice(attached: boolean, mode: string | undefined, graph: GraphData | null, error: string | undefined, clean: boolean, ghosts = 0): GraphNotice {
   if (!attached) return { kind: 'detached', text: 'No session is attached. The honesty graph shows the honesty state of an attached session.' };
   if (!mode || mode === 'off' || (graph && graph.mode === 'off')) {
     return { kind: 'off', text: 'Code honesty is off. Choose "track" or "enforce" in the Honesty menu to see the graph.' };
   }
   if (error !== undefined) return { kind: 'error', text: `The honesty graph was not loaded: ${error}` };
   if (!graph) return { kind: 'loading', text: 'Loading the honesty graph…' };
-  if (graph.nodes.length > 0) return { kind: 'graph' };
+  if (graph.nodes.length > 0 || ghosts > 0) return { kind: 'graph' };
   if (graph.everything) return { kind: 'clean', text: EVERYTHING_TEXT };
   if (clean) return { kind: 'clean', text: 'Nothing to show: the honesty state is clean.' };
   return { kind: 'clean', text: 'Nothing to show: no unit is marked, changed or to judge again. The Honesty chip says what is still open.' };

@@ -438,7 +438,7 @@ export class HonestyGraphView {
     const signature = JSON.stringify([attached, mode, honesty?.clean === true, reviewing, this.error ?? null, this.version, this.width]);
     if (signature === this.drawn) return;
     this.drawn = signature;
-    const notice = graphNotice(attached, mode, this.graph, this.error, honesty?.clean === true);
+    const notice = graphNotice(attached, mode, this.graph, this.error, honesty?.clean === true, this.ghosts.length);
     const graph = notice.kind === 'graph' ? this.graph : null;
     els.notice.hidden = graph !== null;
     els.canvas.hidden = graph === null;

@@ -1395,6 +1395,24 @@ project trusted. One round. The web pane was not looked at.
 | Right click: "Mark as honest" and "Open the source" on a dishonest node | ok (`screenshots/vscode-honesty-graph-menu.png`) |
 | "Mark as honest" clears the mark; the node turns green, then vanishes | ok (`screenshots/vscode-honesty-graph-settled.png`) |
 | The view stays open across "New session…" | ok |
-| Edges, callers of a dishonest unit, code to judge again | not seen: the scripted honesty checker marks the whole file, so there is no unit to find callers of. Covered by unit tests only |
-| Click opens the source; "Mark as dishonest…" with its prompt; zoom with Ctrl and the wheel; pan; the "N callers" group | not tried in the desktop |
-| The web chat pane | not tried |
+| Edges, callers of a dishonest unit, code to judge again | see the second round below |
+| Click opens the source; "Mark as dishonest…" with its prompt; zoom with Ctrl and the wheel; pan; the "N callers" group | see the second round below |
+| The web chat pane | see the second round below |
+
+Second round, the same evening, with the scenario `graph` of `uitest/fake_server.py`: eight
+callers of `greet` committed and trusted, then `greeter.py` changed for real and the unit
+`greet` marked dishonest by the fake checker (`calu:dishonest:greet`). The fake honesty
+checker can now mark one unit (`calu.testing.honesty_answering`).
+
+| Case | Result |
+|---|---|
+| Arrows from callers to the units they use; red `greet`, yellow changed `greet_all` and `farewell`, grey related test, orange callers | ok (`screenshots/vscode-honesty-graph-callers.png`) |
+| More than five callers of one unit collapse into "9 callers"; a click expands them; their hover names the unit they use | ok (`screenshots/vscode-honesty-graph-expanded.png`) |
+| "Fit", "+", "−"; zoom with Ctrl and the wheel (xdotool in the container) | ok, VSCode and the web pane; the browser page itself does not zoom |
+| A click opens the source at the unit's line | ok: VSCode opens `greeter.py` at line 11; the web pane's file view shows line 14 of `callers.py` |
+| "Mark as dishonest…" with its prompt; the node turns red, the chip counts 2 marks; "Mark as honest" clears it | ok, VSCode and the web pane (`screenshots/web-honesty-graph-marked.png`) |
+| "Mark as honest: trust the whole file…" on a changed node, with the question | ok; the state turns clean |
+| The last unclean unit is settled: it stays green for 2.5 s before "Nothing to show" | **fixed**: the view showed "Nothing to show" at once, because the notice did not count the settled nodes (`graphNotice` now takes their number; `screenshots/vscode-honesty-graph-settled-last.png`) |
+| The web pane's text prompt said "A reason is needed." in red before anything was typed | **fixed** (`pane/dialogs.ts`: the problem shows after typing or Enter; OK is disabled from the start) |
+| A compound `git add ... && git commit` in the first version of the scenario was refused by calu's commit rule | correct behaviour; the scenario was split into two commands |
+| The PyCharm plugin | n/a: it has no graph view |

@@ -269,7 +269,10 @@ def marking_checker(
 
 
 DISHONEST_MARKER = "calu:dishonest"
-"""A step that contains this text is answered DISHONEST by `honesty_answering()`."""
+"""A step that contains this text is answered DISHONEST by `honesty_answering()`. Followed by
+a colon and a dotted name (`calu:dishonest:greet`), only that unit of the file is dishonest."""
+_DISHONEST_UNIT = re.compile(re.escape(DISHONEST_MARKER) + r":([A-Za-z_][\w.]*)")
+"""The marker with the unit it names."""
 BACKDOOR_MARKER = "calu:backdoor"
 """A step that contains this text is escalated by `honesty_answering()`."""
 _FILE_LINE = re.compile(r"^File: `([^`]*)`", re.MULTILINE)
@@ -288,6 +291,7 @@ def honesty_answering(
 
         the step names a file ("File: `path`")           -> HONEST for that file
         ... and contains `DISHONEST_MARKER`              -> DISHONEST for that file
+        ... and `DISHONEST_MARKER:name`                  -> DISHONEST for that unit only
         the step contains `BACKDOOR_MARKER`              -> also `escalate`
 
     Args:
@@ -324,13 +328,18 @@ def honesty_answering(
         why = escalate
         if not dishonest and not honest:
             named = _FILE_LINE.search(step)
+            unit = _DISHONEST_UNIT.search(step)
             if named and DISHONEST_MARKER in step:
+                # Not the marker itself: the reason reaches the context of later steps,
+                # where the marker would make every later edit of the file dishonest.
+                reason = "the fake honesty checker found its dishonest marker"
                 files[named[1]] = {
                     "path": named[1],
                     "verdict": "DISHONEST",
-                    # Not the marker itself: the reason reaches the context of later steps,
-                    # where the marker would make every later edit of the file dishonest.
-                    "reason": "the fake honesty checker found its dishonest marker",
+                    "reason": reason,
+                    "units": (
+                        [{"symbol": unit[1], "honest": False, "reason": reason}] if unit else []
+                    ),
                 }
             elif named:
                 files[named[1]] = {"path": named[1], "verdict": "HONEST"}

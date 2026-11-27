@@ -104,7 +104,9 @@ export function confirm(question: string, detail: string, yes: string): Promise<
 /**
  * Ask for a text.
  *
- * @param options Title, question, start value, masking and the check while typing.
+ * @param options Title, question, start value, masking and the check while typing. OK is
+ *   disabled while the check finds a problem; the problem's text shows once the user typed
+ *   or pressed Enter.
  * @returns The text, or `undefined` for Cancel or Escape.
  */
 export function input(options: InputOptions): Promise<string | undefined> {
@@ -120,15 +122,23 @@ export function input(options: InputOptions): Promise<string | undefined> {
     const cancel = button('Cancel');
     box.append(field, problem, row(ok, cancel));
     const check = (): string | undefined => options.validate?.(field.value);
+    // The problem is said only after the user typed or tried to accept: an empty field that
+    // was just opened is no error yet. OK is disabled from the start all the same.
+    let touched = false;
     const update = (): void => {
       const said = check();
-      problem.textContent = said ?? '';
+      problem.textContent = touched ? (said ?? '') : '';
       ok.disabled = said !== undefined;
     };
-    field.oninput = update;
+    field.oninput = () => {
+      touched = true;
+      update();
+    };
     update();
     return new Promise<string | undefined>((resolve) => {
       const accept = (): void => {
+        touched = true;
+        update();
         if (check() === undefined) resolve(field.value);
       };
       ok.onclick = accept;

@@ -61,6 +61,10 @@ answered with "Echo: <message>".
                  run; turn 2: a correcting edit and the test run again. Needs the honesty
                  checker enabled (`calu checker set honesty --enable`) and `honesty.mode` track
                  or enforce.
+    graph        for the honesty graph: turn 1 commits `callers.py` (eight callers of
+                 `greet`; trust HEAD afterwards), turn 2 changes `greeter.py` for real and
+                 marks the unit `greet` dishonest, turn 3 clears the mark. Needs the honesty
+                 checker enabled and `honesty.mode` track.
 
 A message that begins with "/" is answered with a line that names the command: Claude Code's
 own commands (`/compact`, `/usage`, `/clear`) are not played.
@@ -575,6 +579,96 @@ def honesty(workspace: Path) -> FakeScript:
     return FakeScript(turns=[dishonest, fixed, fixed, fixed])
 
 
+GRAPH_GREETER = '''def greet(name: str) -> str:
+    """Return the greeting for `name`."""
+    return f"Hello, {name}!"
+
+
+def greet_all(names: list[str]) -> list[str]:
+    """Return one greeting per name, in the order given, without empty names."""
+    return [greet(name) for name in names if name]
+
+
+def farewell(name: str) -> str:
+    """Return a farewell for `name`, after the greeting."""
+    return f"{greet(name)} Goodbye."
+'''
+"""`greeter.py` as the scenario `graph` writes it: `greet_all` changed, `farewell` new."""
+
+GRAPH_CALLERS = "from greeter import greet\n\n\n" + "\n\n".join(
+    f'def welcome_{n}(name: str) -> str:\n    """Welcome guest {n}."""\n    return greet(name)\n'
+    for n in range(8)
+)
+"""`callers.py` as the scenario `graph` writes it: eight unchanged callers of `greet`, once
+committed, so that the graph has more callers of one unit than it shows one by one."""
+
+
+def graph(workspace: Path) -> FakeScript:
+    """Build the scenario `graph`: changed units, callers and a mark on one unit, for the view.
+
+    Needs the honesty checker enabled and `honesty.mode` "track".
+
+    - Turn 1 writes `callers.py` and commits it (git, for real). After "Trust HEAD…" in the
+      honesty menu its eight functions are unchanged callers of `greet`.
+    - Turn 2 changes `greeter.py` for real: `greet_all` changed, `farewell` new, both use
+      `greet`. Then an edit that the fake honesty checker calls dishonest for the unit
+      `greet` alone.
+    - Turn 3 edits `greeter.py` again without the marker, which clears the mark.
+
+    Args:
+        workspace: The project directory of the session.
+
+    Returns:
+        The script of the three turns.
+    """
+    doc = '"""Return the greeting for `name`."""'
+    committed = [
+        {"text": "I add a module with eight callers of `greet` and commit it."},
+        {
+            "tool": "Bash",
+            "input": {"command": "git add callers.py"},
+            "writes": {"callers.py": GRAPH_CALLERS},
+            "run": ["git", "add", "callers.py"],
+            "result": "",
+        },
+        {
+            # calu reviews a commit only when it is the whole command line.
+            "tool": "Bash",
+            "input": {"command": "git commit -m 'Add callers'"},
+            "run": [
+                "git",
+                "-c",
+                "user.name=uitest",
+                "-c",
+                "user.email=uitest@example.org",
+                "commit",
+                "-q",
+                "-m",
+                "Add callers",
+            ],
+            "result": "[main] Add callers",
+        },
+        {"text": "Committed. Trust HEAD in the honesty menu, then send the next message."},
+    ]
+    changed = [
+        {"text": "I change `greet_all` and add `farewell`, then I touch the docstring of `greet`."},
+        {
+            "tool": "Bash",
+            "input": {"command": "python scripts/rewrite_greeter.py"},
+            "writes": {EDITED_FILE: GRAPH_GREETER},
+            "result": "rewritten",
+        },
+        edit(workspace, doc, f"{doc}  # calu:dishonest:greet"),
+        {"text": "`greet` is marked; `greet_all` and `farewell` are changed and use it."},
+    ]
+    fixed = [
+        {"text": "I correct the edit of `greet`."},
+        edit(workspace, doc, doc.replace("greeting", "greeting text")),
+        {"text": "The mark is cleared."},
+    ]
+    return FakeScript(turns=[committed, changed, fixed, fixed])
+
+
 RICH_TEXT = """Raw HTML must stay text: <b>bold?</b> <img src=x onerror=alert(1)>
 <script>alert(2)</script>
 
@@ -828,6 +922,7 @@ SCENARIOS: dict[str, Callable[[Path], FakeScript]] = {
     "swarm": swarm,
     "nousage": levels,
     "honesty": honesty,
+    "graph": graph,
     "rule": rule,
     "tasks": tasks,
 }
