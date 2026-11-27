@@ -1,8 +1,8 @@
 # Handoff
 
-State on 2026-11-19, in a session that began on 2026-11-18 and is still going. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D255, open
-questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
+State on 2026-11-27 (the section "Pick up here" is current; older sections below keep the
+state of their day). Read this, then `AGENTS.md`, `REQUIREMENTS.md` and `PLAN.md` (decisions
+D1-D292, open questions §11, phases §12).
 
 ## Pick up here
 
@@ -13,7 +13,8 @@ came up, then built the features the owner asked for. A second session worked in
 `~/projects/calu`; this one merged `origin/main` after every commit. Everything below is
 committed and pushed.
 
-**In progress: temporary rules, steps 1 and 2 of 6 done, step 3 next.** The design is
+**In progress: temporary rules.** Steps 1 to 5 of 6 are done; step 6 (documentation) is
+next. PLAN D292 summarises the feature. The design is
 `agent/records/notes/temporary-rules-design.md`, with the owner's decisions in its section 7.
 The owner chose option B for the built-in protections; the limits of B in section 6 are
 Claude's proposal. Claude's message asked two things at once: whether the owner confirms those
@@ -42,7 +43,7 @@ feature must work end to end in the Cua desktop before the owner tests by hand.
   repository (`uv run pyright`). `honesty.mode` is `enforce` in the owner's session:
   running tests needs a clean honesty state, so settle open marks first. Make code edits
   with the Edit tool; a script edit leaves the file unreviewed.
-- Step 3 is partly done and pushed:
+- Step 3 is done and pushed:
   - `calu rule add/list/remove` (`c5a2ac6`, `cli.cmd_rule`, `TemporaryRule.line` and
     `as_json`);
   - the bridge's `ide.rules.list/add/remove` (`calu.ide.database.rules_view`, `add_rule`,
@@ -68,7 +69,19 @@ feature must work end to end in the Cua desktop before the owner tests by hand.
   `EscalationRequest.suggested_rule`, and a rule field in the escalation dialogs. What
   differs from the design is at the end of the design's section 5. Tried in the Cua desktop
   in the VSCode chat (test plan, section T); the PyCharm card not in the IDE.
-- Next: step 6 (documentation, the PLAN decision), then the owner's issue report below.
+- Next: step 6. `DOCUMENTATION.md` gets the `/rule` commands, `calu rule`, the settings pane
+  and card, the rule field of the escalation dialogs and `built_in_rules.*`; the extension
+  specs get the new protocol fields. After that, the owner's issue report below.
+- Not tried in a real UI: anything of PyCharm since 2026-11-26; `calu attach` against a
+  database (unit tests only); the web escalation page's rule field (database test only).
+- Report to the owner after step 5 was given on 2026-11-27.
+
+**The Cua desktop as this session left it:** the scripted server from the working tree of
+2026-11-27 (`uitest/setup-demo.sh`, scenario `rule` added), `calu web` on port 8765 in the
+tmux session `calu-web` with no web password (chosen with `calu web --set-password` for the
+test; the container's calu user password is empty), Chromium and VSCode open. Every test
+rule was removed (`calu rule list` shows none) and `built_in_rules.calu_commands` was unset
+again. PyCharm waits for the JetBrains user agreement, which only the owner may accept.
 
 **The owner's list of 2026-11-26 evening:**
 
@@ -100,9 +113,11 @@ this is also confusing." In detail:
 **For the owner's installation:** D290 (a PNG in an escalated commit) is fixed in the
 repository only. Until `/usr/local/lib/calu` is reinstalled from `main`, a commit with a
 binary file that the changeset checker escalates is denied with "calu could not record this
-step". For that reason two screenshots named in the test plan are in the working tree of
-`calu2` and not committed yet: `agent/records/notes/screenshots/vscode-rules-chat.png`
-(section P) and `web-pane-rules.png` (section P, the pane).
+step". For that reason five screenshots named in the test plan are in the working tree of
+`calu2` (`agent/records/notes/screenshots/`) and not committed yet: `vscode-rules-chat.png`
+and `web-pane-rules.png` (section P), `web-settings-built-in-rules.png` (section R),
+`vscode-settings-rules.png` (section S), `vscode-escalation-rule.png` (section T). Commit
+them once the owner's installation runs `main`.
 
 Also open from today: the length guard of the checker instructions has allowances for the
 generated-code sections and the owner's AI-slop rule (`tests/unit/test_instructions.py`); a
