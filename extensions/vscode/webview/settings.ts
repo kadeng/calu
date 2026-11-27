@@ -28,6 +28,7 @@ import {
   renderCheckersCard,
   renderHonestyCard,
   renderModelsCard,
+  renderRulesCard,
   renderSetupCard,
   type CardHost,
   type CardId,
@@ -454,7 +455,7 @@ function isModelKey(key: string): boolean {
  * Show a failed request.
  *
  * @param key A setting's key (roll the row back and show the message there), or "models",
- *   "status", "fix" or "load" (show it at the card or on top).
+ *   "rules", "status", "fix" or "load" (show it at the card or on top).
  * @param message The message, shown verbatim.
  * @returns Nothing.
  */
@@ -472,8 +473,8 @@ function receiveError(key: string, message: string): void {
   if (card) {
     ui.cards.errors[card] = message;
     renderCards();
-  } else if (key === 'models') {
-    ui.cards.errors.models = message;
+  } else if (key === 'models' || key === 'rules') {
+    ui.cards.errors[key] = message;
     renderCards();
   } else if (key === 'status' || key === 'fix') {
     ui.cards.errors.setup = message;
@@ -551,6 +552,12 @@ function cardSpecs(shown: SettingsData): CardSpec[] {
       render: () => renderCheckersCard(shown, ui.cards, cardHost),
     },
     { id: 'honesty', label: 'Honesty', keywords: 'honesty mode off track enforce', render: () => renderHonestyCard(ui.cards, cardHost) },
+    {
+      id: 'rules',
+      label: 'Temporary rules',
+      keywords: 'temporary rules rule checkers allow session project expire',
+      render: () => renderRulesCard(shown, ui.cards, cardHost),
+    },
   ];
 }
 

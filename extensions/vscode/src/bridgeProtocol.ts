@@ -290,6 +290,15 @@ export interface IdeCheckerResult {
   instructions: string;
 }
 
+/** Result of `ide.rules.list`: every active rule, newest first; the attached session's scope. */
+export interface IdeRulesResult {
+  rules: IdeTemporaryRule[];
+  /** The attached session's conversation, or `null`. */
+  conversation: string | null;
+  /** The attached session's project, or `null`. */
+  project: string | null;
+}
+
 /** One temporary rule for the checkers, as `ide.rules.*` return it. */
 export interface IdeTemporaryRule {
   id: number;
@@ -373,7 +382,7 @@ export interface BridgeRequestResults {
   'ide.checker.get': IdeCheckerResult;
   'ide.checker.save': { version: number };
   /** Every active temporary rule, newest first; `conversation` and `project` of the attached session. */
-  'ide.rules.list': { rules: IdeTemporaryRule[]; conversation: string | null; project: string | null };
+  'ide.rules.list': IdeRulesResult;
   'ide.rules.add': { rule: IdeTemporaryRule };
   'ide.rules.remove': { rule: IdeTemporaryRule };
   /** `content_b64`: the bytes read; `size`: of the whole file; `eof`: the read reached its end. */

@@ -1327,6 +1327,7 @@ Cua desktop, scripted backend, VSCode extension built from the working tree afte
 | Remove it with its button | ok: "Removed rule #4: …", the list empty, `calu rule list` empty |
 | The text field | was 26 rem high (the code editor's height); now 5 rem in the body font |
 | A duration over 7 days, an unknown id | refused with the reason on the page (database test) |
+| VSCode settings dialog, card "Temporary rules": add "Claude may run make." for this session, then for every project; remove each | ok. First round: the card showed nothing for some seconds while the dialog reloaded (looked like a lost click), and the text field was unstyled. Fixed: a progress line "Adding the rule…", the dialog's own field styles. Screenshot: `screenshots/vscode-settings-rules.png` |
 
 ### R. The switches of calu's built-in rules (D291, 2026-11-27)
 

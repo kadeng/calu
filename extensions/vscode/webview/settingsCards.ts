@@ -12,7 +12,7 @@
  *     Honesty   off / track / enforce ─► host.commit("honesty.mode", …)
  */
 
-import type { CheckerRow, IdeModelsResult, ModelPreset } from '../src/bridgeProtocol';
+import type { CheckerRow, IdeModelsResult, IdeTemporaryRule, ModelPreset } from '../src/bridgeProtocol';
 import type { SettingsData, SettingsWebviewMessage } from '../src/shared/settingsMessages';
 import type { SettingsRowView } from '../src/shared/settingsModel';
 import {
@@ -31,7 +31,7 @@ import { add, button, el, icon, modelPicker, rich, wireRadios, type IconName } f
 import { presetChoices } from './settingsRows';
 
 /** Ids of the cards (also their navigation ids: the section element has the id `sec-<id>`). */
-export const CARD_IDS = ['setup', 'models', 'checkers', 'honesty'] as const;
+export const CARD_IDS = ['setup', 'models', 'checkers', 'honesty', 'rules'] as const;
 /** Id of a card. */
 export type CardId = (typeof CARD_IDS)[number];
 
@@ -657,6 +657,81 @@ export function renderCheckersCard(data: SettingsData, state: CardState, host: C
     list.appendChild(item);
   }
   add(section, list, cardError('checkers', state));
+  return section;
+}
+
+// ------------------------------------------------------------------ Temporary rules
+
+/**
+ * Name the scope of a temporary rule for a person.
+ *
+ * @param rule The rule as `ide.rules.list` gives it.
+ * @returns "every project", "project <name>", "this session" for a rule of the attached
+ *   session, or "another session".
+ */
+function ruleWhere(rule: IdeTemporaryRule): string {
+  if (rule.scope === 'global') return 'every project';
+  if (rule.scope === 'project') return `project ${rule.project ?? ''}`;
+  return rule.applies ? 'this session' : 'another session';
+}
+
+/**
+ * Build the card of the temporary rules: the rules that count now, each with a Remove button,
+ * and a form that adds one (`ruleAdd`, `ruleRemove`).
+ *
+ * @param data The dialog's data (`rules` is `ide.rules.list`, `null` if it failed).
+ * @param state The card state (`errors.rules`).
+ * @param host The dialog; the buttons post their message with `host.post`.
+ * @returns The card.
+ */
+export function renderRulesCard(data: SettingsData, state: CardState, host: CardHost): HTMLElement {
+  const section = card(
+    'rules',
+    'Temporary rules',
+    'Sentences the checkers read next to their instructions until they expire (1 minute to 7 days). Claude is not told which rules count.',
+  );
+  const rules = data.rules?.rules ?? [];
+  const list = el('ul', 'checkers', '', { testid: 'rules-list' });
+  for (const rule of rules) {
+    const until = new Date(rule.expires_at).toLocaleString();
+    const where = ruleWhere(rule);
+    add(
+      list,
+      add(
+        el('li', 'checker', '', { testid: `rule-${rule.id}` }),
+        add(
+          el('div', 'checker-text'),
+          add(el('div', 'checker-line'), el('strong', 'checker-name', `#${rule.id}`), el('span', 'muted', `${where} · until ${until}`)),
+          el('div', 'checker-meta', rule.text),
+        ),
+        button('Remove', 'btn', () => host.post({ type: 'ruleRemove', id: rule.id }), { testid: `rule-remove-${rule.id}`, 'aria-label': `Remove rule ${rule.id}` }),
+      ),
+    );
+  }
+  if (rules.length === 0) list.appendChild(el('li', 'muted', data.rules ? 'No temporary rule counts now.' : 'The rules could not be loaded.'));
+  const text = el('textarea', 'textarea', '', { rows: '3', maxlength: '1000', 'aria-label': 'Rule', placeholder: 'e.g. Claude may run the database tests.', testid: 'rule-text' }) as HTMLTextAreaElement;
+  const duration = el('input', 'input rule-duration', '', { type: 'text', value: '1d', size: '5', 'aria-label': 'For how long', testid: 'rule-duration' }) as HTMLInputElement;
+  const scope = el('select', 'select', '', { 'aria-label': 'Applies to', testid: 'rule-scope' }) as HTMLSelectElement;
+  for (const [value, label] of [['session', 'this session'], ['project', "this session's project"], ['global', 'every project']] as const) {
+    scope.appendChild(el('option', '', label, { value }));
+  }
+  const addButton = button('Add rule', 'btn primary', () => {
+    const scoped = scope.value === 'project' || scope.value === 'global' ? scope.value : 'session';
+    if (!text.value.trim()) {
+      state.errors.rules = 'A rule needs a text.';
+      host.changed();
+      return;
+    }
+    state.errors.rules = '';
+    host.post({ type: 'ruleAdd', text: text.value, duration: duration.value.trim() || '1d', scope: scoped });
+  }, { testid: 'rule-add' });
+  add(
+    section,
+    list,
+    text,
+    add(el('div', 'card-actions'), el('span', 'muted', 'For'), duration, el('span', 'muted', 'applies to'), scope, addButton),
+    cardError('rules', state),
+  );
   return section;
 }
 

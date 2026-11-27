@@ -220,6 +220,11 @@ mark.hit {
   max-width: 140px;
 }
 
+/* The duration of a temporary rule: "30m", "1d", "7d". */
+.input.rule-duration {
+  width: 5em;
+}
+
 .textarea {
   display: block;
   max-width: none;

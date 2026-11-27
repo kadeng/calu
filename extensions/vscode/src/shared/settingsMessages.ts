@@ -13,12 +13,14 @@
  *     editChecker {name}  --------------->  opens calu-checker:/<name>.md
  *     runStatus  ------------------------>  ide.status          -> status {status}
  *     fix {action}  --------------------->  install, update, terminal, clipboard, browser
+ *     ruleAdd {text, duration, scope}  -->  ide.rules.add       -> data
+ *     ruleRemove {id}  ------------------>  ide.rules.remove    -> data
  *
  * The host validates every incoming message with `parseSettingsMessage` and drops invalid
  * ones; the webview is treated as untrusted input.
  */
 
-import type { IdeModelsResult, IdeSettingsResult, IdeStatusResult } from '../bridgeProtocol';
+import type { IdeModelsResult, IdeRulesResult, IdeSettingsResult, IdeStatusResult } from '../bridgeProtocol';
 import type { ServerHelp } from './serverCommand';
 import { FIX_ACTIONS, type FixAction } from './settingsModel';
 
@@ -47,7 +49,15 @@ export type SettingsWebviewMessage =
   /** Run the environment check again. */
   | { type: 'runStatus' }
   /** Run a fix of the Setup card. */
-  | { type: 'fix'; action: FixAction };
+  | { type: 'fix'; action: FixAction }
+  /**
+   * Add a temporary rule (`ide.rules.add`): `scope` "session" binds it to the attached
+   * session's conversation, "project" to its project, "global" to every project. `duration`
+   * is written as `/rule` takes it; calu refuses one outside 1 minute to 7 days.
+   */
+  | { type: 'ruleAdd'; text: string; duration: string; scope: 'session' | 'project' | 'global' }
+  /** End a temporary rule before it expires (`ide.rules.remove`). */
+  | { type: 'ruleRemove'; id: number };
 
 /** Everything the dialog shows (the `data` message). */
 export interface SettingsData {
@@ -63,6 +73,8 @@ export interface SettingsData {
   serverHelp: ServerHelp | null;
   /** The root installation `calu serve --sudo` needs, as a command to copy (never run). */
   rootInstallCommand: string;
+  /** `ide.rules.list`: the temporary rules that count now; `null` if it failed. */
+  rules?: IdeRulesResult | null;
   /** Messages for requests that failed, e.g. "Settings: the database is not reachable". */
   problems: string[];
 }
@@ -144,6 +156,15 @@ export function parseSettingsMessage(raw: unknown): SettingsWebviewMessage | und
       return { type: 'runStatus' };
     case 'fix':
       return FIX_ACTIONS.includes(m.action as FixAction) ? { type: 'fix', action: m.action as FixAction } : undefined;
+    case 'ruleAdd': {
+      const scopes = ['session', 'project', 'global'] as const;
+      const chosen = scopes.find((s) => s === m.scope);
+      if (typeof m.text !== 'string' || !m.text.trim() || m.text.length > 1000 || !chosen) return undefined;
+      if (typeof m.duration !== 'string' || !/^\d{1,6}[mhdMHD]$/.test(m.duration.trim())) return undefined;
+      return { type: 'ruleAdd', text: m.text, duration: m.duration.trim(), scope: chosen };
+    }
+    case 'ruleRemove':
+      return Number.isSafeInteger(m.id) && (m.id as number) > 0 ? { type: 'ruleRemove', id: m.id as number } : undefined;
     default:
       return undefined;
   }
@@ -154,13 +175,17 @@ export function parseSettingsMessage(raw: unknown): SettingsWebviewMessage | und
  *
  * @param message The request.
  * @returns The setting's key for `set` and `unset`; "models" for the model requests; "status"
- *   for `runStatus`; "fix" for `fix` and `editChecker`; "load" for `load`.
+ *   for `runStatus`; "rules" for `ruleAdd` and `ruleRemove`; "fix" for `fix` and
+ *   `editChecker`; "load" for `load`.
  */
 export function errorKey(message: SettingsWebviewMessage): string {
   switch (message.type) {
     case 'set':
     case 'unset':
       return message.key;
+    case 'ruleAdd':
+    case 'ruleRemove':
+      return 'rules';
     case 'setAllModels':
     case 'setRoleModel':
       return 'models';

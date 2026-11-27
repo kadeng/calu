@@ -158,6 +158,13 @@ describe('parseSettingsMessage', () => {
     expect(parseSettingsMessage({ type: 'editChecker', name: 'command' })).toEqual({ type: 'editChecker', name: 'command' });
     expect(parseSettingsMessage({ type: 'runStatus' })).toEqual({ type: 'runStatus' });
     expect(parseSettingsMessage({ type: 'fix', action: 'copyRootInstall' })).toEqual({ type: 'fix', action: 'copyRootInstall' });
+    expect(parseSettingsMessage({ type: 'ruleAdd', text: 'ask first', duration: ' 3d ', scope: 'global' })).toEqual({
+      type: 'ruleAdd',
+      text: 'ask first',
+      duration: '3d',
+      scope: 'global',
+    });
+    expect(parseSettingsMessage({ type: 'ruleRemove', id: 4 })).toEqual({ type: 'ruleRemove', id: 4 });
   });
 
   it('drops invalid messages', () => {
@@ -176,6 +183,12 @@ describe('parseSettingsMessage', () => {
       { type: 'setRoleModel', role: 'r' },
       { type: 'editChecker', name: ' ' },
       { type: 'fix', action: 'runAsRoot' },
+      { type: 'ruleAdd', text: ' ', duration: '1d', scope: 'global' },
+      { type: 'ruleAdd', text: 'x', duration: 'soon', scope: 'global' },
+      { type: 'ruleAdd', text: 'x', duration: '1d', scope: 'team' },
+      { type: 'ruleAdd', text: 'x'.repeat(1001), duration: '1d', scope: 'global' },
+      { type: 'ruleRemove', id: 0 },
+      { type: 'ruleRemove', id: '4' },
     ]) {
       expect(parseSettingsMessage(bad), JSON.stringify(bad)?.slice(0, 80)).toBeUndefined();
     }
@@ -187,5 +200,6 @@ describe('parseSettingsMessage', () => {
     expect(errorKey({ type: 'runStatus' })).toBe('status');
     expect(errorKey({ type: 'load', project: null })).toBe('load');
     expect(errorKey({ type: 'editChecker', name: 'c' })).toBe('fix');
+    expect(errorKey({ type: 'ruleRemove', id: 1 })).toBe('rules');
   });
 });

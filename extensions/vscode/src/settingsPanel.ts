@@ -4,13 +4,15 @@
  * rendered by `webview/settings.ts` from `shared/settingsModel.ts`.
  *
  *     webview message (validated by parseSettingsMessage)      host action
- *     load {project}            ──► ide.settings.get + ide.models.presets + ide.status ──► data
+ *     load {project}            ──► ide.settings.get + ide.models.presets + ide.status
+ *                                   + ide.rules.list ──► data
  *     set {key, value, project} ──► ide.settings.set    ──► saved {key, value} | error {key, message}
  *     unset {key, project}      ──► ide.settings.unset  ──► saved {key, unset} + data | error
  *     setAllModels / setRoleModel ► ide.models.set_all / ide.models.set ──► data | error {key: "models"}
  *     editChecker {name}        ──► opens calu-checker:/<name>.md
  *     runStatus                 ──► ide.status          ──► status | error {key: "status"}
  *     fix {action}              ──► the `fix` callback (install, update, terminal, clipboard, browser)
+ *     ruleAdd / ruleRemove      ──► ide.rules.add / ide.rules.remove ──► data | error {key: "rules"}
  *
  * Requests may need the calu user password; `Bridge.request` asks for it once per bridge and
  * does not log it.
@@ -18,7 +20,7 @@
 
 import * as vscode from 'vscode';
 import { errorText, type Bridge } from './bridge';
-import type { IdeModelsResult, IdeSettingsResult, IdeStatusResult } from './bridgeProtocol';
+import type { IdeModelsResult, IdeRulesResult, IdeSettingsResult, IdeStatusResult } from './bridgeProtocol';
 import { renderHtml } from './chatView';
 import type { ServerHelp } from './shared/serverCommand';
 import { errorKey, parseSettingsMessage, type SettingsHostMessage, type SettingsWebviewMessage } from './shared/settingsMessages';
@@ -187,6 +189,21 @@ export class SettingsPanel implements vscode.Disposable {
         await this.host.fix(message.action);
         await this.sendData(this.project);
         return;
+      case 'ruleAdd':
+        // The reload after it takes seconds: the progress line says what is going on.
+        await this.busy('Adding the rule', async () => {
+          await this.bridge.ensureStarted();
+          await this.bridge.request('ide.rules.add', { text: message.text, duration: message.duration, scope: message.scope });
+          await this.sendData(this.project);
+        });
+        return;
+      case 'ruleRemove':
+        await this.busy('Removing the rule', async () => {
+          await this.bridge.ensureStarted();
+          await this.bridge.request('ide.rules.remove', { id: message.id });
+          await this.sendData(this.project);
+        });
+        return;
     }
   }
 
@@ -211,8 +228,9 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   /**
-   * Load settings, model presets and status, and post one `data` message. A request that fails
-   * leaves its part `null` and adds a line to `problems`; the others are still shown.
+   * Load settings, model presets, status and the temporary rules, and post one `data`
+   * message. A request that fails leaves its part `null` and adds a line to `problems`; the
+   * others are still shown.
    *
    * @param project The scope (`null` = global).
    * @returns A promise that resolves when the message was posted (never rejects).
@@ -237,6 +255,7 @@ export class SettingsPanel implements vscode.Disposable {
     let settings: IdeSettingsResult | null = null;
     let presets: IdeModelsResult | null = null;
     let status: IdeStatusResult | null = null;
+    let rules: IdeRulesResult | null = null;
     const started = await part('calu', () => this.bridge.ensureStarted());
     if (started) {
       // One after the other: a password prompt of the first must not overlap one of the second.
@@ -244,6 +263,7 @@ export class SettingsPanel implements vscode.Disposable {
       presets = await part('Models', () => this.bridge.request('ide.models.presets', { project }));
       status = await part('Setup', () => this.bridge.request('ide.status', {}));
       if (status) this.host.statusLoaded(status);
+      rules = await part('Temporary rules', () => this.bridge.request('ide.rules.list', {}));
     }
     this.post({
       type: 'data',
@@ -253,6 +273,7 @@ export class SettingsPanel implements vscode.Disposable {
       status,
       serverHelp: this.host.serverHelp(),
       rootInstallCommand: this.host.rootInstallCommand(),
+      rules,
       problems,
     });
   }
