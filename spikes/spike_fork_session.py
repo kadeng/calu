@@ -18,7 +18,9 @@ This spike checks the three claims that matter for calu with the installed CLI:
 
     uv run python spikes/spike_fork_session.py
 
-It writes two files in a throwaway directory through Claude, so nothing of yours is touched.
+Claude writes two files in a throwaway directory. The runs use `bypassPermissions` and no tool
+restriction, and the sandbox is the SDK's default, so Claude could run any command that this
+process can run. The prompts ask only for file writes.
 """
 
 import asyncio
@@ -94,7 +96,8 @@ def options(workspace: Path, **extra: Any) -> ClaudeAgentOptions:
         **extra: Fields to add, e.g. `resume` or `fork_session`.
 
     Returns:
-        The options, with the sandbox off and the transcript kept (a fork needs it).
+        The options, with permission checks bypassed, no setting sources, and the transcript
+        kept (a fork needs it). No sandbox option is set; the SDK's default applies.
     """
     return ClaudeAgentOptions(
         cwd=str(workspace),

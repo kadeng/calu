@@ -72,7 +72,8 @@ interface SyncEngine {
      * The remote hash is `change.afterSha256` (none if `change.deleted`); `change.beforeSha256`
      * is not needed, because the base of the state is what the local side was synchronised
      * with. A notification about content the state already has as base (the echo of the
-     * plugin's own upload) gives null.
+     * plugin's own upload) gives null only if the local file also equals that base. If the
+     * local file differs from the base, the result is `Upload(base)`.
      *
      * @param change the entry.
      * @param localSha256 hash of the local file on disk, null if there is none.

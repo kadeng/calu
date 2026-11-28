@@ -18,10 +18,10 @@ The two APIs fit calu's switches differently:
 * A mode, and a select option, is one value out of a list, so the combinations of the
   switches have to be flattened. `LADDER` is that flattening: five modes of increasing
   strictness. The first runs no checker; each of the other four is a superset of the one
-  before. The combinations that are not on the ladder
-  (commands without edits, for instance) are reachable with `calu config set` and the web
-  interface, so the state of a running session need not be on it; `mode_of` then answers
-  `CUSTOM`, which is offered as a mode only while it is the current one and cannot be selected.
+  before. A user can set a combination that is not on the ladder (commands without edits,
+  for instance) with `calu config set` or the web interface. So the state of a running
+  session need not be on the ladder. For such a state, `mode_of` answers `CUSTOM`. The
+  client is offered `CUSTOM` as a mode only while it is the current one, and cannot select it.
 
 So a client that supports boolean options gets the switches themselves, and one that does
 not gets the ladder.

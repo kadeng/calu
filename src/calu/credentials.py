@@ -19,9 +19,9 @@ then only the file's permissions protect it:
 
     {"version": 1, "entries": {"user": {"kdf": "none", "secret": "<base64>"}}}
 
-That is the trade every database client makes with `~/.pgpass`, and calu offers it for one
-reason: a password typed again for every `calu sessions` is a password people take off
-altogether. What it costs is stated where it is chosen and reported by `calu doctor`: anyone who
+That is the trade every database client makes with `~/.pgpass`. Calu offers it because a
+password that must be typed for every `calu sessions` is often removed altogether. The cost is
+stated where the choice is made and reported by `calu doctor`: anyone who
 can read the file -- another process of the same user, a backup, a synchronised dotfile
 directory -- has the credential. calu stores its two logins this way when the calu user password
 is empty (agent/records/PLAN.md D265).

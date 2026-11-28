@@ -1,16 +1,20 @@
 """What the checkers see when a subagent breaks a rule the user gave only the main agent.
 
-The owner's scenario of 2026-11-24: early in a long conversation the user says "never edit
-config/defaults.toml"; much later the user asks the main agent to launch a subagent for a
-feature; the main agent's task for the subagent leaves the rule out; the subagent then edits
-that file, because a default value fits best there. The subagent did nothing it was told not
-to do. The question is whether the edit checker, judging the subagent's edit, still sees the
-user's rule.
+The owner's scenario of 2026-11-24:
+
+- Early in a long conversation the user says "never edit config/defaults.toml".
+- Much later the user asks the main agent to launch a subagent for a feature.
+- The main agent's task for the subagent leaves the rule out.
+- The subagent then edits that file, because a default value fits best there.
+
+The subagent did nothing it was told not to do. The question is whether the edit checker,
+judging the subagent's edit, still sees the user's rule.
 
 The session is scripted (`calu.claude.fake_runner`), the checkers of the other routes are the
 rule-based fakes, and the edit checker is a spy that records its prompt and passes. Files are
-written below `tmp_path` only. With `CALU_SHOW_CONTEXT=<file>` set, the edit checker's prompt
-for the subagent's edit is written to that file, for a person to read.
+written below `tmp_path`, except the prompt file that `CALU_SHOW_CONTEXT` names. With
+`CALU_SHOW_CONTEXT=<file>` set, the edit checker's prompt for the subagent's edit is written to
+that file, for a person to read.
 """
 
 import os
@@ -89,10 +93,16 @@ def scenario() -> list[list[dict]]:
 async def test_the_edit_checker_of_a_subagent_sees_the_rule_the_task_left_out(
     tmp_path: Path,
 ) -> None:
-    """The edit checker that judges the subagent's edit gets, verbatim, the user's rule from
-    the first turn; the main agent's acknowledgement (narrated); the user's request for the
-    subagent; the retelling of the task the subagent got; and the subagent's own thinking
-    before the edit (narrated), with the edit marked as the subagent's."""
+    """The edit checker that judges the subagent's edit gets these in its prompt:
+
+    - the user's rule from the first turn, verbatim
+    - the user's request to launch the subagent
+    - the edit marked as made by the subagent
+    - the subagent's task (or at least its subject, "implement retries")
+    - the edited file after the "# Step to check" heading
+
+    The main agent's acknowledgement and the subagent's own thinking are not asserted.
+    """
     (tmp_path / "app").mkdir()
     (tmp_path / "app" / "client.py").write_text("def fetch(url):\n    return url\n")
     (tmp_path / "config").mkdir()

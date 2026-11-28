@@ -114,10 +114,9 @@ HELP = (
 )
 """One line listing the commands, printed on connect and for an unknown command.
 
-Every command `Console.line` answers belongs here, aliases included: a command that is not in
-this line is a command nobody finds. `tests/unit/test_attach.py` reads the commands out of the
-`match` statement and fails when one is missing, which is how `/help` and the `/exit` alias
-turned out to be absent from it."""
+Every command that `Console.line` answers must be in this line, aliases included.
+`tests/unit/test_attach.py` reads the commands out of the `match` statement and fails when one
+is missing from this line."""
 
 
 def say(text: str, flush: bool = True) -> None:
@@ -788,19 +787,30 @@ async def attach(
     Side effects: connects to `address`, prints the state and every event, and reads lines
     from stdin as chat messages or commands.
 
-    If the session closes the connection because this client fell behind
-    (`CLOSE_FELL_BEHIND`: the terminal did not take the output fast enough), the client
-    connects again, continues after the last event it printed and says so. If the session can
-    no longer replay all the events in between, the state and the open escalations are printed
-    again. At most `MAX_RECONNECTS` such reconnects follow each other without an event in
-    between. If the connection breaks (`BROKEN_CODES`: a dropped SSH tunnel, a network that went
-    away), the client tries again after 1, 2, 4, 8, then every 15 seconds for `REDIAL_FOR_S`
-    seconds, says so on every attempt, and continues after the last event it printed; a
-    session that refuses the token at such an attempt has ended, which ends the client. A
-    session whose process is known to be gone (`gone`) ends the client at once. A session that
-    closes the connection because the client's minted token belonged to the row that ended
-    (`ENDED_WITH_SESSION`), after this client's `/start` told it the new row, ends the client
-    with that row in `switch_to` (when given), so that the caller attaches to it.
+    The client handles a closed connection by case.
+
+    The client fell behind (`CLOSE_FELL_BEHIND`): the terminal did not take the output fast
+    enough. The client says so, connects again and continues after the last event it printed.
+    If the session can no longer replay all the events in between, the client prints the state
+    and the open escalations again. At most `MAX_RECONNECTS` such reconnects follow each other
+    without an event in between. After that, the client detaches.
+
+    The connection broke (`BROKEN_CODES`): for example an SSH tunnel dropped, or the network
+    went away. The client tries again after 1, 2, 4 and 8 seconds, then every 15 seconds, for
+    `REDIAL_FOR_S` seconds in all. It says so on every attempt. When it is connected again, it
+    continues after the last event it printed. If the session refuses the token at such an
+    attempt, the session has ended, and the client ends.
+
+    The session's process is gone: `gone` says so when the connection breaks. The client ends
+    at once.
+
+    The session row ended (`ENDED_WITH_SESSION`): this client's `/start` started the session
+    again under a new row, and the client's minted token belonged to the old row. When
+    `switch_to` is given, the client ends and appends the new row to it, so that the caller
+    attaches to it. Without `switch_to`, the client detaches as in the next case.
+
+    The session closed the connection for any other reason: the client prints why, detaches
+    and returns.
 
     Args:
         address: The WebSocket address that `calu run` printed.
@@ -815,14 +825,16 @@ async def attach(
             when the client ends for it; the caller attaches to that one next.
 
     Returns:
-        0 when the user detached, the session closed the connection, or a broken connection
-        could not be opened again in time.
+        0 when the user detached, the session closed the connection, the client fell behind
+        more often than `MAX_RECONNECTS` allows, or a broken connection could not be opened
+        again in time.
 
     Raises:
-        OSError: If the address cannot be reached.
-        ConnectionError: If the session closes the connection before it answered the first
-            request of the first connection, for another reason than this client falling
-            behind, or after `MAX_RECONNECTS` reconnects.
+        OSError: If the address cannot be reached at the first connection.
+        ConnectionError: If the session closes the first connection before it answered the
+            first request (`state.get`). A close because this client fell behind during the
+            replay raises only after `MAX_RECONNECTS` reconnects in a row. Later closes do not
+            raise: they follow the cases above.
         RequestFailed: If the token is refused at the first connection.
     """
     printer = Printer(show_thinking)

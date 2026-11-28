@@ -46,13 +46,14 @@ taken **without the repository's configuration**:
     git diff, with GIT_COMMON_DIR = that directory, GIT_DIR and GIT_OBJECT_DIRECTORY = the
               repository's, and no user or system configuration
 
-git reads `config` from the common directory, so no setting of the repository reaches the
-diff: no program it names is run (file system monitor, content filters, external diff, text
-conversion, a fetch of missing objects), and no setting can leave a file out of the diff or
-change how it is shown. `DIFF_OPTIONS` states the same on the command line, and `--text` shows
-the content of a file that an attribute declares binary. calu itself then leaves out the
-content of binary data files (`without_binary_content`): a file that is named like an image
-or a font and holds a NUL character is shown as its name and the size of its change. The rule
+git reads `config` from the common directory, so no setting of the repository reaches the diff.
+No program a setting names is run. That covers a file system monitor, content filters, an
+external diff, a text conversion and the fetch of missing objects. No setting can leave a file
+out of the diff or change how it is shown. `DIFF_OPTIONS` states the same on the command line,
+and `--text` shows the content of a file that an attribute declares binary. calu itself then
+leaves out the content of binary data files (`without_binary_content`): a file that is named
+like an image or a font and holds a NUL character is shown as its name and the size of its
+change. The rule
 goes by the name and the content, both of which the agent chooses. Code hidden in a file named
 `x.png` is not read at the commit. It is not run by that name either: running it takes a
 command, which the command checker judges.
@@ -552,11 +553,15 @@ def classify_commit(command: str, cwd: Path) -> CommitLine:
     Returns:
         NONE if no simple command of the line is a commit. PLAIN if the line is exactly one
         `git commit` command whose content follows from the index and its options (see the
-        module docstring); `options` is set then. COMPOUND otherwise, with the cause: other
-        commands in the line, a wrapper or options before `commit`, path arguments, a
-        redirection into a file, shell syntax calu does not resolve (`_shell_runs_more`), or
-        a line the parser cannot split (it is then also searched
-        line by line, so a commit inside an unparsable command is still found).
+        module docstring); `options` is set then. COMPOUND otherwise, with one of these causes:
+
+        - other commands in the line;
+        - a wrapper or options before `commit`;
+        - path arguments;
+        - a redirection into a file;
+        - shell syntax calu does not resolve (`_shell_runs_more`);
+        - a line the parser cannot split. It is then also searched line by line, so a commit
+          inside an unparsable command is still found.
 
     Example:
         classify_commit("git commit -m x", cwd).kind is CommitKind.PLAIN
@@ -847,7 +852,11 @@ NUL_SIGN = "␀"
 
 
 def without_binary_content(patch: bytes) -> bytes:
-    """Take the content of binary data files out of a patch, and every NUL character.
+    """Take the content of binary data files out of a patch, and show the NUL characters.
+
+    The result holds no NUL character. Outside binary data files each one is replaced by the
+    sign `NUL_SIGN`. In a binary data file the content is replaced by a note, and the NUL
+    characters of its header are removed.
 
     A binary data file is not checked like a source file: the bytes of an image tell a
     checker nothing and fill its prompt. A file's part of the patch loses its content only

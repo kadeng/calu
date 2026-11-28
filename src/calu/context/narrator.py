@@ -13,11 +13,11 @@ requested"). The narrator turns them into a report about Claude:
 
 The narrator is not told which of Claude's blocks were thinking and which were text: both are
 labelled as Claude's text (`render_input`). It only retells what it is given. The thinking
-blocks are no reasoning traces in any case: Anthropic's API returns only a summary of the
-model's thinking (or nothing), never the raw chain of thought. But a prompt that asks a model
-to retell "thinking" probably reads like an attempt to extract reasoning, and Anthropic's
-classifiers refused such narrator requests now and then
-(`refusal_category: "reasoning_extraction"`, 2026-11-26). Messages from another session and
+blocks are not reasoning traces. Anthropic's API returns only a summary of the model's
+thinking, or nothing, and never the raw chain of thought. A prompt that asks a model to retell
+"thinking" probably reads like an attempt to extract reasoning. Anthropic's classifiers
+refused such narrator requests now and then (`refusal_category: "reasoning_extraction"`,
+2026-11-26), so the prompt speaks of Claude's text. Messages from another session and
 automatic notices keep labels of their own, because who wrote them matters to the checker.
 
 The narration keeps the content (about 50-100 % of the original length). Long passages (more

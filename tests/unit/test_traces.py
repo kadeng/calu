@@ -1165,9 +1165,14 @@ def test_a_random_name_of_digits_alone_is_drawn_again(
     assert path.name == "session_0a2259208858.md"
 
 
-async def test_a_flat_layout_with_random_names_is_found_and_never_removes_the_directory(
+async def test_a_flat_layout_with_random_names_is_found_and_keeps_the_trace_root(
     tmp_path: Path,
 ):
+    """A trace with a random name is found by its session marker.
+
+    A writer that ends without a turn removes its empty file. It keeps the trace root. It also
+    removes an empty per-user directory below the root.
+    """
     root = tmp_path / "agent" / "traces"
     earlier = root / "session_0123456789ab.md"
     root.mkdir(parents=True)

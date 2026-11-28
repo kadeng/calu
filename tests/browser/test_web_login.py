@@ -99,7 +99,8 @@ class OtherServer:
 
 
 async def test_the_login_works_in_a_browser_and_no_other_port_can_use_it(db_url: str, page) -> None:
-    """wa0, end to end: log in, let another port see what a browser sends it, replay that."""
+    """End to end: the test logs in, lets a server on another port record the cookies that the
+    browser sends it, and replays one of them against calu web, which must refuse it."""
     conn = await connect(db_url)
     try:
         await setup(conn, db_url, "test:model")
@@ -230,7 +231,7 @@ async def test_the_live_view_attaches_with_the_key(db_url: str, tmp_path: Path, 
 
 
 async def test_the_live_page_says_when_the_session_hangs_up(db_url: str, page) -> None:
-    """wa4: the page kept saying "attached" for a session whose process had ended."""
+    """The live page used to keep saying "attached" for a session whose process had ended."""
     async with gone_quiet(db_url) as (db, session_id, hang_up), serve(create_app(db)) as base:
         await page.goto(f"{base}/sessions/{session_id}/live")
         await page.wait_for_function("document.getElementById('note').textContent === 'attached'")
@@ -246,7 +247,7 @@ async def test_the_live_page_says_when_the_session_hangs_up(db_url: str, page) -
 async def test_the_live_page_attaches_again_when_its_own_connection_drops(
     db_url: str, page
 ) -> None:
-    """wa4: a dropped connection to calu web (a restart, a tunnel) left the page dead."""
+    """A dropped connection to calu web (a restart, a tunnel) used to leave the page dead."""
     sockets: list[Any] = []
 
     async def through(route: Any) -> None:
@@ -271,7 +272,7 @@ async def test_the_live_page_attaches_again_when_its_own_connection_drops(
 
 @pytest.mark.slow
 async def test_the_triage_says_when_its_list_may_be_out_of_date(db_url: str, page) -> None:
-    """wa3: a poll that failed left the last queue on screen without a word."""
+    """A poll that failed used to leave the last queue on screen without a word."""
     conn = await connect(db_url)
     try:
         await setup(conn, db_url, "test:model")

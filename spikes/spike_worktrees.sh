@@ -19,6 +19,10 @@
 # A calu run stops at the first escalation it cannot get answered (wt3: after 180 s); calu's
 # records are the `steps` and `checker_runs` rows and the trace in <project>/agent/traces/.
 #
+# `setup` deletes, with `rm -rf`, the project ~/work/wt, the directory ~/work/wt-outside and the
+# log directory $LOG, and creates them again. `calu-setup NAME` deletes ~/work/NAME and
+# $LOG/NAME.jsonl and creates the project again.
+#
 # The project ~/work/wt is recreated by `setup`. Its committed CLAUDE.md and
 # .claude/settings.json differ from the main checkout's working copies, so the logs show
 # which copy a step in a worktree loads:
@@ -225,7 +229,7 @@ report)
     done
     ;;
 *)
-    echo "usage: $0 setup|plain|calu|merge|report" >&2
+    echo "usage: $0 setup|plain|report|calu-setup|calu|calu-again|calu-outside|exit-remove|by-hand" >&2
     exit 2
     ;;
 esac

@@ -290,7 +290,8 @@ def up(
 
     Side effects: after a start with an owner password the container is created a second time
     without it, so the password is in the container's configuration only while the cluster
-    is being initialized.
+    is being initialized. Once the server accepts connections, `harden` edits the container's
+    `pg_hba.conf` so that every login needs a password, and reloads the server.
 
     Args:
         port: Host port on 127.0.0.1.

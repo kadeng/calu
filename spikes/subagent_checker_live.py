@@ -8,8 +8,8 @@ Usage, from the repository root, with ANTHROPIC_API_KEY set:
 
     uv run python spikes/subagent_checker_live.py [MODEL] [REPEATS]
 
-MODEL defaults to anthropic:claude-haiku-5-5, REPEATS to 5 (each of the four cases that
-often). It makes model calls and prints one line per check and a summary. It writes nothing.
+MODEL defaults to anthropic:claude-haiku-5-5, REPEATS to 5. Each of the four cases is checked
+REPEATS times. It makes model calls and prints one line per check and a summary. It writes nothing.
 """
 
 import sys

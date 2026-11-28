@@ -20,9 +20,11 @@ Which edges it believes:
 - Calls: yes, when the program says how it found the target and that way is not a match by
   name. Examples are an import, the type of the receiver, or a function in the same file.
 - Calls where the program only matched the name (the ways listed in `UNPROVEN`), or names no
-  way at all: none. For a name match the program picks one function of that name, and it
-  picks the wrong one about as often as the right one.
-- The program's edge kind USAGE: none, for the same reason.
+  way at all: the index believes none of these edges and reports no referrer for them. For a
+  name match the program picks one function of that name, and it picks the wrong one about
+  as often as the right one.
+- The program's edge kind USAGE: the index believes none of these edges either, for the same
+  reason.
 
 What to expect from it:
 
@@ -220,8 +222,8 @@ class CbmIndex:
             The parsed JSON answer.
 
         Raises:
-            CbmError: If the program is not installed, does not end in time, or its output
-                is no JSON object.
+            CbmError: If the program is not installed, does not end in time, ends with a
+                non-zero exit status, or its output is no JSON object.
         """
         if shutil.which(self.command[0]) is None:
             raise CbmError(f"No code graph: {self.command[0]} is not installed.")
@@ -237,6 +239,10 @@ class CbmIndex:
                 env=environment,
                 check=False,
             )
+            if done.returncode != 0:
+                raise CbmError(
+                    f"The code graph tool failed at {tool} (exit status {done.returncode})."
+                )
             answer = json.loads(done.stdout)
         except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
             raise CbmError(f"The code graph tool failed at {tool} ({type(exc).__name__}).") from exc

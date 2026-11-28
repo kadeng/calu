@@ -6,6 +6,10 @@
 # and unpacked into the cache, the same trick `spikes/get-socat.sh` uses for socat, and the tests
 # put that directory on LD_LIBRARY_PATH.
 #
+# Side effects: Playwright downloads its browser and apt downloads the two packages over the
+# network. The cache directory (CALU_BROWSER_LIBS, default ~/.cache/calu-browser-libs) is
+# removed and built again on every run.
+#
 #     scripts/get-browser.sh && uv run pytest -m browser
 #
 # Without this the browser tests skip; every other test is unaffected.

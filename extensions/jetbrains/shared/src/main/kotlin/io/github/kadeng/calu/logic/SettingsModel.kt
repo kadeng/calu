@@ -434,7 +434,7 @@ private val NUMBER_TEXT = Regex("^[+-]?(\\d+\\.?\\d*|\\.\\d+)([eE][+-]?\\d+)?$")
  * @return `Ok`: a boolean (`TOGGLE`), a number (`NUMBER`; a whole number is written without a
  *   decimal point), a list of the non-empty trimmed lines (`LIST`), the parsed JSON (`JSON`),
  *   the text as entered (`MARKDOWN`), else the trimmed text; JSON null for an empty input of a
- *   nullable setting. `Error` for a number that is not one, a decimal where a whole number is
+ *   nullable setting, except a `LIST` setting, whose empty input gives an empty array. `Error` for a number that is not one, a decimal where a whole number is
  *   needed, a value outside `choices`, invalid JSON, or an empty input of a `NUMBER` or `JSON`
  *   setting that cannot be empty.
  */
@@ -619,9 +619,9 @@ data class SetupItem(val name: String, val level: String, val message: String, v
  *
  * @param findings The `findings` of `ide.status` (untrusted: entries without a string `name`
  *   are dropped).
- * @return One item per finding in the given order. A missing `claude` gets the fix "How to
- *   install Claude Code" (the plugin never installs it); a finding named `calu` that is not ok
- *   gets "Update calu"; other findings get no button.
+ * @return One item per finding in the given order. A `claude` finding that is not ok (missing
+ *   or a note) gets the fix "How to install Claude Code" (the plugin never installs it); a
+ *   finding named `calu` that is not ok gets "Update calu"; other findings get no button.
  */
 fun setupItems(findings: List<JsonElement>?): List<SetupItem> = findings.orEmpty().mapNotNull { entry ->
     val f = entry.asObj() ?: return@mapNotNull null

@@ -137,8 +137,9 @@ export class Installer {
     }
     const where = vscode.env.remoteName ? `on this ${vscode.env.remoteName} machine` : 'on this machine';
     const detail =
-      `uv installs calu as a tool (\`uv tool install --python 3.14 ${source}\`), with Python 3.14 and its ` +
-      'dependencies from PyPI (internet access needed). The command `calu` goes to ~/.local/bin.';
+      `uv installs calu as a tool (\`uv tool install --force --python 3.14 ${source}\`), with Python 3.14 and its ` +
+      'dependencies from PyPI (internet access needed). The command `calu` goes to ~/.local/bin. ' +
+      '`--force` replaces a calu tool that is already installed.';
     const answer = await vscode.window.showInformationMessage(`Install calu ${where}?`, { modal: true, detail }, 'Install');
     if (answer !== 'Install') return false;
     let uv = findUv(hostFacts());

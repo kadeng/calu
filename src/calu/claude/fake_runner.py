@@ -16,7 +16,8 @@ Each user message starts the next scripted turn; when the script is exhausted, t
                                                       interrupt ends the text after the words
                                                       streamed so far
     {"tool": "Bash", "input": {...}, "result": "..."} a tool call; it passes the ToolGate first
-                                                      (PASS runs it: there is no auto mode here)
+                                                      (a PASS runs it or not by the permission
+                                                      mode; see `FakeScript.permission_mode`)
     {"tool": "Bash", "writes": {"a.txt": "text"}}     ... and the call really writes those files
                                                       (relative to the workspace; "" deletes),
                                                       so that features which watch the file

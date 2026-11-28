@@ -9,15 +9,19 @@ continues after a sequence number; `protocol_connector` wraps `calu.protocol.cli
 
 `Link.run` is the reconnect loop of `calu.attach.attach` with the model in place of the
 printer: on the first attach it takes the stored history of the session (`session.history`),
-the replayed events below it and a snapshot; when the session
-closes the connection because this client fell behind, it connects again after the last event
-it applied, at most `calu.attach.MAX_RECONNECTS` times in a row without an event in between;
-when the connection breaks (no close frame, a keepalive without answer: a dropped SSH tunnel,
-a network that went away), it tries again after 1, 2, 4, 8, then every 15 seconds, for
-`REDIAL_FOR_S` seconds, and continues after the last event it applied (a session of this
-machine whose process is known to be gone ends the link at once instead, `gone`);
-when the session can no longer replay the missed events, it forgets the session data, loads
-the stored history again, applies the events it did get and takes the rest from a snapshot.
+the replayed events below it and a snapshot. Three cases follow.
+
+- The session closes the connection because this client fell behind. The loop connects
+  again after the last event it applied. It does so at most `calu.attach.MAX_RECONNECTS`
+  times in a row without an event in between.
+- The connection breaks: no close frame, or a keepalive without an answer, as after a
+  dropped SSH tunnel or a lost network. The loop tries again after 1, 2, 4 and 8 seconds,
+  then every 15 seconds, for `REDIAL_FOR_S` seconds. It continues after the last event it
+  applied. If the session runs on this machine and its process is known to be gone, the
+  link ends at once instead (`gone`).
+- The session can no longer replay the missed events. The loop forgets the session data and
+  loads the stored history again. It applies the events it did get and takes the rest from
+  a snapshot.
 
 While the client has handed the terminal to another program (`f4`), it reads nothing, and the
 session may close the connection because its keepalive got no answer. The app announces such
@@ -210,9 +214,11 @@ class Link:
     def expect_drop(self) -> None:
         """Announce that the client stops reading for a while (it hands the terminal over).
 
-        Until `drop_over` and `DROP_GRACE_S` seconds beyond it, or until the next snapshot
-        after a reconnect, a connection the session closes is opened again as after falling
-        behind. A revoked token (`CLOSE_TOKEN_REVOKED`) still ends the link.
+        The announcement holds until `drop_over` has been called and `DROP_GRACE_S` seconds
+        have passed after it. A snapshot after a reconnect also ends it, but only once
+        `drop_over` has been called. Until then a connection the session closes is opened
+        again as after falling behind. A revoked token (`CLOSE_TOKEN_REVOKED`) still ends
+        the link.
         """
         self._drop_expected = True
         self._drop_until = None
@@ -254,7 +260,8 @@ class Link:
     async def _on_event(self, method: str, params: dict[str, Any]) -> None:
         """Apply one event to the model and report the change.
 
-        A replayed event gets no time. A change of the session state that involves a start
+        A replayed event gets no timestamp: the model takes the time of the event as unknown.
+        A change of the session state that involves a start
         marks the snapshot as stale, because model and effort are not part of any event. While
         a connection replays, and until the stored history is loaded, the events are held back
         (`_release`), so that they are applied below what precedes them. Every text of the
@@ -350,7 +357,10 @@ class Link:
         self._replaying = False
 
     async def _snapshot(self, connection: Connection) -> None:
-        """Ask for `state.get` and load it into the model.
+        """Ask for `state.get`, load it into the model and derive the capabilities from it.
+
+        Side effects: replaces `self.capabilities` with the capabilities the snapshot
+        shows, and notifies the change.
 
         Args:
             connection: The open connection.

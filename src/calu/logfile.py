@@ -193,8 +193,9 @@ def setup(command: str, stderr: TextIO | None = None) -> Path | None:
     stderr; the records then reach stderr only, still as one line each. Opens the refusal file
     (`refusals_path`, mode 0600) the same way for the logger `REFUSALS_LOGGER`, which then
     stops passing its records on; if it cannot be opened, prints one line saying so, and the
-    refusal records are dropped. Both files are opened here, before `calu.asuser.enter` can
-    switch the file access to another user.
+    refusal records are dropped. When the log file also failed, the refusal file's line is
+    left out, because the log file's line already names the cause. Both files are opened
+    here, before `calu.asuser.enter` can switch the file access to another user.
 
     Args:
         command: The command's name; it names the file (`log_path`).

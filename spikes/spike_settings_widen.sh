@@ -4,6 +4,9 @@
 #
 #   bash spikes/spike_settings_widen.sh [model]          (default model: haiku)
 #
+# Part 1 makes Claude run `curl` against https://example.com through the sandbox, so the spike
+# sends a real outbound request.
+#
 # Part 1. A scratch project's settings file re-opens one file inside a denied directory
 # (sandbox.filesystem.allowRead) and allows one domain (sandbox.network.allowedDomains). Each of
 # the two files (.claude/settings.json, .claude/settings.local.json) is tried twice:

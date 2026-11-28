@@ -264,8 +264,8 @@ def test_the_acp_adapter_never_reads_a_password_from_the_editor_s_stream(
     `calu acp` speaks ACP on its standard input, and `read_password` reads a line from standard
     input whenever it is not a terminal. Asking for the password of an encrypted credential
     there would therefore swallow the editor's `initialize` request, treat it as the password
-    and fail with "wrong password" -- with the stream already broken. The adapter refuses
-    instead, and the assertion that the line is still unread is the assertion that it did.
+    and fail with "wrong password", with the stream already broken. The adapter refuses
+    instead. The test checks that the request line is still unread in stdin afterwards.
     """
     from calu.credentials import CredentialStore
 

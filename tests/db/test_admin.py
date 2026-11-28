@@ -20,7 +20,14 @@ pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
 
 async def prepared(db_url: str) -> tuple[Db, psycopg.AsyncConnection]:
-    """Return an owner connection on a database with the defaults loaded."""
+    """Set up a database with the defaults and return its wrapped and its raw owner connection.
+
+    Args:
+        db_url: The test database.
+
+    Returns:
+        The `Db` and the psycopg connection under it.
+    """
     conn = await connect(db_url)
     await setup(conn, db_url, "test:model")
     return Db(conn), conn
@@ -497,7 +504,8 @@ async def test_an_older_shipped_text_is_offered_an_update_and_an_edited_one_neve
 
 
 async def test_a_template_is_loaded_into_a_checker_without_losing_own_text(db_url: str) -> None:
-    """D250: shipped text replaced, own text kept unless --append or --replace, route checked."""
+    """D250: a template replaces the shipped text of a checker. The user's own text is kept
+    unless `--append` or `--replace` says otherwise. The route must match."""
     from calu.defaults import library
 
     db, conn = await prepared(db_url)

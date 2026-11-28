@@ -142,7 +142,8 @@ def presets() -> list[dict[str, str]]:
     """Return the presets as JSON objects.
 
     Returns:
-        One `{id, label, group, model, note}` object per preset, in display order.
+        A list with one `{id, label, group, model, note}` object per preset, in display
+        order.
     """
     return [asdict(preset) for preset in PRESETS]
 

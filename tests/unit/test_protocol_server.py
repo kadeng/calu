@@ -535,7 +535,8 @@ async def test_the_history_holds_the_turn_that_just_ended(tmp_path: Path):
     """A client reading the history right after `turn.result` sees that turn.
 
     The turn is narrated and stored in a background task while the event is already out, so
-    without a wait this is a race -- and it was one: the test above failed intermittently.
+    without a wait this is a race. It was one: an earlier version of this test, which read the
+    history without waiting, failed intermittently.
     """
     turns = [[{"text": "first"}], [{"text": "second"}]]
     async with served(tmp_path, turns) as run:
@@ -1067,7 +1068,12 @@ async def test_the_printed_token_survives_a_session_that_never_recorded_it(tmp_p
 # ------------------------------------------------------------------ which requests are checked
 
 
-def test_every_request_that_is_not_listed_as_read_only_exists():
+def test_every_request_is_either_read_only_or_checked_against_the_token():
+    """The read-only requests are all real requests; every other request is on a fixed list.
+
+    A request that is not read-only is checked against the client's token. A new request
+    therefore fails this test until it is added to one of the two sets.
+    """
     from calu.protocol.messages import REQUESTS
     from calu.protocol.server import READ_ONLY_METHODS
 
@@ -1094,7 +1100,7 @@ def test_every_request_that_is_not_listed_as_read_only_exists():
         "model.set",
         "permission_mode.set",
         "shutdown",
-    }, "a new request is checked against the token unless it is listed as read-only: decide"
+    }, "a new request is checked against the token unless it is read-only; add it to one set"
 
 
 async def test_a_revoked_token_is_refused_every_request_that_changes_the_session(
@@ -1102,14 +1108,16 @@ async def test_a_revoked_token_is_refused_every_request_that_changes_the_session
 ):
     """Every such request is answered with -32001 when it is the first to notice the revocation.
 
-    Two things made this fail about one run in ten under load. (1) In the server: the
-    connection of a revoked token was closed a fixed 0.1 s after the database's answer, "so
-    that the error response goes out first"; on a busy machine the close came first and the
-    request got a closed connection instead of its response. The close now waits for the
-    response, and this test runs without the 0.1 s. (2) In the test: the server's own
-    scheduled check, 1 s after its start (`FIRST_CHECK_S`), could fall between a revocation
-    and its request; the connection is then closed before the request is read, which is the
-    other documented refusal (the next test). The scheduled check is kept out of the way.
+    This test failed about one run in ten under load, for two reasons.
+
+    1. The server closed the connection of a revoked token a fixed 0.1 s after the database's
+       answer, "so that the error response goes out first". On a busy machine the close came
+       first, and the request got a closed connection instead of its response. The close now
+       waits for the response, and this test runs without the 0.1 s.
+    2. The server's own scheduled check, 1 s after its start (`FIRST_CHECK_S`), could fall
+       between a revocation and its request. The connection is then closed before the request
+       is read, which is the other documented refusal (the next test). The test keeps the
+       scheduled check out of the way.
     """
     from calu.protocol import server as server_module
     from calu.protocol.messages import REQUESTS

@@ -16,24 +16,40 @@ same day: an absent field counts as background, and the call's tool result corre
         [--variants abc] [--handback allow|deny] [--permission-mode default|acceptEdits|auto]
 
 Variants of the main agent's one Agent call: a = without `run_in_background`, b = with `false`,
-c = with `true`. Each variant runs calu's own `SdkRunner` with `claude.model` = Haiku,
-`claude.permission_mode` as given by `--permission-mode` (not set by default) and otherwise
-calu's default `ClaudeConfig`, so Claude Code gets calu's options: the CLI the SDK
-finds (its bundled one unless `claude.cli_path` is set), `setting_sources` user/project/local,
-calu's `--settings` document, the permission mode calu chooses, its hooks and extra arguments.
+c = with `true`.
+
+Each variant runs calu's own `SdkRunner` with `claude.model` = Haiku. `claude.permission_mode`
+is the value of `--permission-mode` (not set by default). The rest is calu's default
+`ClaudeConfig`, so Claude Code gets calu's options:
+
+- the CLI the SDK finds (its bundled one unless `claude.cli_path` is set)
+- `setting_sources` user, project and local
+- calu's `--settings` document
+- the permission mode calu chooses
+- calu's hooks and extra arguments
+
 Claude Code runs in a new empty directory under DIR. One prompt tells the main agent the exact
-input of its Agent call; the subagent is asked to reply with one word. A stand-in `ToolGate`
-(`RecordingGate`) allows the Agent and Task calls, denies every other tool call, and records
-every call of `review_subagent_result`. `SubagentHandback` (a subagent's hand-back of its
-report, which calu's session reviews as a result instead of checking it as a step,
-`Session._handback`) is allowed with `--handback allow` (the default: what calu's session does
-when the review passes) and denied with `--handback deny` (what it does when a person denies
-the report; then the subagent ends without handing back). `RecordingRunner` records every SDK
-message (except stream deltas, rate limit events and the system messages `thinking_tokens` and
-`commands_changed`) and every call of calu's hooks without changing what they do. A run ends
-once the subagent has ended, a later turn has ended with no background task running and 5 s
-passed without a message (if the main agent made no Agent call: once a turn has ended and 5 s
-passed), or after the timeout.
+input of its Agent call. The subagent is asked to reply with one word.
+
+A stand-in `ToolGate` (`RecordingGate`) allows the Agent and Task calls and denies every other
+tool call. It records every call of `review_subagent_result`.
+
+`SubagentHandback` is a subagent's hand-back of its report. calu's session reviews it as a
+result and does not check it as a step (`Session._handback`). With `--handback allow` (the
+default) the gate allows it, as calu's session does when the review passes. With
+`--handback deny` the gate denies it, as calu's session does when a person denies the report.
+The subagent then ends without handing back.
+
+`RecordingRunner` records every call of calu's hooks and every SDK message, except stream
+deltas, rate limit events and the system messages `thinking_tokens` and `commands_changed`.
+It does not change what the hooks do.
+
+A run ends in one of three ways:
+
+- The subagent has ended, a later turn has ended with no background task running, and 5 s have
+  passed without a message.
+- The main agent made no Agent call, a turn has ended and 5 s have passed.
+- The timeout is reached.
 
 Output: a timeline and a summary per variant on stdout, and `records.jsonl` (the same records;
 texts and tool inputs shortened) in each run's directory. Claude Code loads the user's
@@ -148,15 +164,17 @@ ADDED_ENV = {"CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1"}
 
 
 def short(value: Any, limit: int = 200) -> str:
-    """Return `value` as one line of at most `limit` characters.
+    """Return `value` as one line, cut after `limit` characters of text.
 
     Args:
         value: A string, or anything else, which is rendered as JSON (`str` for what JSON
             cannot hold).
-        limit: Most characters kept; a cut text ends with "... [N chars]", N the full length.
+        limit: Most characters kept of the text; a cut text is followed by "... [N chars]", N the
+            full length.
 
     Returns:
-        The text with runs of white space joined to one space.
+        The text with runs of white space joined to one space: at most `limit` characters of
+        it, followed by the marker `... [N chars]` when it was cut.
     """
     text = value if isinstance(value, str) else json.dumps(value, default=str)
     text = " ".join(text.split())

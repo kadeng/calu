@@ -51,7 +51,9 @@ def real_place_file(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
 
     Side effects (root box only): removes `CALU_PLACE_FILE` from the environment for the
     test; keeps the content of an existing `/var/lib/calu/database.json` and writes it back
-    afterwards, or removes the file if there was none.
+    afterwards, or removes the file if there was none. It also removes the login file
+    (`place.login_path()`, `user-login.json`) after the test and does not restore it, so a
+    login file of the machine's own is deleted by a test run.
 
     Yields:
         `calu.db.place.PATH`.
@@ -91,13 +93,14 @@ def test_storing_the_logins_as_root_publishes_the_user_login_only_without_a_user
 
     Root's file, 0644, in a directory only root writes, read and trusted by another user;
     never the owner's password. With a user password both entries are encrypted and the file
-    holds no secret. With an empty one (`--no-password`) both are stored without encryption
-    the generated password of `calu_admin` goes into `user-login.json`, which only the user who
-    ran `sudo calu setup` can read (D279); a later setup with a user password removes it again
-    and removes the entries of before D265 it was given.
+    holds no secret. With an empty one (`--no-password`), both are stored without encryption.
+    The generated password of `calu_admin` goes into `user-login.json`, which only the user
+    who ran `sudo calu setup` can read (D279). A later setup with a user password removes that
+    file and the entries from before D265.
 
     Side effects (root box only): the place file (kept and restored by `real_place_file`);
-    a store below `tmp_path`.
+    the login file `user-login.json` below `/var/lib/calu`, written and read back (removed by
+    `real_place_file` afterwards); a store below `tmp_path`.
     """
     store = CredentialStore(tmp_path / "etc" / "calu" / "credentials.json")
     owner = Target.parse(b"postgresql://calu_owner:owner-pw@127.0.0.1:5434/calu")
@@ -296,7 +299,9 @@ async def test_calu_serve_as_root_runs_claude_code_as_the_user_behind_a_root_soc
     with status 0 and the socket is gone.
 
     Side effects (root box only): `/var/lib/calu/{state,claude}/<uid>`, `/run/calu/sessions`;
-    rows in the test database.
+    rows in the test database, including the global settings, which are switched to
+    `sandbox.enabled: false`. The whole output of the server is printed in `finally`, also
+    when the test passes.
     """
     user_url = await prepare(db_url, project)
     standin_dir = project.parent / "standin"

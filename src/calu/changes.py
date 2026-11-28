@@ -222,8 +222,10 @@ class SnapshotStore:
         """Snapshot the project directory and return the id of the resulting git tree.
 
         Side effects: writes git objects into `root` for everything that changed since the last
-        snapshot. In-tree `.gitignore` files are honoured; `always_capture` is added regardless.
-        Two snapshots of the same store are taken one after the other.
+        snapshot. Rewrites `<root>/info/exclude` when `exclude` changed since the last snapshot
+        and removes the excluded directories from the snapshot's index (`git rm --cached`),
+        both through `_write_excludes`. In-tree `.gitignore` files are honoured; `always_capture`
+        is added regardless. Two snapshots of the same store are taken one after the other.
 
         Returns:
             The tree id (a hexadecimal object name).

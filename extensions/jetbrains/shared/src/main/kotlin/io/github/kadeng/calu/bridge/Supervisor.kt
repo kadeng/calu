@@ -23,8 +23,8 @@
  *     start: ide.initialize ok ──► password in memory? ──► ide.unlock ── refused ──► forget it
  *
  * The one-password rule (spec sections 8 and 10): the calu user password the user typed is kept
- * in a `PasswordMemory` (a variable, never a file, a setting or a log) until the IDE closes, and
- * a restarted bridge is unlocked with it without a prompt. An empty entry is sent like any
+ * in a `PasswordMemory`. It is a variable, never a file, a setting or a log, and it lasts until
+ * the IDE closes. A restarted bridge is unlocked with it without a prompt. An empty entry is sent like any
  * other; nothing here refuses one (an empty user password itself means calu never asks). The
  * decisions are in `logic/Unlock.kt`.
  *
@@ -229,8 +229,9 @@ class BridgeSupervisor(
      * @return The response's `result`.
      * @throws IllegalStateException if the bridge is not running.
      * @throws RpcRequestException for an error answer, also -32010 if no password unlocked the
-     *   bridge: its message is then `notDoneText`'s (the user cancelled, before or after the
-     *   request started; every password of the round was refused) or else the bridge's own.
+     *   bridge. The message is then `notDoneText`'s in two cases: the user cancelled, before or
+     *   after the request started, or every password of the round was refused. In any other
+     *   case it is the bridge's own message.
      * @throws RpcClosedException if the bridge exits before answering.
      */
     suspend fun request(method: String, params: JsonObject = EMPTY_OBJECT, interactive: Boolean = true): JsonElement {
@@ -335,7 +336,10 @@ class BridgeSupervisor(
         setStatus(BridgeStatusInfo(BridgeStatus.STOPPED))
     }
 
-    /** Kill the process without the shutdown handshake (the project closes). No reconnect follows. */
+    /**
+     * End the process without the shutdown handshake (the project closes). No reconnect follows.
+     * The process is asked to end first; it is killed if it still runs after `STOP_TIMEOUT_MS`.
+     */
     fun dispose() {
         disposed = true
         synchronized(lock) { reconnectJob?.cancel(); reconnectJob = null }

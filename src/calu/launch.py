@@ -60,7 +60,9 @@ DEFAULT_KEEP = (
 """Environment variables Claude Code keeps, as shell patterns: what a program needs to run
 (path, locale, proxy, certificates), Claude Code's own settings and login variables, and what
 the Agent SDK and calu set for it. Everything else of calu's environment is dropped, among it
-database, AWS and `SUDO_*` variables and the checker keys."""
+database, AWS and `SUDO_*` variables and the checker keys. The patterns `ANTHROPIC_*` and
+`CLAUDE_*` keep every variable of those names, so `ANTHROPIC_API_KEY`, the Anthropic checker key,
+reaches Claude Code when calu's environment has it."""
 
 REFUSED = 126
 """Exit status of a launcher that did not start Claude Code."""

@@ -38,7 +38,11 @@ def runtime() -> Iterator[Path]:
 
 
 async def test_sigterm_stops_calu_run_in_order(db_url: str, tmp_path: Path, runtime: Path) -> None:
-    """A `kill` or `docker stop` ended the process at once: the row stayed "escalated"."""
+    """SIGTERM ends `calu run` with status 130 and no traceback, removes its socket, and leaves
+    the session stopped and its open escalation cancelled.
+
+    A `kill` or `docker stop` used to end the process at once, and the row stayed "escalated".
+    """
     workspace = tmp_path / "project"
     workspace.mkdir()
     session_url = await prepare(db_url, workspace)

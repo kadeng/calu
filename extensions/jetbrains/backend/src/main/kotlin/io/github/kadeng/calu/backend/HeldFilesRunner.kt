@@ -11,13 +11,17 @@
  *                                        ├─ Run anyway ──────────────────────────► the other runner
  *                                        └─ Cancel ──────────────────────────────► nothing starts
  *
- * Why a `ProgramRunner`: it is the public extension point every start of a run configuration
- * passes through, for every executor (Run, Debug, Profile, ...), and its `execute` may decide
- * not to start or to start later. `ExecutionListener` only reports a start and cannot stop it;
- * a `BeforeRunTaskProvider` acts only for the configurations whose "Before launch" list holds
- * its task, so existing configurations would be missed. The other runner gets an environment
- * of its own (`ExecutionEnvironmentBuilder(...).runnerAndSettings`), so the Run or Debug tab it
- * opens belongs to it; a Rerun from that tab therefore starts without this question, and
+ * A `ProgramRunner` is the public extension point that every start of a run configuration
+ * passes through. It does so for every executor (Run, Debug, Profile, ...). Its `execute` may
+ * decide not to start, or to start later. Two other extension points do not fit:
+ *
+ * - `ExecutionListener` only reports a start and cannot stop it.
+ * - A `BeforeRunTaskProvider` acts only for the configurations whose "Before launch" list holds
+ *   its task, so existing configurations would be missed.
+ *
+ * The other runner gets an environment of its own
+ * (`ExecutionEnvironmentBuilder(...).runnerAndSettings`), so the Run or Debug tab it opens
+ * belongs to it. A Rerun from that tab therefore starts without this question.
  * `HeldFilesStartListener` shows a notification with "Upload now" for such a start instead.
  *
  * While nothing is held (every other mode, "Sync: none", no running turn) `canRun` is false

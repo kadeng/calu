@@ -2,8 +2,10 @@
 
 `tests/fuzz/test_locking_fuzz.py` uses it (marker `fuzz`; never part of CI), and it runs on its
 own as `uv run python -m tests.fuzz.locking_harness --help`. Everything runs in threads of this
-process. Nothing is started or contacted, and no file is written except a timeline CSV when
-one is asked for. Reports go to stdout and hold counts and timings only.
+process. Nothing is started or contacted. Two kinds of file can be written, both only when
+asked for: a timeline CSV, and the lock state files of the file backend (`FileLockSpace`)
+below the directory the caller gives (`--files DIR`, or a `FileLockSpace` passed by a test).
+Reports go to stdout and hold counts and timings only.
 
     agent (one thread per simulated agent), in a loop:
         think ─► issue a batch of 1-3 calls (one ticket each, in order) ─► wait for all of them
@@ -295,7 +297,8 @@ def draw_timeout(rng: random.Random, cfg: LoadConfig) -> float | None:
 
 
 def _finish(rng: random.Random, cfg: LoadConfig, spec: OpSpec) -> OpSpec:
-    """Give `spec` the random properties every call has: check, outcome, timeout, release, probe.
+    """Give `spec` the random properties every call has: check, outcome, timeout, release, probe,
+    cancellation and an invalid timeout.
 
     Args:
         rng: The random source.
@@ -1110,8 +1113,13 @@ class Report:
 
 
 def _probe(scheme: LockingScheme, op: Op, lease: Lease, ledger: Ledger) -> None:
-    """Ask again while `op` holds `lease`: with its owner, or with its ticket; it must be
-    refused at once with `LockError`.
+    """Ask again while `op` holds `lease`; each probe must be refused at once with `LockError`.
+
+    There are three probes, chosen by `OpSpec.probe`:
+    - "scheme": ask the scheme with the same owner.
+    - "lock": ask the first lock of the lease directly with the same owner (only on an
+      `RWLockingScheme`; a lease without locks is skipped).
+    - "ticket": ask the scheme with the same ticket under another owner.
 
     Args:
         scheme: The scheme under test.

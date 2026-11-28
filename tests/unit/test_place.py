@@ -60,7 +60,12 @@ def test_a_place_file_others_could_have_written_is_refused(tmp_path: Path):
 
 def test_a_setup_without_a_user_password_shares_the_user_login(tmp_path: Path, monkeypatch):
     """D228, the owner's ruling: without passwords, security is weak, and a client asks for
-    nothing. The login is then in the file every user can read (D265: an empty user password)."""
+    nothing (D265: an empty user password).
+
+    `place.write` with an `admin_password` stands for such a setup. Since D279 the login is not
+    in the place file that every user reads. It is in a file of mode 600 next to it, which the
+    test checks. A client that knows the database and has no password takes that shared login.
+    A setup with passwords leaves no file that holds the secret."""
     from calu import cli
     from calu.setup import user_login
 
@@ -99,7 +104,8 @@ def test_a_setup_without_a_user_password_shares_the_user_login(tmp_path: Path, m
 
 def test_commands_use_the_shared_login_and_ask_nothing(tmp_path: Path, monkeypatch):
     """D228: after a setup without passwords, also the commands of a user who cannot read
-    root's store find the database and its login in the place file."""
+    root's store find the database in the place file and its login in the login file next to
+    it (D279), and they ask for nothing. A place file written without that login shares none."""
     from calu import cli
     from calu.credentials import CredentialStore
 

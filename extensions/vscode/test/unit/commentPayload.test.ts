@@ -33,7 +33,7 @@ describe('selectionToLines', () => {
   it('excludes a last line selected only up to column 0', () => {
     expect(selectionToLines(sel(4, 0, 7, 0))).toEqual({ startLine: 5, endLine: 7 });
   });
-  it('keeps a one-line selection that ends at column 0 of the same line... (empty handled above)', () => {
+  it('gives the line of a one-line selection that ends inside its line', () => {
     expect(selectionToLines(sel(3, 0, 3, 4))).toEqual({ startLine: 4, endLine: 4 });
   });
 });

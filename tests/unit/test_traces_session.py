@@ -224,7 +224,7 @@ async def run_turn(session: Session, rec) -> None:
 
 
 async def test_a_rewritten_thinking_block_is_traced_once_in_its_final_form(tmp_path: Path):
-    """D241: the summary streams and is rewritten; the file holds its last version once."""
+    """A thinking summary streams and is rewritten; the trace holds its final version (D241)."""
     script = [
         [
             {"thinking": "First draft of the plan", "message": "m1", "stream": True},
@@ -376,7 +376,11 @@ async def test_changed_trace_settings_start_a_new_file_that_names_the_old_one(tm
 
 
 async def test_a_changed_trace_setting_starts_no_file_in_an_idle_session(tmp_path: Path):
-    """One `calu config set traces...` added a header-only file for every running session."""
+    """A changed trace setting leaves an idle session without a new file.
+
+    Running `calu config set traces...` once added a header-only file to every running
+    session. A setting change must not start a file until the session has something to write.
+    """
     session, rec, _ = make_session(tmp_path, [[{"text": "one"}], [{"text": "two"}]], traced())
     async with anyio.create_task_group() as tg:
         await session.start(tg)
@@ -611,7 +615,8 @@ def test_the_redaction_agents_model_is_checked_for_its_key_only_while_it_runs():
 async def test_the_format_settings_and_the_configured_instructions_reach_the_trace(
     tmp_path: Path,
 ):
-    """D245: layout, file names, header lines, turn numbers and the redaction prompt."""
+    """The format settings (layout, file names, header lines, turn numbers) and the redaction
+    prompt reach the trace (D245)."""
     seen: list[str] = []
 
     def redacting(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:

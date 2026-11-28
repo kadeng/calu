@@ -13,7 +13,9 @@ which takes no lock and never waits.
                                             says it writes code or configuration outside them
                                             (`mark_writes_outside`), else shared
     Edit, Write, MultiEdit, NotebookEdit    an edit in the checkout of its file, with the file's
-                                            lock; a file outside every checkout: an edit outside
+      on a file in a checkout               lock
+    Edit, Write, MultiEdit, NotebookEdit    an edit outside the worktrees: the global lock,
+      on a file outside every checkout      exclusive
     every other tool                        none
 
 The locks live in a space that every session of the process shares (`shared_space`): the

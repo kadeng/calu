@@ -21,9 +21,14 @@ that one can be exchanged for another (the owner's requirement 52):
 - `CombinedIndex` (`combined.py`): the word search first, then a fast index, then a model
   (`judge.py`) for the places nothing cheaper could decide.
 
-The rule all of them follow: an index never answers "nothing refers to this" merely because
-it knows nothing. What it cannot decide is reported as unclear, and a checker reads those
-places.
+`SearchIndex` and `CombinedIndex` follow one rule: they never answer "nothing refers to this"
+merely because they know nothing. What they cannot decide is reported as unclear, and a
+checker reads those places.
+
+`NavigatorIndex` and `CbmIndex` do not follow this rule. They report only the places they
+confirm and no unclear ones, and a place they cannot work out is missing from the answer.
+They are meant as the fast stage of `CombinedIndex`, where the word search finds the places
+they miss.
 
 Importing this package does not load a model library. `judge` and `combined` use Pydantic
 AI; import them by their module names.

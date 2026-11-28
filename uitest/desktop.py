@@ -6,9 +6,9 @@ keyboard input and shell commands inside the XFCE desktop session of the user
 `cua`. This helper talks to that daemon through the Cua Python SDK (package
 `cua` on PyPI).
 
-Run it from anywhere on the host::
+Run it on the host, from the repository root::
 
-    uv run --no-project --with cua python calu/uitest/desktop.py <command> [args]
+    uv run --no-project --with cua python uitest/desktop.py <command> [args]
 
 Commands::
 
@@ -31,8 +31,9 @@ Configuration (environment variables)::
 Exit status: 0 on success; `shell` exits with the remote command's exit code;
 1 when the desktop is not reachable or a command fails.
 
-The SDK keeps its own state in ~/.cache/calu-uitest/cua-home (not ~/.cua), and
-its telemetry is switched off (DO_NOT_TRACK=1) before the SDK is imported.
+The SDK keeps its own state in ~/.cache/calu-uitest/cua-home (not ~/.cua), unless
+`CUA_HOME` is already set in the environment. Its telemetry is switched off (DO_NOT_TRACK=1)
+before the SDK is imported.
 """
 
 from __future__ import annotations

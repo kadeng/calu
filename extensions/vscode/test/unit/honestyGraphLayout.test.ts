@@ -35,7 +35,7 @@ function at(layout: GraphLayout, id: string): PlacedNode {
   return found;
 }
 
-/** Seven callers c0..c6 of the unit "t". */
+/** Returns `count` callers c0 to c(count-1) of the unit "t". The default is two more than the group limit. */
 function manyCallers(count = GROUP_LIMIT + 2): { nodes: LayoutNodeInput[]; edges: LayoutEdgeInput[] } {
   const callers = Array.from({ length: count }, (_, i) => `c${i}`);
   return {

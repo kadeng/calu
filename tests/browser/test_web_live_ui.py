@@ -401,8 +401,8 @@ async def test_side_questions_and_the_usage_panel_in_the_live_view(
 async def test_the_live_view_counts_each_subagent_once_and_streams_thinking_as_thinking(
     db_url: str, tmp_path: Path, page
 ) -> None:
-    """Test plan J O3, O5: thinking deltas are thinking lines; counts do not overlap; the
-    running turn is not under "Recorded turns"."""
+    """Thinking deltas are shown as thinking lines, the counts of subagents do not overlap, and
+    the running turn is not under "Recorded turns" (test plan J, O3 and O5)."""
     from calu.protocol.messages import AgentInfo, AgentsUpdate, AssistantDelta, AssistantThinking
 
     async with running(db_url, tmp_path, []) as (base, session_id, session):

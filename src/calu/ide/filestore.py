@@ -13,10 +13,10 @@ Every read and write of a file names it relative to an open directory descriptor
 directory which is replaced by a link while a request runs cannot lead it out of the project.
 The listing (the walk, git and its existence checks) works on paths: a directory swapped for
 a link during a listing can add names from outside to it, never their contents, which are
-read through the descriptors (`describe`). Nothing
-here needs more rights than the user who started the bridge has. All methods block: call them
-from a worker thread. The rules that need no file access are in `calu.ide.files`, the
-contract in `agent/records/notes/jetbrains-sync-spec.md`.
+read through the descriptors (`describe`). Nothing here needs more rights than the user who
+started the bridge has. All methods block: call them from a worker thread. The rules that need
+no file access are in `calu.ide.files`, the contract in
+`agent/records/notes/jetbrains-sync-spec.md`.
 """
 
 import contextlib
@@ -1005,7 +1005,10 @@ class Tree:
             `sha256` None if `hashes` is off; `{path, reason}` per skipped path, with the
             reason "symlink", "too-large", "not-regular", "submodule" or
             "unsupported-name"; path -> signature of each file). A path at which nothing
-            is, or which cannot be read, is in none of them.
+            is, or which cannot be read, is in none of them. A path whose directory
+            cannot be opened is skipped with the reason "symlink", whatever the cause is:
+            a link on the way, another non-directory or a read error such as a denied
+            permission.
         """
         files: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []

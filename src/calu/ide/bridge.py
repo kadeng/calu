@@ -187,7 +187,7 @@ def program_findings() -> list[doctor.Finding]:
     Side effect: runs `uv --version` if uv is on PATH.
 
     Returns:
-        One finding each. None is essential: a missing uv matters for installing and
+        A finding for each of them. No finding is essential: a missing uv matters for installing and
         updating calu, and tmux or screen only for keeping `calu serve` running after the
         editor's terminal closes.
     """
@@ -517,12 +517,16 @@ class Bridge:
     async def _status(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer `ide.status`: what is installed, and whether the database answers.
 
-        Side effects: runs `claude --version`, `uv --version` and the sandbox test of
-        `calu.doctor` (a start of `bwrap`); reads Claude Code's settings files; opens one
-        database connection if a login is readable without a password (a stopped local
-        Docker database is not started), and through it closes the open escalations of
-        sessions that are gone (`herd.sessions`, `herd.close_gone`). Without a database it
-        connects once to each token-free local socket and counts those sessions instead.
+        Side effects:
+            - Runs `claude --version`, `uv --version` and the sandbox test of `calu.doctor`
+              (a start of `bwrap`).
+            - Reads Claude Code's settings files.
+            - Opens one database connection if a login is readable without a password. A
+              stopped local Docker database is not started.
+            - Through that connection, closes the open escalations of sessions that are
+              gone (`herd.sessions`, `herd.close_gone`).
+            - Without a database, connects once to each token-free local socket and counts
+              those sessions instead.
 
         Args:
             params: Unused.
@@ -532,11 +536,11 @@ class Bridge:
             `finding_json`), `database` (`{reachable, place, problem}`, and `needs` with the
             credential's name when only a password is missing), `server`
             (`{sessions_running, servers_running}`: the sessions of this host that say they
-            are running, and the `calu serve` processes of this host that run
-            (`calu.servers.running`: row not ended, a heartbeat within the last minute, and a
-            process not known to be gone); `servers_running` is None when that is not known:
-            no database, a login that may not read `servers`, or a schema older than
-            migration 0040),
+            are running, and the `calu serve` processes of this host that run). A server
+            runs (`calu.servers.running`) if its row is not ended, its heartbeat is within the
+            last minute and its process is not known to be gone. `servers_running` is None
+            when that is not known: no database, a login that may not read `servers`, or a
+            schema older than migration 0040,
             `locked` (a protected credential exists and no login is held: the editor asks
             for the one password, `ide.unlock`) and `unlocked` (the held logins' names).
         """
@@ -660,12 +664,16 @@ class Bridge:
                 else ─► resume the conversation through `calu serve`, as `ide.start`
                         {kind: "resume"} does, in the session's directory
 
-        Side effects: detaches first if a session is attached; connects once to each
-        token-free local socket to find the session (each session logs that); a lookup
-        through the database also closes the open escalations of gone sessions
-        (`herd.sessions`) and may write a `client_tokens` row; a resume also writes a
-        `session_requests` row and waits for the server (`_request_session`); starts the
-        connection, whose events flow after the response.
+        Side effects:
+            - Detaches first if a session is attached.
+            - Address given: connects to it.
+            - Otherwise, a local socket: connects once to each token-free local socket to
+              find the session (each session logs that).
+            - Otherwise, the database: closes the open escalations of gone sessions
+              (`herd.sessions`) and may write a `client_tokens` row.
+            - Session named and dormant: a resume writes a `session_requests` row and waits
+              for the server (`_request_session`).
+            - Starts the connection, whose events flow after the response.
 
         Args:
             params: `session` (an id or its beginning; null for the workspace's session),
@@ -713,9 +721,9 @@ class Bridge:
 
         The session is looked up among those of this host and of the OS user this bridge runs
         as that have a Claude session id (`herd.dormant_session`). If a session that serves
-        clients already continues its conversation (another editor, calu's own resume after
-        an end, D282), that one is meant; else the conversation is to be resumed in the
-        session's directory.
+        clients already continues its conversation, that session is meant. Such a session
+        can be one that another editor started or one that calu resumed after an end.
+        Otherwise the conversation is resumed in the session's directory.
         A bridge that runs as root for root itself resumes nothing: root's own sessions are
         `calu run` processes, which no `calu serve` resumes. A bridge in a root process that
         works for a user (`asuser.active`, the chat pane of `calu web --sudo`) resumes that
@@ -948,11 +956,11 @@ class Bridge:
 
         Side effects: each waiting `ide.start` withdraws its `session_requests` row (so that
         no server starts a session nobody waits for) and fails with `START_CANCELLED`. A
-        request whose outcome the server has reported is not affected: from the moment its
-        wait returns, it is no longer counted here and it names, mints a token for and
-        attaches to the started session. Only a cancel that arrives while the wait is still
-        reading the row that says "started" ends the request; the session then runs with
-        nobody attached (`calu sessions` lists it).
+        request whose outcome the server has reported is not affected. Once its wait returns,
+        the request is no longer counted here. It then names the session if a name was given,
+        mints a token and attaches to the started session. Only a cancel that arrives while
+        the wait is still reading the row that says "started" ends the request; the session
+        then runs with nobody attached (`calu sessions` lists it).
 
         Args:
             params: Unused.

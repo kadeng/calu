@@ -24,11 +24,15 @@ What it tries, with the candidate policies applied to the tables a session write
    before it writes anything else.
 
 **This is the original measurement, kept as the record.** The answer it produced shipped the
-same day as migration 0015 (agent/records/PLAN.md D49), and the shipped policies go further than the ones
-below: a conversation spans several `sessions` rows when it is resumed or forked, so there the
-turns, steps and chat summary of the sibling rows stay readable (`calu_same_conversation`) and
-`calu_recent_sessions` and `calu_conversation_sessions` serve the reads that span sessions. Read
-the migration for what calu does; read this for what was measured before it existed.
+same day as migration 0015 (agent/records/PLAN.md D49).
+
+The shipped policies go further than the ones below. A conversation spans several `sessions`
+rows when it is resumed or forked. The shipped policies keep the turns, steps and chat summary
+of the sibling rows readable (`calu_same_conversation`). The functions `calu_recent_sessions`
+and `calu_conversation_sessions` serve the reads that span sessions.
+
+Read the migration for what calu does. Read this file for what was measured before the
+migration existed.
 """
 
 import asyncio

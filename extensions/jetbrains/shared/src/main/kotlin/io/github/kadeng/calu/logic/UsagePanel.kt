@@ -91,6 +91,9 @@ fun resetText(seconds: Long): String {
 /**
  * Describe one limit.
  *
+ * `limit.utilization` is the used share from 0 to 1 (as the protocol says). A value above 1
+ * is read as a percent and shown as it is, so a value of exactly 1 is shown as 100%.
+ *
  * @param limit The limit.
  * @param now The time to measure ages and resets from.
  * @param stamped True to add when Claude Code reported it ("reported 3 min ago").

@@ -165,11 +165,12 @@ class ChatControllerTest {
     }
 
     @Test
-    fun `ssh mode - after a dropped connection the controller attaches again and continues the transcript`() = runBlocking {
+    fun `ssh mode - after a dropped connection the controller attaches again`() = runBlocking {
         val counter = java.io.File(tmp, "count").apply { writeText("") }
         // Each connection is a new bridge process, as over SSH; the first one ends after eight
-        // answers. (The scripted bridge keeps no session between processes, so the second attach
-        // finds an empty session: the test checks that the attach happens with `after_seq`.)
+        // answers. The scripted bridge keeps no session between processes, so the second attach
+        // finds an empty session. The test checks only that the controller attaches again; it
+        // does not check the transcript or the `after_seq` of the second attach.
         val ssh = script(
             "ssh",
             "echo x >> '${counter.absolutePath}'\n" +

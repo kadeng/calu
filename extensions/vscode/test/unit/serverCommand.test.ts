@@ -4,7 +4,10 @@ import { describe, expect, it } from 'vitest';
 import { buildServerHelp, rootInstallCommand, serveArgv, shellJoin, shellQuote, type ServerCommandInput } from '../../src/shared/serverCommand';
 
 /**
- * Split a command line into words with a real POSIX shell.
+ * Splits a command line into words with a real POSIX shell.
+ *
+ * Starts `sh` and lets it evaluate the given text, so `$(...)` and backticks in it would run.
+ * Use it only for input that the quoting under test has already made safe.
  *
  * @returns The words the shell passes to a program.
  */

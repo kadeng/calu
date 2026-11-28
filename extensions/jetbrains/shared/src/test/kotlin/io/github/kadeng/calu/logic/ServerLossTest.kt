@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Test
 /**
  * Tests of what the chat shows after the calu server stops (the owner's decision of
  * 2026-11-19), ported from `extensions/vscode/test/unit/serverLoss.test.ts`, and of the
- * projects directory the server command names (PLAN D243).
+ * projects directory the server command names (decision D243 in `agent/records/PLAN.md`).
  */
 class ServerLossTest {
     private val running = ev("bridge.status", "status" to "running")

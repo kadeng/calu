@@ -1,7 +1,7 @@
 # License
 
 Calu is free software under the **GNU General Public License, version 2**. [LICENSE](LICENSE)
-holds a short notice with the same clarifications and the exception for the checker
+holds a short notice with these clarifications in its own words, and the exception for the checker
 instructions, followed by the GPL's verbatim text; this file explains in plain language what
 it covers, because the GPL is often read as saying more than it does.
 
@@ -9,7 +9,7 @@ it covers, because the GPL is often read as saying more than it does.
 
 Calu's own source code. If you distribute Calu, or a modified or extended version of it, that
 version stays GPL-2.0 and you pass the source on with it. Patches and forks are welcome on the
-same terms. The licence keeps Calu free software and will keep it that way.
+same terms. Because modified versions stay under GPL-2.0, the code stays free software.
 
 ## What it does not cover: your work
 
@@ -35,7 +35,9 @@ you **distribute Calu itself**.
 ## The checker instructions are in the public domain
 
 The checker instructions that ship with Calu are prompts for a language model, written to be
-copied into projects and rewritten there. They are not licensed under the GPL at all:
+copied into projects and rewritten there. They are not licensed under the GPL at all. The
+notice in [LICENSE](LICENSE) says this in its own wording. The text below restates it in plain
+language and adds a last sentence that names what the dedication does not cover:
 
 > The copyright holders of Calu place the checker instructions shipped with Calu, and the rule
 > lists that go with them, **in the public domain**, to the fullest extent permitted by
@@ -66,7 +68,8 @@ obviously, for instructions you wrote yourself, which were never Calu's to licen
 ## No warranty
 
 **Calu comes with no warranty and no guarantees of any kind. It is provided as is, free of
-charge.** That is sections 11 and 12 of [LICENSE](LICENSE), and it is meant literally:
+charge.** Sections 11 and 12 of [LICENSE](LICENSE) say this in the GPL's own words. The
+following paragraph restates them in plain language, and it is meant literally:
 
 > Calu is provided as is and free of charge. There is no warranty of any kind, express or
 > implied, including but not limited to the implied warranties of merchantability and fitness

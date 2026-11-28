@@ -26,17 +26,21 @@ Outcome of a tool call (`RuleOutcome`):
 
 Which parts a tool call has: Bash -> its simple commands, the paths its commands read and write;
 Read, NotebookRead, Grep, Glob, LS -> the path they read; Edit, Write, MultiEdit, NotebookEdit ->
-the file they write. Other tools have no parts; the rules do not affect them.
+the file they write. Any other tool has the path-like arguments it names (`named_paths`) as its
+parts: a match of the read deny list makes the call ask, and so does a match of the write deny
+list when the tool's name says it writes (D166). A tool without such an argument is not affected.
 
-Built-in rules that the lists cannot remove: reading or writing calu's own directories always asks
-the human. These are the directory of the credentials and of the env file with the checker keys and
-the directory above the snapshots, at the place they really have on this machine
+Built-in rules that the lists cannot remove: reading or writing calu's own directories asks the
+human. They apply by default; `built_in_rules.calu_files` switches them off. These are the
+directory of the credentials and of the env file with the checker keys and the directory above
+the snapshots, at the place they really have on this machine
 (`calu.paths.calu_private_dirs`: `$XDG_CONFIG_HOME/calu`, `$XDG_STATE_HOME/calu` and the two
 defaults below the home directory), plus every path with a `.config/calu` component. While session
 traces are written (`traces.enabled`, agent/records/PLAN.md D232), writing into the trace directory
 always asks the human as well: the files there are calu's record of the session, and a change to
-them is not an ordinary edit (`Rules.trace_directory`). An invalid pattern makes every checked call
-ask the human until it is fixed, so a broken deny list never lets a call through.
+them is not an ordinary edit (`Rules.trace_directory`). An invalid pattern makes every Bash,
+read and edit call ask the human until it is fixed, so a broken deny list never lets a call
+through.
 """
 
 import os
@@ -212,12 +216,17 @@ WORKTREE_FORCE_RULE = Rule(
 """The built-in pattern of a forced worktree removal (`built_in_rules.worktree_force_remove`)."""
 
 BUILT_IN_COMMAND_DENY = (CALU_RULE, WORKTREE_FORCE_RULE)
-"""Claude running calu itself asks (agent/records/PLAN.md D160). `calu resolve`, `calu config
+"""The built-in command rules, listed together; `_deny_command` applies each one itself.
+
+It checks each rule on its own, and only while its switch in `built_in` is on
+(`calu_commands`, `worktree_force_remove`). They come before the user's lists.
+
+Claude running calu itself asks (agent/records/PLAN.md D160). `calu resolve`, `calu config
 set`, `calu rules`, `calu checker` or a `calu attach` that mints its own token (D105) would let
 Claude decide its own escalations or switch off the checks. With the sandbox on,
 `~/.config/calu` is unreadable to Claude's commands and such a call fails anyway; without it,
 this rule is what stops it. It applies before the lists, so existing installations have it
-at once; `built_in_rules.calu_commands` switches it off.
+at once.
 
 `git worktree remove --force` (or `-f`) deletes a worktree with its uncommitted work, the loss
 that `ExitWorktree` with `discard_changes` asks about (D165, D251); Claude Code guards only its
@@ -376,9 +385,11 @@ class Rules:
             step: The tool call. `step.cwd` is the directory relative paths resolve against.
 
         Returns:
-            The outcome. Tools without parts (WebFetch, MCP tools, TodoWrite, ...) get an empty
-            outcome with `allowed` False. Example: `cat .env` with the default lists gives
-            `ask == ["read-deny#6 `...` matches `.env` (argument of cat)."]`.
+            The outcome. Tools without parts (WebFetch, TodoWrite, ...) get an empty outcome with
+            `allowed` False. An MCP or other tool that names a protected path in an argument
+            gets an `ask` reason from `_evaluate_named_paths`, and `allowed` stays False.
+            Example: `cat .env` with the default lists gives
+            `ask == ["Reading `.env` (argument of cat) matches the deny rule read-deny#6 `...`."]`.
         """
         outcome = RuleOutcome()
         tool = step.tool_name
@@ -1147,13 +1158,14 @@ def runs_calu(command: str) -> bool:
     - or it is a launcher (`LAUNCHERS`): its leading words are read until the run verb (`run`,
       `exec`, `x`, `tool run`; none for `uvx` and `pipx run`) -- a known non-running
       subcommand (`NON_RUN_SUBCOMMANDS`: `uv add`, `uv pip`, `poetry install`) ends the check,
-      any other word counts as an option's value. After the verb, a word counts when it is
-      `calu` (version suffix such as `@latest` ignored), a path to a program named calu
-      (`.venv/bin/calu`, `./calu`, `~/...`, `$VAR/...`), or a `-m`/`--module` naming calu;
-      not when it is the value of a known option (`launch_value_options`) or a source path
-      (`src/calu`). A `-m` naming another module, an ordinary program (`ORDINARY_PROGRAMS`)
-      or a hatch `env:script` ends the check, except that a `-m calu` among its arguments
-      still counts (`uv run coverage run -m calu`).
+      any other word is passed over while the scan looks for the run verb. Only the value of
+      a known option (`launch_value_options`) is skipped as a value. After the verb, a word
+      counts when it is `calu` (version suffix such as `@latest` ignored), a path to a program
+      named calu (`.venv/bin/calu`, `./calu`, `~/...`, `$VAR/...`), or a `-m`/`--module`
+      naming calu; not when it is the value of a known option (`launch_value_options`) or a
+      source path (`src/calu`). A `-m` naming another module, an ordinary program
+      (`ORDINARY_PROGRAMS`) or a hatch `env:script` ends the check, except that a `-m calu`
+      among its arguments still counts (`uv run coverage run -m calu`).
 
     Args:
         command: One simple command, as `shell.command_variants` gives it.
@@ -1265,7 +1277,8 @@ def _python_module_calu(rest: list[str]) -> bool:
         True if a `-m` (also combined, `-Im`, and attached, `-mcalu`) names calu before the
         first argument that is neither an option nor the value of `-X`/`-W` (separate or
         attached: `-X dev`, `-Wonce`); such an argument is the script, and a `-m` after it
-        belongs to the script. `-c CODE` ends it as well.
+        belongs to the script. `-c CODE` ends it as well. Also True if that script has the
+        base name `calu`, because `python src/calu` runs the package's `__main__.py`.
     """
     skip = False
     for index, word in enumerate(rest):
@@ -1471,7 +1484,7 @@ def _absolute(text: str, cwd: Path) -> Path | None:
 
 
 DIFF_LIMIT = 1_000_000
-"""Most bytes of a diff file read to find the files it changes."""
+"""Most characters of a diff file read to find the files it changes."""
 
 
 MAX_STRIP = 3
@@ -1647,7 +1660,7 @@ def _read_diff(name: str, base: Path) -> list[str]:
         base: The directory a relative name is relative to.
 
     Returns:
-        Its lines (at most `DIFF_LIMIT` bytes read), or [] when it is no readable file.
+        Its lines (at most `DIFF_LIMIT` characters read), or [] when it is no readable file.
     """
     source = _absolute(name, base)
     if source is None or not source.is_file():

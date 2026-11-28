@@ -276,7 +276,12 @@ def calu_command(tmp_path: Path) -> str:
 async def test_the_hook_refuses_an_unfinalized_trace_and_passes_a_finalized_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """A commit outside a session: no database login here, so the pass cannot run."""
+    """A commit outside a session: no database login here, so the pass cannot run.
+
+    The test runs `git commit` in a temporary repository below `tmp_path`. The installed hook
+    starts the `calu` command in a subprocess. The XDG directories are set below `tmp_path`,
+    and `CALU_PLACE_FILE` names a file that does not exist.
+    """
     for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"):
         monkeypatch.setenv(name, str(tmp_path / name.lower()))
     monkeypatch.setenv("CALU_PLACE_FILE", "/nonexistent")

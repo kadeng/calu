@@ -461,7 +461,7 @@ async def test_a_denied_changeset_stops_the_commit(tmp_path: Path):
 
 
 async def test_a_commit_line_does_not_get_past_the_command_checkers(tmp_path: Path):
-    """sg0: a line with `git commit` used to be judged by the changeset checker alone."""
+    """A line with `git commit` used to be judged by the changeset checker alone."""
     root = repository(tmp_path)
     settings = default_settings(root)
     security = CheckerDefinition(
@@ -508,7 +508,7 @@ async def test_a_commit_line_does_not_get_past_the_command_checkers(tmp_path: Pa
 async def test_a_compound_commit_line_is_denied_without_asking_a_checker(
     tmp_path: Path, command: str
 ):
-    """sg0, cc3: calu cannot know what such a line commits, so it says how to make it knowable."""
+    """Calu cannot know what such a line commits, so it says how to make that knowable."""
     root = repository(tmp_path)
     session, rec, store = make_session(
         root, [[{"tool": "Bash", "input": {"command": command}, "result": "x"}]]
@@ -528,7 +528,7 @@ async def test_a_compound_commit_line_is_denied_without_asking_a_checker(
 
 
 async def test_auto_escalation_for_commands_holds_a_commit(tmp_path: Path):
-    """sg0: "every command waits for a human" includes the ones that commit."""
+    """ "Every command waits for a human" includes the commands that commit."""
     root = repository(tmp_path)
     session, rec, _ = make_session(
         root,
@@ -546,7 +546,7 @@ async def test_auto_escalation_for_commands_holds_a_commit(tmp_path: Path):
 
 
 async def test_the_changeset_is_read_where_the_command_runs(tmp_path: Path):
-    """cc3: a commit in another repository below the workspace is diffed there."""
+    """A commit in another repository below the workspace is diffed there."""
     inner = repository(tmp_path)  # tmp_path/repo, with a staged change to app.py
     session, _rec, _store = make_session(tmp_path, [])
     seen: list[str] = []
@@ -589,7 +589,7 @@ async def test_the_changeset_of_an_amend_and_of_a_message_with_option_words(tmp_
 
 
 async def test_reading_the_changeset_runs_no_program_the_repository_names(tmp_path: Path):
-    """sg0: the repository is the agent's to write; its configuration must not run code here."""
+    """The agent can write the repository, so its configuration must not run code here."""
     root = repository(tmp_path)
     marker = tmp_path / "ran"
     script = tmp_path / "hook.sh"

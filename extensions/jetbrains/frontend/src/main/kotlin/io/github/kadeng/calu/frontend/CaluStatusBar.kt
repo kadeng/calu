@@ -41,6 +41,8 @@ class CaluStatusBarWidgetFactory : StatusBarWidgetFactory {
 
 /**
  * Shows how many steps wait for the user's decision; a click opens the tool window.
+ * In the SSH mode the text also shows the state of the file synchronisation, and the tooltip
+ * lists its message, conflicts, held files and files that are not synchronised.
  * `CaluFrontendService` asks the status bar to update it when the count changes.
  *
  * @param project The project.

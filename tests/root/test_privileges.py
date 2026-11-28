@@ -56,7 +56,8 @@ def as_user(uid: int, code: str) -> subprocess.CompletedProcess[str]:
 def test_the_launcher_starts_the_program_as_the_user_with_an_environment_built_for_it(
     shared_dir: Path,
 ) -> None:
-    """D207: groups, gid and uid of the record; no variable of root but the kept ones."""
+    """D207: the program runs with the uid, gid and groups of the record, and with only the
+    environment variables the launcher keeps from root's environment."""
     recorder = shared_dir / "claude"
     recorder.write_text(
         "#!/bin/sh\n"
@@ -153,7 +154,8 @@ def test_the_launcher_refuses_to_change_users_without_root(shared_dir: Path) -> 
 
 
 def test_after_enter_calu_touches_files_as_the_user_and_stays_root(shared_dir: Path) -> None:
-    """D211: files it creates are the user's, root's files are closed, `as_root` opens them."""
+    """D211: files that calu creates belong to the user, a file of root's cannot be read with the
+    user's identity, and `as_root` opens it again."""
     project = shared_dir / "project"
     project.mkdir()
     os.chown(project, OTHER_UID, OTHER_UID)
@@ -318,7 +320,7 @@ def test_the_log_file_and_the_credential_store_are_roots_alone(
     assert not asuser.only_root_writes(store.path)
 
 
-def test_root_must_name_the_user_and_root_itself_only_by_name(
+def test_root_must_name_the_user_and_root_itself_by_name_or_uid(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Requirement 26: Claude Code never runs as root by accident."""

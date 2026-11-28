@@ -43,7 +43,11 @@ class AllowAll:
 
 
 def test_claude_code_authenticates_as_configured(tmp_path: Path):
-    """No billing rule: only checker keys are hidden; Bedrock, Vertex and API keys pass."""
+    """No billing rule: the options' environment blanks the checker key and sets calu's marker.
+
+    It holds nothing else, so Claude Code's own authentication (Bedrock, Vertex, API keys) is
+    inherited unchanged. The test checks the environment dictionary and the permission mode;
+    it starts no Claude Code."""
     options = SdkRunner(tmp_path, ClaudeConfig(), {"MISTRAL_API_KEY"})._options(AllowAll(), None)
     assert options.env == {"MISTRAL_API_KEY": "", "CALU_INSIDE_SESSION": "1"}
     chosen = SdkRunner(tmp_path, ClaudeConfig(permission_mode="default"))._options(AllowAll(), None)
@@ -94,6 +98,12 @@ def test_subagent_messages_are_attributed(tmp_path: Path):
 
 
 def test_checker_keys_are_hidden_from_claude(tmp_path: Path, monkeypatch):
+    """The runner blanks the checker keys in the environment it gives Claude Code.
+
+    `load_secrets` reads a temporary env file and puts its keys into `os.environ` of the test
+    process. `monkeypatch` records the variable as absent first, so the environment is restored
+    when the test ends.
+    """
     import os
 
     from calu.config import load_secrets
@@ -101,7 +111,8 @@ def test_checker_keys_are_hidden_from_claude(tmp_path: Path, monkeypatch):
     env_file = tmp_path / "calu" / ".env"
     env_file.parent.mkdir()
     env_file.write_text("MY_CHECKER_KEY=secret\n", encoding="utf-8")
-    monkeypatch.delenv("MY_CHECKER_KEY", raising=False)
+    monkeypatch.setenv("MY_CHECKER_KEY", "placeholder")
+    monkeypatch.delenv("MY_CHECKER_KEY")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     hidden = load_secrets()
 

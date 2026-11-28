@@ -164,7 +164,7 @@ MODE_ANNOUNCE_S = 4.0
 """How long the client waits for the session to announce a mode it has stored for it."""
 
 DOUBLE_ESCAPE_S = 1.0
-"""Two presses of Escape within this many seconds interrupt the running turn."""
+"""Escape pressed twice within this many seconds interrupts the running turn."""
 
 MODELS = ("default", "fable", "opus", "sonnet", "haiku")
 """Claude Code's model aliases offered by the model picker; `/model <id>` takes any model id."""
@@ -316,7 +316,6 @@ class CaluApp(App[None]):
         self.run_program: Callable[[Sequence[str], str], int] = self._run_program
         """Hands the terminal to a program in a directory and returns its exit code; tests
         replace it."""
-        """Says whether `git diff` would show anything in a directory; tests replace it."""
         self.describe_commit: Callable[[str, str], str] = describe_commit
         """Names a commit of a repository for the question of `/trust`; tests replace it."""
         self._honesty_page: TextScreen | None = None
@@ -429,7 +428,14 @@ class CaluApp(App[None]):
         yield KeyLine("", id="footer")
 
     def on_mount(self) -> None:
-        """Register the themes, start the connection and the clock, draw the empty screen."""
+        """Register the themes, set up the window, start the connection and the clock.
+
+        Side effects:
+            - Reads the history of sent texts from `options.history_path`, if one is set.
+            - Applies the `[keys]` table of `tui.toml`; a key id that no binding has is added
+              to the settings problems.
+            - Draws the empty screen and flashes the settings problems, if there are any.
+        """
         self.register_theme(CALU_DARK)
         self.register_theme(CALU_LIGHT)
         self.transcript.thinking_open = self.options.show_thinking
@@ -1355,7 +1361,11 @@ class CaluApp(App[None]):
             self.select_tab(block.tool_use_id)
 
     def on_picked(self, message: Picked) -> None:
-        """React to a click on a tab, a panel row or the marker for new content.
+        """React to a click in the transcript, a card, the composer header or the panels.
+
+        The kinds are: a tab (`agent`), the marker for new content (`follow`), a button of a
+        card (`card`, `option`, `answers`, `decline`), the usage cell (opens the usage page)
+        and an entry of the slash-command list (`slash`).
 
         Args:
             message: What was clicked.
@@ -1530,9 +1540,10 @@ class CaluApp(App[None]):
             elif pressed == "r":
                 self.composer.set_text(entry.text)
                 self.composer.focus()
+                why = self.capabilities.reason("queue_withdraw")
                 self.flash(
-                    "copied into the input; the queued message stays queued: "
-                    + str(self.capabilities.reason("queue_withdraw"))
+                    "copied into the input; the queued message stays queued"
+                    + (f": {why}" if why else "")
                 )
         elif kind == "held" and key.isdigit() and int(key) < len(self.held):
             index = int(key)
@@ -2096,10 +2107,11 @@ class CaluApp(App[None]):
             the card began to show the item just now   nothing, with a message
             allow, and the card does not show all      the detail screen opens
             allow of a step a deny rule stopped        needs a second alt+a
-            text in the composer (chat mode)           a question: send it as the note?
-                                                       y with it, n without it, Enter and
-                                                       Escape decide nothing
-            otherwise                                  the decision is sent
+            a step, text in the composer (chat mode)  send it as the note? y with it, n
+                                                       without it, Enter and Escape decide
+                                                       nothing
+            otherwise (also a question, which          the decision is sent
+            takes no note)
 
         The decision is bound to the escalation the card shows when the key is pressed.
 
@@ -2504,12 +2516,18 @@ class CaluApp(App[None]):
     def action_escape(self) -> None:
         """Step back once: cancel, close, return to the composer, or count towards an interrupt.
 
-        In this order: cancel a yes-or-no question; forget a first decision key; close the
-        list of slash commands; end a search;
-        leave note or answer mode; close the side
-        questions; close the side panel on a narrow screen; return the focus to the composer;
-        and while the session works, a second Escape within `DOUBLE_ESCAPE_S` interrupts the
-        turn.
+        Only the first of these steps that applies is taken:
+
+        1. Cancel a yes-or-no question.
+        2. Forget a first decision key.
+        3. Close the list of slash commands.
+        4. End a search.
+        5. Leave note or answer mode.
+        6. Close the side questions.
+        7. Close the side panel on a narrow screen.
+        8. Return the focus to the composer.
+        9. While the session works, a second Escape within `DOUBLE_ESCAPE_S` interrupts the
+           turn.
         """
         if self.ask is not None:
             self.ask = None
@@ -4279,6 +4297,11 @@ class CaluApp(App[None]):
         the client; the handler that was installed before is put back afterwards. The
         program itself starts with the default handling.
 
+        A client that runs as root for a user starts the program as that user (`asuser.child`),
+        with that user's home. In every case `gittool.local_bin()` (`~/.local/bin`, where
+        gitui is installed) is put first on the program's search path. Any other client
+        starts the program as itself.
+
         Args:
             argv: The command line.
             cwd: The directory the program starts in.
@@ -5179,13 +5202,15 @@ def describe_commit(workspace: str, rev: str) -> str:
 
     Args:
         workspace: The project directory; it does not have to exist on this machine.
-        rev: A commit id, a branch name or `HEAD`.
+        rev: A commit id, a branch name or `HEAD`. A value that starts with `-` is refused,
+            because git would read it as an option.
 
     Returns:
         `HEAD = 4f2a9c1 Rename the helper` for HEAD, `4f2a9c1 Rename the helper` otherwise;
-        "" if the directory is not on this machine, git is missing or does not know `rev`.
+        "" if the directory is not on this machine, git is missing, `rev` starts with `-` or
+        git does not know `rev`.
     """
-    if not workspace or not Path(workspace).is_dir():
+    if not workspace or not Path(workspace).is_dir() or rev.startswith("-"):
         return ""
     try:
         # As the user the client works for (`asuser.child`): git reads the repository's
@@ -5251,19 +5276,20 @@ def help_lines(
         "enter sends · ctrl+j or alt+enter starts a new line · up/down on the first/last line "
         "walk the history of sent texts. The keys of the decision card act only while the "
         "input is empty. Each letter (a allow, d deny, n note, w detail, o own answer) needs "
-        "a second press; for n, w and o Enter does as well. Any other key after the first "
-        "press types both characters, so a reply that begins with one of these letters is "
-        "typed and nothing is decided. Both presses act on the step the first one was made "
-        "for; if another step has taken its place, nothing is sent. For half a second after "
-        "the card began to show another step, the keys that decide are ignored. A step whose "
-        "command or change does not fit on the card says how many lines are missing; a then "
-        "opens the detail, and the step is allowed from there. alt+a and alt+d decide at "
-        "once (a step that a deny rule stopped needs alt+a twice); with text in the input "
-        "they ask whether it goes along as a note: y with it, n without it, enter or esc "
-        "decide nothing. Select text with the mouse while holding shift (option in iTerm); "
-        "alt+c copies a block. @ at the start of a word completes a path of the project "
-        "with tab. A large pasted text is shown as one marker and sent in full; alt+e shows "
-        "it. alt+h holds the input as a draft until the session is idle."
+        "a second press. For n, w and o, Enter works as the second press as well. Any other "
+        "key after the first press types both characters. A reply that begins with one of "
+        "these letters is therefore typed, and nothing is decided. Both presses act on the "
+        "step the first one was made for. If another step has taken its place, nothing is "
+        "sent. For half a second after the card began to show another step, the keys that "
+        "decide are ignored. Sometimes the command or change of a step does not fit on the "
+        "card. The card then says how many lines are missing. Press a to open the detail "
+        "screen, and allow the step from there. alt+a and alt+d decide at once. A step that "
+        "a deny rule stopped needs alt+a twice. With text in the input, they ask whether "
+        "the text goes along as a note: y with it, n without it, enter or esc decide "
+        "nothing. Select text with the mouse while holding shift (option in iTerm). alt+c "
+        "copies a block. @ at the start of a word completes a path of the project with tab. "
+        "A large pasted text is shown as one marker and sent in full; alt+e shows it. alt+h "
+        "holds the input as a draft until the session is idle."
     )
     claude = (
         "A slash command that is not calu's is Claude Code's: enter sends the line to Claude as "

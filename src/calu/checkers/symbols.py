@@ -1,8 +1,8 @@
 """The definitions an edit changes, with their contract as it will be after the edit.
 
-A diff shows the lines that change. The contract of the function those lines belong to -- its
-signature and its docstring -- is often outside the diff, so a checker that judges "does this
-code still do what it says" would judge without the text that says it. This module finds, for
+A diff shows the lines that change. The signature and the docstring of the function those
+lines belong to are often outside the diff. A checker that asks whether the code still does
+what it says then judges without the text that says what it should do. This module finds, for
 a Python file before and after an edit, the functions, methods and classes the edit changes and
 says for each which part changed:
 

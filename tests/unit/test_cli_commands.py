@@ -520,9 +520,12 @@ def test_a_claude_cli_model_is_refused_as_a_checker_model() -> None:
 def test_serve_with_web_hands_its_child_the_login_through_a_pipe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """D268: the child `calu web` gets the login through an inherited pipe (never the
-    command line or the environment), is told `--user` when calu runs as root for a user,
-    `--login-typed` when the password was typed, and is asked to die with its parent."""
+    """D268: the child `calu web` gets the login through an inherited pipe.
+
+    The login is never on the command line or in the environment. The child is told `--user`
+    when calu runs as root for a user, and `--login-typed` when the password was typed. It is
+    also asked to die with its parent.
+    """
     import os
     import subprocess
 
@@ -560,8 +563,8 @@ def test_serve_with_web_hands_its_child_the_login_through_a_pipe(
     assert threading.active_count() == threads
     argv = seen["argv"]
     assert isinstance(argv, list)
-    # D279: isolated (`-I`) and in `/`, so that no module of the projects directory -- the
-    # working directory of `calu serve`, which Claude's user can write -- is imported as root.
+    # The child runs isolated (`-I`) and in `/`. The working directory of `calu serve` is
+    # writable by Claude's user, so no module of that directory may be imported as root (D279).
     assert argv[1:7] == ["-I", "-m", "calu", "web", "--port", "8811"]
     assert seen["cwd"] == "/"
     assert "--login-typed" in argv and argv[-2:] == ["--user", "ada"]
@@ -608,9 +611,11 @@ def test_serve_with_web_refuses_to_start_when_its_child_ends_early(
 def test_the_database_stops_with_the_server_only_when_no_other_calu_uses_it(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """D269: at the end of `calu serve`, a database set to stop with it is stopped, unless
-    another calu process (a `calu run`, an editor's `calu ide`) still uses it; a refusal of
-    docker is said, not raised."""
+    """At the end of `calu serve`, the database is stopped if it was set to stop with the server.
+
+    It stays running while another calu process (a `calu run`, an editor's `calu ide`) uses it.
+    A refusal of docker is printed, not raised (D269).
+    """
     from calu import machine
 
     downs: list[bool] = []
@@ -635,9 +640,13 @@ def test_the_database_stops_with_the_server_only_when_no_other_calu_uses_it(
 
 
 def test_the_stop_with_server_question_and_its_option(monkeypatch: pytest.MonkeyPatch) -> None:
-    """D269: the option answers without a question; without a terminal the database keeps
-    running; on a terminal the question takes yes or no; the option is refused for a new
-    database that calu does not start (a server)."""
+    """D269: the question whether the database stops with the server.
+
+    - With the option, the answer is given and nothing is asked.
+    - Without a terminal, the database keeps running.
+    - On a terminal, the question takes yes or no.
+    - For a new database that calu does not start (a server), the option is refused.
+    """
     import argparse
 
     assert cli.choose_stop_with_server(True) is True
@@ -661,9 +670,10 @@ def test_the_stop_with_server_question_and_its_option(monkeypatch: pytest.Monkey
 def test_ctrl_d_at_a_setup_question_says_what_was_not_done(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Ctrl-D at a question of `calu setup` ends the command with one sentence that names
-    the question and the option that answers it, not with a traceback (found when the
-    install script ran `calu setup` on the terminal)."""
+    """Ctrl-D at a question of `calu setup` ends the command with one sentence.
+
+    The sentence names the question and the option that answers it. No traceback is printed.
+    """
 
     def ended(_prompt: str) -> str:
         raise EOFError

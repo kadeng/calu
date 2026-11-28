@@ -22,7 +22,7 @@
  * the password of `calu web` and keeps it in memory only (`SocketLauncher`, PLAN.md D279).
  */
 
-import { BridgeCore, LaunchError, type Launched, type Launcher } from '../src/host/bridgeCore';
+import { BridgeCore, LaunchError, STOP_TIMEOUT_MS, type Launched, type Launcher } from '../src/host/bridgeCore';
 import { ChatHost, type ChatView, type HostUi } from '../src/host/chatHost';
 import type { SessionsUi } from '../src/host/sessions';
 import type { EditDiff } from '../src/protocol.generated';
@@ -140,7 +140,7 @@ export class SocketLauncher implements Launcher {
             write: (line) => socket.send(line.replace(/\n$/, '')),
             end: async () => {
               socket.close();
-              await Promise.race([gone, new Promise((r) => setTimeout(r, 3000))]);
+              await Promise.race([gone, new Promise((r) => setTimeout(r, STOP_TIMEOUT_MS))]);
             },
             kill: () => socket.close(),
           },
@@ -276,7 +276,7 @@ export class PaneView implements ChatView {
  * The tab's title: the open decisions first, then the session.
  *
  * @param state The view state.
- * @returns E.g. "(2) calu · my-project" or "calu chat".
+ * @returns E.g. "(2) calu chat · my-project" or "calu chat".
  */
 function titleFor(state: ViewState): string {
   const open = Object.values(state.escalations).filter((e) => e.status === 'open').length;

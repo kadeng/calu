@@ -39,17 +39,22 @@ the one calu session, so the waiting prompts of every ACP session answer `cancel
 `session/close` ends one id; Claude's turn is interrupted only if that ACP session has a prompt
 waiting or was the last live one.
 
-Escalations that are already open when the editor attaches are asked as well: the adapter keeps
-every open escalation it hears of (from the events, the replay at connect and the `state.get`
-snapshot) and opens the permission dialogs once the editor has a session id, that is after the
-answer to `session/new` or `session/load`, and again at each `session/prompt` for those whose
-dialog the editor closed without a decision.
+Escalations that are already open when the editor attaches are asked as well. The adapter keeps
+every open escalation it hears of: from the events, from the replay at connect and from the
+`state.get` snapshot. It opens the permission dialogs once the editor has a session id, that is
+after the answer to `session/new` or `session/load`. At each `session/prompt` it opens them
+again for the escalations whose dialog the editor closed without a decision.
 
-Deliberately not translated, because ACP has no slot for them and a calu-aware client reads them
-from calu's own protocol instead (§6.2): the checker verdicts as structure (they travel as tool
-call content here), the herd overview, the checker definitions and the chat summary. Events
-without an ACP counterpart (`chat.queue`, `tool.files`, `agents.update`) are dropped, and `log`
-goes to the adapter's own log, not to the editor.
+ACP has no slot for the following, so the adapter does not translate them. A calu-aware client
+reads them from calu's own protocol instead (§6.2).
+
+- The checker verdicts as structure. Here they travel as tool call content.
+- The herd overview.
+- The checker definitions.
+- The chat summary.
+
+Events without an ACP counterpart (`chat.queue`, `tool.files`, `agents.update`) are dropped.
+The `log` event goes to the adapter's own log, not to the editor.
 """
 
 import logging
@@ -164,8 +169,7 @@ class Adapter:
 
         Args:
             calu: The connected calu session client.
-            workspace: The session's project directory; `session/new` checks that the editor's
-                `cwd`
+            workspace: The session's project directory. `session/new` checks the editor's `cwd`
                 against it, because this adapter can only serve that one directory.
             name: Name of the agent as the editor shows it.
             version: Version of the adapter.
@@ -181,9 +185,9 @@ class Adapter:
         self.state: str = "starting"
         """Last state the calu session reported."""
         self.auto = AutoEscalate()
+        """Auto-escalation categories of the session, which ACP shows as its session mode."""
         self.permission_mode: str | None = None
         """Claude Code's permission mode as the session last reported it (D247)."""
-        """Auto-escalation categories of the session, which ACP shows as its session mode."""
         self.boolean_options = False
         """Whether the client takes boolean config options (set by `initialize`)."""
         self._peer: Peer | None = None

@@ -14,9 +14,12 @@
  *        UserItem.images: [ImageView {mediaType, data (base64), omitted}]
  *        ──imageBytes(view)──► the image file's bytes for a thumbnail, or null
  *
- * Limits (the session's own, `calu.protocol.messages`): at most `MAX_IMAGES` images per
- * message, each at most 5 MiB (`MAX_IMAGE_BASE64` characters of base64), PNG, JPEG, GIF or
- * WebP only (an SVG can carry scripts and is refused), and only in a message to the main agent.
+ * Limits (the session's own, `calu.protocol.messages`):
+ *
+ * - At most `MAX_IMAGES` images per message.
+ * - Each image is at most 5 MiB (`MAX_IMAGE_BASE64` characters of base64).
+ * - Only PNG, JPEG, GIF and WebP. An SVG can carry scripts and is refused.
+ * - Images only in a message to the main agent.
  *
  * Port of the image parts of `extensions/vscode/src/shared/messages.ts` and `chatModel.ts`.
  */

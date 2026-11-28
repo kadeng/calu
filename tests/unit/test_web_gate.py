@@ -102,7 +102,10 @@ async def login(client: httpx.AsyncClient, onward: str = "/") -> tuple[str, str]
 
 
 async def test_the_login_hands_out_a_session_cookie_and_a_key_but_never_the_password() -> None:
-    """wa0: the cookie held the login token itself, so whoever saw the cookie held the login."""
+    """The cookie does not hold the login token.
+
+    A cookie that held the token itself would give the login to whoever saw the cookie.
+    """
     inner, _gate, client = gated()
     async with client:
         asked = await client.get("/sessions/abc?detail=full")
@@ -138,7 +141,7 @@ async def test_the_login_never_goes_on_to_another_host() -> None:
 
 
 async def test_the_cookie_alone_reads_but_changes_nothing() -> None:
-    """wa0: a server on another port of the host name receives the cookie, and only the cookie.
+    """A server on another port of the host name receives the cookie, and only the cookie.
 
     The cookie is all such a server can replay. It must not be enough to resolve an
     escalation, save a setting or mint a client token -- which are all POSTs.

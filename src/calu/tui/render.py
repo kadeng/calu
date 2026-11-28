@@ -21,7 +21,7 @@ import io
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 from rich.console import Console, ConsoleOptions, RenderResult
@@ -362,6 +362,10 @@ def markdown_lines(source: str, width: int, palette: Palette, dark: bool = True)
         The rendered lines without trailing spaces; one empty line for an empty text. The
         lines of a code block are the exception: they have the background `palette.surface`
         and are padded to the width, so that the block is a rectangle.
+
+    Side effects:
+        Sets the class attribute `_PanelCode.background` to `palette.surface`. Every later
+        render uses that colour until the next call sets another one.
     """
     markdown = _TranscriptMarkdown(
         source, code_theme="ansi_dark" if dark else "ansi_light", hyperlinks=False
@@ -511,9 +515,9 @@ def badge(step: StepBlock, palette: Palette, held: bool = False, started: bool =
 
     Returns:
         The verdict word, `BADGE_WIDTH` columns wide: PASS muted, ALLOW green, DENY red,
-        ESCALATE orange; `check…` while no check was reported for a running step, `held`
-        for a held one (also one whose approval is recorded and that waits before it runs)
-        and nothing for an Agent call whose subagent was started.
+        ESCALATE orange; `check…` while no check was reported for a running step.
+        `held` for a held step, which includes one whose approval is recorded and that waits
+        before it runs. Blank for an Agent call whose subagent was started.
     """
     word = step.verdict
     if step.result is None and held:
@@ -646,7 +650,8 @@ def step_lines(step: StepBlock, model: SessionModel, view: View) -> list[Text]:
         view: Width, colours, cursor, clock and which steps are expanded.
 
     Returns:
-        The lines, each at most `view.width` columns.
+        The lines, each at most `view.width` columns, except the `files` line and the diff
+        header of an expanded step: a long path is not cut there.
     """
     palette = view.palette
     waiting = step.waiting == "open"
@@ -1055,8 +1060,9 @@ def turn_lines(block: TurnEndBlock, view: View) -> list[Text]:
         view: Width and colours.
 
     Returns:
-        One line: `── turn 14 · $0.06 · 1m12s ───`; for a turn that ended with an error or was
-        interrupted the rule says so, and it names background tasks that still run.
+        One line: `── turn 14 · $0.06 · 1m12s ───`. For a turn that ended with an error or was
+        interrupted the rule says so, and it names background tasks that still run. A turn
+        that failed and has a result gets a second line with the error text.
     """
     palette = view.palette
     parts = [f"turn {block.number}"]
@@ -1348,8 +1354,9 @@ def tab_cells(model: SessionModel, selected: str) -> list[tuple[str, str]]:
 
     Returns:
         `(key, label)` per tab in display order. A label is the agent's name, `bg` for a
-        background subagent, `N!` for N open decisions and `*` for unread activity; a finished
-        subagent is marked `done`.
+        background subagent, `N!` for N open decisions and `*` for unread activity. A
+        finished subagent without open decisions is marked ✓ when it completed, else with its
+        status word.
     """
     cells: list[tuple[str, str]] = []
     for key in model.tabs():
@@ -1594,8 +1601,8 @@ def _step_room(decision: Decision, max_lines: int) -> int:
         max_lines: The most lines the card may take.
 
     Returns:
-        `max_lines` less the head, the keys, one line of the reason and the lines of the
-        note and of a refusal; the step comes before the reason.
+        `max_lines` less the head, the keys, one line of the reason, and the lines of the
+        note and of a refusal. The step takes its room before the reason does.
     """
     return max_lines - 3 - bool(decision.note) - bool(decision.error)
 
@@ -1642,8 +1649,12 @@ def card_lines(
         `/deny`, `/why` and `calu resolve` take it) and waiting time; the step or the question
         with its options; the reason; a checker's suggested temporary rule as the `/rule`
         command that adds it; the user's note and the session's refusal if any; and
-        the keys, as many as fit the width, or, while this client's decision is on its way,
-        a line that says so.
+        the last line. The last line is one of these:
+
+        - A line that says this client's decision is on its way.
+        - A line that says the client is not connected (reconnecting or detached).
+        - The hint for the key pressed once, when `armed` names one.
+        - Otherwise the keys, as many as fit the width.
     """
     palette = view.palette
     index, total = position
@@ -1763,7 +1774,7 @@ def _question_lines(decision: Decision, view: View, room: int) -> list[Text]:
     Args:
         decision: The open question set.
         view: Width and colours.
-        room: The most lines to use.
+        room: The most lines to use. At least two lines are used, even when `room` is smaller.
 
     Returns:
         The lines.
@@ -2362,12 +2373,12 @@ def reset_text(moment: datetime) -> str:
     """Say when a usage limit starts again.
 
     Args:
-        moment: The time, with its time zone.
+        moment: The time, with its time zone; it is converted to UTC.
 
     Returns:
         Weekday and time in UTC, e.g. `Thu 14:00 UTC`.
     """
-    return f"{moment:%a %H:%M} UTC"
+    return f"{moment.astimezone(UTC):%a %H:%M} UTC"
 
 
 def meter(share: float, width: int) -> str:

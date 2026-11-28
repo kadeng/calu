@@ -16,7 +16,7 @@ takes none away. A revoked server token closes the connection with
 `CLOSE_SERVER_TOKEN_REVOKED`. The close code and reason of the session's side are passed on.
 
 With `insecure` (`calu serve --insecure`, D227) a peer on a loopback address needs no server
-token to attach; `relay.start` still needs one, so that only a holder of a token or of an
+token to attach; `relay.start` still needs one, so that only a holder of a token or of a
 user login can make the server start a session (D208). A loopback peer that sends a
 valid server token is a token holder as on any relay.
 """
@@ -223,9 +223,12 @@ class Relay:
     async def label(self, sha: str, new: bool) -> str | None:
         """Ask whether a server token is valid, waiting at most `check_s` seconds.
 
-        The question runs as a task of the relay, so it is not cut short when the caller
-        stops waiting. While the database gives no answer, the last known one stands for a
-        connection that is already open (`new` False); a token seen revoked stays refused.
+        Once `run` has started, the question runs as a task of the relay, so it is not cut
+        short when the caller stops waiting. Before that, the question runs in the caller's
+        task, and the caller waits for it in full.
+
+        While the database gives no answer, the last known one stands for a connection that
+        is already open (`new` False). A token seen revoked stays refused.
 
         Args:
             sha: SHA-256 of the token.
@@ -332,9 +335,13 @@ class Relay:
     ) -> tuple[_Peer, Any, InitializeParams] | None:
         """Wait for an `initialize` with a valid server token.
 
-        Every other message before it is answered with an error; a message larger than
+        Every other message before it is answered with an error. A message larger than
         `MAX_PRE_AUTH_CHARS`, or no valid `initialize` within `INITIALIZE_TIMEOUT_S`, closes
         the connection.
+
+        A `trusted` peer is accepted without a valid token, as a "local" peer that holds no
+        server token. This happens when it sends no token, a token that is not valid, or a
+        token the database gives no answer about.
 
         Args:
             connection: The connection.
@@ -569,6 +576,8 @@ class Relay:
 
     def find(self, target: str) -> Hosted | None:
         """Find a session by its id or a beginning of it that names only one.
+
+        A beginning of an id counts only from four characters on.
 
         Args:
             target: The id from the path.

@@ -1,9 +1,13 @@
 """`calu lightcycles`: the hidden command and the local server of MetaTron for the browser.
 
 The game itself is JavaScript and is tested in a browser (`tests/browser/test_lightcycles.py`).
-Here: the command is hidden and still works, it needs nothing of calu, the server binds the
-loopback interface only, and every file of the page is served with the right type under a
-Content-Security-Policy that allows no inline script and no other server.
+The tests check these things:
+
+- The command is hidden and still works.
+- It needs nothing of calu.
+- The server binds the loopback interface only.
+- Every file of the page is served with the right type.
+- A Content-Security-Policy allows no inline script and no other server.
 """
 
 import argparse
@@ -220,7 +224,11 @@ def test_serve_prints_the_address_opens_the_browser_and_serves(monkeypatch) -> N
 
 
 def test_no_other_command_imports_the_game_or_its_server() -> None:
-    """`calu --version` and every other command start without the easter egg."""
+    """Building the command parser imports no module of the easter egg.
+
+    Starts a child Python process that builds the parser and prints the loaded
+    `calu.lightcycles` modules. It runs no command.
+    """
     code = (
         "import sys; from calu.cli import build_parser; build_parser(); "
         "print(sorted(m for m in sys.modules if m.startswith('calu.lightcycles')))"

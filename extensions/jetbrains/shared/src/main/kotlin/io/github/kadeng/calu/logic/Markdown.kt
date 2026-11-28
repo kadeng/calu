@@ -225,8 +225,9 @@ fun markdownToHtml(markdown: String): String {
  * the single spaces that remain (a wrapped line continues at the left edge).
  *
  * @param line One line of code (without its line end).
- * @return The escaped line; a tab is four non-breaking spaces; "&nbsp;" for an empty line (a
- *   `<br>` alone would collapse).
+ * @return The escaped line; a tab is written as four spaces, which are non-breaking where
+ *   the rule above makes them so (all of them in the indentation); "&nbsp;" for an empty line
+ *   (a `<br>` alone would collapse).
  */
 fun codeLineHtml(line: String): String {
     if (line.isEmpty()) return "&nbsp;"

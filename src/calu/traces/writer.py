@@ -33,7 +33,7 @@ never written:
 
 The narrated form: a block of Claude's text and thinking is queued where the text appeared
 and gets its narration later. The session passes each narration it computes for its checkers
-to `narration`, which finds the block by its text; a block that got none within
+to `narration`, which finds the block by the outputs it narrates; a block that got none within
 `narration_wait_s` after it was closed is narrated by the writer's own call of `narrate`.
 """
 
@@ -374,6 +374,9 @@ class TraceWriter:
     def _create(self) -> None:
         """Create the trace file and write its header (runs in a worker thread).
 
+        Side effects: if the header cannot be written, the empty file that
+        `create_trace_file` made stays on disk, so its number is taken and it has no header.
+
         Raises:
             TraceFileError: If the file cannot be created or the header cannot be written.
         """
@@ -479,8 +482,8 @@ class TraceWriter:
     def hold(self, seconds: float) -> None:
         """Keep the writer from appending to the file until `release`, at most `seconds`.
 
-        Used while a commit of Claude's runs (agent/records/PLAN.md D246): the final pass has
-        written the file as the commit records it, and a block appended before the commit
+        Used while the final pass before a commit runs (agent/records/PLAN.md D246). The
+        pass writes the file as the commit records it. A block appended before the commit
         ran would be committed without that pass. Blocks keep being queued and redacted
         meanwhile; `close` writes them in any case. Never raises.
 
@@ -498,12 +501,11 @@ class TraceWriter:
     async def settle(self, timeout_s: float) -> bool:
         """Wait until the blocks queued so far are in the file, as far as they can get there.
 
-        Used before the final pass for a commit of Claude's (agent/records/PLAN.md D262):
-        the pass reads the file on disk, and a block that is still being narrated or
-        redacted (e.g. the block of the commit's own tool call) would otherwise miss the
-        commit, depending on how fast the redaction agent answered. The caller calls `hold`
-        right after this returns, with no `await` in between, so that no block is appended
-        between the two.
+        Used before the final pass before a commit (agent/records/PLAN.md D262). The pass
+        reads the file on disk. A block still being narrated or redacted, such as the block
+        of the commit's own tool call, would miss the commit if the redaction agent is slow.
+        The caller calls `hold` right after this returns, with no `await` in between, so that
+        no block is appended between the two.
 
             the blocks queued at the call          settle returns
             all written                            True

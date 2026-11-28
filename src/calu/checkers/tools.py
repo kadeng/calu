@@ -13,10 +13,10 @@ escalating. The tools are:
 
 The last two answer "who did this?" instead of "what does this say?" (agent/records/PLAN.md D32). A
 file's ctime cannot be set by an unprivileged process, so comparing it with the times of the steps
-attributes a change to a step. What that does **not** give: the content of the change (D31's
-snapshot is the option for that), and more than the *last* change of a file, because a later write
-overwrites the evidence of an earlier one — the later write is attributed in its place. calu watches
-its own clock for exactly this reason (`calu.clock`).
+attributes a change to a step. The ctime does **not** give the content of the change (D31's
+snapshot is the option for that). It gives only the *last* change of a file, because a later write
+overwrites the evidence of an earlier one, and the later write is attributed in its place.
+calu watches its own clock for exactly this reason (`calu.clock`).
 
 The checker runs inside the calu process, outside the sandbox that confines the agent under
 review, and the agent can ask it (through a file it wrote) to read something. So every bound is
@@ -429,8 +429,9 @@ class CodeTools:
         Raises:
             ReadRefused: If the path is empty, holds a NUL character, is absolute, has a ".."
                 part, resolves (through symbolic links) to a place outside the project
-                directory or inside calu's own configuration directory, or is covered by a read
-                deny rule in its written or its resolved form.
+                directory, inside calu's own configuration directory or inside the directory of
+                the session traces, or is covered by a read deny rule in its written or its
+                resolved form.
 
         Example:
             In the project `/w` with the link `/w/cfg -> /home/u/.config/calu`:
@@ -553,8 +554,8 @@ class CodeTools:
         """Yield the project-relative paths of the files a checker may read.
 
         Blocking (directory listings): iterate it in a worker thread. Directories of
-        `SKIP_DIRS` are left out. A symbolic link to a directory is never walked into; a link
-        to a file is yielded only if `confine` accepts it, like every other entry, so nothing
+        `SKIP_DIRS` are left out. A symbolic link to a directory is never walked into. A link
+        to a file is yielded only if `confine` accepts it, like every other entry. So nothing
         outside the project and nothing the read deny lists cover is yielded. At most
         `MAX_SCAN` files are visited, so one call cannot walk a huge tree.
 

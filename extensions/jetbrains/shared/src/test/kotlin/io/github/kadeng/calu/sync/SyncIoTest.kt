@@ -44,7 +44,7 @@ class SyncIoTest {
         assertTrue(g.isIgnored("docs/secret.txt"))
         assertTrue(g.isIgnored("docs/gen/x.md"))
         assertFalse(g.isIgnored("gen/x.md"))
-        assertTrue(g.isIgnored("__x/[ab].txt".replace("__x/[ab]", "b")))
+        assertTrue(g.isIgnored("b.txt"))
     }
 
     @Test fun `status text - one line per state`() {

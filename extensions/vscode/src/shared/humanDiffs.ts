@@ -9,9 +9,9 @@
  *                                                          human_diffs.add {path, before, after}
  *     answer {enabled: false} ──► gate.heard(false): nothing is sent for OFF_PAUSE_MS
  *
- * The base is the text the user's buffer started from, not the file on disk at the save: when
- * Claude wrote the file while the buffer had unsaved edits and the user chose to overwrite it,
- * the diff shows only the user's own edits (the owner's decision, D253).
+ * The base is the text the user's buffer started from, not the file on disk at the save. If
+ * Claude wrote the file while the buffer had unsaved edits, and the user overwrote it, the diff
+ * shows only the user's own edits (D253).
  *
  * The session decides everything else (the setting, git-tracked files only, the file layout).
  */

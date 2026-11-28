@@ -157,9 +157,9 @@ async def seed_defaults(
     A checker type is inserted only if no type of that name exists. With `update_outdated`, a
     type that still holds an earlier shipped text unchanged (`shipped_status` "outdated", any
     version calu ever shipped, D248) gets the present one; a text somebody edited is left as
-    it is. The default rules -- none
-    since D179 -- would be inserted only if there are no global rules at all, so rules an
-    administrator removed are not restored, and a database set up earlier keeps its rules.
+    it is. The default rules (none since D179)
+    would be inserted only if there are no global rules at all. Rules an administrator removed
+    are therefore not restored, and a database set up earlier keeps its rules.
 
     Args:
         conn: An open connection of the database owner, schema migrated.
@@ -228,10 +228,11 @@ class SetupRefused(Exception):
 async def preflight(conn: psycopg.AsyncConnection) -> list[str]:
     """Check that the connected login can set calu up in this database, before anything changes.
 
-    calu needs a database of its own (it creates its tables in the schema `public`, grants
-    its operator role read access to every table there, and `calu db reset` drops that
-    schema) and a login that may create roles (`CREATEROLE`) and, from PostgreSQL 16 on, may
-    manage the roles of `MANAGED_ROLES` if they exist already. It needs no superuser.
+    calu needs a database of its own. It creates its tables in the schema `public`, grants its
+    operator role read access to every table there, and `calu db reset` drops that schema.
+    The login must be allowed to create roles (`CREATEROLE`). From PostgreSQL 16 on it must
+    also be allowed to manage the roles of `MANAGED_ROLES` if they exist already. It needs no
+    superuser.
 
     Args:
         conn: An open connection of the login that `calu setup` was given.
@@ -401,11 +402,11 @@ async def is_user_password(place: Target, password: str) -> bool:
 
 
 SCRAM_ITERATIONS = 300_000
-"""Rounds of the SCRAM verifier of `calu_admin` and of the web password's hash (D279). First
-3,000,000; that took 4.9 s per login on a CPU without SHA instructions (a Xeon Silver 4116), more
-than libpq's 10 s connect timeout for two connections. The owner then: "Use 300k ... Enough to
-multiply by a lot the computational price for brute-forcing." About 0.5 s there, 0.03 s on a
-CPU with SHA instructions."""
+"""Rounds of the SCRAM verifier of `calu_admin` and of the web password's hash (D279).
+
+300,000 keeps a login below libpq's connect timeout on slow CPUs and still makes guessing
+expensive. A login takes about 0.5 s on a CPU without SHA instructions and 0.03 s on one with
+them."""
 
 ITERATIONS_ENV = "CALU_SCRAM_ITERATIONS"
 """Replaces `SCRAM_ITERATIONS`, at least 4096 (PostgreSQL's default). Calu's tests set it low:
@@ -428,7 +429,8 @@ async def set_user_password(conn: psycopg.AsyncConnection, password: str) -> Non
     The server gets the SCRAM verifier, computed here, and never the password itself, so the
     password is in no statement the server could log. On RDS the role is first taken out of
     `rds_iam`, which would otherwise make the server ignore the password. From PostgreSQL 16
-    on the verifier takes `SCRAM_ITERATIONS` rounds (D279): every guess at the password then
+    on the verifier takes `SCRAM_ITERATIONS` rounds, or the value of `CALU_SCRAM_ITERATIONS`
+    when that is set (`ITERATIONS_ENV`, D279): every guess at the password then
     costs the guesser that work, on the server's port as well as with a stolen verifier;
     every login of calu pays it once (0.03 to 0.5 s, by CPU).
 

@@ -469,7 +469,10 @@ def test_a_symbolic_link_is_hashed_as_a_link(repo: Path) -> None:
 def test_the_fourth_open_mark_requires_a_review_and_clean_marks_are_then_ignored(
     repo: Path,
 ) -> None:
-    """Three marks are within the default threshold; a fourth one is not."""
+    """Three marks are within the threshold of this test (`trusted_state` sets 3).
+
+    A fourth mark is not.
+    """
     state = trusted_state(repo)
     for name in ("a.py", "b.py", "c.py", "d.py"):
         (repo / name).write_text("x = 1\n", encoding="utf-8")
@@ -913,7 +916,7 @@ def test_a_submodule_is_reviewed_only_at_the_commit_the_baseline_records(repo: P
     moved = commit(repo, "moves the submodule")
     assert state.uncertified(moved.commit_id) == "1 file(s) of the commit are not verified: lib"
 
-    # Back at the recorded commit it is the baseline's again; not checked out, nothing is there.
+    # Checked out at the recorded commit again, the submodule is the baseline's again.
     git(repo / "lib", "checkout", "-q", "HEAD~1")
     assert state.snapshot().unreviewed.paths == ("lib",), "the index still holds the move"
     git(repo, "add", "lib")
@@ -1115,7 +1118,11 @@ async def test_a_commit_of_a_weaker_source_than_required_is_passed_over(repo: Pa
 
 
 def test_a_commit_gets_the_weakest_source_of_what_it_contains(repo: Path) -> None:
-    """All by review: `review`. Any step check: `check`. Never stronger than the baseline."""
+    """A commit whose changes are all reviewed is certified `review`.
+
+    If any changed content was only checked, it is certified `check`. The source is never
+    stronger than the baseline's.
+    """
     state = trusted_state(repo)
     assert state.certification(head(repo).commit_id).source == "user"
 
@@ -1227,7 +1234,8 @@ def test_an_empty_staged_content_is_nothing_to_review(repo: Path) -> None:
 
 def test_a_mark_names_the_content_whose_stored_trust_is_withdrawn(repo: Path) -> None:
     """Section 13: opening a mark hands out the SHA-256 of the marked content, drops a stored
-    check or review entry for it and keeps a person's; the content is no verified blob."""
+    check or review entry for it and keeps a person's. The fixing edit then starts from the
+    verified record of the withdrawn content."""
     state = trusted_state(repo)
     assert checked_write(state, "README.md", "# one\n")
     sha256 = state.content_sha256("README.md")

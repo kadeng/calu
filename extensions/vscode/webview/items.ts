@@ -613,12 +613,14 @@ const OUTCOMES: Record<EscalationView['status'], string> = {
 
 /**
  * Build an escalation card. Open: the tool, the reason, the rendered step, the literal input on
- * expand, the agent's questions (if any), a note field and the buttons. The row of buttons is
+ * expand, the agent's questions (if any) and the buttons. An approval card also has a note
+ * field and a rule field; a question card has its answer fields instead. The row of buttons is
  * the card's last child and sticks to the lower edge of the transcript (`.esc-actions` in
  * `chat.css`), so Allow and Deny stay reachable while a card taller than the view scrolls.
  * While the session cannot be reached the card stays open, says "connection lost" and its
  * buttons are disabled. Once the session ended (`ctx.ended`: nothing answers at its address)
- * an open card is shown as one closed line "Session ended": it can no longer be decided. Closed: one line with the outcome that expands to the details.
+ * an open card is shown as one closed line "Session ended", because it can no longer be
+ * decided. A closed card is one line with the outcome; a click on it shows the details.
  *
  * @param esc The escalation view (`undefined` if the state no longer holds it).
  * @param ctx The render context.
@@ -652,15 +654,17 @@ function renderEscalation(esc: EscalationView | undefined, ctx: Ctx): HTMLElemen
   if (asks) esc.questions.forEach((q, i) => card.append(questionElement(esc, q, i, draft.choices[i], Boolean(esc.pending))));
   else if (esc.rendered) card.append(markdown(esc.rendered, 'md esc-step'));
   card.append(literalDetails(esc));
-  const note = el('input', 'esc-note', undefined, {
-    type: 'text',
-    placeholder: asks ? 'Note (optional)' : 'Note for Claude (optional, e.g. why you deny)',
-    'aria-label': 'Note for Claude',
-    'data-esc-note': esc.key,
-  });
-  note.value = draft.note;
-  note.disabled = Boolean(esc.pending);
-  if (!asks) card.append(note, ruleFields(esc, draft));
+  if (!asks) {
+    const note = el('input', 'esc-note', undefined, {
+      type: 'text',
+      placeholder: 'Note for Claude (optional, e.g. why you deny)',
+      'aria-label': 'Note for Claude',
+      'data-esc-note': esc.key,
+    });
+    note.value = draft.note;
+    note.disabled = Boolean(esc.pending);
+    card.append(note, ruleFields(esc, draft));
+  }
   const row = el('div', 'esc-actions');
   const disabled = Boolean(esc.pending) || !ctx.attached;
   if (asks) {

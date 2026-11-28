@@ -118,8 +118,8 @@ async def test_the_loop_leaves_the_report_of_a_jump_to_on_jump(
 ) -> None:
     """The session's `clock_jumped` reports a jump as a `log` event the console prints.
 
-    A warning of the watch itself printed every jump a second time; only a failing report is
-    logged as an error.
+    A warning of the watch itself printed every jump a second time, so the watch's own log
+    records stay at debug level. The test does not cover a failing report.
     """
     clocks = Clocks()
     seen: list[ClockJump] = []

@@ -11,8 +11,12 @@
  *       ├─ SettingsPanel, CheckerFileSystem, ContextDocuments, DiffStore, Installer
  *       └─ commands calu.* (package.json)
  *
- * The extension starts only `calu ide`. Sessions run in `calu serve`, which the user starts in
- * a terminal; they keep running when the editor closes.
+ * The extension starts these processes:
+ *   - `calu ide`, as a child process (the bridge).
+ *   - `calu serve`, only when the user chooses to start the server; the command is typed into
+ *     an integrated terminal.
+ *   - The uv installer and `uv tool install`, only after the user confirmed them in a modal.
+ * Sessions run in `calu serve`; they keep running when the editor closes.
  */
 
 import * as vscode from 'vscode';
@@ -69,8 +73,8 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
   const output = vscode.window.createOutputChannel('calu');
   const version = String((context.extension.packageJSON as { version?: unknown }).version ?? '0');
   // The calu user password (spec sections 8 and 10): kept in this variable until the window
-  // closes, so that a restarted bridge is unlocked again without asking. Never logged or sent
-  // anywhere but to `ide.unlock`.
+  // closes, so that a restarted bridge is unlocked again without asking. The password is never
+  // logged and is sent only with `ide.unlock`.
   let heldPassword: string | undefined;
   const bridge = new Bridge(output, version, {
     stored: async () => heldPassword,
@@ -100,7 +104,8 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
   );
 
   // The "calu" item of the status bar: always visible, also while the view is hidden or folded
-  // away behind the secondary side bar's "…" (a new profile shows the editor's own chat first).
+  // away behind the secondary side bar's "…". Clicking it opens the calu chat, which a new
+  // profile does not show at first.
   const statusItem = vscode.window.createStatusBarItem('calu.status', vscode.StatusBarAlignment.Right, 100);
   statusItem.name = 'calu';
   statusItem.command = 'calu.openChat';

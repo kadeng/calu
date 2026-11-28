@@ -297,9 +297,9 @@ fun honestyChip(honesty: HonestyInfo?): HonestyChip {
 /**
  * Say that calu's settings store another honesty mode than the session uses.
  *
- * A session reads a changed `honesty.mode` by itself and reports it (`honesty.update`); the
- * two differ in the moment between, and for a session that does not read the change (it uses
- * another database, or its settings could not be reloaded).
+ * A session reads a changed `honesty.mode` by itself and reports it with `honesty.update`.
+ * Until that report, the two values differ. Some sessions never report it: one that uses
+ * another database, or whose settings could not be reloaded.
  *
  * @param honesty The session's honesty state, or `null` (counts as mode "off").
  * @param stored `ViewState.honestyStored`.

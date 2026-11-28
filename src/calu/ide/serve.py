@@ -64,11 +64,13 @@ class _Lines:
 
         A pipe or a socket (what an editor gives a child process) is read through the event
         loop. Anything else (a terminal, a regular file, `/dev/null`) is read in a worker
-        thread, because the event loop cannot wait for it.
+        thread, because the event loop cannot wait for it. Only the event-loop reader limits
+        the length of a line; the threaded read returns a line of any length.
 
         Returns:
-            The line including its newline, or "" at end of input, and also for a line
-            longer than `LINE_LIMIT`, after which the stream cannot be followed any more.
+            The line including its newline, or "" at end of input. A pipe or a socket also
+            gives "" for a line longer than `LINE_LIMIT`, after which the stream cannot be
+            followed any more.
         """
         if self._reader is None and not self._threaded:
             self._threaded = not _is_pipe(self._stream)

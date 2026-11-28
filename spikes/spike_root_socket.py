@@ -1,7 +1,8 @@
 """Spike: the session's root-owned socket, made and used after the switch to the user (D215).
 
-Run as root in a container (see `spikes/spike_other_uid.sh` for the mounts). It switches the
-process's file identity to uid 1000 as `calu run --user 1000` does, then binds the socket
+Run as root in a container (see `spikes/spike_other_uid.sh` for the mounts). It first calls
+`asuser.prepare`, which creates the state directories of uid 1000 with files in them. Then it
+switches the process's file identity to uid 1000 as `calu run --user 1000` does, and binds the socket
 through `calu.asuser.as_root`, and prints: who owns the socket and its directory, whether the
 process's own (user) file access can reach it, whether a connection made with root's file
 access is accepted, and which uid the kernel reports for that peer. Results are recorded in

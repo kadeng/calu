@@ -49,9 +49,11 @@ CREDENTIAL = logins.USER
 """The credential the changes use: the user login (`calu_admin`)."""
 
 CONFLICT_HELP = "the text stays in the editor; leave it with esc esc, press r, edit again"
-"""What follows "changed meanwhile to version N" when a checker's instructions were stored by
-someone else since the editor read them: the keys in the order they work (`r` reads again
-only outside the editor, and leaving the editor drops the text)."""
+"""What follows "changed meanwhile to version N" when someone else stored a checker's
+instructions after the editor read them. It names the keys in the order to press them. The
+text stays in the editor. To read the new version, leave the editor with esc esc and press r;
+`r` works only outside the editor. Leaving the editor drops the text, so edit again after
+reading."""
 
 NO_CREDENTIAL = (
     "this machine has no calu login: `calu setup` sets one up (for a database another machine "
@@ -60,8 +62,8 @@ NO_CREDENTIAL = (
 """What `StoreAdmin.problem` says without the credential."""
 
 CONNECT_TIMEOUT_S = 30.0
-"""How long opening the database connection may take before the change is given up; as long
-as libpq's own `connect_timeout` (`calu.db.connection.LIVENESS`)."""
+"""How long opening the database connection may take before the change is given up.
+It should match libpq's own `connect_timeout` in `calu.db.connection.LIVENESS`."""
 
 MODES = ("off", "track", "enforce")
 """The values of `honesty.mode`, from the weakest to the strictest."""

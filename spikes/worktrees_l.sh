@@ -11,8 +11,10 @@
 #   $X s2 V           # session 2 in wtl-V: L4 (ends at its escalation, which nobody decides)
 #   $X s3 V           # session 3 in wtl-V: L5 and L6 (ends at the --force escalation)
 #   $X s4 V           # wtl-V-par: L3, two background worktree subagents
-#   $X wait           # until the tmux session `wtl` has ended
+#   $X wait           # until the tmux session `wtl` has ended, for about 110 s at most
 #   $X collect V RUN  # evidence of the newest session of the run's project to /share/worktrees-l/V-RUN
+#                     # (deletes that directory first; reads the session rows with
+#                     # `sudo -u postgres psql -d calu`)
 #   $X probe-on       # install the test-only probe (spikes/worktrees_probe.py) into calu's tool env
 #   $X probe-off      # remove it again
 #   $X leakcheck      # count evidence files with a known secret value or a key shape

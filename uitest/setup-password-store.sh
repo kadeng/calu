@@ -13,7 +13,8 @@
 #   2. Runs `calu setup` with its own XDG directories below ~/pwstore: the calu user password
 #      is `user-pw`; it protects the logins `user` and `db-admin`. A store without `db-admin`
 #      (an earlier setup failed, or a calu from before the one user login stored it) starts
-#      again from an empty database.
+#      again from an empty database: the database `calu_pw` is dropped, and so are the roles
+#      `calu_session`, `calu_operator` and `calu_admin` on that cluster.
 #   3. Starts uitest/fake_server.py for that store in the tmux session `calu-fake-pw`.
 #   4. Writes ~/pwstore/calu: a wrapper that runs calu with those XDG directories. An editor
 #      plugin reaches the store with the setting "calu command" = /home/cua/pwstore/calu.

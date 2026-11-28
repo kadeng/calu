@@ -14,8 +14,9 @@ import type { CheckerContextResult, EscalationContextResult } from '../protocol.
 export const CONTEXT_EVENTS: ReadonlySet<string> = new Set(['check.result', 'turn.result', 'user.input', 'session.state']);
 
 /**
- * Add one `#` to every Markdown heading outside fenced code blocks, so that an embedded text's
- * "# Chat summary" sits below the document's own top-level sections.
+ * Add one `#` to every Markdown heading of level 1 to 5 outside fenced code blocks, so that an
+ * embedded text's "# Chat summary" sits below the document's own top-level sections. A level-6
+ * heading stays as it is, because Markdown has no level 7.
  *
  * @param text - Markdown text.
  * @returns The text with demoted headings; indented lines and fenced code are unchanged.

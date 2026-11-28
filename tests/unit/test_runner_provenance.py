@@ -1,11 +1,12 @@
-"""Findings ga0, ci0 and ci3: what the SDK runner makes of the stream it cannot trust.
+"""What the SDK runner makes of the stream it cannot trust.
 
-- ga0: a user-role message counts as the user's words only when calu sent that text for a human.
-- ci0: the effective permission mode is reported (a warning only when Claude Code did not take
-  the "auto" calu started it with), and `claude.require_auto_mode` makes a step wait when auto
-  mode's classifier is not active.
-- ci3: one message that cannot be translated, or one event the sink refuses, does not end the
-  session.
+- A user-role message counts as the user's words only when calu sent that text for a human
+  (review finding ga0).
+- The effective permission mode is reported (a warning only when Claude Code did not take the
+  "auto" calu started it with), and `claude.require_auto_mode` makes a step wait when auto
+  mode's classifier is not active (ci0).
+- One message that cannot be translated, or one event the sink refuses, does not end the
+  session (ci3).
 """
 
 from pathlib import Path

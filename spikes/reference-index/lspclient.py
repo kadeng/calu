@@ -3,6 +3,14 @@
 Usage: lspclient.py OUT.json [--root DIR] [--sample FILE] [--ids S01,S02] [--raw FILE]
                     [--settle SECONDS] -- SERVER ARGS...
 Prints timings (measured, wall clock) and the server's resident memory to stderr.
+
+Besides OUT.json it writes three files next to it:
+
+- OUT.json.stderr: the server's own stderr.
+- OUT.json.stats: the timings and memory figures that go to stderr, as JSON.
+- OUT.json.notes: the server's notifications, with the time of each.
+
+With --raw FILE it also writes the server's unprocessed answers to FILE.
 """
 
 import argparse
@@ -89,7 +97,12 @@ class Server:
         self._send({"jsonrpc": "2.0", "method": method, "params": params})
 
     def rss_kb(self):
-        """Sum of VmRSS and VmHWM of the server process and its children, in kB."""
+        """Measure the memory of the server process and its direct children.
+
+        Returns:
+            The pair (rss, hwm): the sum of VmRSS and the sum of VmHWM over the server and
+            its children, in kB. A process that has ended counts as zero.
+        """
         pids = [self.p.pid]
         try:
             kids = subprocess.run(

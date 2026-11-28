@@ -3,7 +3,7 @@
  * and calu, and how `claude` is reported. The dialogs and processes are in `src/bootstrap.ts`.
  *
  *     calu missing ──► ask ──► uv missing? ask, install uv (astral.sh script, ~/.local/bin)
- *                          ──► uv tool install --python 3.14 <calu.install.source>
+ *                          ──► uv tool install --force --python 3.14 <calu.install.source>
  *     update       ──► uv tool upgrade calu
  *     claude       ──► only checked (`claude --version`) and reported with CLAUDE_DOCS_URL;
  *                      never installed by the extension

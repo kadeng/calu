@@ -66,9 +66,10 @@ def no_root_place(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(db_place, "read", no_file)
 
 
-def test_the_credential_store_is_reported_without_decrypting_anything(
+def test_the_credential_store_is_reported_by_the_logins_it_holds(
     store: CredentialStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The findings follow which of the two logins the store holds."""
     no_root_place(monkeypatch)
     user, db_admin = doctor.credential_findings(store)
     assert (user.ok, db_admin.ok) == (False, False)
@@ -88,8 +89,10 @@ def test_the_credential_store_is_reported_without_decrypting_anything(
 def test_the_logins_of_an_earlier_calu_are_reported_with_what_to_do(
     store: CredentialStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """D265 (5): without the user login the advice is `calu.logins.old_logins`; next to it the
-    old entries are named as unused."""
+    """Without the user login, the advice is the text of `calu.logins.old_logins`.
+
+    The old entries are also listed as unused (D265).
+    """
     no_root_place(monkeypatch)
     store.save("admin", "postgresql://calu_owner@localhost/calu", "pw")
     store.save("operator", "postgresql://calu_operator@localhost/calu", "pw")
@@ -163,6 +166,7 @@ def test_the_local_findings_cover_the_four_groups(
 
 @pytest.mark.anyio
 async def test_a_database_that_does_not_answer_is_one_finding() -> None:
+    """Connects to a closed local port (a real TCP attempt, no database) and expects one finding."""
     found = await doctor.database_findings("postgresql://127.0.0.1:1/nothing")
     assert len(found) == 1
     assert found[0].name == "database" and found[0].ok is False and found[0].essential

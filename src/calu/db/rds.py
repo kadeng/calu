@@ -10,8 +10,8 @@ A token is a signed request, made locally with the credentials of one AWS profil
 for new logins for 15 minutes and is sent as the password, which is why the connection must
 verify the server's certificate (`sslmode=verify-full`).
 
-This module is the only place that imports boto3, and `token_provider` and `identity_provider`
-are what a test replaces.
+This module is the only place that signs tokens with boto3, and `token_provider` and
+`identity_provider` are what a test replaces.
 """
 
 import re

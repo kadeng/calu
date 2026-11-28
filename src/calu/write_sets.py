@@ -20,7 +20,8 @@ Guarantees:
   asked and nobody decided, the files stay and Claude is told that the change is unreviewed.
 - Claude is told that a change was undone only if the revert applied.
 - A write set that could not be measured is not read as "nothing was written": with the review
-  on, a human is asked about it.
+  on, a human is asked about it. The exception is a write set of overlapping commands (next
+  item): it is neither reviewed nor asked about, even when it could not be measured.
 - Commands that ran at the same time in the same checkout share one write set. It is recorded
   as overlapping and neither reviewed nor undone, because it cannot be attributed to one of
   them. Commands in different checkouts (parallel subagents in their own worktrees) do not
@@ -343,8 +344,8 @@ class WriteSets:
         session is over, and keeping them would let the snapshot root grow without bound. The
         write sets themselves stay in the database.
 
-        Side effects: removes the directory and clears `RunState.snapshots`. A failure is logged
-        only.
+        Side effects: removes the snapshot repository of the run and of each worktree, and
+        clears `RunState.snapshots` and `RunState.worktree_snapshots`. A failure is logged only.
         """
         store, self._run().snapshots = self._run().snapshots, None
         others = list(self._run().worktree_snapshots.values())
@@ -360,11 +361,11 @@ class WriteSets:
                 log.warning("could not remove the snapshots in %s: %s", one.root, exc)
 
     async def snapshot_before(self, step: Step, step_id: int | None, summary: str) -> None:
-        """Snapshot the project directory before an approved command runs (D31).
+        """Snapshot every checkout the command belongs to (`_stores`) before it runs (D31).
 
-        Side effect: remembers the tree for `snapshot_after`, and marks every open window as
-        overlapping if more than one command runs at a time, because the write set can then not
-        be attributed to one of them.
+        Side effect: remembers the trees for `snapshot_after`. It marks the open commands that
+        share a checkout with this one, and this one, as overlapping, because their writes
+        cannot be told apart. Commands in different checkouts do not overlap.
 
         Args:
             step: The tool call that is about to run.
@@ -584,10 +585,10 @@ class WriteSets:
     async def review(self, step: Step) -> str:
         """Review what a finished command wrote, and undo it if the review refuses (D31).
 
-        This is the second half of the write-set snapshot: the step checker judged the command
-        before it ran, with no way of knowing what it would write; this judges the change
-        itself, with the patch in front of it. Only reached when `changes.review` is on, which
-        needs `changes.snapshot`.
+        This is the second half of the write-set snapshot. The step checker judged the command
+        before it ran, without knowing what it would write. This review judges the change
+        itself, with the patch in front of it. The review happens only when `changes.review` is
+        on, which needs `changes.snapshot`. The write set is measured and recorded in every case.
 
         A DENY reverts the change (`git apply --reverse` from calu's own snapshot) and tells
         Claude what was undone and why; a revert that does not apply is reported as such, so
@@ -606,7 +607,9 @@ class WriteSets:
 
         A write set that could not be measured (`Measured.error`) cannot be reviewed or
         undone; with the review on, it is escalated with `WRITE_SET_UNMEASURED` instead of
-        being skipped.
+        being skipped. The exception is an overlapping write set: it returns "" before the
+        error is looked at, so an unmeasured write set of overlapping commands is neither
+        asked about nor mentioned to Claude.
 
         Side effects: measures and records the write set (see `measure`), may change
         files in the workspace, and may open an escalation.

@@ -37,6 +37,11 @@ def test_the_editor_comes_from_visual_then_editor(monkeypatch: pytest.MonkeyPatc
 def test_the_text_goes_through_the_editor_and_comes_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
+    """The text the editor script writes comes back, and the edited file stays on disk.
+
+    The test starts a real subprocess, a generated `/bin/sh` script named by `$EDITOR`.
+    `edit_in_editor` keeps the edited file in a new `calu-edit-*` temporary directory.
+    """
     monkeypatch.setenv("EDITOR", fake_editor(tmp_path, 'printf "edited\\n" > "$1"'))
     after, path = edit_in_editor("before\n", "command-instructions.md")
     assert after == "edited\n"
@@ -46,7 +51,13 @@ def test_the_text_goes_through_the_editor_and_comes_back(
     assert path.read_text(encoding="utf-8") == "edited\n"
 
 
-def test_an_editor_that_fails_stores_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_an_editor_that_fails_or_is_missing_raises_a_cli_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """An editor that exits with 3, or whose program does not exist, raises `CliError`.
+
+    The first case starts a real subprocess (a generated `/bin/sh` script).
+    """
     monkeypatch.setenv("EDITOR", fake_editor(tmp_path, "exit 3"))
     with pytest.raises(CliError, match="exited with 3"):
         edit_in_editor("before\n", "x.md")

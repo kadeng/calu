@@ -28,7 +28,9 @@
 #   CALU_UITEST_PORT    host port for cua-spacesd (default 56211)
 #   CALU_UITEST_MEMORY  memory limit of the container (default 8g)
 #   CALU_UITEST_IMAGE   image of a newly created container (default calu-uitest:latest;
-#                       e.g. an image made with `docker commit` from the old container)
+#                       e.g. an image made with `docker commit` from the old container).
+#                       The script builds only calu-uitest:latest, whatever this variable
+#                       holds. A named image that does not exist makes `docker run` fail.
 set -euo pipefail
 
 NAME=calu-uitest

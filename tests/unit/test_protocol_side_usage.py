@@ -1,6 +1,8 @@
-"""The requests `side.ask`, `usage.get` and `model.set` and the event `usage.update`.
+"""The requests `side.ask`, `usage.get`, `usage.panel` and `model.set`, the event `usage.update`
+and the time at which an escalation began to wait (`opened_at`).
 
-All through a real WebSocket and the scripted fake runner (`tests/unit/test_protocol_server`).
+The requests and events go through a real WebSocket and the scripted fake runner
+(`tests/unit/test_protocol_server`).
 """
 
 from datetime import UTC, datetime

@@ -23,7 +23,8 @@
  *     a request that failed without a password ── notDoneText ──► the message its caller shows
  *
  * One `UnlockState` belongs to one bridge process. All functions return a new state and leave
- * their argument unchanged. No function receives or stores a password.
+ * their argument unchanged. No function stores a password. Only `onStoredPassword` receives
+ * one, and it inspects only whether one is present.
  */
 
 /** How many passwords may be entered in one prompt round before the round gives up. */
@@ -90,7 +91,7 @@ export type NeedAction = 'fail' | 'retry' | 'join' | 'prompt';
 export type RoundOutcome = 'done' | 'ask-again' | 'give-up';
 
 /**
- * How a prompt round ended: "unlocked" (a password was accepted), "dismissed" (Escape),
+ * The ways a prompt round can end: "unlocked" (a password was accepted), "dismissed" (Escape),
  * "refused" (`MAX_ATTEMPTS_PER_ROUND` passwords were refused), "aborted" (the bridge ended, the
  * database was unreachable, the prompt failed).
  */

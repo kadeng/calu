@@ -1,4 +1,4 @@
-"""Run the whole built-in evaluation set against a real checker model, both checkers.
+"""Run the whole built-in evaluation set against a real checker model, all four checkers.
 
 What `calu evals` does, without a database: it reads the instructions from
 `src/calu/defaults/checkers/` and the cases from `src/calu/defaults/evals/`, so it measures what

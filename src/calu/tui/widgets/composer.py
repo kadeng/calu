@@ -7,9 +7,9 @@ subclass takes the keys before the text area does:
     ctrl+j, alt+enter, shift+enter insert a newline
     up / down on the first / last line walk the history of sent texts
 
-Before any of that it offers the key to `intercept`, a function the app sets: the app takes a
-key there when it is a command rather than text (a decision key while the input is empty, for
-instance), and the composer then does nothing with it.
+The app may set `intercept`, a function that takes a key before the composer does. It takes a
+key that is a command, such as a decision key while the input is empty. The composer then
+ignores that key.
 """
 
 import re
@@ -132,7 +132,7 @@ class Composer(TextArea):
         self.fit()
 
     def remember(self, text: str) -> None:
-        """Add a sent text to the history, unless it repeats the newest entry.
+        """Add a sent text to the history, unless it is blank or repeats the newest entry.
 
         Args:
             text: The text.

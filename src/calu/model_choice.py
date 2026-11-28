@@ -83,14 +83,16 @@ def bedrock_choice(
 ) -> ModelChoice | None:
     """Return the Bedrock choice if this machine has AWS credentials that STS accepts.
 
-    Side effects: up to two AWS API calls, STS `GetCallerIdentity` and Bedrock
-    `ListInferenceProfiles`; neither creates or changes anything.
+    Side effects: one STS `GetCallerIdentity` call, then one Bedrock `ListInferenceProfiles`
+    call for each region it tries. It stops at the first region that lists a Haiku profile.
+    Neither call creates or changes anything.
 
     Args:
         session_factory: Builds a `boto3.session.Session`; None uses boto3 itself. Tests pass a
             stand-in.
-        region: An EU source region to list profiles from; None tries `AWS_REGION` when it is
-            an EU region, then `EU_REGIONS`.
+        region: An EU source region to list profiles from; None tries the session's own
+            region when it is an EU region (boto3 takes it from `AWS_REGION`,
+            `AWS_DEFAULT_REGION` or the AWS config profile), then `EU_REGIONS`.
 
     Returns:
         The choice, or None when boto3 is missing, there are no credentials, or STS refuses

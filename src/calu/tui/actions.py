@@ -83,7 +83,7 @@ class Actions:
                 )
             return Outcome(False, visible(str(error.error.get("message") or error)))
         except ConnectionError as error:
-            return Outcome(False, f"not sent: {error}")
+            return Outcome(False, f"not sent: {visible(str(error))}")
 
     async def send(self, text: str, target: str = MAIN, delivery: str = "queued") -> Outcome:
         """Send a chat message (`chat.send`).
@@ -406,7 +406,9 @@ class Actions:
         directory exists on the client's machine.
 
         Args:
-            path: The file, relative to the session's project directory.
+            path: The file, normally relative to the session's project directory. The path is
+                not checked: a file anywhere this client can read is read, and its whole
+                content is sent to the session as `after_text`.
             first: First line, counted from 1.
             last: Last line, inclusive.
             text: The comment.

@@ -252,7 +252,8 @@ def test_cases_are_read_from_a_yaml_file(tmp_path: Path):
     )
     (loaded,) = load_cases(path)
     assert loaded.name == "deploy" and loaded.source == "my_cases.yaml"
-    assert load_cases(tmp_path / "empty.yaml") if (tmp_path / "empty.yaml").exists() else True
+    (tmp_path / "empty.yaml").write_text("[]\n", encoding="utf-8")
+    assert load_cases(tmp_path / "empty.yaml") == []
 
 
 def test_pass_and_allow_count_as_the_same_answer():
@@ -451,9 +452,9 @@ def test_the_case_set_tries_to_instruct_the_checkers():
 def test_every_field_of_a_case_survives_an_export(tmp_path: Path):
     """D96: an exported case has to come back as the same case, field for field.
 
-    What this actually guards, having been checked both ways: a field left **out of the dump**.
-    Dropping `diff` from it makes the changeset cases fail to load at all, because their
-    validator requires one -- a loud failure, which is the good case. `exclude_defaults` is not
+    The test guards against a field left out of the dump. The author checked this both ways.
+    Dropping `diff` from the dump makes the changeset cases fail to load at all, because their
+    validator requires one. That failure is loud, which is the good case. `exclude_defaults` is not
     what protects this: a field omitted because it holds its default is restored by the model
     on the way back, so the round trip survives either setting. The risk this pins is a future
     `exclude={...}` or a field that does not serialise, which would come back as a case that
@@ -702,9 +703,8 @@ async def test_the_runner_resolves_a_model_string_the_way_a_session_does(
     """D118: `calu evals` built its checkers from the bare string and skipped `resolve_model`.
 
     What that cost: a `mistral:` model would have gone to the global endpoint instead of the EU
-    one that
-    `resolve_model` pins. A session has always resolved; the measurement path has to agree with
-    it, or it measures something the session never runs.
+    one that `resolve_model` pins. A session has always resolved; the measurement path has to
+    agree with it, or it measures something the session never runs.
     """
     seen: list[object] = []
     real = runner.resolve_model

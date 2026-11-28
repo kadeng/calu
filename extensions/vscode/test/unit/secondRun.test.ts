@@ -1,6 +1,6 @@
-// Decisions added after the extension's first run in VSCode: the waiting session request, hints
-// as one line while a session is attached, the context meter's tooltip, names of forked
-// sessions, and the summary of the settings dialog's saves.
+// This file tests what the extension gained after its first run in VSCode. That is the waiting
+// session request, the hints as one line while a session is attached, the context meter's
+// tooltip, the names of forked sessions, and the summary of the settings dialog's saves.
 import { describe, expect, it } from 'vitest';
 import { STARTING_CARD, checkImage, setupCards, startingCard, usageMeter } from '../../src/shared/chatModel';
 import { buildHints } from '../../src/shared/hints';
@@ -109,7 +109,7 @@ describe('image sizes', () => {
 
   it('accepts what a session accepts (5 MB) and refuses more before anything is sent', () => {
     expect(checkImage('image/png', 5 * MB, 0, true)).toBeUndefined();
-    // base64 counts in groups of 3 bytes.
+    // checkImage counts base64 characters: 4 for each started group of 3 bytes.
     expect(checkImage('image/png', 5 * MB + 3, 0, true)).toMatch(/too large/);
     expect(checkImage('image/jpeg', 6 * MB, 0, true)).toBe('The image is too large: 6.0 MB; a message takes images of at most 5 MB. Nothing was attached.');
     // The host's validation has the same limit.

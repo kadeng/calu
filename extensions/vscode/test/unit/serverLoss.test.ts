@@ -1,6 +1,7 @@
-// After the calu server stops: "The calu server stopped" with Start server and Retry, the
-// transcript greyed under "Session ended" (the owner's decision of 2026-11-19); and the
-// "Waiting for you" timer counted from the session's time of the escalation.
+// After the calu server stops, the chat shows "The calu server stopped" with Start server and
+// Retry. The transcript stays and is greyed under "Session ended" (the owner decided this on
+// 2026-11-19). The "Waiting for you" timer counts from the time the session reports for the
+// escalation.
 import { describe, expect, it } from 'vitest';
 import type { IdeStatusResult } from '../../src/bridgeProtocol';
 import { activityLine, waitingSince } from '../../src/shared/activity';

@@ -16,7 +16,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * B23: a save held for a running turn stays held across a restart of the IDE until the turn is
+ * Tests that a save held for a running turn stays held across a restart of the IDE until the turn is
  * known to have ended. Runs [Synchronizer] with [HoldKeeper] over the scripted `ide.fs.*` bridge;
  * a "restart" is a new synchroniser and keeper on the same store directory.
  */

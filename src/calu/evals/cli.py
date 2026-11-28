@@ -6,11 +6,19 @@
     calu evals --model mistral:...    one model for every checker, instead of the configured
     calu evals --repeat 3             run every case three times (decision stability)
 
-It measures all four checkers: the command and edit checkers on single steps, the changeset
-checker on a whole commit (a case carries the `diff`, D75) and the subagent-result checker on
-what a subagent handed back (a case carries the `prompt` and the `result`, D77). The checker
-instructions and models come from the database, so the command measures the checkers as they
-are actually configured. The cases run in temporary directories; nothing of
+It measures the four built-in checkers and every other enabled checker row
+(`_rows_to_measure`):
+
+- the command and edit checkers on single steps;
+- the changeset checker on a whole commit (a case carries the `diff`, D75);
+- the subagent-result checker on what a subagent handed back (a case carries the `prompt` and
+  the `result`, D77);
+- every other enabled checker on one of these four routes, on the cases of its route;
+- when it is enabled, the honesty checker on the cases of the kind "honesty", and the reviewer
+  of the honesty review on the cases of the kind "honesty-review".
+
+The checker instructions and models come from the database, so the command measures the
+checkers as they are actually configured. The cases run in temporary directories; nothing of
 the project is read or changed, and the checker is told a plausible working directory rather
 than that temporary one (agent/records/PLAN.md D71).
 
@@ -99,7 +107,6 @@ ROW_NAMES: dict[CheckerName, str] = {
     "subagent": "subagent-result",
 }
 """Name of the `checker_types` row that holds each checker's instructions."""
-"""The checkers an evaluation run measures."""
 
 
 async def collect_cases(
@@ -148,7 +155,7 @@ async def run_evals(
         workspace: The project directory whose settings apply (for the rules and the models).
         project: Name of the project row whose settings apply, or None for the global ones.
         files: YAML case files to add to the built-in set.
-        from_db: Also use the resolved escalations and the overruled honesty marks as cases.
+        from_db: Also use the resolved escalations of the database as cases.
         builtin: Include the built-in case set.
         model: One model for every checker, instead of the configured ones.
         repeat: How often each case is run.

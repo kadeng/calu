@@ -94,9 +94,10 @@ private fun activity(icon: String, label: String, elapsed: String, active: Boole
     Activity(icon, label, elapsed, listOf(icon, label, elapsed).filter { it.isNotEmpty() }.joinToString(" "), active, kind)
 
 /**
- * Find when the waiting began: the time the session gives for the oldest open escalation
- * (`escalation.request.opened_at`, also in the snapshot of a later attach), so that the
- * "waiting for you" timer survives a bridge restart, a reattach and a reopened tool window.
+ * Find when the waiting began. The result is the time that the session gives for the oldest
+ * open escalation (`escalation.request.opened_at`, also in the snapshot of a later attach).
+ * The time comes from the session, not from the view, so that the "waiting for you" timer
+ * survives a bridge restart, a reattach and a reopened tool window.
  * Port of `waitingSince` in `extensions/vscode/src/shared/activity.ts`.
  *
  * Example: `waitingSince(listOf("2026-11-19T10:00:00Z", null), 5, <10:03:00Z in ms>)` is the

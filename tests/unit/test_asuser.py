@@ -1,7 +1,9 @@
 """calu's own work as the unprivileged user (`calu.asuser`, D206): what needs no root.
 
 The switch itself needs root and is measured in a container (`spikes/smoke_privileged.sh`,
-`spikes/spike_fs_identity.py`). These tests touch no file outside `tmp_path` and print nothing.
+`spikes/spike_fs_identity.py`). These tests write only below `tmp_path` and print nothing.
+Two of them read outside it: one looks up the real user and home in the system's user database,
+and one stats `/usr/bin/env`.
 """
 
 import argparse

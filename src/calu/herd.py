@@ -2,9 +2,11 @@
 
 See agent/records/PLAN.md §8, REQUIREMENTS 12, 13.
 
-These queries need no running session: they work on the database alone, from any machine that
-can reach it. `resolve` calls `calu_resolve_escalation`, which notifies the waiting session, so
-the session continues within a second.
+These queries need no running session: they work from any machine that can reach the database.
+Besides the database they read the local process table, to judge whether the process of a
+session on this machine is gone, and `stored_conversations` reads the transcripts that Claude
+Code keeps below the user's home. `resolve` calls `calu_resolve_escalation`, which notifies
+the waiting session, so the session continues within a second.
 
 `calu sessions`, `calu escalations`, `calu resolve` and `calu token` use the user login (the role
 `calu_admin`, agent/records/PLAN.md D265).
@@ -42,11 +44,11 @@ log = logging.getLogger(__name__)
 STALE_AFTER_S = 60.0
 """Silence after which a session is called stale (agent/records/PLAN.md D56, D237).
 
-A session stamps `last_seen` every `HEARTBEAT_S` seconds, so one minute is six missed beats
--- long enough that a slow machine, a paused process or a short database outage is not called
-dead, short enough that a session whose machine or container went away is marked within a
-minute (it was three minutes, and an editor's session list showed such a session as running
-in the meantime). A session whose process is known to be gone is stale at once
+A session stamps `last_seen` every `HEARTBEAT_S` seconds, so one minute is six missed beats.
+That is long enough that a slow machine, a paused process or a short database outage is not
+called dead. It is short enough that a session whose machine or container went away is marked
+within a minute. The value was three minutes before, and an editor's session list showed such
+a session as running in the meantime. A session whose process is known to be gone is stale at once
 (`SessionRow.gone`)."""
 
 HEARTBEAT_S = 10.0
@@ -180,8 +182,8 @@ class EscalationRow:
         """Return the escalation as one terminal line.
 
         Returns:
-            Id, session, host and directory, age, what the step is, the reason, and a mark when
-            answering it cannot reach anybody (D56).
+            Id, session, host and directory, the time it was asked, what the step is, the
+            reason, and a mark when answering it cannot reach anybody (D56).
         """
         gone = "  [the session is gone: answering changes nothing]" if self.unanswerable else ""
         about = f"\n    {' '.join(self.about.split())[:200]}" if self.about.strip() else ""
@@ -232,8 +234,8 @@ async def close_gone(db: Db) -> int:
 
     1. has ended (`sessions.ended_at`), or
     2. is stale (silent for more than `STALE_AFTER_S`, D56), ran in this machine's process
-       table, and no process with its pid exists here any more; or ran on this machine before
-       its last reboot (`calu.machine`, D202), or
+       table, recorded a pid, and no process with that pid exists here any more; or ran on
+       this machine before its last reboot (`calu.machine`, D202), or
     3. has been silent for more than `CLOSE_SILENT_AFTER_S` while the database server was up.
 
     A stale session of another machine is only marked as gone in the lists until rule 3
@@ -273,7 +275,7 @@ async def close_gone(db: Db) -> int:
         for session_id, pid, recorded_text in rows:
             recorded = machine.Machine.parse(recorded_text)
             relation = "same" if recorded is None else this.relation(recorded)
-            if relation == "other" or (relation == "same" and process_exists(pid)):
+            if relation == "other" or (relation == "same" and (pid is None or process_exists(pid))):
                 continue
             note = (
                 f"the session's process (pid {pid}) is gone"
@@ -1353,10 +1355,15 @@ def render_escalation(
 ) -> str:
     """Render everything needed to decide an escalation, for a terminal.
 
-    This is the **database-only** view (agent/records/PLAN.md D30): an operator who can reach the
-    database can see why a step was escalated, what it would do, what Claude asked if it was a
-    question, and the conversation as the checkers saw it — without connecting to the session
-    process, which may be on another host or already gone.
+    This is the **database-only** view (agent/records/PLAN.md D30). An operator who can reach
+    the database sees:
+
+    - why the step was escalated and what it would do,
+    - what Claude asked, if it was a question,
+    - the conversation as the checkers saw it.
+
+    No connection to the session process is needed. That process may be on another host or
+    already gone.
 
     Args:
         row: The escalation row.
@@ -1368,7 +1375,7 @@ def render_escalation(
             the checkers approved it.
 
     Returns:
-        The rendering, ending with the command that answers it.
+        The rendering. For an open escalation it ends with the command that answers it.
     """
 
     def section(title: str, body: str) -> str:
@@ -1699,10 +1706,14 @@ async def step_stats(db: Db, since_days: int | None = None) -> StepStats:
 
     This is the other half of `checker_stats`: that one says what the checkers did with the
     steps they saw, this one says how many steps reached them at all. Both read the record and
-    cost nothing. The point of the first number is that the allow and deny lists settle a step
-    without a model call (`calu rules`), so the share of steps no checker ran on is the share
-    that is free; the point of the second is that everything calu does sits between Claude Code
-    asking to run a tool and the tool running, so it is measurable as a delay.
+    cost nothing.
+
+    The first measure is the share of steps that no checker ran on. The allow and deny lists
+    (`calu rules`) settle those steps without a model call, so they are free.
+
+    The second measure is the delay of the gate. Everything calu does sits between Claude Code
+    asking to run a tool and the tool running, so the time of that decision is the cost in
+    waiting.
 
     Args:
         db: A connection that may read `steps`, `checker_runs` and `escalations`.
@@ -1756,10 +1767,10 @@ async def checker_stats(db: Db, since_days: int | None = None) -> list[CheckerSt
 
     This is the free half of `calu evals`: it reads what already happened instead of running
     the checkers again, so it costs nothing and says something the eval set cannot -- how they
-    behave on this project's real steps. Two numbers matter most. An escalation a human
-    **allowed** cost an interruption for nothing; a step a checker **passed** that a human then
-    denied is a miss, which only exists in the record when an auto-escalation category made the
-    human look (D42, D50).
+    behave on this project's real steps. The two numbers that matter most are these. An
+    escalation a human **allowed** cost an interruption for nothing. A step a checker
+    **passed** that a human then denied is a miss. It only exists in the record when an
+    auto-escalation category made the human look (D42, D50).
 
     Args:
         db: A connection that may read `checker_runs`, `steps` and `escalations`.
@@ -1806,8 +1817,8 @@ async def checker_stats(db: Db, since_days: int | None = None) -> list[CheckerSt
         " GROUP BY c.checker_name ORDER BY count(*) DESC, c.checker_name",
         (since_days, since_days, since_days, since_days),
     )
-    # By keyword, not by position: the row has fifteen columns and a field inserted in the
-    # wrong place would silently shift every later one.
+    # The row has thirteen columns, read by position in the order of the SELECT. The fields of
+    # `CheckerStats` are given by keyword, so a field added to the class cannot shift the others.
     return [
         CheckerStats(
             checker_name=row[0],

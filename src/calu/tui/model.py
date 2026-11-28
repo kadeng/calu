@@ -240,8 +240,9 @@ class StepBlock(Block):
 
         Returns:
             For an escalated step its state: ESCALATE while it is open, then ALLOWED, DENIED,
-            CANCELLED, ANSWERED or RESOLVED. Otherwise the strictest decision of the step's
-            checks (DENY, ESCALATE, ALLOW, PASS), or "" for a step no check was reported for.
+            CANCELLED, ANSWERED, DECLINED or RESOLVED. Otherwise the strictest decision of the
+            step's checks (DENY, ESCALATE, ALLOW, PASS), or "" for a step no check was
+            reported for.
         """
         if self.waiting == "open":
             return "ESCALATE"
@@ -379,7 +380,8 @@ class Decision:
     """Client clock when the request arrived; None if it was open before this client attached
     or was replayed."""
     by_rule: bool = False
-    """True if a deny rule stopped the step before any checker ran."""
+    """True if a rule stopped the step: a check of the step has the route "escalate", or the
+    reason names a deny rule or deny list. It is False for a request with questions."""
     own: bool = False
     """True once this client has sent its decision; the `escalation.resolved` that follows is
     then not reported as decided elsewhere."""
@@ -392,7 +394,7 @@ class Decision:
     armed: bool = False
     """True after the first allow key on a step a deny rule stopped; the second one allows."""
     error: str = ""
-    """What the session answered when it refused the decision."""
+    """The session's answer when it refused the decision."""
     sent: str = ""
     """What this client sent and the session has not confirmed yet ("allow", "deny",
     "answer"); "" when nothing is under way. Over a slow link the card says so, so that a
@@ -523,8 +525,8 @@ class Mark:
 class Honesty:
     """The honesty state of the session beyond mode and marks (`honesty.update`).
 
-    Today's session sends mode and marks only; then `reported` is False and every other field
-    keeps its default. A session that certifies commits also sends the fields below, and
+    A session that sends mode and marks only leaves `reported` False and every other field at
+    its default. A session that certifies commits also sends the fields below, and
     `honesty_from` reads each of them with a default, so that both render.
     """
 
@@ -543,7 +545,7 @@ class Honesty:
     unreviewed_all: bool = False
     """True without a baseline: every file counts as unreviewed."""
     unreviewed_problem: str = ""
-    """Why the session could not list the unreviewed files ("" if it could)."""
+    """The reason the session could not list the unreviewed files ("" if it could)."""
     review_required: bool = False
     """True once more marks are open than `honesty.max_open_marks` allows."""
     review_running: bool = False
@@ -557,11 +559,19 @@ def honesty_from(raw: dict[str, Any]) -> Honesty:
     """Read the honesty state from the params of `honesty.update` or from a snapshot.
 
     Every field is optional and a value of an unexpected type counts as absent. Accepted
-    spellings: in the event `baseline`, `unreviewed`, `unreviewed_count`, `review_required`,
-    `review_running`; in a snapshot the same names with the prefix `honesty_`, or one object
-    `honesty` that holds them. `baseline` is a commit id or an object with `commit_id`,
-    `source` and `subject`; `unreviewed` is a list of paths or an object with `paths`,
-    `count`, `everything` and `problem`.
+    spellings:
+
+    - In the event: `baseline`, `baseline_source`, `unreviewed`, `unreviewed_count`,
+      `unreviewed_all`, `review_required`, `review_running` and `worktrees`.
+    - In a snapshot: the same names with the prefix `honesty_`, or one object `honesty` that
+      holds them.
+    - `baseline` is a commit id or an object with `commit_id` (or `commit`), `source` and
+      `subject`.
+    - `unreviewed` is a list of paths or an object with `paths`, `count`, `everything` and
+      `problem`.
+
+    `reported` becomes True when `baseline`, `unreviewed`, `unreviewed_count`,
+    `review_required` or `review_running` is present.
 
     Args:
         raw: The params or the snapshot as the session sent them.
@@ -671,7 +681,7 @@ class SideExchange:
     question: str
     answer: str = ""
     error: str = ""
-    """Why no answer came, if the session refused or failed."""
+    """The reason no answer came, if the session refused or failed."""
     pending: bool = True
     """True until the answer or the error arrived."""
 
@@ -1083,9 +1093,9 @@ class SessionModel:
     def held(self, step: StepBlock) -> bool:
         """Tell whether a step waits in calu because another step waits for the user.
 
-        A session sends `step.held` when a hold begins and ends; a step it named as held and
-        that has no result is held, also after its check (an approval that met an open
-        escalation while it was recorded). For a session without that event the client
+        A session sends `step.held` when a hold begins and ends. A step it named as held and
+        that has no result is held, also after its check. This happens when an approval met
+        an open escalation while it was recorded. For a session without that event the client
         derives it: a tool call that has neither a check nor a result, while an escalation
         of another step is open, is one calu holds back. An Agent call whose subagent runs
         was let through, and a question is not held.
@@ -1169,12 +1179,18 @@ class SessionModel:
             agent: The agent.
 
         Returns:
-            For the main agent outside a turn the session state (idle, stopped, failed,
-            starting). For a finished subagent its status. "held by a decision" for an
-            agent whose tool call calu holds back while another step waits for the user
-            (`held`), and "running N subagents" for one whose last call started subagents that
-            still run in the foreground. Otherwise the derived activity with the tool name,
-            or "running, no activity seen since attach".
+            The first of these that applies:
+
+            - "waits for you" if the agent has an open decision.
+            - The session state (idle, stopped, failed, starting) for the main agent outside
+              a turn.
+            - The status of a finished subagent.
+            - "held by a decision" for an agent whose tool call calu holds back while
+              another step waits for the user (`held`).
+            - "running N subagents" for an agent whose last call started subagents that
+              still run in the foreground.
+            - Otherwise the derived activity with the tool name, or "running, no activity
+              seen since attach".
         """
         if self.open_decisions(agent.key):
             return "waits for you"
@@ -1333,8 +1349,7 @@ class SessionModel:
         not replayed (nothing but its inputs if its input was not replayed), later turns not
         at all. A turn's input counts as replayed by Claude Code's id of its prompt
         (`TurnRecord.prompt_uuid`) where the turn has one and the replayed inputs have ids at
-        all; only otherwise by its text. By text alone, the same words in two turns
-        ("continue") made the earlier turn the boundary and dropped every turn between them.
+        all; only otherwise by its text.
         A line of the client follows the stored blocks and says what they are.
 
         Precondition: the model holds no blocks (a new or a reset model); otherwise nothing is
@@ -1348,8 +1363,9 @@ class SessionModel:
                 has one.
 
         Returns:
-            A change that names the added blocks; an empty one if there was nothing to add or
-            the result does not fit the protocol (which adds a log line).
+            A change that names the added blocks; an empty one if there was nothing to add; a
+            change with one warning notice if the result does not fit the protocol (the log
+            gets a line too).
         """
         if self.blocks:
             return Change()

@@ -220,7 +220,7 @@ def test_the_panel_lists_what_needs_the_user_the_agents_and_the_queue() -> None:
     assert ">main         waits for you" in text
     assert " explore      tool call Grep bg" in text
     assert "QUEUE (2)" in text
-    assert " next   → main also bump the…" in text or any("also bump" in row for row in text)
+    assert any(row.startswith(" next") and "also bump" in row for row in text)
     assert "HONESTY (1)  enforce" in text
     assert targets[1] == ("decision", "e1") and ("agent", "a1") in targets.values()
 
@@ -250,7 +250,10 @@ def test_the_decision_card_shows_the_step_the_reason_and_the_keys() -> None:
 
 
 def test_a_reconnecting_client_offers_no_decision_keys() -> None:
-    """Test plan J O5: while the connection is broken, the card offers no allow or deny."""
+    """While the connection is broken, the card offers no allow or deny.
+
+    The case comes from section J of `agent/records/notes/test-plan.md`.
+    """
     model = showcase()
     decision = model.decisions["e1"]
     model.connection.status = "reconnecting"

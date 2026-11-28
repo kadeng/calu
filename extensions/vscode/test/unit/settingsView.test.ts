@@ -155,7 +155,7 @@ describe('setup rows', () => {
     expect(rows[0].fixes.map((f) => f.action)).toEqual(['installCalu', 'restartBridge']);
   });
 
-  it('summarises: collapsed when nothing is missing', () => {
+  it('summarises the setup rows: a missing item, or only notes and ok rows', () => {
     const rows = setupRows({ status, serverHelp, problems: [] });
     expect(setupSummary(rows)).toEqual({ ok: false, text: '1 thing needs attention' });
     const fine = rows.filter((r) => r.level !== 'missing');

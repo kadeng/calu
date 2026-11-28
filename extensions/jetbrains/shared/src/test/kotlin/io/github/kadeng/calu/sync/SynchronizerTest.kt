@@ -52,7 +52,12 @@ class RecordingUi(var answer: Boolean = true) : SyncUi {
     }
 }
 
-/** [Synchronizer] with a local directory and the scripted `ide.fs.*` bridge. */
+/**
+ * [Synchronizer] with a local directory and the scripted `ide.fs.*` bridge.
+ *
+ * Every test creates two temporary directories (the local root and the store directory). They are
+ * not deleted afterwards.
+ */
 class SynchronizerTest {
     private val root: Path = Files.createTempDirectory("calu-sync-local")
     private val storeDir: Path = Files.createTempDirectory("calu-sync-store")

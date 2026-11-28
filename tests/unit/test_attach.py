@@ -475,9 +475,9 @@ def test_a_token_can_always_be_passed_on_a_command_line():
     """D102: a token starting with `-` is read as an option, not as a value.
 
     This was found as a flaky process test: `calu attach --token <value>` failed with
-    "expected one argument" for 1.71% of tokens, which is one session in 58 printing a token a
-    user cannot use as instructed. The generator therefore discards such a draw, and the
-    printed hint uses `--token=` so that a token issued before the fix works as well.
+    "expected one argument" for about 1.7 % of tokens, so one session in 58 printed a token
+    that could not be passed as instructed. The generator therefore discards such a draw, and
+    the printed hint uses `--token=` so that a token issued before the fix works as well.
     """
     from calu.cli import build_parser
     from calu.tokens import new_token
@@ -713,7 +713,10 @@ async def test_usage_prints_the_usage_panel(capsys):
 
 
 def test_running_lines_name_the_sessions_with_their_time_and_line_up():
-    """Test plan J O5: names and time in state through a relay; the columns line up."""
+    """Through a relay, each session line shows the session's name and its time in its state.
+
+    The columns line up.
+    """
     from datetime import UTC, datetime
 
     from calu.attach import running_lines

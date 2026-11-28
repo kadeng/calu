@@ -257,6 +257,10 @@ See agent/records/PLAN.md §6.
 async def _open(address: str) -> AsyncGenerator[ClientConnection]:
     """Open a connection to a TCP or a Unix socket address.
 
+    A socket below `localsocket.ROOT` is a session's root-owned socket. It is first checked
+    to belong to root alone, then opened with root's file access (`asuser.as_root`). Every
+    other address is opened with the caller's access.
+
     Args:
         address: `ws://host:port` or `unix:<path>`.
 
@@ -265,6 +269,7 @@ async def _open(address: str) -> AsyncGenerator[ClientConnection]:
 
     Raises:
         OSError: If the address cannot be reached.
+        localsocket.NotTrusted: If a root-owned socket fails the check (`localsocket.problems`).
     """
     if address.startswith(UNIX_PREFIX):
         path = Path(address[len(UNIX_PREFIX) :])

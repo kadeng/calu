@@ -42,7 +42,7 @@ async def prepared(db_url: str) -> Target:
     return user_login(Target.parse(db_url), PASSWORD)
 
 
-async def test_the_user_login_changes_settings_with_a_typed_password(db_url: str, tmp_path: Path):
+async def test_the_user_login_changes_settings_with_the_user_password(db_url: str, tmp_path: Path):
     login = await prepared(db_url)
     conn = await open_stored(login, start_local=False)
     try:

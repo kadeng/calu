@@ -233,7 +233,8 @@ def record(workspace: Path, directory: str, saved: Saved) -> Path | None:
 
     The file is `<directory>/<YYYY-MM-DD>/<user>/<slug(path)>.tmp.diff`. The block is one
     comment line and the unified diff, written with one `write` call to a file opened with
-    `O_APPEND` and `O_NOFOLLOW`, so concurrent sessions do not interleave their blocks.
+    `O_APPEND` and `O_NOFOLLOW`, so concurrent sessions do not interleave their blocks. A
+    short write is reported as an error; the part that was written stays in the file.
 
     Side effects: creates the directory as `ensure_directory` does, the date and user
     folders, and the file (mode 0644, less the umask).
@@ -266,7 +267,9 @@ def record(workspace: Path, directory: str, saved: Saved) -> Path | None:
         _refuse_outside(workspace.resolve(), folder)
         fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o644)
         try:
-            os.write(fd, (head + diff + "\n").encode("utf-8", "surrogatepass"))
+            block = (head + diff + "\n").encode("utf-8", "surrogatepass")
+            if os.write(fd, block) != len(block):
+                raise HumanDiffError(f"cannot write {target}: short write")
         finally:
             os.close(fd)
     except OSError as exc:
@@ -279,8 +282,8 @@ def cleanup(workspace: Path, directory: str, keep_days: int, now: float | None =
 
     Walks only the configured directory and never follows a link: a link is neither entered
     nor deleted, also one named `*.tmp.diff`. Only regular files whose name ends in
-    `.tmp.diff` are deleted; a file renamed to `<name>.diff` stays. Folders below the
-    directory that the deletions left empty are removed; the directory itself stays.
+    `.tmp.diff` are deleted; a file renamed to `<name>.diff` stays. Empty folders below the
+    directory are removed, including those that were empty before; the directory itself stays.
 
     Side effects: deletes files and empty folders; logs each removed file. Errors on single
     entries are logged and skipped.

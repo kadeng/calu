@@ -55,9 +55,9 @@ def sandbox_warnings(config: Config) -> list[str]:
         config: The session configuration.
 
     Returns:
-        One warning naming every missing program, or an empty list if the sandbox is off or all
-        programs are present. With `sandbox.fail_if_unavailable` the warning says that Claude
-        Code will refuse to start.
+        One warning if the sandbox is off, or one warning naming every missing program, or an
+        empty list if all programs are present. With `sandbox.fail_if_unavailable` the
+        warning says that Claude Code will refuse to start.
     """
     sandbox = config.claude.sandbox
     if not sandbox.enabled:
@@ -307,10 +307,10 @@ def network_warnings(config: Config, platform: str | None = None) -> list[str]:
 
     Returns:
         A warning if the commands may reach **every** domain (the wildcard of the "full"
-        policy), because that is a deliberate choice worth seeing at every start; one if they
-        can reach nothing, which is the safe end but explains every failing download, so a
-        session that is stuck on an install says why; nothing in between. On Linux also one
-        when `allow_unix_sockets` names sockets: Claude Code ignores that list there (it is a
+        policy), because that is a deliberate choice worth seeing at every start. One warning
+        if the commands can reach no domain: every download then fails, and the warning says
+        why. No warning for a policy in between. On Linux also one warning when
+        `allow_unix_sockets` names sockets: Claude Code ignores that list there (it is a
         macOS setting) and its sandbox refuses every Unix socket a command tries to create
         (measured 2026-11-20 with CLI 2.1.329, DOCUMENTATION.md "Developing Calu inside
         Calu"). An empty list for a sandbox that is off.
@@ -487,7 +487,7 @@ def self_approval_warnings(config: Config, store: CredentialStore | None = None)
     protected only by the file mode, which does not separate the two. The sandbox makes calu's
     own directories unreadable to Claude's commands. Without a working sandbox, the built-in
     rules still make `calu ...` (D160) and every tool call on those directories wait for a
-    human, and what else a command does with the file is left to the checker's judgement. Such
+    person. What else a command does with the file depends on the checkers' judgement. Such
     a credential can resolve escalations, so that combination is named here, with the two
     ways out.
 
@@ -596,9 +596,10 @@ def published_admin_login(path: Path | None = None) -> bool:
         path: The place file; None is `calu.db.place.default_path()`.
 
     Returns:
-        True if the place file is root's alone (so clients use it) and a password goes with
-        it; False if it is missing, cannot be trusted (no client reads it then) or no
-        password goes with it.
+        True if a trusted place file exists and a password of `calu_admin` goes with it. That
+        password is then readable by the users the file is shared with: the user who ran
+        `sudo calu setup`, or every user for a place file of before D279. False if the place
+        file is missing, cannot be trusted (no client reads it then) or has no password.
     """
     from calu.db import place  # imported here: `calu.db` loads psycopg
 
@@ -785,8 +786,9 @@ def settings_file_sandbox_findings(
         file that has such entries; [] when the sandbox is off (calu asks for none) or no file
         goes beyond calu's configuration. An entry of a list (`SANDBOX_LIST_KEYS`) counts when
         calu's own list does not hold it (for domains: unless calu allows every domain); a
-        switch (`SANDBOX_SWITCH_KEYS`) counts when it has its weakening value and calu's
-        configuration does not say the same; a key of `SANDBOX_VALUE_KEYS` counts when it is
+        switch (`SANDBOX_SWITCH_KEYS`) counts when it is set to anything other than its
+        strengthening value (`0` or "no" may be read as off) and calu's configuration does
+        not hold the weakening value itself; a key of `SANDBOX_VALUE_KEYS` counts when it is
         present with any value but null.
     """
     claude = config.claude if isinstance(config, Config) else config
@@ -860,10 +862,11 @@ def settings_file_sandbox_blockers(
 
     calu passes its sandbox settings with `--settings`, and for the project's files and three
     keys that precedence was measured (`spikes/RESULTS.md`, "Can a settings file widen the
-    pinned sandbox?"). For the user's file, the other keys and other CLI versions calu cannot
-    be sure, and with `claude.sandbox.fail_if_unavailable` a sandbox it cannot be sure of is a
-    reason not to run: the runner refuses the start, and during a session it makes a Bash step
-    wait for a human while a finding exists (the files can change while a session runs).
+    pinned sandbox?"). For the user's file, for other keys and for other CLI versions, calu
+    cannot be sure what the sandbox is. With `claude.sandbox.fail_if_unavailable`, a sandbox
+    calu cannot be sure of is a reason not to run. The runner then refuses the start. During
+    a session a Bash step waits for a person while a finding exists, because the files can
+    change while a session runs.
 
     Args:
         config: The session configuration, or its `claude` part alone, with the project's
@@ -933,7 +936,8 @@ def settings_permission_mode(
 
     Args:
         config: The session configuration, or its `claude` part alone.
-        home: The home directory; None uses `claude_home()`.
+        home: The home directory; None uses `claude_home()`, or `$CLAUDE_CONFIG_DIR` for the
+            user's file when that variable is set (`user_settings_file`).
         workspace: The project directory; None skips the project and the local file.
 
     Returns:
@@ -942,14 +946,13 @@ def settings_permission_mode(
     """
     claude = config.claude if isinstance(config, Config) else config
     sources = set(claude.setting_sources)
-    home = home if home is not None else claude_home()
     files: list[tuple[str, Path]] = []
     if workspace is not None and "local" in sources:
         files.append((".claude/settings.local.json", workspace / ".claude" / "settings.local.json"))
     if workspace is not None and "project" in sources:
         files.append((".claude/settings.json", workspace / ".claude" / "settings.json"))
     if "user" in sources:
-        files.append(("~/.claude/settings.json", home / ".claude" / "settings.json"))
+        files.append(user_settings_file(home))
     for label, path in files:
         mode = _nested(_json_object(path), ("permissions", "defaultMode"))
         if isinstance(mode, str) and mode:

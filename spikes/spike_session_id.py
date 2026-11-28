@@ -7,8 +7,9 @@ branches a whole conversation: `resume` with `fork_session=True` and no fork poi
 
 Run: `uv run python spikes/spike_session_id.py` (needs a logged-in `claude`; uses Haiku).
 It prints the id Claude Code reports for (1) a new session with a chosen id, (2) a fork of it
-with a chosen id, (3) a fork of it without one, and whether each fork remembers the original
-conversation. Results are recorded in `spikes/RESULTS.md`.
+with a chosen id, (3) a fork of it without one. Each fork is asked for the secret word of the
+original conversation, and the script prints the answer for the reader to judge whether the fork
+remembers it; it does not compare the answer with anything. Results are recorded in `spikes/RESULTS.md`.
 """
 
 import tempfile

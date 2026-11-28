@@ -213,10 +213,9 @@ private fun onBridgeStatus(state: ViewState, p: JsonObject): ViewState {
  *
  * With "lost" the session can no longer be reached: nothing is streaming, and nothing can be
  * decided until it is attached again (the cards stay open, see `unpendEscalations`).
- *
- * @param state The current state (not modified).
  * The cause of a loss (`cause`, see `lostCause`) is kept in `link.cause`.
  *
+ * @param state The current state (not modified).
  * @param p The params `{state: "attached" | "reconnecting" | "lost", message, cause?}` (untrusted).
  * @return The new state; unchanged for another `state` value.
  */

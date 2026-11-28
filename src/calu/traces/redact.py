@@ -19,10 +19,10 @@ Stage 2 reads a long text in pieces of at most `CHUNK_CHARS` characters, cut at 
 that every answer fits into the model's output; one failed piece fails the whole text.
 
 Removal (agent/records/PLAN.md D245). The instructions may let the agent leave text out, e.g.
-the user's questions. An answer may therefore be shorter than its input, but never longer
-than `MAX_GROWTH` allows, and it is empty only where the caller allowed the whole text to go
-(`may_remove`) and the agent said so (`Redaction.remove_block`); an empty answer without that
-is a failed redaction, as before.
+the user's questions. An answer may therefore be shorter than its input. It is never longer
+than `MAX_GROWTH` allows. It is empty only if the caller allowed the whole text to go
+(`may_remove`) and the agent said so (`Redaction.remove_block`). Any other empty answer is a
+failed redaction.
 """
 
 from __future__ import annotations

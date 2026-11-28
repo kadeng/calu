@@ -203,6 +203,8 @@ class ChatController(
     /**
      * Connect the controller to the supervisor and start the bridge in the background. Later
      * calls do nothing. A bridge that cannot be started is shown in the state, not thrown.
+     * While no session is attached, it also asks the bridge for the session list every
+     * `SESSION_LIST_REFRESH_MS` until the scope ends.
      */
     fun start() {
         synchronized(lock) { if (started) return; started = true }
@@ -321,9 +323,9 @@ class ChatController(
     }
 
     /**
-     * While "The calu server stopped" is shown: ask `ide.status` whether a server runs again;
-     * if one runs, or (for Retry) a session can be attached anyway, attach as at the start
-     * (`connectWorkspace`: the same session, else the project's) and drop the card. Does
+     * While "The calu server stopped" is shown, ask `ide.status` whether a server runs again.
+     * If one runs, or (for Retry) a session can be attached anyway, attach as at the start and
+     * drop the card. The attach is `connectWorkspace`: the same session, else the project's. Does
      * nothing while the chat does not say so, or while another look runs. Never throws.
      *
      * @param retry True for the Retry button: the attach is tried even if the status cannot

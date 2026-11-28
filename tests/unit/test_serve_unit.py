@@ -290,7 +290,9 @@ def test_a_claimed_request_outside_the_projects_directory_is_refused(tmp_path: P
 async def test_the_relay_takes_the_next_derived_port_when_its_own_is_taken(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """D243: the port derived from the directory, else the next one of the sequence."""
+    """D243: the port derived from the directory, else the next one of the sequence.
+
+    Binds real loopback ports on 127.0.0.1 for a moment and closes them again."""
     import socket
 
     from calu import projects_dir

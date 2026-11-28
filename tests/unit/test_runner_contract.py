@@ -248,7 +248,7 @@ async def test_the_runner_does_not_start_on_a_sandbox_entry_calu_did_not_configu
         await runner.run(AllowAll(), no_sink)
 
 
-async def test_the_runner_does_not_pass_a_hidden_variable_on(
+async def test_the_runner_refuses_to_start_with_a_hidden_variable_in_pass_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """`claude.pass_env` with a name calu hides (env file, `hidden_env`): the start is refused."""

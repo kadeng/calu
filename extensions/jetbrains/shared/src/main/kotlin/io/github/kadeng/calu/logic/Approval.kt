@@ -24,7 +24,7 @@ import java.security.MessageDigest
 /**
  * Return the part of the settings that decides what the plugin runs, as canonical text.
  *
- * Two settings with the same text run the same programs with the same arguments. The
+ * Settings with the same text run the same programs with the same arguments. The
  * notifications switch is left out (it runs nothing); so are SSH host, directory, options and
  * sync mode outside the SSH mode, where nothing uses them.
  *
@@ -75,6 +75,7 @@ fun approvalText(project: String, command: String, settings: PluginSettingsDto):
             add("SSH host: ${settings.sshHost}")
             if (settings.sshDirectory.isNotEmpty()) add("Directory on the server: ${settings.sshDirectory}")
             if (settings.sshOptions.isNotEmpty()) add("SSH options: ${settings.sshOptions}")
+            if (settings.syncMode != defaults.syncMode) add("File synchronisation: ${settings.syncMode}")
         }
         if (settings.serverSudo) add("Server command with --sudo")
         if (settings.serverInsecure) add("Server command with --insecure")

@@ -57,6 +57,9 @@ fun JsonElement?.asStr(): String? = (this as? JsonPrimitive)?.takeIf { it.isStri
 fun JsonElement?.asNum(): Double? =
     (this as? JsonPrimitive)?.takeIf { !it.isString && it !is JsonNull }?.doubleOrNull
 
+/** 2^63 as a double: a whole double at or above it, or below its negative, does not fit a `Long`. */
+private const val LONG_LIMIT: Double = 9.223372036854775807E18
+
 /**
  * Read a JSON value as a whole number.
  *
@@ -65,7 +68,9 @@ fun JsonElement?.asNum(): Double? =
  */
 fun JsonElement?.asLong(): Long? =
     (this as? JsonPrimitive)?.takeIf { !it.isString && it !is JsonNull }?.let { p ->
-        p.longOrNull ?: p.doubleOrNull?.takeIf { it == Math.floor(it) && !it.isInfinite() }?.toLong()
+        p.longOrNull ?: p.doubleOrNull
+            ?.takeIf { it == Math.floor(it) && it >= -LONG_LIMIT && it < LONG_LIMIT }
+            ?.toLong()
     }
 
 /**

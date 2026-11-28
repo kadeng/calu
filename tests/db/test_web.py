@@ -1481,7 +1481,8 @@ async def test_only_images_inside_the_sessions_directory_are_served(db_url: str,
 async def test_the_settings_page_says_when_a_checker_text_is_an_older_shipped_one(
     db_url: str,
 ) -> None:
-    """D248: an older shipped text gets "Use the present version"; an own text a diff only."""
+    """D248: an older shipped text gets the button "Use the present version". A text that the
+    user wrote shows only a diff against the shipped text."""
     import html
 
     from calu.defaults.instructions import default_instructions, superseded_instructions
@@ -1540,9 +1541,10 @@ async def test_the_new_session_dialog_makes_a_folder_and_starts_a_session_there(
     db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """D270: without a `calu serve` of this host and user the dialog says what to start.
-    With one, it lists the folders of its projects directory, makes a new folder, and turns
-    the window into the chat pane of that folder; asked to start a session, it files the
-    request there (answered here by a stand-in for the server) and opens its live view.
+    With such a server, the dialog lists the folders of its projects directory. It makes a new
+    folder on request. It then turns the window into the chat pane of that folder. When asked
+    to start a session, it files the request there and opens the live view. A stand-in for
+    the server answers the request in this test.
 
     Makes folders below `tmp_path`; records a `servers` row for this host and user."""
     import socket
@@ -1623,9 +1625,10 @@ async def test_the_new_session_dialog_continues_a_conversation_of_the_folder(
     db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The dialog offers the conversations of the chosen folder to continue (calu's and those
-    of `claude` itself), takes an id typed or picked, files a "resume" request for it and
-    opens the chat pane on the session that started; an id of another folder, or one with a
-    new folder, is refused before anything is filed.
+    of `claude` itself). It takes an id typed or picked, files a "resume" request for it and
+    opens the chat pane on the session that started.
+
+    An id of another folder, or an id with a new folder, is refused before anything is filed.
 
     Makes folders below `tmp_path`; records a `servers` row for this host and user; Claude
     Code's transcripts are stood in for."""

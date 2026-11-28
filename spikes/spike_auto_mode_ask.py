@@ -8,10 +8,16 @@ escalate even though no checker objected. This spike checks that.
 
     uv run python spikes/spike_auto_mode_ask.py
 
-Setup: `permission_mode="auto"`, a PreToolUse hook that returns an empty output (no decision, as
-calu does for PASS), and a `can_use_tool` that records what reached it and denies with a marker.
-Two prompts: something harmless (`ls`), and something outside the project directory, which is
-the kind of step an approval layer tends to want confirmed.
+Setup: `permission_mode="auto"`, a PreToolUse hook that returns the event name and no permission
+decision (as calu does for PASS), and a `can_use_tool` that records what reached it and denies
+with a marker. Four prompts:
+
+- something harmless (`ls`)
+- a write to `calu-spike-outside.txt` in the temporary directory, outside the project directory,
+  which is the kind of step an approval layer tends to want confirmed; the script deletes that
+  file before and after the run
+- a WebFetch of `https://example.com`, an outbound request to a domain never seen before
+- `mkdir -p doomed && rm -rf doomed`, which creates and deletes a directory in the project
 
     can_use_tool called      -> auto mode asks, and calu's `Session.ask` already handles it
     never called             -> auto mode only allows and denies in this mode

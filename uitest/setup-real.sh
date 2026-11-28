@@ -8,6 +8,8 @@
 #   $D shell 'bash /workspace/calu/uitest/setup-real.sh --no-deploy'  # keep the installed calu
 #   $D shell 'bash /workspace/calu/uitest/setup-real.sh --stop-server'
 #   $D shell 'bash /workspace/calu/uitest/setup-real.sh --remove-key' # delete the key files
+#                         # (the whole of ~/.config/calu/.env and ~/.claude/settings.json, not only
+#                         # the key entries, and /share/anthropic.env)
 #
 # The API key: the owner puts a file with the lines `ANTHROPIC_API_KEY=...` and, optionally,
 # `ANTHROPIC_BASE_URL=...` at ~/.cache/calu-uitest/share/anthropic.env on the host (mode 600;
@@ -26,7 +28,9 @@
 # What it does:
 #   1. `setup-demo.sh --no-server` (database, calu from the host's working tree, the demo
 #      project) and stops the fake server if it runs.
-#   2. Installs bubblewrap and socat (apt) and Claude Code (the native installer), no login.
+#   2. Installs bubblewrap and socat (apt, with sudo) and Claude Code, no login. Claude Code
+#      comes from the installer script, which it downloads from https://claude.ai/install.sh
+#      to /tmp/claude-install.sh and runs with bash.
 #   3. Puts the key in place (see above).
 #   4. Sets every model role to Claude Haiku (`calu config models`), Claude Code's model to
 #      `haiku`, and switches Claude Code's sandbox off if this container cannot create user

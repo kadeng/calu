@@ -1,5 +1,9 @@
 """Count evidence files that calu's stage-1 redaction would change (known secret values from
-calu's env file, and key shapes). Prints file names and counts only, never a value."""
+calu's env file, and key shapes). Prints file names and counts only, never a value.
+
+Usage: python worktrees_leakcheck.py DIRECTORY. Every file below the directory is read and
+counted, except the files in a directory named `probe`: they are neither read nor counted, so
+the total leaves them out."""
 
 import pathlib
 import sys

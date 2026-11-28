@@ -3,14 +3,15 @@
     cached prefix = chat summary
     recent        = unfolded turns + the running turn
 
-When at least `fold_every` turns are unfolded, or the unfolded turns and the running turn
-together are longer than `max_recent_chars`, the oldest turns are folded (`fold_count` of them,
-or as many as it takes to get under the limit, whichever is more; PLAN.md D272): a summarizer
-agent merges them into the narrative part of the chat summary, and their user inputs are
-appended verbatim to its "User inputs" section. Folding runs in the background;
-checks continue with the old context until it is done. The summary is kept in memory
-(`ContextBuilder.summary`) and handed to `on_summary` after each fold, so the session can store
-it in the database (table `chat_summaries`, with the number of the newest folded turn).
+The oldest turns are folded in either of two cases. The first is that at least `fold_every` turns
+are unfolded. The second is that the unfolded turns and the running turn together are longer than
+`max_recent_chars`. A fold takes `fold_count` turns, or as many as it takes to get under the
+limit, whichever is more (PLAN.md D272). A summarizer agent merges them into the narrative part of
+the chat summary, and their user inputs are appended verbatim to its "User inputs" section.
+Folding runs in the background; checks continue with the old context until it is done. The summary
+is kept in memory (`ContextBuilder.summary`) and handed to `on_summary` after each fold, so the
+session can store it in the database (table `chat_summaries`, with the number of the newest folded
+turn).
 
 Chat summary layout (an operator may edit both parts):
 
@@ -398,7 +399,9 @@ class ContextBuilder:
         The summary is read before and compared again after the (slow) summarizer call; if it
         was replaced meanwhile, nothing changes and the turns stay unfolded for the next try.
         On success, `summary` is replaced and `on_summary` is awaited with it and the number
-        of the newest folded turn.
+        of the newest folded turn. `summary` is replaced before `on_summary` is awaited. If
+        `on_summary` raises, the function returns False with the new summary in memory and the
+        turns still unfolded.
         Concurrent calls are serialized. Does not raise (except cancellation): errors are
         logged.
 

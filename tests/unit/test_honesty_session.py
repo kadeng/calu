@@ -121,7 +121,8 @@ async def session_on(
         trusted: Whether HEAD is recorded as trusted (source "user") before the session.
         models: Checker models that replace the defaults: the command checker says that a
             command with one of `EXECUTING` executes project code, the honesty checker
-            (enabled here, key "honesty") calls every edited file HONEST, the others pass.
+            (enabled here, key "honesty") calls an edited file HONEST unless the step carries
+            `calu.testing.DISHONEST_MARKER`, the others pass.
         snapshots: Whether `changes.snapshot` is on (write sets, D31).
         honesty: Further `honesty.*` settings.
 
@@ -315,7 +316,10 @@ async def test_a_denied_edit_changes_nothing(repo: Path):
 
 
 async def test_a_checked_edit_verifies_the_file_and_stores_the_verification(repo: Path):
-    """Sections 2 and 13: an approved edit without a mark verifies the content, source check."""
+    """Sections 2 and 13: an approved edit without a mark verifies the content.
+
+    The stored record has the source `check`.
+    """
     session, rec, store = await session_on(repo, [[write("src/parser.py", CHANGED)]])
     await run_turns(session, rec)
     state = await session.honesty_snapshot()
@@ -388,8 +392,9 @@ async def test_more_marks_than_allowed_require_a_review_and_clean_marks_are_igno
 @pytest.mark.parametrize("mode", ["track", "off"])
 async def test_a_hand_edit_of_a_generated_file_waits_for_a_person(repo: Path, mode: str):
     """Generated files are left out of the honesty checks, so only their build may write them
-    without a person's decision: an approved Write to a configured path escalates, in every
-    `honesty.mode`. A file the patterns do not name is not affected."""
+    without a person's decision: an approved Write to a configured path escalates, in the
+    modes `track` and `off` (the modes this test runs). A file the patterns do not name is not
+    affected."""
     session, rec, _store = await session_on(
         repo,
         [[write("dist/app.js", "var a=1;\n"), write("src/app.js", "export const a = 1;\n")]],
@@ -443,9 +448,10 @@ async def test_any_writing_tool_and_a_shell_command_on_a_generated_file_are_chec
 
 @pytest.mark.parametrize("limit", [3, 0])
 async def test_claude_is_told_after_three_dishonest_edits_also_under_track(repo: Path, limit: int):
-    """The owner, 2026-11-26: after D (`honesty.notify_after_dishonest_edits`, default 3)
-    dishonest edits the main agent hears about the open marks, also in `track` mode, with
-    both ways out and neither preferred. 0 never tells."""
+    """The owner, 2026-11-26: after the number of dishonest edits that
+    `honesty.notify_after_dishonest_edits` sets (default 3), the main agent hears about the
+    open marks, also in `track` mode, with both ways out and neither preferred. With 0 it is
+    never told."""
     dishonest = "x = 1  # calu:dishonest\n"
     session, rec, _store = await session_on(
         repo,
@@ -523,7 +529,10 @@ def notes_of(session: Session, route: Route) -> list[str]:
 
 
 async def test_every_checker_gets_the_computed_state_with_its_own_marks_first(repo: Path):
-    """Section 6: the note names the baseline, the marks, the unreviewed files, the review."""
+    """Section 6: the note names the baseline, the marks, the unreviewed files, the review.
+
+    The marks on the step's own files are listed before the marks on other files.
+    """
     (repo / "other.py").write_text("x = 1\n", encoding="utf-8")
     session, rec, _store = await session_on(
         repo, [[write("src/parser.py", CHANGED), bash("ls src")]], mode="track"
@@ -538,6 +547,7 @@ async def test_every_checker_gets_the_computed_state_with_its_own_marks_first(re
     assert f"Baseline: trusted commit {git(repo, 'rev-parse', 'HEAD')[:12]}" in note
     assert "Open marks on this step's files: src/parser.py:fields" in note
     assert "Open marks on other files: other.py" in note
+    assert note.index("Open marks on this step's files") < note.index("Open marks on other files")
     assert "Unreviewed files (1): other.py." in note
     assert "Review required: no." in note
     # `ls` is on the allow lists, and `track` leaves them in force: no checker ran for it.
@@ -1140,11 +1150,11 @@ async def test_a_staged_content_nobody_verified_stops_a_commit(repo: Path):
 
 
 async def test_a_corrected_file_is_staged_again_and_committed_without_a_person(repo: Path):
-    """G6a: the dishonest content was staged before the commit was denied.
+    """A dishonest content was staged before the commit was denied, and the file is corrected.
 
-    The denial for the mark names `git add`; after the correcting edit the index still
-    holds the dishonest content, and the commit is denied with the command that stages the
-    corrected file; after that the commit passes and is certified. Nobody is asked.
+    The denial for the mark names `git add`. After the correcting edit the index still holds
+    the dishonest content, and the commit is denied with the command that stages the corrected
+    file. After that command the commit passes and is certified. Nobody is asked.
     """
     session, rec, store = await session_on(
         repo,
@@ -1191,7 +1201,10 @@ async def test_a_corrected_file_is_staged_again_and_committed_without_a_person(r
 
 
 async def test_a_step_that_runs_code_is_denied_the_same_way_while_the_index_is_behind(repo: Path):
-    """The test run after the correction of G6a asked a person; `git add` settles it."""
+    """A command that runs code is denied while the index holds an older content of a file.
+
+    The denial names the `git add` command that settles it, and no person is asked.
+    """
     (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
     git(repo, "add", "src/parser.py")
     session, rec, _store = await session_on(
@@ -1230,7 +1243,11 @@ async def test_a_file_that_is_itself_unverified_is_not_settled_by_staging(repo: 
 
 
 async def test_a_mark_cleared_by_hand_is_stored_as_the_persons_decision(repo: Path):
-    """G9: the clearing held for the session only; a new session marked the same code again."""
+    """Clearing a mark by hand stores the content as the person's record.
+
+    A later session then does not mark the same code again. Before, the clearing held for the
+    session only.
+    """
     (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
     session, rec, store = await session_on(repo, [[]])
     mark(session)
@@ -1517,7 +1534,10 @@ CHANGED_DOC = PARSER.replace("sorted.", "sorted, and send them to the server.")
 
 
 def with_caller(repo: Path) -> Path:
-    """Add a caller of `fields` to the test repository and certify the new commit's tree.
+    """Add a caller of `fields` to the test repository and commit it.
+
+    The commit is not recorded as trusted here. The tests that use this helper get their trust
+    from `session_on(trusted=True)`, which certifies HEAD afterwards.
 
     Args:
         repo: The repository of the `repo` fixture.
@@ -1612,11 +1632,12 @@ async def test_without_the_setting_no_code_is_judged_again(repo: Path):
 async def test_the_graph_names_the_dishonest_unit_its_callers_and_the_code_to_judge_again(
     repo: Path,
 ):
-    """`honesty.graph`: after an edit that changes the doc comment of `fields` and a mark a
-    person puts on it, the graph holds `fields` as dishonest and `main`, which calls it, as
-    code to judge again, with an edge between them. Dismissing the entry by hand leaves `main`
-    as a mere caller, found by the word search for the view. With the mode off the graph is
-    empty."""
+    """`honesty.graph` after an edit changes the doc comment of `fields` and a person marks it.
+
+    The graph then holds `fields` as dishonest. It holds `main`, which calls `fields`, as code
+    to judge again. An edge joins the two. Dismissing the entry by hand leaves `main` as a mere
+    caller, found by the word search for the view. With the mode off the graph is empty.
+    """
     with_caller(repo)
     session, rec, _store = await session_on(
         repo,

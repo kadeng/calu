@@ -43,8 +43,8 @@ def test_the_index_reports_the_servers_references_and_those_of_a_base_method(
 ) -> None:
     """The server's references of the unit are confirmed places. A call through a base class
     counts too: the server lists it under the base method, and the index finds that method
-    through the symbols of the same name and their implementations. The definition itself
-    and a place outside the project are left out."""
+    through the symbols of the same name and their implementations. The definition itself is
+    left out. The test has no place outside the project, so it does not check that case."""
     script = {
         "ready": True,
         "references": {"a.py:2": [["b.py", 1, 6], ["a.py", 2, 8]], "base.py:2": [["b.py", 2, 5]]},

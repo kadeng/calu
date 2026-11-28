@@ -1,5 +1,6 @@
 /**
- * The four cards on top of the settings dialog: Setup, Models, Checkers and Honesty. Each
+ * The five cards on top of the settings dialog: Setup, Models, Checkers, Honesty and
+ * Temporary rules. Each
  * `render…Card` function builds a fresh `<section class="card">` from the last `data` message;
  * the dialog replaces the old card with it (and gives the focus back by `data-testid`).
  * Runs in the webview. The cards never keep data of their own: what must survive a rebuild
@@ -10,6 +11,7 @@
  *               Claude Code's model, effort, Bedrock ─► host.commit (an ordinary `set`)
  *     Checkers  one row per checker ─► editChecker {name}
  *     Honesty   off / track / enforce ─► host.commit("honesty.mode", …)
+ *     Temporary rules  list ─► ruleRemove {id};  form ─► ruleAdd {text, duration, scope}
  */
 
 import type { CheckerRow, IdeModelsResult, IdeTemporaryRule, ModelPreset } from '../src/bridgeProtocol';
@@ -287,8 +289,9 @@ function modelParts(presets: IdeModelsResult | null): {
  * @param state The card state (`draftPreset`, `draftCustom`, `draftEffort`).
  * @param host The dialog; "Apply" posts `setAllModels`.
  * @param efforts The effort levels to offer.
- * @returns The block. Selecting a card or typing a custom model only opens the confirm bar;
- *   nothing is sent before "Apply".
+ * @returns The block. Selecting a card or typing a custom model opens the confirm bar, and
+ *   nothing is sent until "Apply" is clicked or Enter is pressed in the custom field. Enter
+ *   there posts `setAllModels` at once.
  */
 function renderUseOne(parts: ReturnType<typeof modelParts>, state: CardState, host: CardHost, efforts: readonly string[]): HTMLElement {
   const block = el('div', 'use-one');
@@ -369,7 +372,8 @@ function renderUseOne(parts: ReturnType<typeof modelParts>, state: CardState, ho
   /**
    * Return what "Apply" would send.
    *
-   * @returns The model (a preset id for a preset) and the text naming it; `undefined` if
+   * @returns The model string to store (the typed text for a custom model; else the preset's
+   *   model, or `default` for a preset without one) and the label naming it; `undefined` if
    *   neither a preset nor a custom model is chosen.
    */
   const draft = (): { model: string; label: string } | undefined => {
@@ -676,8 +680,9 @@ function ruleWhere(rule: IdeTemporaryRule): string {
 }
 
 /**
- * Build the card of the temporary rules: the rules that count now, each with a Remove button,
- * and a form that adds one (`ruleAdd`, `ruleRemove`).
+ * Build the card of the temporary rules: every active rule, each with a Remove button and its
+ * scope (a rule of another session is marked "another session", because it does not apply to
+ * the attached one), and a form that adds one (`ruleAdd`, `ruleRemove`).
  *
  * @param data The dialog's data (`rules` is `ide.rules.list`, `null` if it failed).
  * @param state The card state (`errors.rules`).
@@ -708,7 +713,7 @@ export function renderRulesCard(data: SettingsData, state: CardState, host: Card
       ),
     );
   }
-  if (rules.length === 0) list.appendChild(el('li', 'muted', data.rules ? 'No temporary rule counts now.' : 'The rules could not be loaded.'));
+  if (rules.length === 0) list.appendChild(el('li', 'muted', data.rules ? 'No temporary rule is active.' : 'The rules could not be loaded.'));
   const text = el('textarea', 'textarea', '', { rows: '3', maxlength: '1000', 'aria-label': 'Rule', placeholder: 'e.g. Claude may run the database tests.', testid: 'rule-text' }) as HTMLTextAreaElement;
   const duration = el('input', 'input rule-duration', '', { type: 'text', value: '1d', size: '5', 'aria-label': 'For how long', testid: 'rule-duration' }) as HTMLInputElement;
   const scope = el('select', 'select', '', { 'aria-label': 'Applies to', testid: 'rule-scope' }) as HTMLSelectElement;

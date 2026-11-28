@@ -5,7 +5,7 @@ the transcript with the checkers' decisions, cards to allow or deny a waiting st
 every edit, and calu's settings. It offers what the VSCode extension offers
 (`../vscode`, `agent/records/notes/vscode-extension-spec.md`) and reaches calu in three ways.
 
-State: fourth round. The plugin runs in PyCharm 2026.3 on Linux in all three modes below, each
+State: fifth round. The plugin runs in PyCharm 2026.3 on Linux in all three modes below, each
 walked through in the UI-test desktop ("State" at the end, `agent/records/notes/test-plan.md` sections B
 and H): a local IDE; JetBrains remote development with the IDE backend on a headless SSH server
 and the JetBrains Client on the desktop; a local copy kept equal over SSH, with PyCharm's SSH
@@ -23,10 +23,11 @@ In every mode the plugin speaks the protocol of `calu ide` (JSON-RPC over newlin
 JSON) and nothing else: it opens no socket and no database. It assumes a running `calu serve`
 and never calls sudo; when no server answers it shows the tmux or screen command and can open a
 terminal with it. That command names a projects directory (`calu serve --projects`, which
-starts sessions only in that directory and below it): the folder that holds the project
-(`~/work` for `~/work/demo`), or the project's own folder when that parent has a single
-component (`/home`, `/srv`, `/tmp`), is hidden or is a system directory. A `--projects` among
-the server's extra arguments in the plugin settings wins. The card shows the directory.
+starts sessions only in that directory and below it). The plugin names the parent of the
+project (`~/work` for `~/work/demo`). It names the project's own folder instead when the
+parent has a single component (`/home`, `/srv`, `/tmp`), has a hidden component, or is a
+system directory. A `--projects` among the server's extra arguments in the plugin settings
+wins. The card shows the directory.
 
 If the calu server stops, the chat says "The calu server stopped; the session ended with it."
 with **Start server** (the terminal with the server command) and **Retry**, and a notification
@@ -81,7 +82,7 @@ What the user goes through the first time in mode C:
 Afterwards:
 
     the agent edits a file         -> the local file and an open editor follow within about a second
-    a local save                   -> on the server at once (300 ms after the last change)
+    a local save                   -> on the server 300 ms after the last change
     a save while the agent edits   -> held ("1 file held until the turn ends", "Upload now");
       that file in a running turn     merged with the agent's change when the turn ended
     the IDE restarts while a file  -> still held: the held paths are stored with the session id
@@ -101,10 +102,10 @@ Afterwards:
       what git ignores                synchronised", Show)
 
 The question before a run (`HeldFilesRunner`) is a `ProgramRunner` registered with
-`order="first"`: every start of a run configuration (Run, Debug, the gutter, Shift+F10) asks the
-registered runners in order, and this one claims a start only while files are held; it shows
-the dialog and then hands the start to the runner that would have taken it, uploads first, or
-starts nothing. `ExecutionListener` cannot stop a start, and a `BeforeRunTaskProvider` acts
+`order="first"`. Every start of a run configuration (Run, Debug, the gutter, Shift+F10) asks
+the registered runners in order. This runner claims a start only while files are held. It
+then shows the dialog. After the dialog it does one of two things: it uploads first and hands
+the start to the runner that would have taken it, or it starts nothing. `ExecutionListener` cannot stop a start, and a `BeforeRunTaskProvider` acts
 only on configurations whose "Before launch" list holds its task. The Rerun button reuses the
 other runner, so for it `HeldFilesStartListener` (an `ExecutionListener`) only notifies.
 
@@ -147,19 +148,28 @@ because calu keeps both copies equal (checked after an edit on the server that m
 By hand: Add Interpreter | On SSH, sync folder `<Project root>` → the remote directory, and
 "Automatically upload project files to the server" off.
 
-PyCharm 2026.3 has no public API that creates an SSH interpreter: the data class of such an
-SDK (`PyTargetAwareAdditionalData`), its constructors and loader, and the "add interpreter"
-packages are internal API. `calu.python` therefore builds the SDK's data with the platform's
-public persistence methods (`SdkType.loadAdditionalData`/`saveAdditionalData` of
-`PythonSdkType`) from an element written by the platform's own `saveTargetConfiguration`, and
-reads it through the public interfaces `TargetBasedSdkAdditionalData` and
-`RemoteSdkProperties`; no XML is written by hand. That depends on PyCharm's stored format of SSH
-interpreters (which PyCharm must keep readable for its users' settings); the deployment and SSH
-configuration classes it uses are public, without a compatibility promise. The module loads
-only in an IDE with PyCharm's Python, SSH, remote-run and deployment plugins; elsewhere no card
-is shown. If PyCharm's Deployment uploads changed files
-by itself into the same directory, the plugin warns in the chat and with a notification: two
-writers can overwrite each other.
+The plugin builds the SSH interpreter with the platform's own methods. It may break if
+PyCharm changes the stored format of SSH interpreters. PyCharm must keep that format readable
+for its users' settings, but the deployment and SSH configuration classes the plugin uses
+are public without a compatibility promise.
+
+The reason is that PyCharm 2026.3 has no public API that creates an SSH interpreter. These
+parts are internal API:
+
+- the data class of such an SDK (`PyTargetAwareAdditionalData`), its constructors and its
+  loader;
+- the "add interpreter" packages.
+
+`calu.python` therefore takes an element that the platform's own `saveTargetConfiguration`
+wrote. It builds the SDK's data from that element with the platform's public persistence
+methods (`SdkType.loadAdditionalData` and `saveAdditionalData` of `PythonSdkType`). It reads
+the result through the public interfaces `TargetBasedSdkAdditionalData` and
+`RemoteSdkProperties`. No XML is written by hand.
+
+The module loads only in an IDE with PyCharm's Python, SSH, remote-run and deployment
+plugins. Elsewhere no card is shown. If PyCharm's Deployment uploads changed files by itself
+into the same directory, the plugin warns in the chat and with a notification: two writers
+can overwrite each other.
 
 The status bar shows one line ("calu sync: in sync", "3 files uploading", "conflict in x.py",
 "offline: 2 changes queued"); the title action "Sync Now" compares both sides again. The last
@@ -173,7 +183,8 @@ local save to the server 0.2 s; a full comparison of an unchanged tree 30 to 340
 bridge's polling watcher 0.6 % of one core with its `git` calls.
 
 Not built: the commit comparison of the spec's section 7 (the copy made by "Clone from
-Server" has no `.git`, so git operations happen on the server); `ide.ping`; marks on editor
+Server" has no `.git`, so git operations happen on the server); a call of `ide.ping` (the bridge answers it, but the
+plugin never sends it); marks on editor
 tabs and in the project view; a setting for the per-file limit; file modes on Windows. A
 change made to the local copy outside the IDE is uploaded when the IDE notices it (its file
 watcher; up to its next refresh). A file above the limit that appears on the server is listed
@@ -264,10 +275,14 @@ Plugin Verifier result (2026-11-20): compatible with PyCharm 2026.3
 (PY-263.7307.206), 11 usages of deprecated API (default methods of `ToolWindowFactory`,
 `StatusBarWidget` and `ProjectViewNodeDecorator`, `FileEditorManager.openFile`, and
 `Key.findKeyByName`, which reads the revision of a VCS diff without a dependency on the VCS
-plugin, absent in a JetBrains Client), 22 of
-experimental API, none of internal API (the progress
-indicator of the synchronisation has no percentage for that reason) (the RPC and `ProjectId` API that split
-mode needs, and the Reworked Terminal API). No EAP of the next version (2027.1) was published
+plugin, absent in a JetBrains Client).
+
+- The verifier reports 22 usages of experimental API. They are the RPC and `ProjectId` API
+  that split mode needs, and the Reworked Terminal API.
+- It reports no usage of internal API. For that reason the progress indicator of the
+  synchronisation shows no percentage: the platform's functions that report one are internal.
+
+No EAP of the next version (2027.1) was published
 when this was written (JetBrains' release list held 2026.3 as the newest build of every
 channel), so the verifier has not run against one.
 
@@ -319,12 +334,22 @@ Settings | Tools | calu holds only what belongs to the editor: how calu is reach
 command, SSH host, remote directory and options, the sync mode, notifications, and the flags of
 the server command. The SSH fields (host, remote directory, extra options, sync) can be edited
 only while "On a server, over SSH" is chosen; in the other modes they are greyed and keep their
-values. They are stored in `.idea/calu.xml` by the backend. calu's own settings are
-in calu's database: the title action "calu Settings" opens a dialog generated from
-`ide.settings.get` (sections, search, a control per kind, a marker for what differs from the
-default, reset, global or per project), with the pages "Models" (presets, one model for
-everything, one field per role), "Checkers" (Edit Instructions) and "Setup" (what `ide.status`
-found, with the buttons of the chat's setup cards).
+values. They are stored in `.idea/calu.xml` by the backend.
+
+calu's own settings are in calu's database. The title action "calu Settings" opens a dialog
+generated from `ide.settings.get`. The dialog has these features:
+
+- sections and a search;
+- a control per kind of setting;
+- a marker for what differs from the default;
+- reset;
+- a choice between global and per project.
+
+The dialog has these pages:
+
+- "Models": presets, one model for everything, and one field per role;
+- "Checkers": Edit Instructions;
+- "Setup": what `ide.status` found, with the buttons of the chat's setup cards.
 
 ## State
 

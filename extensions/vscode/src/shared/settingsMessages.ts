@@ -90,7 +90,7 @@ export type SettingsHostMessage =
   | { type: 'saved'; key: string; value?: unknown; unset?: boolean }
   /**
    * A request failed. `key`: the setting (show the message at its row), or one of "models",
-   * "status", "load", "fix" for the other requests.
+   * "status", "load", "fix", "rules" for the other requests.
    */
   | { type: 'error'; key: string; message: string }
   /** The environment check ran again. */

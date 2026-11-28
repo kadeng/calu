@@ -78,10 +78,14 @@ private val WIRE_DRIVE = Regex("^[A-Za-z]:")
  * Check a path against the form the bridge accepts (section 13, "path form"). No side effects.
  *
  * @param path the path as it would be sent.
- * @return null for a canonical relative path; "outside" for an absolute path, a drive letter or
- *   a `..` segment; "invalid" for an empty path, a control character (NUL included), a
- *   backslash, an empty or `.` segment (`a//b`, `./a`, `a/`), more than 4096 bytes, or a
- *   segment above 255 bytes. The words are the `data.reason` of error -32030.
+ * @return null for a canonical relative path. "outside" for an absolute path, a drive letter or
+ *   a `..` segment. "invalid" for any other fault:
+ *   - an empty path
+ *   - a control character (NUL included) or a backslash
+ *   - an empty or `.` segment (`a//b`, `./a`, `a/`)
+ *   - more than 4096 bytes, or a segment above 255 bytes
+ *
+ *   The words are the `data.reason` of error -32030.
  */
 fun wirePathProblem(path: String): String? {
     if (path.isEmpty() || path.any { it < ' ' || it == '\u007f' || it == '\\' }) return "invalid"

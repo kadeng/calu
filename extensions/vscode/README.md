@@ -56,12 +56,15 @@ empty.
   the transcript; the session list appears only if that session is gone.
 - **If the calu server stops**, the chat says "The calu server stopped" with **Start server**
   (a terminal with the server command, as "Open terminal with this command") and **Retry**.
-  The last session's transcript stays readable, greyed under "Session ended"; its open cards
-  become one line "Session ended" each, since nothing can decide them any more. When a server
-  runs again (Retry, or the chat's own check every 10 seconds while it is visible, every 30
-  seconds otherwise) the chat attaches as at the start: the same session if it still runs,
-  else the session of the workspace, else it offers a new one. A loss for another reason (a
-  revoked token, a refused connection) keeps "connection lost" with "Attach again".
+  The last session's transcript stays readable, greyed under "Session ended". Its open cards
+  become one line "Session ended" each, since nothing can decide them any more.
+- **When a server runs again**, the chat attaches as at the start. The server counts as
+  running again after **Retry**, or after the chat's own check. That check runs every 10
+  seconds while the chat is visible and every 30 seconds otherwise. The chat attaches to the
+  same session if it still runs. Otherwise it attaches to the session of the workspace, and
+  if there is none, it offers a new one.
+- **A loss for another reason**, such as a revoked token or a refused connection, keeps
+  "connection lost" with **Attach again**.
 - **"Waiting for you"** under the transcript counts from the time the session gives for the
   oldest open step, so a window reload, a bridge restart or a reattach does not start it again.
 - **Approval cards** keep Allow and Deny at the lower edge of the view while a long card
@@ -71,12 +74,20 @@ empty.
   chip shows both ("stored: track").
 - **Honesty graph**: "Graph" next to the Honesty chip shows the honesty state in place of the
   transcript; a second click, a click on a tab or a new approval card shows the chat again. A
-  node is a unit of code. Red is dishonest, yellow changed and unverified, orange to judge
-  again (strong border) or a caller of a dishonest unit (thin border), green just settled; each
-  state also has its own sign, explained under "Legend". A click opens the source. A right
-  click (or the context-menu key, or Shift+F10) offers "Mark as honest", "Mark as dishonest…"
-  and "Open the source". Drag to pan; Ctrl and the scroll wheel zoom. The session is asked for
+  node is a unit of code. The colour and the border say what state the unit is in (table
+  below). Each state also has its own sign, explained under "Legend". The session is asked for
   the graph only while it is open.
+- **Honesty graph gestures**: a click opens the source. A right click (or the context-menu
+  key, or Shift+F10) offers "Mark as honest", "Mark as dishonest…" and "Open the source".
+  Drag to pan. Ctrl and the scroll wheel zoom.
+
+  | Colour | Border | Meaning |
+  |---|---|---|
+  | Red | | dishonest |
+  | Yellow | | changed and unverified |
+  | Orange | strong | to judge again |
+  | Orange | thin | a caller of a dishonest unit |
+  | Green | | just settled |
 - **Usage panel**: a click on the context chip below the message field asks the session
   (`usage.panel`) and shows the 5-hour and weekly limits as Claude Code reported them, each
   with the time of the report or "not reported yet by Claude Code", the plan's limits when

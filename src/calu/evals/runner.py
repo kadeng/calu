@@ -106,6 +106,11 @@ async def review_batch(
 ) -> CheckOutcome:
     """Run a honesty-review case: the reviewer agent judges the case's files as one batch.
 
+    A file with an entry in the case's `base_files` is shown to the reviewer as a unified diff
+    against that entry, every other file as a whole. When the case has `base_files`, the
+    reviewer is told a fixed, made-up baseline commit id ("1a2b3c4d5e6f"), as a session tells
+    it the real one. Without `base_files`, the reviewer is told that there is no baseline.
+
     Args:
         case: A case whose `checker` is "honesty-review". Its `files` exist in `workspace`.
         instructions: The reviewer's prompt (`calu.defaults.instructions.review_instructions`).
@@ -685,9 +690,9 @@ class Report:
 
         This is what `--repeat` is for and what the rest of the report cannot show: the
         confusion matrix aggregates the runs away, and a case only appears by name when one of
-        its runs was a miss. A case whose three runs gave PASS, DENY, PASS is the most useful
-        row there is for deciding whether a checker needs a stronger model -- its instructions
-        are not the problem, because they did not change between the runs.
+        its runs was a miss. A case whose three runs gave PASS, DENY, PASS was decided
+        differently with the same instructions. Such cases help to decide whether a checker
+        needs a stronger model.
 
         Returns:
             {case name: the decisions it gave, in order}, for the cases that ran more than once

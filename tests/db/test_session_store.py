@@ -575,10 +575,10 @@ async def test_the_write_set_of_a_step_is_recorded(db_url: str) -> None:
 async def test_a_second_fold_after_a_resume_keeps_every_turn_exactly_once(db_url: str) -> None:
     """The invariant the checkers' context rests on, across two sessions.
 
-    A turn must reach the checkers either folded into the summary or verbatim, never both and
-    never neither: seeing it twice inflates the prompt the fold exists to bound (D63 measures
-    what that costs), and seeing it nowhere loses the conversation. The interesting case is the
-    second fold, because `load_previous` filters on `folded` of the session it loads from while
+    A turn must reach the checkers exactly once, folded into the summary or verbatim. Seeing
+    it twice inflates the prompt that the fold bounds (D63 measures the cost); seeing it
+    nowhere loses the conversation. The interesting case is the second fold, because
+    `load_previous` filters on `folded` of the session it loads from while
     `mark_folded` writes the flag on the session that folds.
     """
     store, conn = await session_store(db_url)
@@ -623,8 +623,8 @@ async def test_a_second_resume_keeps_the_summary_and_the_turns_between(db_url: s
 
     A resume saves only the turns it runs itself, and writes a `chat_summaries` row only when
     it folds. Reading one session therefore lost everything older as soon as a resume ended
-    without a fold: the newest session had turns and no summary, so the checkers started from
-    nothing and the turns recorded by the session before it were never read again.
+    without a fold. The newest session then had turns and no summary. The checkers started
+    from nothing, and the turns recorded by the session before it were never read again.
     """
     store, conn = await session_store(db_url)
     try:
@@ -709,9 +709,10 @@ async def test_a_replay_covers_the_conversation_but_keeps_one_session_of_steps(
 
 async def test_the_history_of_a_fork_holds_the_turns_it_inherited(db_url: str) -> None:
     """A client that attaches to a forked (or rewound) session shows the earlier turns from
-    `session.history`: the fork stores the turns it inherited under its own row (D36), with
-    the steps as the turn records hold them (tool, decision, summary) and the prompt uuids
-    that a client forks by. The `steps` rows are those the fork ran itself.
+    `session.history`. The fork stores the turns it inherited under its own row (D36).
+
+    Each turn keeps its steps as the turn records hold them (tool, decision, summary) and the
+    prompt uuids that a client forks by. The `steps` rows are those the fork ran itself.
     """
     store, conn = await session_store(db_url)
     try:

@@ -44,7 +44,7 @@ describe('calu', () => {
     expect(caluUpgradeArgv('/u/uv')).toEqual(['/u/uv', 'tool', 'upgrade', 'calu']);
   });
 
-  it('checks the install source', () => {
+  it('trims the install source, falls back to the default when blank, and refuses an option', () => {
     expect(installSource(undefined)).toBe(DEFAULT_INSTALL_SOURCE);
     expect(installSource('  ')).toBe(DEFAULT_INSTALL_SOURCE);
     expect(installSource(' /home/me/calu ')).toBe('/home/me/calu');

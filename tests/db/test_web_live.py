@@ -276,10 +276,11 @@ async def test_a_revoked_live_token_is_replaced_instead_of_reported_as_unreachab
 ) -> None:
     """The live view caches one token per session; a revoked one must be minted again.
 
-    `live_tokens` promised exactly this ("the next live view then mints a fresh one") and the
-    code did not do it: the cached token was kept for the life of the server, and the refusal
+    `live_tokens` promised exactly this ("the next live view then mints a fresh one"). The
+    code did not do it. It kept the cached token for the life of the server. The refusal then
     came back as "cannot reach <address>", which sends the reader after a networking problem
-    that is not there. The token can be revoked by hand (D30) or by the session ending (D108).
+    that does not exist. The token can be revoked by hand (D30) or by the session ending
+    (D108).
     """
     from calu import herd
 
@@ -367,7 +368,7 @@ async def gone_quiet(db_url: str) -> AsyncGenerator[tuple[Db, str, anyio.Event]]
 
 
 async def test_the_browser_is_told_when_the_session_hangs_up(db_url: str) -> None:
-    """wa4: the relay noticed a closed session only when the browser sent its next command.
+    """The relay used to notice a closed session only when the browser sent its next command.
 
     An operator who only watches sends nothing, so the page of a session whose process had
     ended kept saying "attached" and "running" for as long as it stayed open.

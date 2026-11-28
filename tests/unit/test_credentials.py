@@ -99,10 +99,15 @@ def test_default_path_uses_xdg(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_an_anthropic_key_serves_the_checkers_and_is_hidden_from_claude(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """D37: the checkers may use the Anthropic API while the main chat keeps the subscription."""
+    """D37: the checkers may use the Anthropic API while the main chat keeps the subscription.
+
+    `load_secrets` sets `ANTHROPIC_API_KEY` in the process environment. The test sets the
+    variable first, so that monkeypatch removes the loaded value again after the test.
+    """
     env_file = tmp_path / ".env"
     env_file.write_text("ANTHROPIC_API_KEY=sk-ant-for-the-checkers\n", encoding="utf-8")
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
 
     loaded = load_secrets(env_file)
     # The key is in calu's own environment, so a checker model can use it ...

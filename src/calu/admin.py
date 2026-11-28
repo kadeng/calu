@@ -129,8 +129,8 @@ async def add_project(
     Nothing is written into the project directory: a project is a row that `calu run --project`
     refers to.
 
-    With the "proxy" policy and no allow list of its own, the project is given
-    `DEFAULT_ALLOWED_DOMAINS` as its starter list (agent/records/PLAN.md D45). That is written into
+    With the "proxy" policy, the new project is given `DEFAULT_ALLOWED_DOMAINS` as its starter
+    list in `claude.sandbox.allowed_domains` (agent/records/PLAN.md D45). That is written into
     the project's settings rather than applied silently at load time, so `calu config get --project`
     shows it and `calu config add|remove claude.sandbox.allowed_domains` edits it. Without it
     "proxy" would mean the same as "none" -- an empty allow list reaches nothing -- and every
@@ -197,10 +197,10 @@ async def set_chat_summary(db: Db, session_id: str, summary: str) -> None:
     See agent/records/PLAN.md D40.
 
     The summary is the conversation the checkers read for everything older than the unfolded
-    turns, so correcting it changes what they are told — which is the point. The session picks
-    it up through the `config_changed` notification this function sends, and applies it at its
-    next check; the number of covered turns is left as it is, so the next folding continues
-    where the summarizer left off.
+    turns, so correcting it changes what they are told. The session picks it up through the
+    `config_changed` notification this function sends, and applies it at its next check. The
+    number of covered turns is left as it is, so the next folding continues where the
+    summarizer left off.
 
     Args:
         db: A connection with write access to `chat_summaries` (the owner).
@@ -708,7 +708,8 @@ async def set_checker(
 
     The database raises the definition's version on every change, so a `checker_runs` row
     records which version decided. A running session applies the new instructions at its next
-    check.
+    check. A call that gives nothing to change for an existing checker writes nothing and
+    returns the definition as it is.
 
     Args:
         db: A connection of the database owner.
@@ -726,8 +727,8 @@ async def set_checker(
         The definition after the change.
 
     Raises:
-        AdminError: If the checker does not exist and no route was given, if the route is
-            unknown, if the instructions are empty, or if nothing was given to change.
+        AdminError: If the checker does not exist and no route or no instructions were given,
+            if the route is unknown, or if the instructions are empty.
         psycopg.Error: On database errors.
     """
     if route is not None and route not in ROUTES:
@@ -780,7 +781,8 @@ async def rules(db: Db, project: str | None = None, rule_list: str | None = None
         rule_list: Only this list (one of `RULE_LISTS`), or None for all.
 
     Returns:
-        The rules, global first, then the project's, each by position and id.
+        The rules, global first, then the project's. Within each scope they are ordered by
+        list, then by position and id.
 
     Raises:
         AdminError: If the project or the list name is unknown.
@@ -916,11 +918,14 @@ RULE_SETS: dict[str, tuple[str, str]] = {
         " uploads, GitHub releases and merges",
     ),
 }
-"""Ready-made rule sets, none of them in the (empty) default lists: name -> (list, what it
-covers). A list of "all" means the set spans every list: `recommended` is the six files
-`calu/defaults/rules/<list>.txt`, the defaults before D179. Every other set is the file
-`calu/defaults/rules/sets/<name>.txt` for one list. Adding a set is one command, and afterwards
-its rules are ordinary rules that can be removed one by one (D143, D179)."""
+"""Ready-made rule sets: name -> (list, what it covers).
+
+The default rule lists are empty, and none of these sets is loaded unless a user adds it. A
+list of "all" means that the set spans every list. The set `recommended` is the six files
+`calu/defaults/rules/<list>.txt`; they were the default lists before D179. Every other set is
+the file `calu/defaults/rules/sets/<name>.txt` for one list. A user adds a set with one
+command. After that, its rules are ordinary rules that can be removed one by one (D143, D179).
+"""
 
 
 def rule_set(name: str) -> tuple[str, list[str], list[str]]:
@@ -1360,11 +1365,15 @@ async def use_template(
         The definition after the change.
 
     Raises:
-        AdminError: If no checker has that name, its route differs from the route of the
-            checker type the template is written for, both `append` and `replace` are given,
-            the stored text already contains the template (with `append`) or is it (without),
-            the stored text is the user's own
-            and neither option is given, or the definition changed since it was read.
+        AdminError: In any of these cases:
+
+            - No checker has that name.
+            - Its route differs from the route of the checker type the template is written for.
+            - Both `append` and `replace` are given.
+            - With `append`, the stored text already contains the template.
+            - Without `append`, the stored text is the template itself.
+            - The stored text is the user's own and neither option is given.
+            - The definition changed since it was read.
         psycopg.Error: On database errors.
     """
     if append and replace:

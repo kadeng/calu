@@ -157,7 +157,7 @@ class PluginFlowTest : HeavyPlatformTestCase() {
         assertEquals(null, nextRunner(listOf("calu"), self) { true })
     }
 
-    fun `test the conflict dialog has no default button and focuses Cancel`() {
+    fun `test the conflict dialog has no default button and starts with Cancel chosen`() {
         val side = ChoiceDialog(project, sideChoice("k_b.txt", "changed on the server, deleted here", mineExists = false, theirsExists = true))
         try {
             assertEquals(listOf("Keep Mine", "Take Theirs", "Cancel"), side.buttonActions.map { it.getValue(javax.swing.Action.NAME) })

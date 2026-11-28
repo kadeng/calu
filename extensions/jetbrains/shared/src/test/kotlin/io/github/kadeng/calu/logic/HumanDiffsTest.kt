@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/** The user's saves as recorded diffs (D253): params, gate, the settings offer. */
+/** The user's saves as recorded diffs (decision D253 in `agent/records/PLAN.md`): params, gate, the settings offer. */
 class HumanDiffsTest {
     @Test
     fun `a save is sent with its path relative to the project and line ends as newlines`() {

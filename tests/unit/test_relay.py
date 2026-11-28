@@ -314,7 +314,11 @@ def test_relay_addresses() -> None:
 
 
 async def test_the_full_screen_clients_relay_access_lists_and_starts(tmp_path: Path) -> None:
-    """`/running`, `/switch`, `/new` and `/fork` of the full-screen client through the relay."""
+    """`/running`, `/switch` and `/new` of the full-screen client through the relay.
+
+    `/switch` is checked through `switch_refusal` only, and `/new` through a request of kind
+    `new`. A request of kind `fork` is not tested here.
+    """
     from calu.session_requests import SessionRequest
     from calu.tui.adminaccess import AdminFailed, RelayAdmin
     from calu.tui.app import switch_refusal

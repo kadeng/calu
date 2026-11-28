@@ -57,7 +57,7 @@ def test_a_duration_is_minutes_hours_or_days(text: str | None, expected: timedel
     ],
 )
 def test_a_duration_outside_one_minute_to_seven_days_is_refused(text: str, why: str) -> None:
-    """The owner: never longer than 7 days, nothing smaller than a minute."""
+    """The owner requires a duration of at most 7 days and at least one minute."""
     with pytest.raises(RuleError, match=why):
         parse_duration(text)
 
@@ -140,7 +140,8 @@ def read(path: str) -> Step:
 
 
 def test_each_built_in_rule_asks_until_its_setting_is_switched_off() -> None:
-    """`built_in_rules.*`: off, the step goes to the lists and the checkers like any other."""
+    """With a built-in rule switched off (`built_in_rules.*`), its steps go to the lists and
+    the checkers like any other step."""
     steps = {
         "calu_commands": [bash("calu resolve 4 allow"), bash("uv run calu doctor")],
         "calu_container": [bash("docker exec calu-db-postgres-1 psql")],

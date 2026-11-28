@@ -259,7 +259,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
 /**
  * Build the webview HTML with a strict Content Security Policy: no inline code, scripts only
- * with a per-load nonce, resources only from the extension's `media/` and `dist/` folders.
+ * with a per-load nonce. The policy allows `data:` images and media, and resources from the
+ * webview origin, which `localResourceRoots` limits to the extension's `media/` and `dist/`
+ * folders.
  *
  * @param webview The webview (for `asWebviewUri` and `cspSource`).
  * @param extensionUri Root of the extension.

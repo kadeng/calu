@@ -224,7 +224,8 @@ async def test_watch_survives_a_broken_configuration(
 
 
 async def test_a_project_name_that_no_row_has_is_an_error(db_url: str) -> None:
-    """ga3: falling back to the global settings would silently drop the project's rules."""
+    """A project name that no row has must be an error: falling back to the global settings
+    would silently drop the project's rules."""
     from calu.store import UnknownProject
 
     conn = await prepared(db_url)
@@ -266,7 +267,7 @@ class Reloads:
 async def test_a_change_without_a_notification_is_found_by_the_periodic_reload(
     db_url: str,
 ) -> None:
-    """sd2: a lost notification must not leave a session on the old rules for the night."""
+    """A lost notification must not leave a session on the old rules until the next restart."""
     from calu.db import Dirty
 
     conn = await prepared(db_url)

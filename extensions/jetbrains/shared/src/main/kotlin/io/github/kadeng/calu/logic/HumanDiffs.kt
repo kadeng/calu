@@ -11,9 +11,10 @@
  *
  * The session decides everything else (the setting, git-tracked files only, the file layout).
  *
- * The base is not the file on disk at the save: when Claude wrote the file while the buffer had
- * unsaved edits and the user kept them ("Keep Memory Changes", then a save that overwrites
- * Claude's version), the diff shows only the user's own edits (the owner's decision, D253).
+ * The diff base is the text the buffer started from, not the file on disk at the save (D253).
+ * Claude may write the file while the buffer has unsaved edits, and the user may keep them
+ * ("Keep Memory Changes") and then save over Claude's version. The diff then shows only the
+ * user's own edits.
  */
 package io.github.kadeng.calu.logic
 

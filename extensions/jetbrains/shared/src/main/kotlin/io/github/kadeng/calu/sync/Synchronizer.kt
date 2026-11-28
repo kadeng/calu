@@ -12,8 +12,11 @@
  *                                                ├─ Hold, offline → the pending queue (persisted)
  *                                                └─ Skip, a refusal of the bridge → a visible note
  *
- * Every public function takes one lock, so decisions never interleave; a request the bridge
- * refuses because the remote file moved (-32031) is decided again with the hash it reports.
+ * Every public function that decides or writes takes one lock, so decisions never interleave.
+ * The queries `pathsBelow`, `isKnown` and `conflictOf` only read and take no lock;
+ * `localRenamed` holds the lock for its rename and releases it before it calls `localChanged`.
+ * A request the bridge refuses because the remote file moved (-32031) is decided again with
+ * the hash it reports.
  */
 package io.github.kadeng.calu.sync
 
@@ -57,7 +60,9 @@ enum class SyncPhase {
  * @property phase where the synchronisation stands.
  * @property uploading files still to upload in the running batch.
  * @property downloading files still to download in the running batch.
- * @property held paths whose local change waits for the agent's turn to end.
+ * @property held paths whose local change waits in the queue for the agent's turn to end:
+ *   the paths the agent edits, and the paths the bridge refused during the turn (-32035).
+ *   Empty while offline, when the queue waits for the connection instead.
  * @property conflicts paths that need the user's decision.
  * @property queued number of queued local changes (held ones included).
  * @property notes paths that are not synchronised, each with the reason.
@@ -88,10 +93,18 @@ private fun count(n: Int, one: String, many: String): String = "$n ${if (n == 1)
  * The one-line text of a status, for the status bar. No side effects.
  *
  * @param s the status.
- * @return "" for [SyncPhase.OFF]; otherwise a line that starts with "calu sync: ": the first that
- *   applies of: not available, connecting, offline (with the queued changes), waiting for the
- *   user, failed, a conflict (the first path, and how many more), files uploading or
- *   downloading, files held until the turn ends, "in sync" (with the number of skipped paths).
+ * @return "" for [SyncPhase.OFF]. Otherwise a line that starts with "calu sync: " and ends
+ *   with the first of these states that applies:
+ *   - not available
+ *   - connecting
+ *   - offline (with the number of queued changes)
+ *   - waiting for the user
+ *   - failed
+ *   - a conflict (the first path, and how many more)
+ *   - files uploading or downloading
+ *   - comparing
+ *   - files held until the turn ends
+ *   - in sync (with the number of skipped paths)
  */
 fun syncStatusText(s: SyncStatus): String {
     val body = when {
@@ -142,7 +155,9 @@ class ConflictContents(val base: ByteArray?, val local: ByteArray?, val remote: 
  * @property uploads paths to copy to the server.
  * @property deleteLocal paths to delete locally.
  * @property deleteRemote paths to delete on the server.
- * @property conflicts paths that differ on both sides and are left alone until the user decides.
+ * @property conflicts paths that differ on both sides. A path whose two changes merge cleanly is
+ *   merged and written to both sides when the plan is carried out. A path whose changes do not
+ *   merge is left alone until the user decides.
  * @property same number of paths that are equal on both sides.
  * @property localFiles number of files in the local copy before the plan.
  */
@@ -163,8 +178,9 @@ data class PlanSummary(
     /**
      * Describe the plan for the user. No side effects.
      *
-     * @return several lines: one per kind of change that occurs, with up to eight paths each,
-     *   and a closing line that says that conflicting files are not overwritten.
+     * @return several lines: one per kind of change that occurs, with up to eight paths each.
+     *   The last line, when there are paths that differ on both sides, says that they are merged
+     *   where the changes allow it and that the user decides the others in the merge dialog.
      */
     fun text(): String {
         val out = StringBuilder()
@@ -183,7 +199,7 @@ data class PlanSummary(
         part("Upload", uploads)
         part("Delete here", deleteLocal)
         part("Delete on the server", deleteRemote)
-        part("Differ on both sides (left alone; you decide each in the merge dialog)", conflicts)
+        part("Differ on both sides (merged where the changes allow it; you decide the others in the merge dialog)", conflicts)
         return out.toString()
     }
 }
@@ -301,9 +317,15 @@ class Synchronizer(
     fun conflictOf(path: String): SyncConflict? = synchronized(conflicts) { conflicts[path] }
 
     /**
-     * Start synchronising over a bridge that just started: check its capability, ask its paths,
-     * subscribe, replay the queue, and compare both sides unless the subscription continued
-     * without a gap. Never throws but for a cancellation; a failure is in [status].
+     * Start synchronising over a bridge that just started. The steps run in this order:
+     * 1. Check the bridge's capability.
+     * 2. Ask its paths and subscribe.
+     * 3. Replay the queue.
+     * 4. Compare both sides, unless the subscription continued without a gap.
+     *
+     * A cancellation is passed on. A lost connection or a failed request is in [status]. Other
+     * exceptions are not caught here, for example the `IllegalArgumentException` of a path or
+     * root that the bridge's wire form refuses.
      *
      * @param capabilities the `capabilities` of `ide.initialize`.
      * @return true if the synchronisation is running afterwards.
@@ -401,10 +423,19 @@ class Synchronizer(
                 publish(phase, message)
                 return@guarded
             }
-            batch(mine) { path ->
-                // The remote file is assumed to be the base; the bridge checks that (base_sha256).
-                val base = state.base(path)
-                reconcile(path, Hint(base?.let { FileEntry(path, 0, FileEntry.DEFAULT_MODE, it) }), false, 0)
+            try {
+                batch(mine) { path ->
+                    // The remote file is assumed to be the base; the bridge checks that (base_sha256).
+                    val base = state.base(path)
+                    reconcile(path, Hint(base?.let { FileEntry(path, 0, FileEntry.DEFAULT_MODE, it) }), false, 0)
+                }
+            } catch (error: FsException) {
+                // The connection broke in the middle of the batch: the paths not yet done wait in the queue.
+                if (error.failure is FsFailure.Offline) {
+                    for (path in mine) enqueueIfChanged(path)
+                    store.saveQueue(queue)
+                }
+                throw error
             }
         }
     }
@@ -520,8 +551,10 @@ class Synchronizer(
     }
 
     /**
-     * Run a block and turn its failures into a status: a lost connection into OFFLINE, anything
-     * else into FAILED with the message. A cancellation saves the state and is passed on.
+     * Run a block and turn its failures into a status: a lost connection into OFFLINE, any
+     * other request failure ([FsException]) and any local file error ([IOException]) into FAILED
+     * with the message. A cancellation saves the state and is passed on. Every other exception is
+     * passed on unchanged, and the status stays as it was.
      *
      * @param block the work.
      */
@@ -585,6 +618,8 @@ class Synchronizer(
     private fun publish(next: SyncPhase, text: String?) {
         phase = next
         message = text
+        // Every queued path counts as held while online: the turn's own holds and the bridge's
+        // refusals during a turn (-32035) both wait in the queue.
         val heldNow = if (online) queue.ops().map { it.path } else emptyList()
         statusFlow.value = SyncStatus(next, pendingUp, pendingDown, heldNow, synchronized(conflicts) { conflicts.keys.toList() }, queue.size, HashMap(notes), text)
     }
@@ -909,8 +944,13 @@ class Synchronizer(
     }
 
     /**
-     * Handle the failures of a request that end the decision of a path without a new decision:
-     * held (queued), too large, not regular, refused (noted), I/O and upload errors (noted and queued).
+     * Handle the failures that end a path's request without a new decision. Each case is
+     * handled by one of these two ways:
+     * - Queued: `Held`. The path waits for the end of the agent's turn.
+     * - Noted: every other case handled here (too large, not regular, refused, target exists,
+     *   I/O error, failed upload, other error). The path is shown in the list of paths that are
+     *   not synchronised and is not queued. The next full comparison or "Sync now" decides it
+     *   again.
      *
      * @param path relative path.
      * @param error the failure.

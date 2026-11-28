@@ -274,7 +274,8 @@ def build_graph(
 ) -> HonestyGraph:
     """Build the honesty graph from the honesty state, without the callers of dishonest units.
 
-    Side effects: reads the unreviewed and the marked files of the project.
+    Side effects: reads the files of the graph's units: the unreviewed files, the marked files,
+    the files with units to judge again, and the files of the units whose change caused that.
 
     Args:
         root: The project directory.
@@ -470,7 +471,8 @@ async def add_neighbours(
     - the units that use it, from the reference index: as `caller` for a dishonest unit,
       as `related` for a changed one.
 
-    A unit that is in the graph already keeps its state and only gets the edge. So two
+    A unit that is in the graph already keeps its state. It only gets the edge and, in its
+    hover text, a line that names the unit it is used by or uses. So two
     changed units of which one uses the other are connected, too.
 
     The index should be a cheap one (the word search, a code navigator), because the view
@@ -480,7 +482,7 @@ async def add_neighbours(
     that is itself dishonest, changed or to judge again is always connected. The unit's
     `hidden_callers` says how many clean callers were left out.
 
-    Two more limits, each of which sets `partial` on the result:
+    The function has two more limits. Each one sets `partial` on the result:
 
     - The index is asked for at most `budget_s` seconds in total, dishonest units first. The
       units after that get no callers.

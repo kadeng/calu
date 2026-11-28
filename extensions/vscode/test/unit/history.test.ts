@@ -21,7 +21,10 @@ function covered(uuids: string[] = [], inputs: string[] = [], toolUseIds: string
   return { uuids: new Set(uuids), inputs: new Set(inputs), toolUseIds: new Set(toolUseIds) };
 }
 
-/** Three recorded turns: two inherited by a fork (their steps are in the turn records only), one of the session itself. */
+/**
+ * The fixture has three recorded turns. Turns 1 and 2 are inherited by a fork; their steps are
+ * only in the turn records. Turn 3 belongs to the session itself.
+ */
 const HISTORY = {
   calu_session_id: 's2',
   claude_session_id: 'c2',

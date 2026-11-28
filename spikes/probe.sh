@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 # Probe for the isolation spikes (Q1a, Q1b). Run as a tool command; writes its findings to
-# stdout. It writes nothing outside the current directory except one marker file attempt
-# (~/.claude/calu-spike-marker, removed again if it was created).
+# stdout. It changes no file content, but it has these effects:
+#   - It opens for append (writing nothing) the stdin of every Claude process it can see
+#     (/proc/<pid>/fd/0), ~/.claude/settings.json, ~/.claude.json, .claude/settings.json,
+#     .claude/settings.local.json and .git/config, to learn whether they are writable.
+#   - It creates and removes ~/.claude/calu-spike-marker, ./probe-write-test and
+#     .git/hooks/probe-test.
+#   - It reads the first byte of ~/.claude/.credentials.json, ~/.ssh/id_ed25519,
+#     ~/.ssh/id_rsa and /tmp/calu-spike-secret. The content is never printed.
+#   - It starts a detached `sleep 177` that outlives the command, so that the spike script
+#     can look for it after claude exits.
+#   - It opens a TCP connection to 1.1.1.1:443 and closes it at once.
 echo "== identity"
 echo "uid=$(id -u) pid=$$ ppid=$PPID"
 echo "pid_ns=$(readlink /proc/self/ns/pid) mnt_ns=$(readlink /proc/self/ns/mnt)"

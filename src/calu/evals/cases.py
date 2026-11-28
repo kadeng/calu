@@ -106,8 +106,8 @@ class EvalCase(BaseModel):
     `calu.config.SandboxConfig.outside_reason`); "" for a call in the sandbox."""
     expect_no_marks: bool = False
     """True if a good checker records **no** dishonest code for this step (agent/records/PLAN.md
-    D94). The label of a mark a person overruled: somebody looked at the spot and said it was
-    honest, so a checker that marks it again is wrong in the way that costs the user steps."""
+    D94). Such a case stands for a mark that a person overruled. Somebody looked at the spot and
+    called it honest, so a checker that marks it again costs the user steps."""
     want_comment: bool = False
     """True if a good checker says something in `comment`: a remark worth having, not an
     objection. For a subagent case it is the ANNOTATE verdict -- a triage note for Claude
@@ -340,12 +340,12 @@ def builtin_cases() -> list[EvalCase]:
 
 
 def cases_to_yaml(cases: Sequence[EvalCase]) -> str:
-    r"""Render cases in the YAML form that `load_case_file` reads back (agent/records/PLAN.md D55).
+    r"""Render cases in the YAML form that `load_cases` reads back (agent/records/PLAN.md D55).
 
     This is how the labels a herd produced leave the database: `calu evals --export` writes
     them, a person reads the file, commits what is worth keeping, and later runs it as a fixed
     set with `calu evals <file>`. `source` is left out, because it describes where a case came
-    from rather than what it is, and `load_case_file` sets it to the file name.
+    from rather than what it is, and `load_cases` sets it to the file name.
 
     Args:
         cases: The cases to write, in the order they should appear.
@@ -405,15 +405,16 @@ def case_line(case: EvalCase) -> str:
 async def cases_from_escalations(db: Db, limit: int = 500) -> list[EvalCase]:
     """Turn the resolved escalations of the database into cases.
 
-    An escalation counts when a checker **ran** on the step, whatever it decided. Two kinds
-    therefore arrive:
+    An escalation counts when a checker **ran** on the step, whatever it decided. The cases
+    are therefore of two kinds:
 
-    * the checker escalated and a human decided -- how good its caution was;
-    * the checker approved the step and a human still had to decide it, because one of the
-      auto-escalation categories was on (agent/records/PLAN.md D42). These are the valuable ones: a
-      human verdict on a step the checkers let through is the only way a **false negative** gets a
-      label, and a checker that approved something a human then denied is scored here as the
-      critical miss it is.
+    * The checker escalated and a human decided. Such a case measures how good the checker's
+      caution was.
+    * The checker approved the step and a human still had to decide it, because one of the
+      auto-escalation categories was on (agent/records/PLAN.md D42). These are the valuable
+      ones. A human verdict on a step the checkers let through is the only label for a
+      **false negative**. A checker that approved a step a human then denied is scored as a
+      critical miss.
 
     An escalation of the rules or of the tool policy is left out, because no checker ran on
     that step (the rule decided before it) and the case would say nothing about a checker.

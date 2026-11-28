@@ -1,10 +1,10 @@
 """Starting the local PostgreSQL container (`calu db up`), without Docker.
 
 `calu db up` is how someone with nothing set up gets a database (REQUIREMENTS 18), and the
-calls it makes were untested, because testing them looked like it needed Docker. It does not: a
-stub `docker` on PATH records what it was asked to do, which is what matters here -- the
-compose file, the project name, the port and the password reaching the container as environment
-variables, and a failure of the command becoming a `DockerError` rather than a traceback.
+calls it makes were untested, because testing them looked like it needed Docker. It does not.
+A stub `docker` on PATH records what calu asks of it. The recorded calls show the compose file,
+the project name, the port and the password, which reaches the container as an environment
+variable. A failing command must become a `DockerError`, not a traceback.
 """
 
 import json
@@ -81,7 +81,7 @@ def composed(log: Path) -> list[dict]:
 def test_a_start_never_replaces_a_database_that_keeps_its_files_elsewhere(
     docker: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """What happened on 2026-11-13: a setup as root replaced the user's running database.
+    """On 2026-11-13 a setup as root replaced the user's running database. A start must not.
 
     Uses a stub `docker` that records its calls in `tmp_path`; nothing is started.
     """
@@ -96,8 +96,15 @@ def test_a_start_never_replaces_a_database_that_keeps_its_files_elsewhere(
     assert len([call for call in composed(docker) if "up" in call["args"]]) == 2
 
 
-def test_the_first_start_needs_a_password_and_passes_it_to_the_container(docker: Path) -> None:
-    """Without a volume the password makes the owner, so it must not be silently skipped."""
+def test_a_first_start_without_a_password_is_refused_before_any_compose_call(
+    docker: Path,
+) -> None:
+    """Without a volume the password makes the owner, so it must not be silently skipped.
+
+    The start raises `ValueError`, and the only call to the stub `docker` is `volume inspect`.
+    Test `test_up_starts_the_compose_project_and_waits` checks the password's way into the
+    container.
+    """
     # The stub answers "no such volume" (exit 1) for the inspect, so this is a first start.
     os.environ["STUB_EXIT"] = "1"
     try:
@@ -341,7 +348,8 @@ def test_the_restart_policy_follows_the_stop_with_server_setting(
 ) -> None:
     """D269: a database that stops with the server is left stopped after a restart of the
     machine (`--restart=no`); one that keeps running comes back (`unless-stopped`). Only the
-    compose project's containers are updated, and without one nothing is called."""
+    compose project's containers are updated, and without a container no `docker update` is
+    called."""
     import subprocess
 
     calls: list[list[str]] = []
@@ -358,11 +366,16 @@ def test_the_restart_policy_follows_the_stop_with_server_setting(
     assert calls[-1] == ["docker", "update", "--restart=unless-stopped", "c1", "c2"]
 
     calls.clear()
-    monkeypatch.setattr(
-        local, "_run", lambda args, env=None: subprocess.CompletedProcess(args, 0, "", "")
-    )
+
+    def run_without_containers(
+        args: list[str], env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(local, "_run", run_without_containers)
     local.set_restart(True)
-    assert calls == []
+    assert [call for call in calls if call[:2] == ["docker", "update"]] == []
 
 
 def test_the_stored_record_keeps_the_stop_with_server_setting() -> None:

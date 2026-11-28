@@ -199,7 +199,8 @@ internal fun ensureTool(state: ViewState, id: String, agentKey: String, name: St
  * The subagent's list key is the `tool_use_id` of the Agent/Task call. If the list already
  * starts with a launch item, it is replaced (keeping its id); otherwise the item is inserted
  * before any events of the subagent that arrived earlier. The prompt is stored in full. A
- * result already stored for the subagent is kept.
+ * result already stored for the subagent is kept. The subagent's tab is created if it does
+ * not exist yet.
  *
  * @param state The current state (not modified).
  * @param toolUseId The id of the Agent/Task tool call.
@@ -342,7 +343,8 @@ internal fun setPending(state: ViewState, key: String, pending: Boolean, answer:
 }
 
 /**
- * Drop the transcript: messages, tool calls, escalations, subagents, queue and side questions.
+ * Drop the transcript: messages, tool calls, escalations, subagents, agent tabs, queue, side
+ * questions and the focus, and set the turn counter back to 0.
  *
  * @param state The current state (not modified).
  * @return The state with empty lists; bridge, link, session, sessions, hints and settings-like

@@ -1,11 +1,14 @@
 """Trusted commits and trusted file contents in the database, and `calu honesty trust ...`.
 
 The tables of migration 0029 hold what was certified as honest, each row with the source of
-its trust (user > review > check). These tests check what the functions allow (a session
-proven by its key adds any source, and withdraws a file content it or another session
-verified; the user login without a session adds the source "user" only, removes and prunes;
-both run as `calu_admin`, agent/records/PLAN.md D265), that a stronger source replaces a weaker
-one and never the reverse, what the store returns, and what the command line prints.
+its trust (user > review > check). These tests check four things.
+
+- What a session proven by its key may do: add any source, and withdraw a file content that it
+  or another session verified.
+- What the user login without a session may do: add the source "user" only, remove and prune.
+  Both run as `calu_admin` (agent/records/PLAN.md D265).
+- That a stronger source replaces a weaker one and never the reverse.
+- What the store returns and what the command line prints.
 """
 
 import hashlib
@@ -109,8 +112,8 @@ async def test_a_session_certifies_any_source_and_the_user_login_alone_only_user
     db_url: str,
 ) -> None:
     """Migration 0044: without a proven session the user login certifies with "user" only; a
-    proven session also with "check" and "review". What is recorded has the shape of an id,
-    a method and a name."""
+    proven session also with "check" and "review". Each recorded row has a valid commit or
+    content id, a method and a non-empty name."""
     user_url = await user_login(db_url)
     unproven = await connect(user_url)
     proven = await connect(user_url)
@@ -544,7 +547,9 @@ async def test_trust_trusted_and_untrust_on_the_command_line(project, capsys) ->
 
 
 async def test_what_cannot_be_resolved_is_not_certified(project, capsys) -> None:
-    """An unknown name, a missing name and a name that is an option record nothing."""
+    """Each of these calls fails with exit status 1 and a one-line error, and certifies nothing:
+    an unknown name, no name, a name together with `--file`, a missing file, and `untrust` of
+    an id that is not recorded."""
     _repo, user_url = project
     for argv in (
         ["honesty", "trust", "no-such-branch"],
@@ -595,7 +600,6 @@ async def test_prune_on_the_command_line_and_the_source_in_the_listing(project, 
     """`calu honesty prune --days N` reports what it removed; `trusted` names each source."""
     repo, user_url = project
     first = GitCommit(git(repo, "rev-parse", "HEAD"), git(repo, "rev-parse", "HEAD^{tree}"))
-    owner_url = user_url  # the listing below reads with the user login
     assert await run(["honesty", "trust", "main"]) == 0
     assert await run(["honesty", "trust", "--file", "a.txt"]) == 0
     capsys.readouterr()
@@ -614,7 +618,7 @@ async def test_prune_on_the_command_line_and_the_source_in_the_listing(project, 
     assert "  user   " in commit_line and "kai" in commit_line
     file_line = next(line for line in said.splitlines() if "a.txt" in line)
     assert "  user   " in file_line
-    conn = await connect(owner_url)
+    conn = await connect(user_url)  # the listing reads with the user login
     try:
         assert len(await trust.trusted_commits(Db(conn))) == 1
     finally:

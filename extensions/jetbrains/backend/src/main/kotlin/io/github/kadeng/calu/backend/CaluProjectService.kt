@@ -142,6 +142,10 @@ class CaluProjectService(private val project: Project, private val scope: Corout
      * Store new editor-side settings; if they change how calu is reached, stop the bridge and
      * start one with the new settings. The chat's transcript starts empty then.
      *
+     * The settings that the person saves count as approved for launching calu in this IDE: the
+     * function records the approval in `calu-approvals.xml`, so calu starts with them without the
+     * approval dialog.
+     *
      * @param dto The new settings.
      */
     fun applySettings(dto: PluginSettingsDto) {
@@ -206,6 +210,11 @@ class CaluProjectService(private val project: Project, private val scope: Corout
 
     /**
      * Create supervisor and controller from the stored settings.
+     *
+     * Side effects on the frontend's state: when the settings are not approved, it posts an
+     * approval request (`approvalFlow`) and the wiring gets a launcher that refuses to start.
+     * The password prompt of the wiring posts its requests to the frontend (`passwordFlow`) when
+     * the bridge asks for a password.
      *
      * @return The new wiring; nothing is started yet.
      */

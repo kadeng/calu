@@ -151,7 +151,7 @@ async def test_unlock_holds_the_user_login_after_the_right_password(tmp_path: Pa
 @pytest.mark.parametrize(
     ("entries", "has_owner"), [(("admin", "session"), True), (("operator",), False)]
 )
-async def test_only_the_logins_of_an_earlier_calu_is_no_database_with_what_to_run(
+async def test_the_logins_of_an_earlier_calu_give_the_no_database_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entries: tuple[str, ...], has_owner: bool
 ):
     """D265 (5): the old entries are not used; the message says how to convert or remove
@@ -233,7 +233,10 @@ async def nothing(db: Any) -> None:
 async def test_a_stored_login_the_database_refuses_is_called_outdated(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """The entry opened, so the refusal is no wrong password: `calu.logins.outdated`."""
+    """The stored entry decrypted, so the database's refusal means the login is outdated.
+
+    The refusal does not mean that the password was wrong (`calu.logins.outdated`).
+    """
     tried = refusing_database(monkeypatch)
     access = Access(store_with(tmp_path, user=None))
     for run in (access.read(nothing), access.change(nothing)):

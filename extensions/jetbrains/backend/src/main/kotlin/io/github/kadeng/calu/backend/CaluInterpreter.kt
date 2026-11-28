@@ -83,14 +83,17 @@ interface SshInterpreterSetup {
      * with the path mapping local folder <-> remote directory and automatic upload off, and the
      * Python SDK on that server; the project and its modules use it from now on.
      *
-     * Call it outside the EDT; it takes the write actions it needs.
+     * It can be called from any coroutine: the implementation switches to the EDT itself and
+     * takes the write actions it needs.
      *
      * @param project The project.
      * @param target The server and the folders.
      * @param python The absolute path of the interpreter on the server, as the user confirmed it.
      * @param version The interpreter's version ("3.12.12"), or `null` if unknown.
      * @return The name of the new (or reused) interpreter.
-     * @throws Exception if the IDE refused a step; nothing half-made is left registered.
+     * @throws Exception if the IDE refused a step. A deployment server that this call created is
+     *   removed again. An SSH configuration that this call created and path mappings it changed
+     *   on an existing deployment server stay.
      */
     suspend fun create(project: Project, target: SshInterpreterTarget, python: String, version: String?): String
 

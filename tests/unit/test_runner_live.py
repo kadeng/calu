@@ -8,6 +8,11 @@ that the real stream lets that rule recognise all three, and nothing else.
 
 Needs a logged-in `claude`, `bwrap` and `socat` (the sandbox is on, as in a real session). The
 checkers are the rule-based fakes, so no checker API key is needed.
+
+The test makes real model calls through `claude`, which are billed to the account that is
+logged in, and runs a Bash command that sleeps for 12 seconds. It is marked `live`, so only
+`-m live` selects it. It stays in `tests/unit/` although the layer is described there as
+running without `claude`; the marker keeps it out of the unit run.
 """
 
 import shutil
@@ -57,7 +62,9 @@ async def test_only_what_a_human_sent_is_recorded_as_user_input(tmp_path: Path) 
     )
 
     async def note_after_command(step: object) -> str:
-        """Stand for a write-set review that has a remark: calu's own text for the agent.
+        """Stand in for a write-set review that has a remark.
+
+        It returns calu's own note for the agent.
 
         Args:
             step: The command that ran (not read).

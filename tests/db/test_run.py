@@ -96,7 +96,15 @@ async def prepare(db_url: str, workspace: Path) -> str:
 
 
 async def resolve_as_operator(db_url: str, workspace: Path) -> None:
-    """Wait for the open escalation of the run and allow it, as `calu resolve` would."""
+    """Wait for the open escalation of the run and allow it, as `calu resolve` does in the database.
+
+    It calls the SQL function `calu_resolve_escalation` on an owner connection; it does not run
+    the command.
+
+    Args:
+        db_url: The test database.
+        workspace: Not used; kept so that callers pass the same arguments as before.
+    """
     owner = await connect(db_url)
     try:
         with anyio.fail_after(20):
@@ -313,7 +321,7 @@ def one_turn(command: str) -> FakeScript:
         command: What the fake Claude runs in that turn.
 
     Returns:
-        The script; one run of `calu run --print` consumes one turn.
+        The script; one run of `calu run --batch -p ...` consumes one turn.
     """
     return FakeScript(
         turns=[
@@ -330,9 +338,9 @@ async def test_the_checkers_still_see_the_conversation_after_two_resumes(
 ) -> None:
     """D65 end to end: four runs of one conversation, the last reading the second's fold.
 
-    The shape that used to lose everything older is a resume that folds nothing: the third run
-    leaves a session with turns and no summary behind, and the fourth run read that session
-    alone -- so the summary came back empty and the turns before it were never read again.
+    The failure used to come from a resume that folds nothing. The third run then left a
+    session with turns and no summary behind. The fourth run read only that session, so the
+    summary came back empty and the earlier turns were never read again.
     """
     session_url = await prepare(db_url, tmp_path)
 
@@ -566,8 +574,9 @@ async def test_a_session_whose_login_is_refused_for_good_stops_and_says_why(
 ) -> None:
     """An unattended run must neither hang for ever nor end silently.
 
-    The session waits for an operator. `calu setup --set-password` runs, which replaces the
-    password of the user login, and then the session's connections are lost. No waiting
+    The session waits for an operator. The test calls `set_user_password`, which is what
+    `calu setup --set-password` does and replaces the password of the user login, and then
+    the session's connections are lost. No waiting
     brings that login back, so the run ends with exit code 1 and names the cause; the step it
     was waiting for never ran.
     """
@@ -841,7 +850,7 @@ async def test_a_clients_shutdown_ends_an_interactive_run(
     db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`calu run` in a terminal (interactive, the default) ends on a client's `shutdown`
-    although nothing is typed in that terminal (test plan M15: it kept waiting for a line)."""
+    although nothing is typed in that terminal. It used to keep waiting for a line of input."""
     import os
 
     session_url = await prepare(db_url, tmp_path)

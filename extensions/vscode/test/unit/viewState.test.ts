@@ -447,7 +447,7 @@ describe('the honesty checker result of check.result', () => {
     expect(parseHonestyResult({ honesty: 'x', honesty_escalation: 3 })).toBeNull();
   });
 
-  it('gets a row chip only for a dishonest file or a request for a person, never PASS', () => {
+  it('gets a row chip only for a dishonest file or a request for a person', () => {
     const allHonest = parseHonestyResult({ honesty: [{ path: 'a.py', verdict: 'HONEST' }] });
     expect(honestyRowChip(allHonest ?? undefined)).toBeNull();
     expect(honestyRowChip(undefined)).toBeNull();

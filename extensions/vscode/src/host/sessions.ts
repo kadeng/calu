@@ -193,8 +193,8 @@ export class Sessions {
 
   /**
    * Start a new session in the workspace at once, without asking anything: the first message is
-   * typed into the chat's input like every other one, and a name is given with "Rename session"
-   * (the owner, 2026-11-18: "everyone should know how to find the chat input box").
+   * typed into the chat's input like every other one, and a name is given later with "Rename
+   * session". This way the user learns where the chat input is.
    *
    * @returns True if the session started and is attached; false if the start failed (the
    *   failure was shown).

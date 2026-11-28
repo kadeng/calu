@@ -115,7 +115,9 @@ export interface Launched {
   write(line: string): void;
   /**
    * End the connection after `ide.shutdown` was answered or timed out: close the sending side
-   * and wait until the bridge is gone, ending it by force after `STOP_TIMEOUT_MS`.
+   * and wait until the bridge is gone, ending it by force after `STOP_TIMEOUT_MS`. A launcher
+   * over a socket cannot end the bridge: it closes the connection and waits for the close, at
+   * most `STOP_TIMEOUT_MS`.
    *
    * @returns Resolves once the bridge is gone (never rejects).
    */
@@ -234,10 +236,13 @@ export class BridgeCore {
   ) {}
 
   /**
-   * True if a protected credential exists and the bridge holds no login for it: after a
-   * cancelled password prompt, after a refused stored password, after error -32010 without a
-   * held login, or as last reported through `noteStatusLocked`. False after a successful unlock
-   * and while no bridge runs.
+   * True if a protected credential exists and the bridge holds no login for it. This is the
+   * case:
+   *   - after a cancelled password prompt,
+   *   - after a refused stored password,
+   *   - after error -32010 without a held login,
+   *   - as last reported through `noteStatusLocked`.
+   * False after a successful unlock and while no bridge runs.
    */
   get locked(): boolean {
     return this.running?.unlock.locked ?? false;
@@ -304,10 +309,13 @@ export class BridgeCore {
    * @param interactive False for requests the user did not ask for (start-up, timers): no
    *   password prompt is shown and error -32010 is passed to the caller.
    * @returns The response's `result`.
-   * @throws (rejects) Error if the bridge is not running; RpcRequestError for an error answer,
-   *   also -32010 if no password unlocked the bridge: its message is then `notDoneText`'s (the
-   *   user cancelled, before or after the request started; every password of the round was
-   *   refused) or else the bridge's own; RpcClosedError if the bridge ends before answering.
+   * @throws (rejects)
+   *   - Error if the bridge is not running.
+   *   - RpcRequestError with the bridge's error for any error answer.
+   *   - RpcRequestError -32010 if no password unlocked the bridge. Its message is
+   *     `notDoneText`'s if the user cancelled (before or after the request started) or if every
+   *     password of the round was refused; otherwise it is the bridge's own.
+   *   - RpcClosedError if the bridge ends before answering.
    */
   async request<M extends BridgeMethod>(
     method: M,

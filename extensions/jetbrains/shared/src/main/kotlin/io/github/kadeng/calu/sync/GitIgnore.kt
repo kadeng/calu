@@ -127,8 +127,13 @@ class GitIgnore {
      * Translate a glob of a `.gitignore` line into a regular expression.
      *
      * @param glob the pattern without `!`, without the leading and the trailing `/`.
-     * @return the expression: `**&#47;` any directories (also none), `&#47;**` everything inside,
-     *   `*` and `?` within one segment, `[...]` a character class, `\x` the character x.
+     * @return the expression:
+     *   - a double star followed by a slash matches any directories, also none;
+     *   - a slash followed by a double star at the end matches everything inside;
+     *   - `*` and `?` match within one segment;
+     *   - `[...]` is a character class, and `\x` is the character x.
+     *   The patterns are written out in words because a star followed by a slash would end
+     *   this comment.
      */
     private fun globToRegex(glob: String): String {
         val out = StringBuilder()

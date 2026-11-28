@@ -1,5 +1,5 @@
 /**
- * What the chat makes of a lost connection to the session (pure, no `vscode` import).
+ * How the chat reads a lost connection to the session. Pure; no `vscode` import.
  *
  *     ide.link lost {cause}
  *       cause "unreachable" ──► ide.status ──► serverCheck
@@ -42,7 +42,7 @@ export function lostCause(cause: unknown, message: unknown): LostCause | undefin
 }
 
 /**
- * What `ide.status` says about the calu server of this host.
+ * The server status that `ide.status` reports for this host.
  *
  * "running": a `calu serve` process of this host is recorded and not known to be gone, or a
  * session of this host says it runs. "stopped": the database was read and holds neither.

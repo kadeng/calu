@@ -1,7 +1,7 @@
 /**
- * One setting of the settings dialog as a DOM row: label, key, description, the control for the
- * setting's kind, the default as a hint, "Reset to default" and the error line. Runs in the
- * webview. The row never talks to the host itself; it calls `RowHost`.
+ * This module builds one setting of the settings dialog as a DOM row. A row has a label, the
+ * key, the description, the control for the setting's kind, the default as a hint, a "Reset to
+ * default" button and an error line. Runs in the webview. The row never talks to the host itself; it calls `RowHost`.
  *
  *     ┌ row ─────────────────────────────────────────────────────────────┐
  *     │▌Label   dotted.key   Modified                    [Reset to default]│   ▌ = modified bar
@@ -382,7 +382,7 @@ function refreshRow(handle: RowHandle, host: RowHost): void {
  * @param view The new view of the same key.
  * @param host The dialog.
  * @returns The handle to keep: the same one, updated in place, or a new one whose element
- *   replaced the old element in the document (when the control kind or the choices changed).
+ *   replaced the old element in the document (when the control kind, the choices or the integer flag changed).
  */
 export function updateRow(handle: RowHandle, view: SettingsRowView, host: RowHost): RowHandle {
   const rebuilt = view.control !== handle.view.control || !sameJson(view.choices, handle.view.choices) || view.integer !== handle.view.integer;

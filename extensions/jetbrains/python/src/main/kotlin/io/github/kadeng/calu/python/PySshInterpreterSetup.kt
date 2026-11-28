@@ -14,16 +14,18 @@
  * user's own) keeps the two copies equal, and a second writer could overwrite the agent's edits.
  *
  * API status (PyCharm 2026.3, javap and the Plugin Verifier): the Python plugin has no public
- * API that creates an SSH interpreter. `PyTargetAwareAdditionalData` (the data of such an SDK),
- * its constructors and its loader are internal API (`@ApiStatus.Internal`, also on its package),
- * and so are the "add interpreter" packages. This file therefore uses only public interfaces:
- * the SDK's data is made by the platform's persistence methods `SdkType.loadAdditionalData` /
- * `saveAdditionalData` of `PythonSdkType` from an element that the platform's own
- * `saveTargetConfiguration` writes (no XML is written by hand); it is read and changed through
- * the platform interfaces `TargetBasedSdkAdditionalData` and `RemoteSdkProperties`. The cost:
- * this depends on PyCharm's stored format of SSH interpreters, which PyCharm itself must keep
- * readable across versions; the deployment and SSH configuration classes are public but have no
- * compatibility promise either.
+ * API that creates an SSH interpreter.
+ *
+ * - Internal API (`@ApiStatus.Internal`): `PyTargetAwareAdditionalData` (the data of such an
+ *   SDK), its constructors and its loader, also its package and the "add interpreter" packages.
+ * - What this file uses instead: the persistence methods `SdkType.loadAdditionalData` and
+ *   `saveAdditionalData` of `PythonSdkType`. They read an element that the platform's own
+ *   `saveTargetConfiguration` writes, so no XML is written by hand. The data is then read and
+ *   changed through the platform interfaces `TargetBasedSdkAdditionalData` and
+ *   `RemoteSdkProperties`.
+ * - The cost: this depends on PyCharm's stored format of SSH interpreters, which PyCharm itself
+ *   must keep readable across versions. The deployment and SSH configuration classes are public
+ *   but have no compatibility promise either.
  */
 package io.github.kadeng.calu.python
 

@@ -227,7 +227,9 @@ open class DiskLocalFiles(val root: Path, private val paths: PathMapper = PathMa
 
     /**
      * Describe a regular file, hashing it unless its size and modification time are those of
-     * the last hash.
+     * the last hash and the modification time is more than 2 seconds old. A write within the
+     * timestamp granularity can leave size and modification time unchanged, so a younger file
+     * is hashed again.
      *
      * @param rel relative path.
      * @param file the absolute path.
@@ -358,8 +360,10 @@ open class DiskLocalFiles(val root: Path, private val paths: PathMapper = PathMa
 
 /**
  * [BaseContents] in a directory: one file per content, named by its hash. Contents above
- * [maxEntryBytes] are not kept (a file that large is never merged), and the oldest files are
- * removed when the directory grows beyond [maxTotalBytes]. Safe for use from several threads.
+ * [maxEntryBytes] are not kept (a file that large is never merged). `put` never removes
+ * anything: `prune` removes the contents that no base names, and then the oldest files while
+ * the directory is above [maxTotalBytes]. The caller runs `prune` after a synchronisation.
+ * Safe for use from several threads.
  *
  * @param dir the directory; created on the first `put`.
  * @param maxEntryBytes largest content that is kept.

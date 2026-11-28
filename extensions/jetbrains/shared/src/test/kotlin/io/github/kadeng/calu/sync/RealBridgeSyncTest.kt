@@ -63,6 +63,12 @@ class RemoteShell(private val prefix: List<String>) {
  * The file synchronisation against REAL bridges: `calu ide` as a child process of this test,
  * and `calu ide` on the SSH box over real SSH. Both run the same walk through a full sync in
  * both directions (see [walk]).
+ *
+ * Side effects on the machines involved: the SSH test creates a temporary directory on the box
+ * with `mktemp -d`, writes several MB of random data in it, and removes it with `rm -rf`. Both
+ * tests kill the `calu ide` processes of their directory with `pkill -f`, on the box or on this
+ * machine. The local test runs `uv run calu ide`, which may update the calu checkout's
+ * environment. The remote shell's standard error goes to the test output.
  */
 class RealBridgeSyncTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)

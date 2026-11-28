@@ -72,7 +72,7 @@ data class SlashCommand(val name: String, val description: String, val source: S
 
 /**
  * Commands of Claude Code that are always offered (sent as chat text). Each one was run
- * through calu against a real Claude Code (CLI 2.1.327), which runs them without the model:
+ * through calu against a real Claude Code (CLI 2.1.327), which runs them as commands, not as a turn of the conversation (`/compact` still has the model write its summary):
  *
  *     /compact   replaces the conversation by a summary; the summary is shown
  *     /clear     Claude forgets the conversation; the transcript stays and a notice says so

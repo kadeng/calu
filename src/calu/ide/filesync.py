@@ -895,8 +895,13 @@ class FileSync:
     async def _unsubscribe(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer `ide.fs.unsubscribe`: no further `ide.fs.changed`.
 
-        Side effects: stops the watcher; a later subscription that names a sequence number
-        is answered with `complete: false`, because changes are not watched meanwhile.
+        Side effects:
+            - Stops the watcher.
+            - Numbers the changes that were collected but not yet sent and keeps them in the
+              replay buffer; they are not sent to the editor.
+            - Forgets the scan baseline, so that a later subscription compares everything.
+            - A later subscription that names a sequence number is answered with
+              `complete: false`, because changes are not watched meanwhile.
 
         Args:
             params: Unused.
@@ -928,8 +933,9 @@ class FileSync:
         """Scan the files again and again until the subscription ends.
 
         A scan starts `poll_s` seconds after the one before (later if scans are slow), or
-        at once when a session event asks for a look, but never sooner than twice the
-        last scan's duration. A failing scan is logged and tried again.
+        earlier when a session event asks for a look. After a scan that event waits for
+        `min(2 * the scan's duration, poll_s)` seconds before the next scan starts. A
+        failing scan is logged and tried again.
         """
         wait_s, gap_s = self.poll_s, 0.0
         while True:
@@ -953,10 +959,14 @@ class FileSync:
         Side effects: holds the write lock; one listing, one `lstat` per file, and a read
         of every file whose signature changed. A changed file whose content is the known
         one is not reported. A file that left the listing is reported as deleted only if
-        nothing is at its path any more. A listed path that is skipped now and was not (or
-        for another reason) at the scan before is reported in `skipped` (a new file above
-        the size limit, a file that grew above it, a FIFO, a link), so that an editor can
-        list it at once rather than at its next full comparison.
+        nothing is at its path any more. A listed path that is skipped now, and was not
+        skipped for the same reason at the scan before, is reported in `skipped`. The editor
+        can then list it at once, without waiting for its next full comparison. Examples:
+
+        - a new file above the size limit
+        - a file that grew above the size limit
+        - a FIFO
+        - a link
 
         Args:
             baseline: True for the first scan: the signatures are taken, nothing is

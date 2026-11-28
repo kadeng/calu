@@ -184,7 +184,8 @@ export type ResolvedAction =
  * @param tool The tool view from the host's state (undefined if the id is unknown).
  * @param action The requested action (untrusted).
  * @param folder Absolute path of the workspace folder ("/" or "\" separators).
- * @returns The task.
+ * @returns The task. The menu action `openFile` (a Read) becomes the task `openFileAtEdit`
+ *   at the read's first line (`readLine`).
  * @throws Error if the tool is unknown, the action is not offered for it, or the path is
  *   outside the workspace.
  */
@@ -238,7 +239,7 @@ export function workspaceRelative(path: string, folder: string): string {
 // ------------------------------------------------------------------ what a click on a row does
 
 /**
- * What a click (or Enter) on a tool row does (spec section 11). `title` is the row's tooltip.
+ * The action of a click or Enter on a tool row (spec section 11). `title` is the row's tooltip.
  *
  * - "openDiff": the native diff editor of this edit (`openDiff {toolUseId}`);
  * - "openFile": the file at `line`, through `itemAction {action}`;

@@ -16,7 +16,8 @@ it awaits the call, reports a failure to the clients and counts it:
 Guarantees:
 
 - `attempt`, `attempt_value`, `failed` and `add_step` never raise because the store failed. A
-  step is checked also when its row could not be written; only its history is lost then.
+  step is checked also when its row could not be written. Its history is lost then, and it
+  does not appear in `step_times`.
 - Every failed write is reported as a `log` error and counted. Only a write that succeeds
   resets the count (agent/records/PLAN.md D59).
 - The stop after too many failures is started once and in a task of its own, because the
@@ -187,12 +188,16 @@ class Recorder:
     async def add_step(self, step: Step) -> int | None:
         """Record a tool call in the database before it is checked.
 
+        When the row is stored, the step's start time is added to `step_times`, and the call's
+        `PerCall` gets the row id and the step's sequence number. When the row cannot be
+        stored, the failure is reported and counted (`failed`), and none of this happens: the
+        step is still checked, but it has no history and does not appear in `step_times`.
+
         Args:
             step: The tool call.
 
         Returns:
-            The id of the `steps` row, or None if it could not be stored (then the step is
-            still checked; only its history is lost).
+            The id of the `steps` row, or None if it could not be stored.
         """
         row = StoredStep(
             seq=next(self._run().step_seq),
@@ -251,14 +256,13 @@ class Recorder:
     def checker_run(self, checker: Checker, route: str, outcome: CheckOutcome) -> CheckerRun:
         """Build the `checker_runs` row of one step check.
 
-        The row is keyed by the **checker's own name**, not by its route: a route may carry several
-        checkers (agent/records/PLAN.md D81), and a row named after the route would merge them, so
-        `calu checker stats` and `calu checker misses` could no longer tell which of them decided or
-        what each one costs.
+        The row is keyed by the **checker's own name**, not by its route. A route may carry
+        several checkers (agent/records/PLAN.md D81). Rows keyed by the route would merge them,
+        and `calu checker stats` and `calu checker misses` could not tell them apart.
 
         Args:
             checker: The checker that ran; its name and version go into the row.
-            route: Its route value, kept for the caller's own bookkeeping.
+            route: Its route value. It is not used and does not go into the row.
             outcome: What the call returned and cost.
 
         Returns:
@@ -288,7 +292,7 @@ class Recorder:
                 run").
             step_id: The `steps` row the run belongs to.
             checker: The checker that ran.
-            route: Its route value (see `checker_run`).
+            route: Its route value. It is not used (see `checker_run`).
             outcome: What the call returned and cost.
         """
         await self.attempt(

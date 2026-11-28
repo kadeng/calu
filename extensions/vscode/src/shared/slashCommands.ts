@@ -43,7 +43,9 @@ function command(name: string, source: SlashCommand['source'], description: stri
 
 /**
  * Commands of Claude Code that are always offered (sent as chat text). Each one was run
- * through calu against a real Claude Code (CLI 2.1.327), which runs them without the model:
+ * through calu against a real Claude Code (CLI 2.1.327). Claude Code handles each one as a
+ * command and does not send it to the model as a prompt; `/compact` still calls the model to
+ * write its summary:
  *
  *     /compact   replaces the conversation by a summary; the summary is shown
  *     /clear     Claude forgets the conversation; the transcript stays and a notice says so
@@ -238,7 +240,9 @@ export function resolveSlash(text: string, attachedId: string | null): SlashResu
     case 'fork':
       return needsSession({ type: 'forkConversation' });
     case 'rename':
-      return attachedId ? { kind: 'message', message: { type: 'renameSession', sessionId: attachedId } } : needsSession({ type: 'detach' });
+      return attachedId
+        ? { kind: 'message', message: { type: 'renameSession', sessionId: attachedId } }
+        : { kind: 'error', text: '/rename needs an attached session.' };
     case 'settings':
       return { kind: 'message', message: { type: 'openSettings' } };
     case 'interrupt':

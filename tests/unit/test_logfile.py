@@ -167,10 +167,13 @@ def test_a_command_that_elevates_through_sudo_opens_no_log_file(
     assert capsys.readouterr().err.startswith("calu: --sudo would run")
 
 
-def test_serve_passes_secure_on_to_every_session(
+def test_serve_passes_the_security_flags_on_to_every_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_root: None
 ) -> None:
-    """D226: `calu serve --secure` makes every client of its sessions show a token."""
+    """D226: `calu serve --secure` makes every client of its sessions show a token.
+
+    D227: `--insecure` is passed on the same way, and `--secure --insecure` together start no
+    server."""
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     seen = []
 

@@ -253,20 +253,19 @@ policy says. So the three policies are expressed through the proxy's allow list:
 class SandboxConfig(ConfigModel):
     """Isolation of Bash commands by Claude Code's own sandbox (agent/records/PLAN.md D15).
 
-    calu passes these settings with `--settings`, which has precedence over the project's and
-    the user's settings files, so a settings file does not switch the sandbox off. `settings()`
-    writes each key of `PINNED_SANDBOX_KEYS`, also when its value is empty or false, so that
-    the document itself says what every one of them is. Measured with CLI 2.1.319
-    (`spikes/RESULTS.md`, "Can a settings file widen the pinned sandbox?"): while `--settings`
-    carries that document, `filesystem.allowRead`, `network.allowedDomains` and
-    `excludedCommands` of the project's `.claude/settings.json` and
-    `.claude/settings.local.json` have no effect. Not measured: the user's
-    `~/.claude/settings.json`, the other keys, and other CLI versions. calu therefore does not
-    rely on the precedence alone: with `fail_if_unavailable`, a session does not start, and a
-    Bash step waits for a human, while a loaded settings file holds a sandbox entry that goes
-    beyond calu's configuration (`calu.preflight.settings_file_sandbox_findings`); without it,
-    such entries are named in a start-up warning. The sandbox needs `bwrap` and `socat` on the
-    machine (`calu.preflight`).
+    calu passes these settings with `--settings`, which has precedence over the project's and the
+    user's settings files, so a settings file does not switch the sandbox off. `settings()` writes
+    each key of `PINNED_SANDBOX_KEYS`, also when its value is empty or false, so that the document
+    itself says what every one of them is. Measured with CLI 2.1.319 (`spikes/RESULTS.md`, "Can a
+    settings file widen the pinned sandbox?"): while `--settings` carries that document,
+    `filesystem.allowRead`, `network.allowedDomains` and `excludedCommands` of the project's
+    `.claude/settings.json` and `.claude/settings.local.json` have no effect. Not measured: the
+    user's `~/.claude/settings.json`, the other keys, and other CLI versions. calu therefore does
+    not rely on the precedence alone. It looks for a loaded settings file that holds a sandbox
+    entry going beyond calu's configuration (`calu.preflight.settings_file_sandbox_findings`).
+    With `fail_if_unavailable` on, a session does not start while such an entry exists, and a Bash
+    step waits for a human. With it off, such entries are named in a start-up warning. The sandbox
+    needs `bwrap` and `socat` on the machine (`calu.preflight`).
 
     calu's own directories (`calu_private_paths()`) are always on the read deny list; the
     `deny_read` setting holds further paths and cannot remove them.
@@ -350,7 +349,8 @@ class SandboxConfig(ConfigModel):
     def outside_reason(self, command: str, disable_sandbox: bool) -> str:
         """Say why a Bash command runs, or may run, outside the sandbox, for the checker.
 
-        Two cases, checked in this order, both only while `enabled` is True:
+        The command runs outside the sandbox in either of two cases, checked in this order,
+        and only while `enabled` is True:
 
         - `disable_sandbox` (the call's `dangerouslyDisableSandbox`) with
           `allow_unsandboxed_commands` True: the command runs outside the sandbox.
@@ -413,7 +413,7 @@ class SandboxConfig(ConfigModel):
         """Return the Claude Code settings document for `--settings`.
 
         The document holds exactly the keys of `PINNED_SANDBOX_KEYS`, each of them always,
-        also with an empty or false value. Four of them have no setting in calu and a fixed
+        also with an empty or false value. Five of them have no setting in calu and a fixed
         value: `filesystem.allowRead` and `filesystem.allowWrite` are empty (calu re-opens
         nothing inside a denied path and adds no writable path), and
         `enableWeakerNetworkIsolation`, `network.allowAllUnixSockets` and
@@ -607,9 +607,13 @@ class ClaudeConfig(ConfigModel):
 class AutoEscalate(ConfigModel):
     """How closely a session is supervised: what waits for the human, and whether checkers run.
 
-    Three categories whose steps always wait for the human, whatever the checker decided:
-    `commands` (Bash and other tool calls reviewed by the command checker), `edits` (file
-    edits) and `subagents` (final results of subagents). The checker still runs; where it
+    Each of the following categories always waits for the human, whatever the checker decided:
+
+    - `commands`: Bash and other tool calls reviewed by the command checker.
+    - `edits`: file edits.
+    - `subagents`: final results of subagents.
+
+    The checker still runs; where it
     would have approved (ALLOW / ACCEPT / ANNOTATE), the step is escalated instead, with the
     checker's decision and reason in the escalation. A checker DENY stays a DENY. Read-only
     tools that the policy allows without a check are not affected. With training mode on as
@@ -733,9 +737,9 @@ class HonestyConfig(ConfigModel):
     code is marked or unreviewed; a commit made in a clean state is certified; nothing is
     blocked or escalated because of the state. `enforce`: additionally, a command that
     executes project code (the command checker says whether it does) and a `git commit` need a
-    clean state: with open marks the step is denied with their reasons, without a trusted
-    commit it waits for a person (`calu honesty trust`, `/trust`), and with unreviewed files
-    an honesty review decides. The allow lists do not skip the command checker while the
+    clean state. With open marks the step is denied with their reasons. Without a trusted
+    commit the step waits for a person (`calu honesty trust`, `/trust`). With unreviewed
+    files an honesty review decides. The allow lists do not skip the command checker while the
     state is not clean. Editing is never blocked. Default `off`."""
     rules: str | None = None
     """The honesty standard the checkers that judge changes read: what dishonesty is and what an
@@ -1317,15 +1321,13 @@ def build_config(
     and so does the configuration (`calu config set command_checker.model`). **The
     configuration wins**, because that is the layer a project overrides: the definition's
     values come first as the default, and the global and then the project settings are merged on
-    top. Before 2026-11-10 it was the other way round, which made `calu config set
-    command_checker.model` -- documented in DOCUMENTATION.md and offered by the web interface's
-    settings form -- silently do nothing.
+    top.
 
     Args:
         layers: Partial configurations in increasing precedence (global, then project).
         checker_rows: (name, model, request_limit, output_tokens_limit, max_tokens) of the
-            enabled checker types. "command", "edit" and "subagent-result" fill the checker
-            fields of `Config`; "narrator" fills `context.narrator_model`; other names are
+            enabled checker types. "command", "edit", "subagent-result" and "changeset" fill the
+            checker fields of `Config`; "narrator" fills `context.narrator_model`; other names are
             ignored here.
 
     Returns:
@@ -1494,7 +1496,7 @@ def claude_cli_path() -> str | None:
 
 
 def load_secrets(env_file: Path | None = None) -> set[str]:
-    """Load checker API keys from calu's env file into `os.environ`.
+    """Load the variables of calu's env file into `os.environ`, among them the checker API keys.
 
     Variables that are already set in the environment are not overwritten. A project's own
     `.env` is deliberately not read: it may hold unrelated secrets, which Claude must not see.

@@ -13,12 +13,18 @@ One `SessionServer` serves one session. Each WebSocket connection gets a `Client
    dropped), so the session is never left halfway through a start or a stop, and
 4. after `events.subscribe` pushes the session's events to the client as notifications.
 
-Control requests (`CONTROL_METHODS`) are handled next to a running request, so that
+Control requests (`CONTROL_METHODS`) are handled next to a running request. So
 `escalation.decide`, `interrupt` and `shutdown` work while a slow request (`session.start`) is
-still running, and a side question (`side.ask`) does not hold up the client's other requests
-(a client has one side question answered at a time; a second one meanwhile is refused):
-the loop that reads the connection never waits for a request, it hands the ordinary ones to
-one worker task per client and starts a task for each control request.
+still running, and a side question (`side.ask`) does not hold up the client's other requests.
+A client has one side question answered at a time; a second one meanwhile is refused.
+
+The loop that reads the connection works like this:
+
+- Before a successful `initialize`, it answers each message itself and waits for the answer.
+- After it, it starts a task for each control request and hands the ordinary requests to one
+  worker task per client. It waits only when `REQUEST_BACKLOG` ordinary requests are already
+  queued.
+
 Requests of different clients are independent; the session itself serializes what must not
 overlap.
 
@@ -886,8 +892,9 @@ class SessionServer:
         """Accept root clients on the session's root-owned socket (agent/records/PLAN.md D215).
 
         Runs next to `listen`, until `shutdown` is set or the caller is cancelled. A
-        connection whose peer the kernel reports as root needs no client token; any other
-        peer is treated like a TCP client and has to show one.
+        connection whose peer the kernel reports as root needs no client token. Any other
+        peer has to show one, as a TCP client does. With `insecure`, every peer of this
+        socket is trusted and needs no token, as on the `--socket` socket (D227).
 
         Side effect: removes the socket file when it stops.
 

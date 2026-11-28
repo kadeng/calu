@@ -240,7 +240,7 @@ def prepare(projects: Path, at: str, name: str, url: str, run: Runner = subproce
             target.mkdir(mode=0o755)
         except OSError as exc:
             raise StartRefused(f"{target} cannot be made: {exc.strerror}") from exc
-        return target
+        return folder(projects, str(target.relative_to(projects)))
     _clone(url, target, run)
     return folder(projects, str(target.relative_to(projects)))
 

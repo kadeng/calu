@@ -99,10 +99,14 @@ def available() -> bool:
 def wants_full_screen(plain: bool) -> bool:
     """Decide which client `calu attach` starts.
 
-    The line client is used, in this order: with `--plain`; when standard input or output is
-    not a terminal (pipes and scripts therefore see the line client unchanged); with
-    `TERM=dumb` or `CALU_ATTACH=plain` in the environment; and when Textual is not installed
-    or is a version the client is not written for, after one line on stderr that says so.
+    The line client is used in each of these cases, checked in this order:
+
+    - `--plain` was given.
+    - Standard input or output is not a terminal. Pipes and scripts therefore see the line
+      client unchanged.
+    - `TERM=dumb` or `CALU_ATTACH=plain` is set in the environment.
+    - Textual is not installed or is a version the client is not written for. One line on
+      stderr says so.
 
     Args:
         plain: Whether `--plain` was given.

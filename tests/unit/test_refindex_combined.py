@@ -195,8 +195,9 @@ async def test_a_place_whose_surroundings_did_not_change_is_not_judged_twice(
     tmp_path: Path,
 ) -> None:
     """The judge's yes and no are kept by the unit and the shown lines without their numbers.
-    A second question costs no model call, also after lines were added above the place and
-    after the unit's own documentation changed. A change next to the place asks again."""
+    A second question about unchanged surroundings costs no model call. A line added inside
+    the shown lines asks the judge again. The test makes that change together with a change of
+    the unit's own documentation, so it does not tell which of the two causes the question."""
     root = project(tmp_path)
     requests: list[str] = []
     judge = MatchJudge(root, judging(requests))

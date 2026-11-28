@@ -157,7 +157,12 @@ DSN = "postgresql://calu_owner@127.0.0.1:55490/calu"
 def test_pass_env_reaches_claude_code_of_another_user(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """`claude.pass_env`: the named variables join the kept ones, with calu's values."""
+    """`claude.pass_env`: the named variables join the kept ones, with calu's values.
+
+    Also starts the installed launcher as a child process with a test environment (`PATH`,
+    `CALU_TEST_DSN`, `PGPASSWORD` and calu's launch variable) and checks that the child prints
+    `CALU_TEST_DSN` through `printenv`.
+    """
     monkeypatch.setenv("CALU_CLAUDE_PATH", "/usr/bin/env")
     run_as = RunAs(uid=os.getuid(), gid=os.getgid(), home="/state")
     config = ClaudeConfig(pass_env=["CALU_TEST_DSN"])

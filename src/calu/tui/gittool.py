@@ -54,7 +54,7 @@ class GitTool:
 
     argv: tuple[str, ...]
     source: str
-    """Why this one: "CALU_GIT_TOOL", "tui.toml", "installed" or "fallback" (`git diff`)."""
+    """Why this one: "CALU_GIT_TOOL", "tui.toml", or "installed"."""
 
     @property
     def name(self) -> str:
@@ -212,15 +212,17 @@ def release_command(which: Which = shutil.which) -> str | None:
     """Build the command that installs gitui's newest release binary for this user.
 
     The command downloads the Linux archive of gitui's newest release for this machine's
-    architecture from GitHub and unpacks the one file `gitui` into `local_bin()`. It changes
-    nothing outside that directory and needs no rights of the administrator.
+    architecture from GitHub and unpacks the one file `gitui` into `local_bin()`. It creates
+    that directory, with any missing parent directories, and writes nothing outside it. It
+    needs no rights of the administrator.
 
     Args:
         which: Finds a program on the search path.
 
     Returns:
         The command line (`sh -c '...'`), or None where it would not work: not Linux, an
-        architecture gitui publishes no archive under that name for, or no curl or tar.
+        architecture gitui publishes no archive under that name for, or no `sh`, `curl` or `tar`
+        on the search path.
     """
     arch = RELEASE_ARCH.get(platform.machine().lower())
     if platform.system() != "Linux" or arch is None:

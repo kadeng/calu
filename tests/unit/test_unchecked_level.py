@@ -58,7 +58,10 @@ async def test_an_edit_the_checker_would_escalate_passes(tmp_path: Path) -> None
 
 
 async def test_a_deny_rule_still_asks_a_person(tmp_path: Path) -> None:
-    """The owner: keep all rules. A match of the deny list escalates as before."""
+    """The unchecked level does not switch calu's rules off (requirement 53).
+
+    A match of the deny list escalates to a person as it does at the other levels.
+    """
     rec = await run_one(tmp_path, "Bash", {"command": "sudo rm -rf /"}, UNCHECKED)
     assert rec.of(EscalationRequest)
 
@@ -109,8 +112,15 @@ async def test_the_level_set_in_a_running_session_takes_effect_at_the_next_step(
     assert rec.of(CheckResult)[0].reason == UNCHECKED_REASON
 
 
-def test_what_a_command_wrote_is_not_reviewed(tmp_path: Path) -> None:
-    """The write-set review is a check by the changeset checkers; the measuring stays."""
+def test_the_unchecked_level_switches_the_write_set_review_off_and_keeps_the_snapshots(
+    tmp_path: Path,
+) -> None:
+    """At the unchecked level the session's changes setting has `review` off and `snapshot` on.
+
+    The test reads `Session._changes_config()` and does not run a command. The review of a
+    write set is a check by the changeset checkers; the measuring of the write set stays.
+    With the level back to the default, the review is on again.
+    """
     config = Config(
         auto_escalate=AutoEscalate(unchecked=True),
         changes=ChangesConfig(snapshot=True, review=True),

@@ -40,10 +40,11 @@ decision itself, and the invariant that every error path ends in ESCALATE, are i
                                clean honesty state: deny with the open marks, or ask the
                                human (no baseline, or the honesty review did not verify the
                                unreviewed files); see `calu.gate`
-    any internal error      -> ask the human, also after the decision (it never weakens a
-                               DENY or an ASK)
+    an internal error in a  -> ask the human, also after the decision (it never weakens a
+    guarded stage              DENY or an ASK); see `Session.pre_tool_use` for the stages
     no answer within `GATE_BUDGET_S` -> ask the human
-    ask -> an `escalations` row and an `escalation.request` event; waits without a time limit
+    ask -> an `escalations` row and an `escalation.request` event; waits at most
+           `escalation_timeout_s` (see below)
 
 Code honesty (`calu.honesty`, while `honesty.mode` is not "off"). The session holds the
 honesty state (`Session.honesty`) and keeps it up to date:
@@ -1040,9 +1041,8 @@ class Session:
     def _result_checker(self) -> ResultChecker:
         """Build the subagent result checker from the configuration as it is now.
 
-        One place for the start and for every reload: before, the reload updated its model and
-        its instructions in place and left its request and token limits as they were at the
-        start, and no path passed its effort at all (agent/records/PLAN.md D135).
+        The start and every reload build the checker here, so that its model, instructions,
+        limits and effort always come from the same configuration (agent/records/PLAN.md D135).
 
         Returns:
             The checker.
@@ -1704,7 +1704,9 @@ class Session:
         wait_s: float | None = None,
         checkouts: Sequence[Checkout] | None = None,
     ) -> str:
-        """Run the honesty review: judge the unreviewed and the marked files (section 4).
+        """Run the honesty review: judge the unreviewed and the marked files.
+
+        The review is specified in `agent/records/notes/honesty-spec.md`, section 4.
 
         The gate calls this for a step that needs a clean honesty state, and `request_review`
         calls it for a person (`_run_review` has the steps).
@@ -2609,13 +2611,14 @@ class Session:
     async def _mark_at_once(self, step: Step, decided: Decided) -> None:
         """Record the dirty marks the honesty checker returned about a command or a commit.
 
-        A honesty checker that runs on the command route, or with the changeset checkers of a
-        commit, marks code that exists in the project whatever the command does. So its
-        `marks_dirty` are recorded for every decision, also for a step that is denied, escalated or
-        fails. The marks of an edit are different: they name what the edit would write, and are
-        applied only after it ran (`_keep_honesty`, `_apply_honesty`). Marks in the answer of any
-        other checker are ignored (agent/records/PLAN.md D224). The shipped honesty checker is on
-        the edit route, so with the defaults this records nothing.
+        An honesty checker that runs on the command route, or with the changeset checkers of a
+        commit, marks code that exists in the project, whatever the command does. Its
+        `marks_dirty` are therefore recorded for every decision. That includes a step that is
+        denied, escalated or fails. The marks of an edit are different: they name what the
+        edit would write, and are applied only after it ran (`_keep_honesty`,
+        `_apply_honesty`). Marks in the answer of any other checker are ignored
+        (agent/records/PLAN.md D224). The shipped honesty checker is on the edit route, so
+        with the defaults this records nothing.
 
         Side effects: as `_apply_record`. Never raises.
 
@@ -2634,7 +2637,9 @@ class Session:
             await self._apply_record(PendingHonesty(marks=marks))
 
     async def _apply_honesty(self, tool_use_id: str, ok: bool) -> None:
-        """Apply or discard what a tool call changes in the honesty state (section 2).
+        """Apply or discard what a tool call changes in the honesty state.
+
+        The state is specified in `agent/records/notes/honesty-spec.md`, section 2.
 
         For a call that succeeded, the record kept at the gate is applied (`_apply_record`).
         If the edit changed the signature or doc comment of definitions, the code that uses
@@ -2774,7 +2779,9 @@ class Session:
         return total, store
 
     async def _certify(self, pending: PendingHonesty) -> None:
-        """Record the new HEAD as trusted after a commit made in a clean state (section 5).
+        """Record the new HEAD as trusted after a commit made in a clean state.
+
+        The rule is specified in `agent/records/notes/honesty-spec.md`, section 5.
 
         The commit is certified only if HEAD moved since the gate decided and
         `HonestyState.certification` finds every entry of the new commit verified. The source
@@ -3233,12 +3240,10 @@ class Session:
         Runs until cancelled; a failed heartbeat is logged and the loop goes on, because losing the
         stamp is not a reason to stop a session that is otherwise fine.
 
-        The first heartbeat is due one interval after the start, not at once: `calu run` starts
-        this loop before the session row exists (the row is created by `start`, which needs the
-        connection the loop would be using), and `sessions.last_seen` is stamped when the row
-        is inserted, so there is nothing to refresh yet. Beating straight away instead made
-        every single session log an error and tell the user its heartbeat had failed, which was
-        both wrong and alarming.
+        The first heartbeat is due one interval after the start. `calu run` starts this loop
+        before the session row exists: `start` creates the row, and it needs the connection
+        the loop would be using. `sessions.last_seen` is set when the row is inserted, so there
+        is nothing to refresh before then, and a heartbeat at once would fail.
 
         Args:
             interval_s: Seconds between heartbeats; a value of 0 or less returns at once, so
@@ -3417,17 +3422,19 @@ class Session:
         history as soon as a turn ends -- which is exactly what `calu attach` and the ACP
         adapter do -- would otherwise see one turn too few. This call therefore waits for the
         background work of the running session first, for at most `BACKGROUND_TIMEOUT_S`
-        seconds; after that it answers with what the store holds, because a late history is
-        worse than one that is a turn behind.
+        seconds. After that it answers with what the store holds, which may lack the last
+        turn.
+
+        The turns can include ones that have not ended, with their inputs and prompt uuid only
+        (`SessionHistoryResult`):
+
+        - the running turn, so that a client can use the prompt uuid to tell the replayed
+          events of that turn from the record;
+        - a turn that a fork inherited while it waited on a decision.
 
         Args:
             claude_session_id: Which session; None is the one that runs now.
             limit: Maximum number of steps returned (the newest ones).
-
-        The turns include one that has not ended, with its inputs and its prompt uuid only
-        (`SessionHistoryResult`): the running turn, so that a client tells the replayed events
-        of that turn from the record by the prompt uuid, and a turn a fork inherited while it
-        waited on a decision.
 
         Returns:
             The turns, the steps and the chat summary; empty fields if the database cannot be
@@ -3510,8 +3517,11 @@ class Session:
         chat summary of the resumed session from the database, emits `startup_warnings` as
         `log` warnings, creates a runner and starts it as a task in `tg`. Once the runner is
         ready, the row gets the Claude session id (with `session_id`: before the first turn),
-        and a fork stores the turns it keeps under its own row (`_restore_context`). A start
-        that fails writes neither.
+        and a fork records its origin and stores the turns it keeps under its own row
+        (`_restore_context`). A start that is rejected because a session runs writes nothing.
+        A start whose runner fails or is not ready in time leaves its `sessions` row, which
+        `_run` ends as "failed" or "stopped". It records no Claude session id, no fork origin
+        and no inherited turns.
 
         Args:
             tg: Task group that runs the session; it must outlive the session.
@@ -3685,9 +3695,9 @@ class Session:
         not narrated yet is dropped. Waits for the background work of the last turn (narration,
         storing the turn, folding), at most `BACKGROUND_TIMEOUT_S` seconds, and for the
         session trace to be written to its end, at most `TRACE_END_TIMEOUT_S` seconds. Stops
-        the language server of `_dependents_index`, if one runs. Does nothing else if no
-        session runs and nothing is pending. A run that ends after this call was ended by
-        calu, and is not resumed automatically (`auto_resume`).
+        the language server that `_dependents_index` or `honesty_graph` started, if one runs.
+        Does nothing else if no session runs and nothing is pending. A run that ends after
+        this call was ended by calu, and is not resumed automatically (`auto_resume`).
         """
         self._stops += 1
         self._run_state.claude_outputs.clear()
@@ -3935,8 +3945,9 @@ class Session:
             params: Text, delivery and target of the message.
 
         Raises:
-            SessionError: If no session runs, the target subagent is unknown, or it is not a
-                running background subagent.
+            SessionError: If no session runs, the target subagent is unknown, it is not a
+                running background subagent, or the message has images and is addressed to a
+                subagent.
         """
         runner = self._require_running()
         if params.delivery == "queued" and params.to == "main" and self._run_state.busy:
@@ -4307,12 +4318,20 @@ class Session:
         A subagent's `SubagentHandback` call is not routed: its report is reviewed by the
         subagent-result checker instead (`_handback`, D252).
 
+        Each stage in the table turns its own failure into the verdict it names. An exception
+        that escapes the stages anyway, or a cancellation of the hook, is not turned into a
+        verdict: the call gives back its ticket and any locks it holds, and the exception is
+        raised to the hook.
+
         Args:
             step: The tool call.
 
         Returns:
-            ALLOW, DENY (with the reason for Claude) or ASK. Any internal error yields ASK, so
-            a human decides instead of the call running unchecked.
+            ALLOW, DENY (with the reason for Claude) or ASK.
+
+        Raises:
+            BaseException: An unexpected exception from outside the guarded stages, or the
+                cancellation of the hook.
         """
         if step.tool_name == HANDBACK_TOOL and step.agent_id is not None:
             return await self._handback(step)
@@ -4820,7 +4839,10 @@ class Session:
         return comment
 
     async def ask(self, step: Step) -> HumanAnswer:
-        """Ask the human about `step` and wait for the answer, without a time limit (ToolGate).
+        """Ask the human about `step` and wait for the answer (ToolGate).
+
+        The wait lasts at most `escalation_timeout_s` (0 for no limit). When that time is up,
+        the step is denied and the session stops (`EscalationDesk`).
 
         Side effects: opens an `escalations` row, emits `escalation.request`, sets the state to
         `escalated`, and emits `escalation.resolved` when the escalation ends — also when it is
@@ -5031,9 +5053,9 @@ class Session:
         """Start the stopped session's conversation again at once, waiting for the user (D282).
 
         `start` with the Claude session id and the model and effort of the last run: a new
-        `sessions` row that reads the turns of the earlier ones (D65), in state "idle". The
-        session counts as stopped by `cause`: nothing is sent to Claude, so it waits for the
-        user's next message. Never raises.
+        `sessions` row that reads the turns of the earlier ones (D65), in state "idle". Nothing
+        is sent to Claude, so the session waits for the user's next message. `cause` appears
+        only in the `log` message. Never raises.
 
         Side effects: those of `start`; emits a `log` warning that names `cause` and says that
         the conversation was resumed, or a `log` error if the start failed, naming how to
@@ -5945,12 +5967,13 @@ class Session:
         covering the turns before the fork point only, so that the turns the fork runs are
         read back when it is resumed.
 
-        A turn the fork copies that has not ended (it waited on a decision when the fork was
-        made, or its session was cut off) is copied with its inputs and its prompt uuid,
-        without steps and answer (its row holds none before it ends), and with `ended_at` set
-        to now: Claude Code's copy of the transcript holds its prompt, and the fork never
-        continues that turn, its own first input starts the next one. Its steps stay with
-        the session that ran them (a fork inherits no `steps` rows, D65).
+        A turn may not have ended when the fork is made: it waited on a decision, or its
+        session was cut off. The fork copies such a turn with its inputs and its prompt uuid,
+        without steps and answer, because its row holds none before it ends. The copy gets
+        `ended_at` set to now, because the fork never continues that turn. Claude Code's copy
+        of the transcript holds the turn's prompt, and the fork's own first input starts the
+        next turn. The steps of the turn stay with the session that ran them (a fork inherits
+        no `steps` rows, D65).
 
         A conversation the store knows nothing about was started without calu: it gets one
         turn that reports what Claude Code's transcript says the user wrote (`_unwitnessed`).
@@ -6071,8 +6094,15 @@ class Session:
         """Return the context that is stored with the `escalations` row of a step.
 
         The context holds what an operator needs to decide and what an evaluation case needs
-        to reproduce the step later (`calu.evals.cases`): the rendered step, the tool input with
-        workspace-relative paths, and the content of the file an edit would change.
+        to reproduce the step later (`calu.evals.cases`):
+
+        - the rendered step;
+        - the tool name and the tool input with workspace-relative paths;
+        - the id of the agent that made the call;
+        - the current content of the file an edit would change;
+        - the diff a commit would record, if the step is a commit;
+        - the recent turns and the chat summary;
+        - the calu version.
 
         Args:
             step: The tool call.
@@ -6139,8 +6169,15 @@ class Session:
     async def emit(self, event: Event) -> None:
         """Send `event` to the clients.
 
-        Side effect: while a session trace is written, the event is queued for it first
-        (`calu.traces.TraceWriter.feed`, which neither waits nor raises).
+        Side effects, before the event goes to the clients:
+
+        - For an `escalation.resolved` event, the name of whoever resolved the escalation is
+          removed from `desk.resolved_by` and passed to the trace, if one is written.
+        - If the `traces` settings changed while the session was idle, an event that adds a
+          block to the trace ends the running trace file and starts a new one
+          (`_switch_traces`).
+        - While a session trace is written, the event is queued for it
+          (`calu.traces.TraceWriter.feed`, which neither waits nor raises).
 
         Args:
             event: The event.
@@ -6170,16 +6207,25 @@ class Session:
         self._trace_secrets.add(value, kind)
 
     def _guard_traces(self) -> None:
-        """Tell the rules, the honesty state and the write sets where the traces are.
+        """Tell the rules, the honesty state and the write sets where calu's own output is.
+
+        While `traces.enabled` is on, the trace directory is calu's own output inside the
+        project:
+
+        - a tool call that would write there waits for a person;
+        - the checkers' code tools do not read it;
+        - its files are left out of the write sets and of the honesty state.
+
+        While `human_diffs.enabled` is on, the directory of the human diffs (D253) is calu's
+        own output too. A tool call that would write there waits for a person, and its files
+        are left out of the write sets and of the main checkout's honesty state. The
+        checkers' code tools can read it.
+
+        With its setting off, each directory is an ordinary directory.
 
         The rules also get two other settings here, because a settings reload replaces them:
         the registry of checkouts (D251) and the switches of calu's built-in rules
         (`Config.built_in_rules`, copied to `Rules.built_in`).
-
-        While `traces.enabled` is on, the trace directory is calu's own output inside the
-        project: a tool call that would write there waits for a person, the checkers' code
-        tools do not read it, and its files are left out of the write sets and of the
-        honesty state. With tracing off, the directory is an ordinary directory.
         """
         cfg = self.config.traces
         directory = cfg.directory if cfg.enabled else None
@@ -6722,7 +6768,10 @@ class Session:
         return CombinedIndex(SearchIndex(self.workspace), self._navigator, judge)
 
     def _close_navigator(self) -> None:
-        """Stop the language server of `_dependents_index`, if one runs. Never raises."""
+        """Stop the language server that `_dependents_index` or `honesty_graph` started.
+
+        Does nothing if none runs. Never raises.
+        """
         if self._navigator is not None:
             self._navigator.close()
         self._navigator = None

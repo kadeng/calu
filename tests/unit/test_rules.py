@@ -340,7 +340,9 @@ def test_a_grep_of_the_project_asks_when_it_would_read_a_protected_file(tmp_path
 
 def test_a_git_ignored_protected_file_does_not_make_a_grep_ask(tmp_path: Path) -> None:
     """D146: Claude Code's Grep skips git-ignored files (measured), and so does the check --
-    otherwise every search of a project with an ignored `.env` would wait for a person."""
+    otherwise every search of a project with an ignored `.env` would wait for a person.
+
+    Runs `git init` in a temporary directory."""
     import subprocess
 
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
@@ -434,7 +436,9 @@ def test_a_recursive_search_asks_when_it_would_read_a_protected_file(
     tmp_path: Path, command: str, asks: bool
 ) -> None:
     """D149: a Bash search reads the files below its directory, as the Grep tool does (D146),
-    and which ones depends on the program and its options."""
+    and which ones depends on the program and its options.
+
+    Runs `git init` in a temporary directory."""
     import subprocess
 
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
@@ -609,7 +613,9 @@ def test_a_search_of_an_ignored_directory_or_a_nested_repository_is_checked(
     tmp_path: Path,
 ) -> None:
     """D168 (found in review): git's list is empty for an ignored directory and stops at a
-    nested repository, but ripgrep reads both -- such a Grep was allowed without any check."""
+    nested repository, but ripgrep reads both -- such a Grep was allowed without any check.
+
+    Runs git in a temporary repository."""
     import subprocess
 
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
@@ -753,7 +759,9 @@ def test_a_container_command_on_calus_database_asks(
 
 def test_an_uninitialised_submodule_does_not_recurse(tmp_path: Path) -> None:
     """D172 (second review): git lists `./` inside an empty submodule, which was listed again
-    until RecursionError -- so every search of such a project asked."""
+    until RecursionError -- so every search of such a project asked.
+
+    Runs git (`init`, `submodule`, `commit`) in temporary repositories."""
     import subprocess
 
     from calu.checkers.search import searched_files
@@ -859,7 +867,9 @@ def test_diff_targets_cover_strip_levels_directories_and_pipes(tmp_path: Path) -
         ("docker compose up -d", False),
     ],
 )
-def test_the_second_review_findings(tmp_path: Path, command: str, asks: bool) -> None:
+def test_wrapped_commands_and_git_writes_ask_and_their_lookalikes_do_not(
+    tmp_path: Path, command: str, asks: bool
+) -> None:
     """D172: what the review of D168-D171 found, in both directions."""
     (tmp_path / "CLAUDE.md").write_text("a\n", encoding="utf-8")
     (tmp_path / "main.c").write_text("int main(){}\n", encoding="utf-8")
@@ -891,7 +901,9 @@ def test_calu_started_through_any_launcher_spelling_asks(tmp_path: Path, command
 
 def test_a_secret_in_an_uninitialised_submodule_is_not_skipped(tmp_path: Path) -> None:
     """D173: D172 skipped git's `./` entry of an empty submodule, so a Grep read `sub/.env`
-    with no check at all; the directory is walked instead."""
+    with no check at all; the directory is walked instead.
+
+    Runs git in temporary repositories."""
     import subprocess
 
     def git(*args: str, cwd: Path) -> None:
@@ -973,7 +985,9 @@ def test_diffs_are_stripped_the_way_the_tool_strips_them(tmp_path: Path) -> None
         ("git checkout feature", False),
     ],
 )
-def test_the_third_review_findings(tmp_path: Path, command: str, asks: bool) -> None:
+def test_script_checkout_and_compose_spellings_ask_and_their_lookalikes_do_not(
+    tmp_path: Path, command: str, asks: bool
+) -> None:
     """D173: what the review of D172 found, in both directions."""
     (tmp_path / "CLAUDE.md").write_text("a\n", encoding="utf-8")
     (tmp_path / ".claude").mkdir()
@@ -1002,7 +1016,7 @@ _HD = "--- a/CLAUDE.md\n+++ b/CLAUDE.md\n@@ -1 +1 @@\n-a\n+b\n"
         "git apply ren.diff",
     ],
 )
-def test_the_fourth_review_diff_findings_ask(tmp_path: Path, command: str) -> None:
+def test_a_diff_applied_in_many_spellings_asks(tmp_path: Path, command: str) -> None:
     """D174: precise option parsing kept missing spellings; `diff_targets` fails closed now."""
     (tmp_path / "hook.diff").write_text(
         "--- a/.git/hooks/pre-commit\n+++ b/.git/hooks/pre-commit\n", encoding="utf-8"
@@ -1050,7 +1064,9 @@ def test_patch_with_a_directory_reads_its_diff_there(tmp_path: Path) -> None:
         ("cat > notes.txt <<EOF\nsee ./docs\nEOF", False),
     ],
 )
-def test_the_fourth_review_findings(tmp_path: Path, command: str, asks: bool) -> None:
+def test_launcher_checkout_and_heredoc_spellings_ask_and_their_lookalikes_do_not(
+    tmp_path: Path, command: str, asks: bool
+) -> None:
     """D174: what the review of D173 found, in both directions."""
     (tmp_path / "CLAUDE.md").write_text("a\n", encoding="utf-8")
     assert bool(default_rules(tmp_path).evaluate(bash(command, str(tmp_path))).ask) is asks
@@ -1093,7 +1109,7 @@ def test_calus_compose_file_is_recognised_by_its_content(tmp_path: Path) -> None
         "python src/calu",
     ],
 )
-def test_the_fifth_review_findings_ask(tmp_path: Path, command: str) -> None:
+def test_quoted_or_joined_spellings_of_a_wrapper_or_diff_ask(tmp_path: Path, command: str) -> None:
     """D175: wrappers lost their quoted command's arguments, a quoted tool name skipped the
     diff, shell operators touching a file name hid it, and more."""
     (tmp_path / "CLAUDE.md").write_text("a\n", encoding="utf-8")
@@ -1116,7 +1132,9 @@ def test_the_fifth_review_findings_ask(tmp_path: Path, command: str) -> None:
         "cat src/calu/db/local-compose.yml",
     ],
 )
-def test_the_fifth_review_false_positives_are_gone(tmp_path: Path, command: str) -> None:
+def test_the_word_patch_or_apply_does_not_make_a_named_file_a_diff(
+    tmp_path: Path, command: str
+) -> None:
     """D175: a word `patch`/`apply`/`am` anywhere made every named file a diff, and any
     multi-line command mentioning python had its literals read as code."""
     (tmp_path / "docs").mkdir()

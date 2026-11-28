@@ -38,14 +38,14 @@ fun heldPaths(state: ViewState): Set<String> {
 }
 
 /**
- * The files held when the IDE closed, and the session whose turn held them (B23).
+ * The files held when the IDE closed, and the session whose turn held them (test plan B23).
  *
  * A local save of a file the agent edits in the running turn is held (queued, not uploaded)
- * until the turn ends. The queue survives a restart of the IDE, but after the restart the chat
- * knows nothing about the running turn until it is attached again, so [heldPaths] is empty and
- * the first comparison would upload the held save at once. The plugin therefore stores the held
- * paths with the session id and holds them after a restart until [holdEnded] says that this
- * session's turn is over.
+ * until the turn ends. The queue survives a restart of the IDE. After the restart the chat
+ * knows nothing about the running turn until it is attached again, so [heldPaths] is empty.
+ * The first comparison would then upload the held save at once. The plugin therefore stores
+ * the held paths with the session id. It holds them after a restart until [holdEnded] says
+ * that this session's turn is over.
  *
  * @property sessionId calu's session id of the turn that held the files; null if none was attached.
  * @property paths the held paths, relative to the project; never empty in a stored record.
@@ -84,7 +84,7 @@ data class KeptHold(val sessionId: String?, val paths: Set<String>) {
  *
  * @param state the chat's view state now.
  * @param sessionId the session of [KeptHold]; null if the hold was recorded without one (then
- *   any attached quiet session of the workspace, or a list without a running session here, ends it).
+ *   any attached quiet session, or a list without a running session here, ends it).
  * @return true only when the end is known; false while it is not.
  */
 fun holdEnded(state: ViewState, sessionId: String?): Boolean {
@@ -97,7 +97,7 @@ fun holdEnded(state: ViewState, sessionId: String?): Boolean {
 }
 
 /**
- * Keeps the held paths across a restart of the IDE (B23): every answer is stored with the
+ * Keeps the held paths across a restart of the IDE (test plan B23): every answer is stored with the
  * session id, and a record found at the start stays held until [holdEnded] is true for its session.
  *
  * @param load reads the record stored by the last IDE run (null if none).

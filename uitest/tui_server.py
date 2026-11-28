@@ -15,7 +15,7 @@ The scenarios (first message `scenario: <name>`):
                     is not held). The other six stream text slowly and run commands of 2 s;
                     their commands wait as well while an escalation is open. The turn ends when
                     every subagent has reported.
-    long            sixty turns of thirteen items each (thinking, streamed text, a Read, an
+    long            sixty turns of eleven items each (thinking, streamed text, a Read, an
                     Edit, six commands, text with a code block); every tenth turn has a result
                     of 200 lines. Send the sixty messages yourself, or all at once: a message
                     sent during a turn starts the next one.
@@ -145,7 +145,7 @@ def many_subagents(workspace: Path) -> FakeScript:
 
 
 def long(workspace: Path) -> FakeScript:
-    """Build the scenario `long`: `LONG_TURNS` turns of thirteen items each.
+    """Build the scenario `long`: `LONG_TURNS` turns of eleven items each.
 
     Args:
         workspace: The project directory of the session.

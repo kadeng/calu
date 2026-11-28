@@ -1,13 +1,15 @@
 # Testing calu
 
-Four layers, each with its own cost, plus the spikes that measure what Claude Code actually
-does. The default run needs nothing but the repository.
+The test layers are in the table below. Next to them are the spikes, which measure what Claude
+Code actually does, and the tests of the VSCode extension. CI runs the unit, database and
+browser layers. The live, root and fuzz layers and the spikes run by hand. The default run
+needs nothing but the repository.
 
 | Layer | Marker | Needs | How long |
 |---|---|---|---|
-| Unit | none | nothing (a few spawn `python -m calu` or a stub `docker`) | ~1.5 min |
-| Database | `db` | PostgreSQL (`docker compose up -d caludb --wait`) | ~20 s |
-| Browser | `browser` (most also `db`) | a headless Chromium (`scripts/get-browser.sh`) | ~8 s |
+| Unit | none | nothing (a few spawn `python -m calu` or a stub `docker`) | ~1.5 min (one process; ~30 s with `-n 8`) |
+| Database | `db` | PostgreSQL (`docker compose up -d caludb --wait`) | ~2.5 min (the full layer, see the times below) |
+| Browser | `browser` (most also `db`) | a headless Chromium (`scripts/get-browser.sh`) | ~1 min |
 | Live | `live` | a real `claude` and/or model API keys | minutes, costs money |
 | Root | `root` (five also `db`) | real root, in the root box (`uitest/rootbox`) | ~15 s |
 | Fuzz | `fuzz` | nothing (threads of one process); run by hand, never in CI | about 1 min |
@@ -40,15 +42,20 @@ order, with the virtual environment outside the checkout
 repository lives on a mounted drive. The default `addopts` deselect `live`, `db`, `browser` and
 `root`, so a plain `uv run pytest` is the fast layer.
 
-Four tests run a real process instead of a mock, because that is the only way to check
-them: `tests/unit/test_acp_process.py` spawns `python -m calu acp` and speaks ACP to its pipes,
-`tests/unit/test_attach_process.py` spawns `python -m calu attach` against a real session and
-types at it, and `tests/unit/test_local_db.py` puts a stub `docker` on PATH and checks what
-`calu db up` would run, and `tests/db/test_web_process.py` starts `python -m calu web` with a
-credential store of its own and checks that it serves the fleet page on loopback and **refuses**
-a public address. The first three need neither Docker nor a database; coverage does not see the
-code that runs in a child process -- `calu/acp/serve.py` and the input loop of
-`calu/attach.py` are exercised end to end while reporting as uncovered.
+Four tests run a real process instead of a mock, because that is the only way to check them:
+
+- `tests/unit/test_acp_process.py` spawns `python -m calu acp` and speaks ACP to its pipes.
+- `tests/unit/test_attach_process.py` spawns `python -m calu attach` against a real session and
+  types at it.
+- `tests/unit/test_local_db.py` puts a stub `docker` on PATH and checks what `calu db up` would
+  run.
+- `tests/db/test_web_process.py` starts `python -m calu web` with a credential store of its
+  own. It checks that the process serves the fleet page on loopback and **refuses** a public
+  address.
+
+The first three need neither Docker nor a database. Coverage does not see the code that runs
+in a child process. `calu/acp/serve.py` and the input loop of `calu/attach.py` are exercised
+end to end while they report as uncovered.
 
 Sync with `uv sync`: the web interface and the full-screen terminal client are part of the one
 package (no optional extras since 2026-11-13). The tests that need their packages still skip
@@ -67,12 +74,68 @@ The client (`src/calu/tui/`) is tested in the unit layer, without a terminal, a 
 | `test_tui_app.py` | the Textual app under `App.run_test()` with `Pilot` pressing keys: sending in each mode, `a a`/`d d`/note, questions, the detail view, agent switching, side questions, the scrolling rules (the scroll offset and every visible line stay while output arrives), 80x24 and 120x36, a session of 2,000 steps | the scripted session |
 | `test_tui_more.py` | the same app for what came second: the start card of a stopped session, the confirmed stop-and-resume with another model or effort, resuming a stored conversation, the stored history above the replayed events, the diff screen (side by side, unified, jumps between changes, a comment on selected lines), the side panel as a list (queue, held drafts, marks), held drafts sent when the session turns idle, search, copy, export, `@` path completion, large pastes, the settings file, other keys, `NO_COLOR` | the scripted session |
 | `test_tui_tools.py` | what needs neither Textual nor a session: `calu.tui.settings` (`tui.toml`, the history of sent texts), `calu.tui.difftools` (the rows of a diff, a selection as a line range), `calu.tui.completion`, `calu.tui.export`, and the stored history in the model | nothing |
-| `test_tui_admin.py` | the checkers screen (reading through the session, saving edited instructions with the user login, the calu user password question and a wrong answer, a stored login the database refuses (called outdated), a machine without the user login), code honesty (today's `honesty.update` and the one with baseline and unreviewed files, the page, `/trust` with its yes/no question, `/trust-file`, `/honesty-review`, `/honesty off\|track\|enforce` with the confirmation of a weaker mode), and `f4` (which git program is chosen, the install command per package manager, that a command with `sudo` is only shown) | the scripted session; `FakeAdmin` for the credential; `CaluApp.run_program`, `which` and `environ` for the external program |
+| `test_tui_admin.py` | the checkers screen, code honesty and `f4`; the lists "Checkers screen", "Code honesty" and "`f4`" below the table name the cases | the scripted session; `FakeAdmin` for the credential; `CaluApp.run_program`, `which` and `environ` for the external program |
 | `test_tui_screens.py` | the whole screen as text for six scripted sessions at 120x36 and 80x24, compared with the files in `tests/unit/tui_screens/`; the same text without colours | the scripted session |
-| `test_tui_review.py` | what two reviews found, each as a test: a long command on the card (wrapped, the cut counted, allowed from the detail only), an edit's changed lines on the card, one resize in each direction, a reply that begins with a letter of the card (typed whole), a decision bound to its escalation (the second press, the note question and the detail never reach a step that took the place; a key right after the card changed; a held key), Enter on a question set, the list of slash commands, a message on a subagent's tab, hints that fit the width, repeated notices as one toast, the keys of the honesty page, the reconnect after a stay in the git program (close code 1011) and after a close during `state.get`, the interrupt handler around the git program (also on a real pty: `f4`, ctrl+c, still attached), a save the session does not show, a save over a change made meanwhile, the bound on the model's blocks, a refused held draft, the filtered help, an unsupported Textual | the scripted session; one test starts `python -m calu.tui` on a pty |
-| `test_startup_imports.py` | what `calu` imports before a command runs, each case in a process of its own: importing `calu.cli`, building the parser, `--version`, `--help`, a subcommand's help and the modules of the client commands (`attach`, the fleet commands, `ide`, `acp`, `doctor`, `start`) import neither Pydantic AI with its provider SDKs nor the Agent SDK, `mcp`, Starlette, uvicorn or Textual; the full-screen client and the web interface import only their own toolkit; the names `calu.checkers`, `calu.context` and `calu.evals` export lazily still resolve; `calu --version` answers faster than a process that only imports what it used to import (Pydantic AI with two provider modules, the Agent SDK; marked `slow`) |
+| `test_tui_review.py` | what two reviews found, each as a test; the list "Review findings" below the table names them | the scripted session; one test starts `python -m calu.tui` on a pty |
+| `test_startup_imports.py` | what `calu` imports before a command runs, each case in a process of its own; the list "Start-up imports" below the table names the cases | nothing |
 | `test_tui_process.py` | the app over `protocol_connector` against a real `SessionServer`, session and fake runner: a turn, an escalation, a side question, the detail view, a model change; and which client `calu attach` starts | a real WebSocket |
 | `test_protocol_side_usage.py` | the requests `side.ask`, `usage.get`, `model.set` and the event `usage.update` through the fake runner | a real WebSocket |
+
+Checkers screen (`test_tui_admin.py`):
+
+- reading the checkers through the session
+- saving edited instructions with the user login
+- the question for the calu user password, and a wrong answer
+- a stored login that the database refuses (called outdated)
+- a machine without the user login
+
+Code honesty (`test_tui_admin.py`):
+
+- today's `honesty.update`, and the one with baseline and unreviewed files
+- the honesty page
+- `/trust` with its yes/no question, `/trust-file` and `/honesty-review`
+- `/honesty off|track|enforce`, with the confirmation of a weaker mode
+
+`f4` (`test_tui_admin.py`):
+
+- which git program is chosen
+- the install command per package manager
+- a command with `sudo` is only shown, never run
+
+Review findings (`test_tui_review.py`), each one test:
+
+- a long command on the card: wrapped, the cut counted, allowed from the detail only
+- an edit's changed lines on the card
+- one resize in each direction
+- a reply that begins with a letter of the card, typed whole
+- a decision bound to its escalation: the second press, the note question and the detail never
+  reach a step that took the place; a key right after the card changed; a held key
+- Enter on a question set
+- the list of slash commands
+- a message on a subagent's tab
+- hints that fit the width
+- repeated notices as one toast
+- the keys of the honesty page
+- the reconnect after a stay in the git program (close code 1011) and after a close during
+  `state.get`
+- the interrupt handler around the git program, also on a real pty: `f4`, ctrl+c, still attached
+- a save the session does not show, and a save over a change made meanwhile
+- the bound on the model's blocks
+- a refused held draft
+- the filtered help
+- an unsupported Textual
+
+Start-up imports (`test_startup_imports.py`), each case in a process of its own:
+
+- Importing `calu.cli`, building the parser, `--version`, `--help`, a subcommand's help and the
+  modules of the client commands (`attach`, the fleet commands, `ide`, `acp`, `doctor`,
+  `start`) must import neither Pydantic AI with its provider SDKs nor the Agent SDK, `mcp`,
+  Starlette, uvicorn or Textual.
+- The full-screen client and the web interface import only their own toolkit.
+- The names `calu.checkers`, `calu.context` and `calu.evals` export lazily still resolve.
+- A timing test (marked `slow`) checks that `calu --version` answers faster than a process
+  that only imports what it used to import (Pydantic AI with two provider modules and the
+  Agent SDK).
 
 `calu.tui.scenarios` holds the scripted sessions (a turn, an escalation, subagents with a
 question, a set of questions, a stopped session, 2,000 steps, a stored history); the tests, the
@@ -105,11 +168,12 @@ sources build to, so run `npm run build:pane` after a change to anything the cha
 pane's Python side is tested in `tests/unit/test_web_pane.py` (login, frame policy, the allowed
 bridge requests, one bridge over the WebSocket) and in a real browser in
 `tests/browser/test_web_pane.py` (its own window, an iframe of another site, no login) and
-`tests/browser/test_web_pane_layouts.py`: a scripted session on a token-free local socket (no
-database) and the pane at the bottom right of a notebook layout on a 2560x1440 monitor and on
-MacBook Pro 16" and 14" displays, as a side bar and in its own window; each runs a turn with an
-escalation, the decision, the diff, a file at its line, the session menu, and checks that the
-settings open the full web interface in another, logged-in window. `CALU_PANE_SCREENSHOTS=<dir>`
+`tests/browser/test_web_pane_layouts.py`. The layout tests use a scripted session on a
+token-free local socket (no database). They put the pane at the bottom right of a notebook
+layout, on a 2560x1440 monitor and on MacBook Pro 16" and 14" displays, as a side bar and in
+its own window. Each test runs a turn with an escalation, the decision, the diff, a file at its
+line and the session menu. Each test also checks that the settings open the full web interface
+in another, logged-in window. `CALU_PANE_SCREENSHOTS=<dir>`
 saves a picture of every state; look at them after a change to `media/chat.css`.
 
 `scripts/test-in-docker.sh` builds the image `calu-vscode-test` (`docker/vscode-test.Dockerfile`:
@@ -126,14 +190,21 @@ in-memory store on 127.0.0.1 and writes its address and a client token to a file
 `scripts/prepare-test-workspace.mjs` makes a git workspace and a `calu` wrapper whose XDG
 directories lie below the test directory and whose `CALU_PLACE_FILE` is `/nonexistent`, so
 nothing of the tester's own calu (credentials, place file, database) is read. No database,
-no Claude Code, no key. The tests (`extension.test.ts`): activation and the commands;
-`calu ide` starts and initializes; the chat webview resolves and reports the state it drew;
-an attach by address and token (`Sessions.attachEndpoint`); a turn whose escalated step is
-allowed, with the card in the webview and "calu: 1 waiting" in the status bar; `step.held`
-through the shared reducer; `calu ide` killed, then "Restart bridge" attaches to the same
-session again and a second turn goes through; the session's process ended: "The calu server
-stopped" with Start server and Retry, the transcript kept and marked ended, a Retry without a
-server says when it looked, and an attach to a second scripted session ends the card.
+no Claude Code, no key. The tests (`extension.test.ts`) check these behaviours:
+
+- The extension activates and registers its commands.
+- `calu ide` starts and initializes.
+- The chat webview resolves and reports the state it drew.
+- An attach by address and token works (`Sessions.attachEndpoint`).
+- A turn whose escalated step is allowed shows the card in the webview and "calu: 1 waiting"
+  in the status bar.
+- `step.held` goes through the shared reducer.
+- After `calu ide` is killed, "Restart bridge" attaches to the same session again, and a
+  second turn goes through.
+- When the session's process ends, the chat shows "The calu server stopped" with Start server
+  and Retry. It keeps the transcript and marks it ended.
+- A Retry without a server says when it looked.
+- An attach to a second scripted session ends the card.
 
 The rest of the extension is tested by hand in the Cua desktop
 (`.claude/skills/ui-testing-with-cua/SKILL.md`, the record in
@@ -265,8 +336,8 @@ uv run pytest -m db
 `caludb` listens on 127.0.0.1:55432 (`calu_owner` / `calu-dev`, development only). Each test
 creates and drops its own database, so the tests do not interfere and a failed run leaves
 nothing behind. `tests/db/` covers the schema and the roles (what the user login `calu_admin`
-may and may not do, and that `calu_session` and `calu_operator` no longer log in after
-migration 0043), the stores, the admin commands, the herd queries, the web interface and the
+may and may not do, and that `calu_session` and `calu_operator` cannot log in after the
+migrations: the baseline creates them with NOLOGIN), the stores, the admin commands, the herd queries, the web interface and the
 live relay.
 
 The databases are per test, but calu's roles (`calu_admin`, `calu_operator`, `calu_session`)
@@ -359,7 +430,7 @@ which a test run must not do to a developer's machine. They run in the root box,
 (`uitest/README.md`, "The root box"):
 
 ```bash
-calu/uitest/rootbox/run.sh                    # once: build, start, install calu inside
+uitest/rootbox/run.sh                         # once: build, start, install calu inside
 docker exec calu-rootbox rootbox-tests        # 25 tests, a PostgreSQL cluster of their own (port 5434)
 docker exec calu-rootbox rootbox-tests -k socket -x
 ```
@@ -390,22 +461,6 @@ it sends a prompt, an injected and a queued message through the real runner and 
 exactly these three are recorded as the user's input, while calu's own note and a command's
 output are not (`spikes/RESULTS.md`, "Whose words a user-role message is"). Run it after every
 update of the CLI or of `claude-agent-sdk`; it takes about half a minute on haiku.
-
-44. The answers of the final acceptance round (PLAN D248), with a real `claude`, ideally on a
-   claude.ai subscription. In the full-screen client click the `ctx` cell of the status line:
-   the usage panel shows "not reported yet by Claude Code" or the 5-hour and weekly limits
-   with "reported ... ago", "YOUR PLAN NOW" for a subscription, and Claude Code's `/usage`
-   text; the chat log on the session page of `calu web` and the transcript gain no turn, and
-   the checkers' context (`/checker-context`) does not mention it. `/usage` in the line client and a click on the
-   web's usage line show the same. Type `/context` and `/compact` in the full-screen client:
-   Claude Code answers them as in VSCode. In the web live view ask a side question while a
-   turn runs, then a follow-up that refers to it: the answers stay on that page (a second
-   browser sees nothing), the turn goes on. Store an older shipped checker text unchanged
-   (`calu checker set edit --instructions-file src/calu/defaults/checkers/legacy/v2/edit.md`):
-   `calu doctor --db`, `calu checker show edit` and the web's settings pane call it older,
-   `calu checker update edit` and "Use the present version" replace it, `calu setup` asks; an
-   edited text is only reported, `calu checker diff` shows it. `/running` and the web's
-   session list show `~/...`, the tooltip the full path.
 
 ## The spikes: what Claude Code actually does
 
@@ -451,17 +506,26 @@ PATH=/tmp/calu-spike-tools/bin:$PATH uv run python spikes/smoke_session.py /tmp/
 ```
 
 `smoke_session.py` creates a throwaway database, runs one real session in it, prints what the
-database holds afterwards and drops it again. Its flags: `--sandbox` (on this machine the
-sandbox needs socat from `get-socat.sh`), `--changes` (measure and review what a command wrote,
-D31), `--socket PATH` (serve the clients on a Unix socket), `--resolve allow|deny` (play the
-operator for the first escalation), `--model`, `--checker-model MODEL|auto` (real checkers
-instead of the rule-based fakes), `--honesty track|enforce`, `--trust-head` (certify HEAD of
-the project directory with the source `user` before the session starts),
-`--reviewer-model`, `--resume ID` and `--fork ID` (continue a Claude conversation, or a copy
-of it, by the id an earlier run printed as `[session] ID`) and `--stay` (keep the session after the first turn and read further
-messages from stdin: the `[clients]` lines name the address and the token for `calu attach`,
-which is how the full-screen client was tried against a real session; a client that is still
-attached keeps the session alive after Ctrl-D).
+database holds afterwards and drops it again. Its flags:
+
+| Flag | Meaning |
+|---|---|
+| `--sandbox` | Turns the sandbox on. On this machine the sandbox needs socat from `get-socat.sh`. |
+| `--changes` | Measures and reviews what a command wrote (D31). |
+| `--socket PATH` | Serves the clients on a Unix socket. |
+| `--resolve allow\|deny` | Plays the operator for the first escalation. |
+| `--model` | Names the model of Claude Code. |
+| `--checker-model MODEL\|auto` | Uses real checkers instead of the rule-based fakes. |
+| `--honesty track\|enforce` | Sets the honesty mode. |
+| `--trust-head` | Certifies HEAD of the project directory with the source `user` before the session starts. |
+| `--reviewer-model` | Names the model of the honesty review. |
+| `--resume ID` | Continues a Claude conversation by the id an earlier run printed as `[session] ID`. |
+| `--fork ID` | Continues a copy of that conversation. |
+| `--stay` | Keeps the session after the first turn and reads further messages from stdin. |
+
+With `--stay`, the `[clients]` lines name the address and the token for `calu attach`. That is
+how the full-screen client was tried against a real session. A client that is still attached
+keeps the session alive after Ctrl-D.
 
 Code honesty against a real model (run on 2026-11-12 with haiku as Claude and Nemotron
 Lightning as checker and reviewer; all four ended as described). The project directory is a
@@ -505,24 +569,27 @@ escalation resolved from the database alone.
    second.
 7. `calu web`: open the printed address (`http://calu.localhost:8800/`; the browser asks for
    the calu user password, item 32, or with an empty one for the password of calu web, item
-   60); the address must answer 401 with the sign-in page in a private window,
-   `http://127.0.0.1:8800/` must answer 403 and name the right address, and a `curl -X
-   POST` must not decide anything -- neither without a cookie nor with the
-   `calu_web_session` cookie copied from the browser (D161).
-   Restart the database while the triage page is open: the page says that its list may be out
-   of date and recovers by itself, without a restart of `calu web`. Then the
-   fleet, a session at all four levels of detail, the triage queue, Ctrl+K. On the settings
-   page (D182): open a checker pane and a rules pane, search for "effort", change a value on two
-   panes and save once, type a broken regular expression into a rule list and check that the
-   error is shown at the list with the text still there, switch the scope to a project and
-   check that the global value is shown as inherited; repeat the first steps at phone width.
+   60).
+   - Sign-in and cookie: the address must answer 401 with the sign-in page in a private
+     window. `http://127.0.0.1:8800/` must answer 403 and name the right address. A `curl -X
+     POST` must not decide anything, neither without a cookie nor with the `calu_web_session`
+     cookie copied from the browser (D161).
+   - Database restart: restart the database while the triage page is open. The page says that
+     its list may be out of date and recovers by itself, without a restart of `calu web`.
+   - Pages: look at the fleet, a session at all four levels of detail, the triage queue and
+     Ctrl+K.
+   - Settings page (D182): open a checker pane and a rules pane, and search for "effort".
+     Change a value on two panes and save once. Type a broken regular expression into a rule
+     list. The error must show at the list, and the text must stay. Switch the scope to a
+     project. The global value must show as inherited.
+   - Phone width: repeat the first steps at phone width.
 8. The session mode from a client (D42): with a session running, set `auto_escalate.edits` on
    the settings page and watch an attached `calu attach` report it; then the session page must
    list the change with who asked for it (D43). With an ACP editor, the same through its own
    agent-mode picker.
-9. Removed with D265: session isolation (D49); every session logs in as `calu_admin`, which
-   passes every row-level policy, and `tests/db/test_schema.py` checks that this login runs a
-   session through every statement the store uses.
+9. Session isolation (D49) no longer exists since D265. Every session logs in as `calu_admin`,
+   which passes every row-level policy. `tests/db/test_schema.py` checks that this login runs
+   a session through every statement the store uses.
 10. In a container: `docker compose run --rm dev sh -c 'command -v bwrap socat'` and a real
    `bwrap --unshare-user ...` — the `dev` service needs `security_opt: [seccomp:unconfined]`,
    because Docker's default seccomp profile blocks user namespaces.
@@ -593,83 +660,109 @@ escalation resolved from the database alone.
    nothing may be deleted. Run it again and type the phrase: `calu project list` is empty
    afterwards and `calu run` still starts with the stored user login. Not yet run with the
    one user login.
-22. The full-screen client in a real terminal (`calu attach` beside a `calu run`): in tmux and
-   over ssh without `COLORTERM` (the verdict words and the state must stay readable in 256
-   colours); at 80x24 (`f2` opens the side panel over the transcript); scroll up with PageUp
-   and the mouse wheel while Claude writes — the visible lines must not move, `End` returns;
-   `alt+←/→` through the subagents of a session that started two; an escalation answered
-   with `a a` and one with `d d` after a note (`n n`); `w w` on an escalation, and back with
-   `w`; type "no, use a branch" and "why?" while a step waits (both are typed whole and sent as
-   messages, nothing is decided); a step with a command of ten lines (the card counts what it
-   cuts, `a` opens the detail, `a a` there allows); hold `a` down on an empty input (nothing is
-   decided); with two steps waiting, press `a`, decide the first one from `calu web`, press `a`
-   again (the second step must still wait); drag the window from 120 to 80 columns and back
-   (the side panel goes and comes with the first resize);
-   `/btw <question>` while a command runs — the answer appears in the side panel, the turn goes
-   on, and the next turn does not know the question; `alt+c` copies (OSC 52: needs
-   `set -g set-clipboard on` in tmux); kill and restart `calu run` while attached (the status
-   bar says why the connection ended; `ctrl+d` leaves); two clients on one escalation (the
-   other one reports "decided elsewhere"); `calu attach --plain` and `calu attach | cat` give
-   the line client.
-23. The second part of the full-screen client, in a real terminal: attach to a session that has
-   run a while and was restarted with `calu run --resume` (the stored history stands above a
-   line that says so, then the live events); `/stop`, then Enter on the start card; `/effort
-   max` on a running session (the confirmation lists what the stop ends; `n` keeps the session,
-   `y` resumes the conversation with the new effort); `/sessions` and a second conversation;
-   `ctrl+up`, the cursor on an edit, `D` (side by side from 120 columns, `s` switches), `v`,
-   `j`, Enter, a comment — Claude must receive it with the selected lines; `ctrl+f` and a
-   word (the matches are marked, Enter goes to the older one, Esc ends); `alt+h` while Claude
-   works (the draft is listed under HELD and goes out when the turn ends), `f2`, `d` on a
-   draft; paste 50 lines (one marker; the message arrives in full); `@` and Tab on a project
-   path; `/export`; `/theme calu-light`, detach, attach again (the theme is kept in
-   `~/.config/calu/tui.toml`, the sent texts come back with the up arrow); `NO_COLOR=1 calu
-   attach`; switch to another window while a turn runs (the bell rings at its end if the
-   terminal reports focus changes).
-
+22. The full-screen client in a real terminal (`calu attach` beside a `calu run`).
+   - Terminal types: in tmux and over ssh without `COLORTERM`, the verdict words and the state
+     must stay readable in 256 colours. At 80x24, `f2` opens the side panel over the
+     transcript.
+   - Scrolling: scroll up with PageUp and the mouse wheel while Claude writes. The visible
+     lines must not move, and `End` returns.
+   - Subagents: `alt+←/→` switches through the subagents of a session that started two.
+   - Escalations: answer one with `a a` and one with `d d` after a note (`n n`). Press `w w`
+     on an escalation, and go back with `w`. Type "no, use a branch" and "why?" while a step
+     waits. Both are typed whole and sent as messages, and nothing is decided.
+   - Long command: a step with a command of ten lines shows a card that counts what it cuts.
+     `a` opens the detail, and `a a` there allows.
+   - Held key: hold `a` down on an empty input. Nothing is decided.
+   - Two steps waiting: press `a`, decide the first one from `calu web`, and press `a` again.
+     The second step must still wait.
+   - Resize: drag the window from 120 to 80 columns and back. The side panel goes and comes
+     with the first resize.
+   - Side question: `/btw <question>` while a command runs. The answer appears in the side
+     panel, the turn goes on, and the next turn does not know the question.
+   - Clipboard: `alt+c` copies (OSC 52; tmux needs `set -g set-clipboard on`).
+   - Reconnect: kill and restart `calu run` while attached. The status bar says why the
+     connection ended, and `ctrl+d` leaves.
+   - Two clients on one escalation: the other one reports "decided elsewhere".
+   - Line client: `calu attach --plain` and `calu attach | cat` give the line client.
+23. The second part of the full-screen client, in a real terminal.
+   - Stored history: attach to a session that has run a while and was restarted with `calu run
+     --resume`. The stored history stands above a line that says so, and then come the live
+     events.
+   - Stop and resume: `/stop`, then Enter on the start card. `/effort max` on a running
+     session shows a confirmation that lists what the stop ends. `n` keeps the session, and
+     `y` resumes the conversation with the new effort. `/sessions` and a second conversation
+     work.
+   - Diff screen: press `ctrl+up` and put the cursor on an edit. `D` opens the diff (side by
+     side from 120 columns, `s` switches). Then press `v`, `j`, Enter and write a comment.
+     Claude must receive the comment with the selected lines.
+   - Search: `ctrl+f` and a word. The matches are marked, Enter goes to the older one, and Esc
+     ends the search.
+   - Held drafts: press `alt+h` while Claude works. The draft is listed under HELD and goes
+     out when the turn ends. `f2` and `d` on a draft remove it.
+   - Paste: paste 50 lines. They show as one marker, and the message arrives in full.
+   - Completion and export: `@` and Tab complete a project path. `/export` writes the
+     conversation.
+   - Theme: `/theme calu-light`, detach, attach again. The theme is kept in
+     `~/.config/calu/tui.toml`, and the sent texts come back with the up arrow.
+   - Colours: `NO_COLOR=1 calu attach` shows no colour.
+   - Focus: switch to another window while a turn runs. The bell rings at its end if the
+     terminal reports focus changes.
 24. Checkers, honesty and the git program in the full-screen client, in a real terminal on the
-   session's machine: `/checkers`, `j`, `e`, change a line, `ctrl+s` (with a calu user
-   password the client asks for it; the message names the new version, and `calu checker
-   list` shows the same version); the same on a machine without the user login (the screen
-   says "read-only here" and names `calu checker edit`); `/honesty` (mode, marks;
-   baseline and unreviewed files once the session reports them); `/honesty enforce`, then
-   `/honesty track` (a question, Enter keeps `enforce`); `/trust` (the box names the short
-   id and subject of HEAD; Enter certifies nothing); `t`, `r`, `x`, `m` on the honesty page;
-   with `calu attach ws://other-host ...` and a local user login for another database, save a
-   checker and `/honesty track` (both must say that the attached session does not show the
-   change); `f4` with gitui installed (gitui opens
-   in the project directory, `q` returns to the client); stay in it for more than a minute (the
-   status bar shows `reconnecting` and then `attached`, and what happened meanwhile is in the
-   transcript); `CALU_GIT_TOOL='git log' calu attach`, `f4`, ctrl+c in the pager (the client
-   is still there); `CALU_GIT_TOOL=tig calu attach`; `f4` without gitui (the
-   client offers to install it, shows the command for this machine and runs nothing that
-   needs `sudo`). Not yet run with the one user login.
-25. Code honesty: in a git repository, `calu config set honesty.mode enforce`, then `calu run`
-   with a prompt that edits a source file and runs the project's tests. Without a trusted
-   commit the test command must wait as an escalation that names `/trust`. In `calu attach`,
-   `/trust` must print the certified commit and a `code honesty (enforce): clean` line; the
-   same test command must then run. Change a file with a shell command (`sed -i`) and run the
-   tests again: the step must wait as an escalation that names the unreviewed file. `/honesty`
-   must print the baseline, the marks and the unreviewed files; `calu honesty trusted` must list
-   the certified commit with its source. A `git commit` made in a clean state must be reported
-   as `certified as trusted`. The honesty panel of the live page of `calu web` must show the
-   same state, and its "Trust HEAD" button must ask before it certifies.
-   The honesty review (needs a key for the model of `honesty.reviewer_model` or the default
-   model): change a docstring with `sed -i` so that it still describes the code, and let
-   Claude run the tests: the terminal must print `honesty: review started`, a `batch ... answered`
-   line and `review finished`, `/honesty` must say `a review is running` in between, and the
-   test command must then run without an escalation. Change a docstring so that it contradicts
-   its function and run the tests again: the command must be denied with the finding of the
-   review. `/honesty-review` in `calu attach` must print `review requested` at once and the
-   answer when the review ended, and further lines must be accepted meanwhile. In a
-   repository without a trusted commit, `/honesty-review` must end with `certified as trusted
-   after the review` when every file was judged honest and the working tree has no changes.
-   The honesty checker's answer per file (with the honesty checker enabled, an edit that
-   renames a function without its docstring): `calu attach --plain` must print a
-   `honesty: <file> DISHONEST: <reason>` line under the checker's line, the full-screen client
-   a `honesty` line under the step, the live page a line tagged `honesty`, and the VSCode chat a
-   `dishonest` chip on the step's row; none of them may show the honesty answer as PASS or
-   ALLOW. An edit that keeps the file honest must show `honest` only in the step's details
-   (full-screen client, VSCode) or as a plain line (line client, live page).
+   session's machine. Not yet run with the one user login.
+   - Checkers screen: `/checkers`, `j`, `e`, change a line, `ctrl+s`. With a calu user
+     password the client asks for it. The message names the new version, and `calu checker
+     list` shows the same version.
+   - Machine without the user login: the screen says "read-only here" and names `calu checker
+     edit`.
+   - Honesty page: `/honesty` shows the mode and the marks, and the baseline and unreviewed
+     files once the session reports them. `/honesty enforce`, then `/honesty track` asks a
+     question, and Enter keeps `enforce`. `/trust` shows a box that names the short id and
+     subject of HEAD, and Enter certifies nothing. `t`, `r`, `x` and `m` work on the honesty
+     page.
+   - Other host: with `calu attach ws://other-host ...` and a local user login for another
+     database, save a checker and run `/honesty track`. Both must say that the attached
+     session does not show the change.
+   - Git program: `f4` with gitui installed opens gitui in the project directory, and `q`
+     returns to the client. Stay in it for more than a minute. The status bar shows
+     `reconnecting` and then `attached`, and what happened meanwhile is in the transcript.
+   - Other programs: `CALU_GIT_TOOL='git log' calu attach`, `f4` and ctrl+c in the pager
+     leave the client in place. `CALU_GIT_TOOL=tig calu attach` starts tig.
+   - Without gitui: `f4` makes the client offer to install it. It shows the command for this
+     machine and runs nothing that needs `sudo`.
+25. Code honesty, in a git repository.
+   - Trust flow: run `calu config set honesty.mode enforce`, then `calu run` with a prompt
+     that edits a source file and runs the project's tests. Without a trusted commit the test
+     command must wait as an escalation that names `/trust`. In `calu attach`, `/trust` must
+     print the certified commit and a `code honesty (enforce): clean` line. The same test
+     command must then run.
+   - Unreviewed file: change a file with a shell command (`sed -i`) and run the tests again.
+     The step must wait as an escalation that names the unreviewed file. `/honesty` must print
+     the baseline, the marks and the unreviewed files. `calu honesty trusted` must list the
+     certified commit with its source.
+   - Commit: a `git commit` made in a clean state must be reported as `certified as trusted`.
+   - Web: the honesty panel of the live page of `calu web` must show the same state. Its
+     "Trust HEAD" button must ask before it certifies.
+   - Honesty review (needs a key for the model of `honesty.reviewer_model` or the default
+     model): change a docstring with `sed -i` so that it still describes the code, and let
+     Claude run the tests. The terminal must print `honesty: review started`, a `batch ...
+     answered` line and `review finished`. `/honesty` must say `a review is running` in
+     between. The test command must then run without an escalation.
+   - Contradicting docstring: change a docstring so that it contradicts its function and run
+     the tests again. The command must be denied with the finding of the review.
+   - `/honesty-review`: in `calu attach` it must print `review requested` at once and the
+     answer when the review ended. Further lines must be accepted meanwhile. In a repository
+     without a trusted commit it must end with `certified as trusted after the review` when
+     every file was judged honest and the working tree has no changes.
+   - The honesty checker's answer per file: enable the honesty checker and make an edit that
+     renames a function without its docstring. Each surface must show the answer like this:
+     - `calu attach --plain` prints a `honesty: <file> DISHONEST: <reason>` line under the
+       checker's line.
+     - The full-screen client shows a `honesty` line under the step.
+     - The live page shows a line tagged `honesty`.
+     - The VSCode chat shows a `dishonest` chip on the step's row.
+     - None of them may show the honesty answer as PASS or ALLOW.
+   - Honest edit: an edit that keeps the file honest must show `honest` only in the step's
+     details (full-screen client, VSCode) or as a plain line (line client, live page).
 26. The database setup (D205), on a machine without calu credentials (or with
    `XDG_CONFIG_HOME` pointing at an empty directory). **Docker:** `calu setup`, answer 1, a
    data directory of your choice: the directory must be private (0700) with the cluster below
@@ -686,46 +779,66 @@ escalation resolved from the database alone.
    the guide says, `calu setup --database rds-iam ...` (the owner logs in with IAM, the user
    login with the user password, D265), then `calu run`; let the session run longer than 15
    minutes, end its connections on the server (`pg_terminate_backend`) and check that it
-   reconnects. **The
-   existing-server variant was run in the root box on 2026-11-18** with the logins of before
-   D265; not yet run with the one user login. To run there (PostgreSQL 16; Docker is not
-   available), as a user and as root: a first setup with the passwords from standard input
-   and on a terminal; a wrong owner password (nothing stored); Ctrl-D at the new user
-   password ("Not done: no password was entered", nothing stored); two different answers at
-   the new password ("Not changed: the two passwords differ"); a second run (the user
-   password asked once); a wrong user password at the second run (tries left, then the
-   pointer to "A forgotten user password"); `--set-password` (a running server keeps its
-   connections and is refused at the next reconnect, in a message that names the cause);
-   Enter at the new password (an empty user password: no command asks afterwards, and the
-   report and the warning say who can use the login); a database that is down (the
-   server's refusal in one message); an older schema (migration 0036 taken out: `calu
-   sessions` and `calu ide` list without names, `calu doctor --db` says that one migration is
-   not applied, `calu setup` applies it); a store of before D265 (`calu setup` asks the earlier admin password once,
-   offers to keep it as the user password, and removes `admin`, `session`, `operator` and
-   `calu_admin`; another command on that store names `calu setup`).
-27. `calu serve` (D208). In one terminal `calu serve` in the directory that holds your
-   projects: it asks the calu user password once (nothing with an empty one) and prints that
-   it answers requests in that directory. In two project directories below it `calu start -p
-   hi`: each must attach to a session of its own without a password, and the server prints one
-   "requested", "started" and (after `/shutdown` in the client) "ended" line per session,
-   with the directory's name in front. `calu start --fork <id>` of one of them must know the
-   original conversation. `/quit` in a client must leave the session running (`calu attach`
-   finds it again). Ctrl-C in the server must stop every session; `calu sessions` then lists
-   none as running. With the server stopped, `calu start` must say after about ten seconds
-   that no `calu serve` answered. Not yet run with the one user login; the runs below used the
-   logins of before D265. Run on 2026-11-13 with `spikes/smoke_serve.py` (two
-   sessions at once and a fork, real Claude Code, fake checkers); not run by hand: the two
-   commands on a real terminal, and Ctrl-C with sessions in the middle of a turn. A test runs
-   `calu serve` as a process with the password on its standard input, a refused request and
-   SIGTERM (`tests/db/test_serve.py`). **Run in the root box on 2026-11-18** with scripted
-   sessions (`fakecalu serve`), as one user, as root with `--user`, and through sudo: the
-   "requested", "started" and "ended" lines, two sessions at once, Ctrl-C with one session
-   in the middle of a turn and one waiting at an escalation (both rows "stopped", the
-   escalation "cancelled", the attached client told that the session closed),
-   `--max-sessions` (the request beyond it is refused with the reason), `--idle-timeout 1`
-   (ended after 60 s without a client), a request for a directory that does not exist, and a
-   server killed after it claimed a request (`calu start` says after 180 s that the server
-   did not answer; the row is "failed"). Not run: `--fork`.
+   reconnects.
+
+   **The existing-server variant** was run in the root box on 2026-11-18 with the logins of
+   before D265. It is not yet run with the one user login. Run it there (PostgreSQL 16; Docker
+   is not available), as a user and as root, and check each of these cases:
+   - A first setup with the passwords from standard input, and one on a terminal.
+   - A wrong owner password: nothing is stored.
+   - Ctrl-D at the new user password: "Not done: no password was entered", nothing stored.
+   - Two different answers at the new password: "Not changed: the two passwords differ".
+   - A second run: the user password is asked once.
+   - A wrong user password at the second run: tries are left, then the pointer to "A
+     forgotten user password".
+   - `--set-password`: a running server keeps its connections and is refused at the next
+     reconnect, in a message that names the cause.
+   - Enter at the new password: the user password is empty, no command asks afterwards, and
+     the report and the warning say who can use the login.
+   - A database that is down: the server's refusal comes in one message.
+   - An older schema: build it in a scratch database by undoing the newest migration after
+     the baseline and deleting its row from `schema_migrations`. `calu sessions` and `calu
+     ide` list without names, `calu doctor --db` says that one migration is not applied, and
+     `calu setup` applies it.
+   - A store of before D265: `calu setup` asks the earlier admin password once, offers to
+     keep it as the user password, and removes `admin`, `session`, `operator` and
+     `calu_admin`. Another command on that store names `calu setup`.
+27. `calu serve` (D208).
+   - Start: in one terminal run `calu serve` in the directory that holds your projects. It asks
+     the calu user password once (nothing with an empty one) and prints that it answers
+     requests in that directory.
+   - Sessions: in two project directories below it run `calu start -p hi`. Each must attach to
+     a session of its own without a password. The server prints one "requested", "started"
+     and (after `/shutdown` in the client) "ended" line per session, with the directory's name
+     in front.
+   - Fork: `calu start --fork <id>` of one of them must know the original conversation.
+   - Quit: `/quit` in a client must leave the session running, and `calu attach` finds it
+     again.
+   - Stop: Ctrl-C in the server must stop every session. `calu sessions` then lists none as
+     running.
+   - No server: with the server stopped, `calu start` must say after about ten seconds that no
+     `calu serve` answered.
+
+   Runs so far. None used the one user login yet; they used the logins of before D265.
+   - 2026-11-13, `spikes/smoke_serve.py`: two sessions at once and a fork, with a real Claude
+     Code and fake checkers. Not run by hand: the two commands on a real terminal, and Ctrl-C
+     with sessions in the middle of a turn.
+   - Automated: `tests/db/test_serve.py` runs `calu serve` as a process with the password on
+     its standard input, a refused request and SIGTERM.
+   - 2026-11-18, in the root box, with scripted sessions (`fakecalu serve`), as one user, as
+     root with `--user`, and through sudo. It covered the "requested", "started" and "ended"
+     lines and two sessions at once. It covered Ctrl-C with one session in the middle of a
+     turn and one waiting at an escalation: both rows "stopped", the escalation "cancelled",
+     and the attached client told that the session closed. It covered `--max-sessions`, where
+     the request beyond the limit is refused with the reason, and `--idle-timeout 1`, which
+     ended the session after 60 s without a client. It covered a request for a directory that
+     does not exist. It covered a server killed after it claimed a request: `calu start` says
+     after 180 s that the server did not answer, and the row is "failed". Not run: `--fork`.
+28. A conversation started with `claude` itself (D209): in a project directory run `claude`,
+   send a message, quit. `calu list-sessions` must list it with "outside calu" and that
+   message. `calu run --resume <id>` must continue it and warn at the start that none of its
+   steps was checked. Run on 2026-11-13: the listing and the reading of a real transcript.
+   Not run: the resume under calu with real checkers.
 29. calu as root (D211). In a container as root with a project directory mounted from a
    host user: `calu run` without `--user` must refuse and say how to name the user; `calu
    run --user 1000 -p "run: id > who.txt"` must write `uid=1000 gid=1000` into a file owned
@@ -746,22 +859,25 @@ escalation resolved from the database alone.
    `calu run --sudo` must refuse and print the install command for root. After that
    install and `sudo calu setup`: `calu run --sudo -p "run: id > who.txt"` must ask the sudo
    password, then the calu user password (nothing after `sudo calu setup --no-password`), and
-   `who.txt` must name you and belong to you;
+   `who.txt` must name you and belong to you.
    `sudo ls /etc/calu` must show the credential store, and your home must hold nothing new
-   of calu's. Not yet run with the one user login; the runs below used the logins of before
-   D265. Run in a container as root on 2026-11-13: the install command (calu and
-   `calu-claude` land in `/usr/local/lib/calu/calu/bin`, linked from `/usr/local/bin`), the
-   installation check on it (passes), and the refusal of `calu run` without `--user`. **Run
-   through a real sudo in the root box on 2026-11-18**, as a user whose sudo asks nothing
-   and as one whose sudo asks its password: the refusal from an installation in the home
-   directory (the install command was cut off the message; corrected), `calu serve --sudo`
-   (sudo's prompt, then the session password of that time, then the server answers that
-   user's requests; the process is root with the user's file access), what sudo passes on
-   (`HOME`, `LANG`, `PATH`, `TERM`, `USER`, `SUDO_*`: none of the user's `XDG_*`, `PG*`,
-   `PYTHONPATH` or provider keys), the note
-   about provider keys, and that the user's home gets no file of calu's (the log file used to
-   be created there before the elevation; corrected). `calu doctor --sudo` reports the same
-   arrangement without starting anything.
+   of calu's. `calu doctor --sudo` reports the same arrangement without starting anything.
+
+   Runs so far. Not yet run with the one user login; the runs used the logins of before D265.
+   - 2026-11-13, in a container as root: the install command (calu and `calu-claude` land in
+     `/usr/local/lib/calu/calu/bin`, linked from `/usr/local/bin`), the installation check on
+     it (passes), and the refusal of `calu run` without `--user`.
+   - 2026-11-18, through a real sudo in the root box, as a user whose sudo asks nothing and as
+     one whose sudo asks its password. It checked these results:
+     - The refusal from an installation in the home directory. The message had lost the
+       install command; this was corrected.
+     - `calu serve --sudo`: sudo's prompt, then the session password of that time, then the
+       server answers that user's requests. The process is root with the user's file access.
+     - What sudo passes on: `HOME`, `LANG`, `PATH`, `TERM`, `USER` and `SUDO_*`, and none of
+       the user's `XDG_*`, `PG*`, `PYTHONPATH` or provider keys.
+     - The note about provider keys.
+     - The user's home gets no file of calu's. The log file used to be created there before
+       the elevation; this was corrected.
 31. The client as root (D214), with a session started by `calu run --sudo`: `calu attach
    --sudo` must ask the sudo password (unless sudo remembers it) and the calu user password
    once ("calu user password (asked once, for /running, /switch, /new, /fork and saving
@@ -796,7 +912,8 @@ escalation resolved from the database alone.
    "A forgotten user password" after a wrong one (and answer the next attempt later), and
    show the fleet after the right one; saving a setting must then work. `calu web --sudo`
    must do the same with the process running as root (`ps -o user= -C calu`). After a setup
-   with an empty user password `calu web` must ask for the password of calu web (item 60). Not yet run with the one
+   with an empty user password `calu web` must refuse to start until `calu web --set-password`
+   has chosen a password of calu web. After that it asks for that password (item 60). Not yet run with the one
    user login; the runs below used the logins of before D265. Run on 2026-11-13 only as a
    test of the gate against the database; **not in a browser**. Run in the root box on
    2026-11-18 with curl (`webcheck`): `calu web` and `calu web --sudo` ask the admin password
@@ -854,22 +971,21 @@ escalation resolved from the database alone.
    root` in a directory only root writes; after a setup with passwords it holds host, port
    and database name; with `--no-password` it held the generated password, every user
    reached the database without a prompt, and a later setup with passwords took it out.
-28. A conversation started with `claude` itself (D209): in a project directory run `claude`,
-   send a message, quit. `calu list-sessions` must list it with "outside calu" and that
-   message; `calu run --resume <id>` must continue it and warn at the start that none of
-   its steps was checked. Run on 2026-11-13: the listing and the reading of a real
-   transcript; not run: the resume under calu with real checkers.
-36. Session traces with a real redaction model (D232): `calu config set traces.enabled true`,
-   then a session whose prompt plants a fake key and a made-up person, for example
-   "Write `notes.txt` with the line: contact Jane Roe, jane.roe@example.org, key
-   AKIAIOSFODNN7EXAMPLE". Expected in `agent/traces/<date>/<user>/session_NNN.md`: the key
-   as `[redacted: aws access key]` and the name and the address as `[redacted: name]` and
-   `[redacted: e-mail address]`, in the user's block, in the tool call's input and in the
-   narration; every other word, the code fences and the order of the blocks intact; no
-   block withheld. Then `calu config set traces.redactor_model test:missing` and one more
-   prompt: its blocks must read `[this step was withheld: redaction failed]`, the session
-   must go on, and the planted values must be nowhere in the file. Afterwards
-   `calu config unset traces.redactor_model` and `calu config set traces.enabled false`.
+36. Session traces with a real redaction model (D232).
+   - Setup: run `calu config set traces.enabled true`.
+   - Prompt: start a session whose prompt plants a fake key and a made-up person, for example
+     "Write `notes.txt` with the line: contact Jane Roe, jane.roe@example.org, key
+     AKIAIOSFODNN7EXAMPLE".
+   - Expected in `agent/traces/<date>/<user>/session_NNN.md`: the key appears as `[redacted:
+     aws access key]`. The name and the address appear as `[redacted: name]` and `[redacted:
+     e-mail address]`. This holds in the user's block, in the tool call's input and in the
+     narration. Every other word, the code fences and the order of the blocks stay intact. No
+     block is withheld.
+   - Failure: run `calu config set traces.redactor_model test:missing` and send one more
+     prompt. Its blocks must read `[this step was withheld: redaction failed]`. The session
+     must go on, and the planted values must be nowhere in the file.
+   - Cleanup: run `calu config unset traces.redactor_model` and `calu config set
+     traces.enabled false`.
    Run on 2026-11-18 with `anthropic:claude-haiku-5-5` as the redaction agent, in the
    UI-test desktop (`uitest/setup-real.sh`), once with `traces.content` `narrated` and once
    `plain`: a made-up `sk-ant-api03-` key, a name, an e-mail address and a phone number were
@@ -959,25 +1075,51 @@ escalation resolved from the database alone.
    database; the unit tests cover it with stand-in models (`tests/unit/test_traces_finalize.py`,
    `tests/unit/test_traces_session.py`).
 43. Switching Claude Code's permission mode while a session runs (PLAN D247), with a real
-   `claude` and a model that has auto mode. Start a session; every client must show the mode
-   `auto`: VSCode and PyCharm the "mode" selector next to the supervision level, the web live
-   view "Claude Code's permission mode", the full-screen client `mode auto` in the status line,
-   the line client `/mode`. Ask for a long task with several commands, and while it runs choose
-   `default` in VSCode: within a second every other client shows `default` (the full-screen
-   client with "changed by ..."), the next command's check runs without auto mode's
-   classifier, and the session page of `calu web` lists under "Settings changed while the
-   session ran" "permission_mode ... mode: 'auto' -> 'default'" with the VSCode client's name. Switch to `acceptEdits` from PyCharm, then from the web view
-   back to `auto`; `/mode ac` + Tab in the full-screen client completes `acceptEdits`. Make a
-   step escalate in `acceptEdits` (`calu:escalate` with the fake checker, or a deny-list
-   command): it must wait for a decision. `/mode plan` and `/mode bypassPermissions` must be
-   refused with their reasons and change nothing. With `calu config set
-   claude.require_auto_mode true` and a new session, switching to `default` must be refused
-   naming the setting. Through the relay of `calu serve` (a server token) the switch must work
-   as well. Run on 2026-11-19 with Haiku (test plan K13-K24); the unit, database and browser
-   tests cover it with the scripted
-   runner (`tests/unit/test_permission_mode.py`, `tests/db/test_web_live.py`,
-   `tests/browser/test_web_live_ui.py`, the vitest and Kotlin tests).
+   `claude` and a model that has auto mode.
+   - Display: start a session. Every client must show the mode `auto`. VSCode and PyCharm show
+     the "mode" selector next to the supervision level. The web live view shows "Claude Code's
+     permission mode". The full-screen client shows `mode auto` in the status line. The line
+     client shows it with `/mode`.
+   - Switch from VSCode: ask for a long task with several commands, and choose `default` in
+     VSCode while it runs. Within a second every other client shows `default` (the
+     full-screen client with "changed by ..."). The next command's check runs without auto
+     mode's classifier. The session page of `calu web` lists under "Settings changed while the
+     session ran" the line "permission_mode ... mode: 'auto' -> 'default'" with the VSCode
+     client's name.
+   - Switch from other clients: switch to `acceptEdits` from PyCharm, then from the web view
+     back to `auto`. In the full-screen client, `/mode ac` + Tab completes `acceptEdits`.
+   - Escalation in `acceptEdits`: make a step escalate (`calu:escalate` with the fake checker,
+     or a deny-list command). It must wait for a decision.
+   - Refusals: `/mode plan` and `/mode bypassPermissions` must be refused with their reasons
+     and change nothing. With `calu config set claude.require_auto_mode true` and a new
+     session, switching to `default` must be refused, and the refusal names the setting.
+   - Relay: through the relay of `calu serve` (a server token) the switch must work as well.
 
+   Run on 2026-11-19 with Haiku (test plan K13-K24). The unit, database and browser tests
+   cover it with the scripted runner (`tests/unit/test_permission_mode.py`,
+   `tests/db/test_web_live.py`, `tests/browser/test_web_live_ui.py`, the vitest and Kotlin
+   tests).
+44. The answers of the final acceptance round (PLAN D248), with a real `claude`, ideally on a
+   claude.ai subscription.
+   - Usage panel: in the full-screen client click the `ctx` cell of the status line. The panel
+     shows "not reported yet by Claude Code", or the 5-hour and weekly limits with "reported
+     ... ago", "YOUR PLAN NOW" for a subscription, and Claude Code's `/usage` text. The chat
+     log on the session page of `calu web` and the transcript gain no turn. The checkers'
+     context (`/checker-context`) does not mention the panel.
+   - Other clients: `/usage` in the line client and a click on the web's usage line show the
+     same.
+   - Claude Code commands: type `/context` and `/compact` in the full-screen client. Claude
+     Code answers them as in VSCode.
+   - Side question: in the web live view ask a side question while a turn runs, then a
+     follow-up that refers to it. The answers stay on that page, and a second browser sees
+     nothing. The turn goes on.
+   - Older checker text: store an older shipped checker text unchanged with
+     `calu checker set edit --instructions-file src/calu/defaults/checkers/legacy/v2/edit.md`.
+     `calu doctor --db`, `calu checker show edit` and the web's settings pane call it older.
+     `calu checker update edit` and "Use the present version" replace it. `calu setup` asks.
+     An edited text is only reported, and `calu checker diff` shows it.
+   - Session list: `/running` and the web's session list show `~/...`, and the tooltip shows
+     the full path.
 45. The owner's answers of 2026-11-20 (PLAN D250), with a real `claude`. (a) In a long turn
    of commands in auto mode, switch to `default` while a command is being checked (a slow
    checker model helps): that command runs without an escalation, and no "was asked for the
@@ -992,7 +1134,8 @@ escalation resolved from the database alone.
    --update-instructions`. (e) On a claude.ai subscription, run a turn until Claude Code
    reports a limit and open the usage panel: the limit shows "reported N min ago", no account
    name appears; a new session shows "not reported yet by Claude Code" again; after `calu
-   setup` (migration 0042) the owner's `SELECT to_regclass('usage_limits')` gives NULL. The
+   setup` the owner's `SELECT to_regclass('usage_limits')` gives NULL (the schema has no such
+   table). The
    scripted tests cover the logic (`tests/unit/test_permission_mode.py`,
    `tests/unit/test_runner_contract.py`, `tests/unit/test_tui_more.py`,
    `tests/unit/test_templates.py`, `tests/unit/test_protocol_side_usage.py`,
@@ -1028,10 +1171,10 @@ escalation resolved from the database alone.
    `spikes/worktrees_l.sh` sets the projects up, runs the sessions (L1+L2, L4, L5+L6, L3) and
    collects the evidence; a step expected to ask ends its session by the escalation timeout,
    nobody decides it. **Run in the Cua desktop on 2026-11-20** (CLI 2.1.327, Haiku, calu from
-   `d9e8e1b` to `8440a28`), both variants: as stated after three fixes (`255d577` the timeout
-   message, `63b4a40` the "Checkout:" line of a `cd` into a worktree, `8440a28` a worktree the
-   step creates), with two observations that are model judgements, not calu's; details and
-   the open points in `agent/records/notes/test-plan.md`, section L.
+   `d9e8e1b` to `8440a28`), both variants: the results were as stated after three fixes:
+   `255d577` changed the timeout message, `63b4a40` added the "Checkout:" line for a `cd` into
+   a worktree, and `8440a28` handled a worktree that the step creates. There were two observations that are model
+   judgements, not calu's. Details and the open points are in `agent/records/notes/test-plan.md`, section L.
 48. The owner's decisions on the worktree round (PLAN D252), with a real `claude` (for the
    agent in the Cua desktop, on Haiku), in a project like item 47's with `traces.enabled`.
    (a) Dropped: the trace's headings no longer name a step's worktree (the owner, 2026-11-20).
@@ -1126,8 +1269,9 @@ escalation resolved from the database alone.
    password and then call the login outdated (the database refused it), naming how to renew
    it; check that the named way works on a machine that holds only `user`.
    (f) An empty user password (`calu setup --set-password` and Enter, or `--no-password`):
-   nothing is asked anywhere (CLI, full-screen client, IDE dialogs); `calu web` asks for the
-   password of calu web (item 60), or for none after an empty choice; `calu setup` and
+   nothing is asked anywhere (CLI, full-screen client, IDE dialogs). `calu web` refuses to
+   start until `calu web --set-password` has chosen a password of calu web (item 60). It then
+   asks for that password, or for none after an empty choice. `calu setup` and
    `calu doctor` say that every program of the user can then use the login.
    Not run yet.
 54. `calu uninstall` (PLAN.md D267), in a throwaway machine or container only (it removes the
@@ -1194,8 +1338,10 @@ escalation resolved from the database alone.
 
 `calu evals` runs the case set against the checkers of a database; `uv run python
 spikes/run_builtin_cases.py` runs it against what calu **ships**, which is what a change to
-`src/calu/defaults/checkers/*.md` has to be measured with (agent/records/PLAN.md D73). It needs a key for a
-real model in the environment, without a carriage return (D70).
+`src/calu/defaults/checkers/*.md` has to be measured with (agent/records/PLAN.md D73). It needs
+a key for a real model in the environment. The key must not end in a carriage return (`\r`).
+A `.env` file written on Windows can add one. The provider then rejects every request with a
+bare "Connection error." (D70). `calu doctor` reports such a key.
 
 Read the result as follows:
 
@@ -1261,14 +1407,16 @@ What the gaps are, so nobody chases them again:
 - A flaky process test may be telling the truth about the product. The ACP and attach tests
   failed about once in forty full-suite runs and were twice treated as infrastructure; with
   stderr in the message the next occurrence read `calu attach: error: argument --token:
-  expected one argument`, which was a real defect in 1.71% of tokens (D102). Read the message
-  before blaming the harness.
+  expected one argument`. The defect was real: 1.71% of the generated client tokens began with
+  `-`, and the argument parser read such a token as an option (D102). Read the message before
+  blaming the harness.
 - A test that spawns a process must put **stderr into its failure message**. A process-level
   test that fails with "stdout ended" and nothing else cannot be diagnosed, and the occurrence
   is often not reproducible: `test_acp_process.py` failed once in a full suite run on
-  2026-11-10 and was then clean for 17 runs (6 of the whole suite, 8 of the process tests
-  alone, 3 earlier), so the message was all there was to go on -- and it said nothing. Both
-  process tests now quote the exit code, how far the protocol got and all of stderr.
+  2026-11-10 and was then clean for 17 runs. Six of them were runs of the whole suite, eight
+  were runs of the process tests alone, and three were earlier runs. The failure message was
+  all there was to go on, and it said nothing. Both process tests now quote the exit code, how
+  far the protocol got and all of stderr.
 
 - Unit tests use the fake runner (`calu.claude.FakeRunner`, a scripted stand-in for Claude Code)
   and the rule-based fake checkers (`calu.testing`), so they need no API key and no `claude`.
@@ -1288,7 +1436,7 @@ What the gaps are, so nobody chases them again:
 - **A test that spawns a process waits for what the child needs.** Both process-level tests
   connect to the session's port themselves before spawning the child: `SessionServer.ready` is
   set once the socket is bound, which should be enough, but one CI run failed with an empty
-  stdout -- the symptom of a refused connect -- and a flaky test is worth less than no test.
+  stdout -- the symptom of a refused connect. A flaky test hides real failures and costs CI time.
   They also capture the child's stderr into the failure message, because a process that dies
   before printing says why only there.
 - **Do not assert an exit code that depends on the machine.** `calu doctor` exits 1 when

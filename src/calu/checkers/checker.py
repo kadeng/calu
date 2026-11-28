@@ -10,14 +10,14 @@ A checker request has this layout; each text is its own content block:
                   step n                                               <- CachePoint (write)
     step to check
 
-Caching per checked tool call: the previous check ended its cached prefix after its last step,
-which is this check's step n-1; this check repeats all blocks before it byte for byte
-(`TurnRecord.render_parts`), so the CachePoint after step n-1 reads that entry and the one after
-step n writes the next. Without steps yet, the two CachePoints sit after the prefix and after
-the completed turns. Pydantic AI's `Caching(messages=False)` capability adds the breakpoints
-after the tool definitions and instructions on Anthropic and Bedrock: four in total, their
-maximum. Providers with automatic prefix caching (Mistral, OpenAI) use the stable order, helped
-by a per-checker routing key (`calu.models.cache_settings`); hybrid-SSM models such as
+Caching per checked tool call: the previous check ended its cached prefix after its last step.
+That step is this check's step n-1. This check repeats all blocks before it byte for byte
+(`TurnRecord.render_parts`). The CachePoint after step n-1 therefore reads that entry, and the
+one after step n writes the next. Without steps yet, the two CachePoints sit after the prefix
+and after the completed turns. Pydantic AI's `Caching(messages=False)` capability adds the
+breakpoints after the tool definitions and instructions on Anthropic and Bedrock: four in
+total, their maximum. Providers with automatic prefix caching (Mistral, OpenAI) use the stable
+order, helped by a per-checker routing key (`calu.models.cache_settings`); hybrid-SSM models such as
 Nemotron on Fireworks only reuse a cache for identical prompts. The context comes from the
 ContextBuilder (`calu.context`).
 
@@ -209,13 +209,18 @@ class Checker:
     `check` does not raise for model, network or file errors: such failures yield an ESCALATE
     decision whose reason names the error, so a human decides instead.
 
-    The agent has the read-only tools of `calu.checkers.tools` — reading a file or a range of its
-    lines, finding files by glob, grepping, and, if `times` is given, the times of the session's
-    steps and which step last changed a file — with which it can find out what the code actually
-    does, and who did it, when the step alone does not say enough (agent/records/PLAN.md D22, D25,
-    D32). Those tools confine every read to `workspace` after resolving symbolic links and apply the
-    read deny lists of `rules` (`CodeTools.confine`); calu enforces this itself and relies on no
-    library for it. It has no other tool: no writes, no commands, no network.
+    The agent has the read-only tools of `calu.checkers.tools`:
+
+    - reading a file or a range of its lines;
+    - finding files by glob;
+    - grepping;
+    - if `times` is given, the times of the session's steps and which step last changed a file.
+
+    With them it can find out what the code actually does, and who did it, when the step alone
+    does not say enough (agent/records/PLAN.md D22, D25, D32). Those tools confine every read
+    to `workspace` after resolving symbolic links and apply the read deny lists of `rules`
+    (`CodeTools.confine`); calu enforces this itself and relies on no library for it.
+    It has no other tool: no writes, no commands, no network.
     """
 
     name: str

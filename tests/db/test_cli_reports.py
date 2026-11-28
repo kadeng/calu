@@ -5,8 +5,8 @@ that waits, `calu escalation <id>` is what they decide from, and `calu sessions`
 The functions behind them are covered elsewhere; only here does the text an operator sees get
 checked, and a stale or empty line is exactly the kind of thing no other test notices.
 
-The credential path is replaced for these tests: `_with_admin` is given the test database, so
-no credential store and no password are involved.
+The credential path is replaced for these tests: `_with_admin` is given the test database and
+a stand-in credential store that holds every entry, so no password is asked for.
 """
 
 import os
@@ -253,12 +253,18 @@ async def test_the_summary_command_shows_the_folded_conversation(prepared, capsy
     assert said.strip() == "## Folded\n\nThe user asked for a cleanup."
 
 
-async def test_the_editor_flow_stores_what_was_written(prepared, capsys, tmp_path) -> None:
+async def test_the_editor_flow_stores_what_was_written(
+    prepared, capsys, tmp_path, monkeypatch
+) -> None:
     """`calu checker edit` and `calu summary --edit` go through $EDITOR (agent/records/PLAN.md D40).
 
     The editor is a stub script that rewrites the file it is given, so the whole path is
     covered: calu writes the current text out, the editor changes it, calu reads it back and
     stores it. An editor that fails must store nothing.
+
+    Side effects: sets `EDITOR` (restored by `monkeypatch`) and the variables `EDITOR_WRITES`
+    and `EDITOR_EXIT` of the stub in the process environment; the last two are removed at the
+    end.
     """
     db, session_id, _escalation = prepared
     editor = tmp_path / "fake-editor"
@@ -270,7 +276,7 @@ async def test_the_editor_flow_stores_what_was_written(prepared, capsys, tmp_pat
         encoding="utf-8",
     )
     editor.chmod(0o755)
-    os.environ["EDITOR"] = str(editor)
+    monkeypatch.setenv("EDITOR", str(editor))
     os.environ["EDITOR_WRITES"] = "Only one rule: say no to everything with rm -rf.\n"
     try:
         assert await run(["checker", "edit", "command"]) == 0
@@ -321,7 +327,7 @@ async def test_the_editor_flow_stores_what_was_written(prepared, capsys, tmp_pat
             "## Folded\n\nThe user asked for a rewrite.\n"
         ), "and the summary that was there is untouched"
     finally:
-        for name in ("EDITOR", "EDITOR_WRITES", "EDITOR_EXIT"):
+        for name in ("EDITOR_WRITES", "EDITOR_EXIT"):
             os.environ.pop(name, None)
 
 
@@ -469,10 +475,15 @@ async def test_the_misses_are_readable_and_say_so_when_there_are_none(prepared, 
 
 
 async def test_the_redaction_instructions_are_shown_edited_and_reset(
-    prepared, capsys, tmp_path, db_url: str
+    prepared, capsys, tmp_path, db_url: str, monkeypatch
 ) -> None:
     """D245: `calu traces instructions show|edit|reset`, and a save that would undo a change
-    made while the editor was open is refused, with the edited text kept in its file."""
+    made while the editor was open is refused, with the edited text kept in its file.
+
+    Side effects: sets `EDITOR` (restored by `monkeypatch`) and the variables `EDITOR_WRITES`
+    and `EDITOR_MEANWHILE` of the stub in the process environment; the last two are removed at
+    the end.
+    """
     import sys
 
     from calu.defaults.instructions import default_redaction_instructions
@@ -492,7 +503,7 @@ async def test_the_redaction_instructions_are_shown_edited_and_reset(
         encoding="utf-8",
     )
     editor.chmod(0o755)
-    os.environ["EDITOR"] = str(editor)
+    monkeypatch.setenv("EDITOR", str(editor))
     try:
         assert await run(["traces", "instructions", "show"]) == 0
         assert capsys.readouterr().out == default_redaction_instructions()
@@ -521,7 +532,7 @@ async def test_the_redaction_instructions_are_shown_edited_and_reset(
         assert "removed" in capsys.readouterr().out
         assert "redactor_instructions" not in (await admin.settings(db)).get("traces", {})
     finally:
-        for name in ("EDITOR", "EDITOR_WRITES", "EDITOR_MEANWHILE"):
+        for name in ("EDITOR_WRITES", "EDITOR_MEANWHILE"):
             os.environ.pop(name, None)
 
 

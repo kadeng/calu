@@ -275,7 +275,10 @@ def test_a_refused_iam_token_never_ends_a_session_for_good(
 
 
 def test_a_remote_password_login_takes_only_scram_with_channel_binding() -> None:
-    """D279: a machine in the middle with any certificate could ask for a clear-text password."""
+    """A remote password login accepts only SCRAM with channel binding (D279).
+
+    Otherwise a machine in the middle with any certificate could ask for a clear-text password.
+    """
     password = PasswordAuth(password="pw")
     remote = from_fields("db.example.org", 5432, "calu", "u", password)
     assert remote.conninfo["require_auth"] == "scram-sha-256"
@@ -307,8 +310,11 @@ def test_a_remote_password_login_takes_only_scram_with_channel_binding() -> None
 def test_an_existing_server_may_keep_its_own_login_method_when_a_person_says_so(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """D279: safe by default, but an existing server's configuration is not overruled; the
-    refusal is never followed silently, because a machine in the middle can cause it."""
+    """By default calu keeps the safe login method (D279).
+
+    A person may let an existing server keep its own method. calu never follows a refusal of
+    the safe method silently, because a machine in the middle can cause that refusal.
+    """
     import argparse
     import sys
 

@@ -11,7 +11,8 @@
  *
  * The password store that `extension.ts` passes in is a variable of the extension host (spec
  * section 10): the password lives until the window closes, so a restarted bridge is unlocked
- * again without asking. The bridge never starts sessions itself and never prompts.
+ * again without asking. `calu ide` never starts sessions and never prompts; the extension asks
+ * for the password (`inputBoxPasswordDeps`).
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';

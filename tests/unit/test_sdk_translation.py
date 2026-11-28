@@ -236,24 +236,34 @@ def test_what_claude_code_says_it_is_asking_about_is_collected() -> None:
     assert permission_prompt(object()) == ""
 
 
-def test_the_runner_puts_the_prompt_on_the_step(tmp_path: Path) -> None:
-    """`can_use_tool` is where a capability request arrives, and the step must carry it."""
+@pytest.mark.anyio
+async def test_the_runner_puts_the_prompt_on_the_step(tmp_path: Path) -> None:
+    """`can_use_tool` is where a capability request arrives, and the step must carry it.
+
+    The test calls the runner's real `can_use_tool` callback with a gate that records the
+    `asked_about` of the step it is asked to decide. Nothing is started.
+    """
     from claude_agent_sdk import ToolPermissionContext
 
     from calu.checkers.model import Step
+    from tests.unit.test_sdk_runner import AllowAll
 
-    sdk = runner(tmp_path)
+    asked: list[Step] = []
+
+    class Recording(AllowAll):
+        """Records the step that `ask` receives."""
+
+        async def ask(self, step: Step) -> Any:
+            asked.append(step)
+            return await super().ask(step)
+
     context = ToolPermissionContext(
         tool_use_id="call-1", title="Allow network connection to example.net?"
     )
-    # The same composition the callback does.
-    from calu.claude.sdk_runner import permission_prompt
-
-    step = Step(tool_name="SandboxNetworkAccess", tool_input={}, cwd=str(tmp_path)).model_copy(
-        update={"asked_about": permission_prompt(context)}
-    )
-    assert step.asked_about == "Allow network connection to example.net?"
-    assert sdk.workspace == tmp_path
+    options = runner(tmp_path)._options(Recording(), None)
+    assert options.can_use_tool is not None
+    await options.can_use_tool("SandboxNetworkAccess", {}, context)
+    assert [step.asked_about for step in asked] == ["Allow network connection to example.net?"]
 
 
 def test_tools_without_a_route_are_named_once(tmp_path: Path) -> None:

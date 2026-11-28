@@ -20,8 +20,8 @@ postgres image, Claude Code, bubblewrap, socat, git, curl), a database on anothe
 `plan` decides without changing anything; `remove` carries a plan out and reports each item.
 The caller (`calu.cli.cmd_uninstall`) prints the plan, refuses while calu processes run
 (`calu.machine.calu_processes`), and asks for `CONFIRM_PHRASE` typed by hand (`confirm`).
-This module imports nothing that is not loaded before the removal starts: the installation
-it runs from may be deleted by the last step.
+Load everything before the removal starts. The last step may delete the installation this
+module runs from, so the module must not import anything afterwards.
 """
 
 import pwd
@@ -213,11 +213,18 @@ def _database_items(
     items: list[Item] = []
     notes: list[str] = []
     dirs = _database_dirs(runner, defaults)
-    foreign = [path for path in dirs if euid != 0 and _owner(path) != euid]
+    foreign = [path for path in dirs if euid != 0 and _owner(path) not in (None, euid)]
+    unknown = [path for path in dirs if euid != 0 and _owner(path) is None]
     if foreign:
         notes.append(
             f"the local database in {foreign[0]} is root's (`sudo calu setup`): `sudo calu "
             "uninstall` removes it"
+        )
+        return items, notes
+    if unknown:
+        notes.append(
+            f"the owner of the local database in {unknown[0]} cannot be looked at, so it is "
+            "not removed (`sudo calu uninstall` can remove it)"
         )
         return items, notes
     try:
@@ -285,7 +292,8 @@ def plan(
         root_home: The root installation's directory.
 
     Returns:
-        The plan. Paths that do not exist are left out.
+        The plan. Paths that do not exist are left out, except the bind-mount sources of the
+        database container, which are listed as they are.
     """
     runner = runner or run_command
     result = Plan()
@@ -413,9 +421,10 @@ def remove(
     """Carry out a plan: the database first, the installation last.
 
     Side effects: `docker compose down --volumes` for the container, `docker volume rm` for
-    the volume; for a data directory whose files belong to the container's user, a run of
-    `image` that deletes them (as root they are deleted directly); deletes files and
-    directories. Each item's outcome is reported as one line. A failure is reported and the
+    the volume; for a data directory, a run of `image` that deletes its files when this
+    process is not root (as root they are deleted directly); deletes files and directories.
+    Each item's outcome is reported as one line: `removed`, `already gone` for an item that
+    was not there any more, or `not removed` with the reason. A failure is reported and the
     other items are still removed.
 
     Args:
@@ -433,16 +442,16 @@ def remove(
     order = {"container": 0, "volume": 1, "data": 2, "path": 3}
     for item in sorted(chosen.items, key=lambda one: order[one.kind]):
         try:
-            _remove_item(item, compose_file, image, euid, runner)
+            deleted = _remove_item(item, compose_file, image, euid, runner)
         except OSError as exc:  # FileNotFoundError too: docker vanished meanwhile
             failed.append(f"{item.target}: {exc}")
             report(f"not removed: {item.target} ({exc})")
             continue
-        report(f"removed: {item.target}")
+        report(f"{'removed' if deleted else 'already gone'}: {item.target}")
     return failed
 
 
-def _remove_item(item: Item, compose_file: Path, image: str, euid: int, runner: Runner) -> None:
+def _remove_item(item: Item, compose_file: Path, image: str, euid: int, runner: Runner) -> bool:
     """Remove one item of a plan (see `remove`).
 
     Args:
@@ -451,6 +460,10 @@ def _remove_item(item: Item, compose_file: Path, image: str, euid: int, runner: 
         image: The postgres image of the compose file.
         euid: The effective uid of this process.
         runner: Runs docker.
+
+    Returns:
+        True if something was removed; False if the item was not there any more (a volume
+        docker does not know, a path that is gone).
 
     Raises:
         OSError: If it could not be removed; the message is docker's or the system's.
@@ -462,15 +475,18 @@ def _remove_item(item: Item, compose_file: Path, image: str, euid: int, runner: 
             raise OSError((done.stderr or done.stdout).strip())
     elif item.kind == "volume":
         done = runner(["docker", "volume", "rm", item.target])
-        if done.returncode != 0 and "no such volume" not in done.stderr.lower():
-            raise OSError((done.stderr or done.stdout).strip())
+        if done.returncode != 0:
+            if "no such volume" not in done.stderr.lower():
+                raise OSError((done.stderr or done.stdout).strip())
+            return False
     elif item.kind == "data":
-        _remove_data(Path(item.target), image, euid, runner)
+        return _remove_data(Path(item.target), image, euid, runner)
     else:
-        _remove_path(Path(item.target))
+        return _remove_path(Path(item.target))
+    return True
 
 
-def _remove_data(path: Path, image: str, euid: int, runner: Runner) -> None:
+def _remove_data(path: Path, image: str, euid: int, runner: Runner) -> bool:
     """Delete a local database's data directory, whose cluster files the container owns.
 
     Args:
@@ -479,11 +495,14 @@ def _remove_data(path: Path, image: str, euid: int, runner: Runner) -> None:
         euid: The effective uid of this process; root deletes them directly.
         runner: Runs docker.
 
+    Returns:
+        True if the directory was deleted; False if it was not there.
+
     Raises:
         OSError: If the files cannot be deleted.
     """
     if not path.exists():
-        return
+        return False
     mounted = path / "pg" if (path / "pg").is_dir() else path
     if euid != 0:
         done = runner(
@@ -505,13 +524,17 @@ def _remove_data(path: Path, image: str, euid: int, runner: Runner) -> None:
         if done.returncode != 0:
             raise OSError((done.stderr or done.stdout).strip())
     shutil.rmtree(path)
+    return True
 
 
-def _remove_path(path: Path) -> None:
+def _remove_path(path: Path) -> bool:
     """Delete a file, a symbolic link or a directory tree.
 
     Args:
         path: What to delete; nothing happens if it is gone already.
+
+    Returns:
+        True if something was deleted; False if the path was gone already.
 
     Raises:
         OSError: If it cannot be deleted.
@@ -520,6 +543,9 @@ def _remove_path(path: Path) -> None:
         path.unlink()
     elif path.is_dir():
         shutil.rmtree(path)
+    else:
+        return False
+    return True
 
 
 def compose_image(compose_file: Path) -> str:

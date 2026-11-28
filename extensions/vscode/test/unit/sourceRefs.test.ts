@@ -51,7 +51,7 @@ describe('splitLine', () => {
 });
 
 describe('a click on a source reference', () => {
-  it('opens a bare file name with a line, which a scheme test would take for "hello.py:"', async () => {
+  it('builds the openLink message for a bare file name with a line, which a scheme test would take for "hello.py:"', async () => {
     const { linkMessage } = await import('../../src/shared/chatModel');
     expect(linkMessage('hello_world.py:1293')).toEqual({ type: 'openLink', href: 'hello_world.py:1293' });
     expect(linkMessage('src/app.py#L12')).toEqual({ type: 'openLink', href: 'src/app.py#L12' });

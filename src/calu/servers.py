@@ -290,10 +290,10 @@ async def session_details(
 ) -> dict[str, tuple[str, datetime]]:
     """Read the names and state times of this server's sessions, for `relay.sessions`.
 
-    A login without row-level access to other sessions' rows (`calu_session` before
-    migration 0043) could not read them, so the
-    database answers through `calu_server_sessions` for the holder of a valid token of a
-    running server, and only about the sessions of that server's process.
+    The rows are read through the database function `calu_server_sessions`. It answers only
+    for the holder of a valid token of a running server, and only about the sessions of that
+    server's process. The function exists because some logins cannot read other sessions'
+    rows directly (`calu_session` before migration 0043).
 
     Args:
         db: A connection of the user login (or the owner).
@@ -302,9 +302,10 @@ async def session_details(
         session_ids: The session row ids to describe.
 
     Returns:
-        Session id -> (name, "" for none; when the session entered its current state). A
-        session the database does not describe (another process's, ended, or an invalid
-        token) is missing.
+        A dict from session id to a pair (name, time). The name is "" if the session has
+        none. The time is when the session entered its current state. A session the
+        database does not describe is missing: one of another process, one that has ended,
+        and every session when the token is not valid.
 
     Raises:
         psycopg.Error: On database errors, among them a schema older than migration 0040.

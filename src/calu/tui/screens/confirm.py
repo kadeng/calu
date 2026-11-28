@@ -24,7 +24,7 @@ class ConfirmScreen(ModalScreen[bool]):
 
     With `typed` empty, `y` confirms. With a word in `typed`, the user has to type that word
     and press Enter; this is for an action that cannot be taken back. `n`, Enter (without
-    `typed`) or Escape declines, so no is the answer of a key pressed without reading. With
+    `typed`) or Escape declines. A key pressed by accident therefore confirms nothing. With
     `notice`, the screen only tells something: Enter, `n` or Escape close it and `y` does
     nothing. With `command`, a command line stands on its own highlighted line and `c` copies
     it to the clipboard. The screen is dismissed with True or False.

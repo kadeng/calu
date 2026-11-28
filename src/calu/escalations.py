@@ -621,20 +621,26 @@ class EscalationDesk:
                     esc.outcome = "answered"
                     esc.done.set()
                     return
-                message = (
-                    "The user denied this step."
-                    if not row.allowed
-                    else "The user allowed this step."
-                )
+                # A row that was cancelled was decided by nobody; only "denied" is a refusal.
+                cancelled = not row.allowed and row.state != "denied"
+                if row.allowed:
+                    message = "The user allowed this step."
+                elif cancelled:
+                    message = "The escalation was cancelled; nobody decided this step."
+                else:
+                    message = "The user denied this step."
                 if row.note:
-                    message += f" Note from the user: {row.note}"
-                esc.answer = HumanAnswer(allow=row.allowed, message=message, note=row.note)
+                    message += (
+                        f" Note: {row.note}" if cancelled else f" Note from the user: {row.note}"
+                    )
+                esc.answer = HumanAnswer(
+                    allow=row.allowed, message=message, note=row.note, cancelled=cancelled
+                )
                 esc.resolved_by = row.resolved_by or ""
                 if row.allowed:
                     esc.outcome = "allowed"
                 else:
-                    # A row that was cancelled was decided by nobody; only "denied" is a refusal.
-                    esc.outcome = "denied" if row.state == "denied" else "cancelled"
+                    esc.outcome = "cancelled" if cancelled else "denied"
                 esc.done.set()
                 return
 

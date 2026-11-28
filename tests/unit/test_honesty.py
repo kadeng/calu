@@ -140,7 +140,8 @@ def test_the_state_is_clean_only_with_a_baseline_and_nothing_open():
 
 def test_the_instruction_part_says_what_the_specification_asks_for():
     """Section 6 as changed by D224: do not rely on listed code; the command checker says
-    whether a call executes project code; no checker but the honesty checker records marks."""
+    whether a call executes project code. Only the honesty checker records marks; the other
+    checkers do not."""
     prompt = compose_instructions("command", "x", honesty_state=True)
     for text in (
         "Do not rely on the names or the documentation",

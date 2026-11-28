@@ -117,8 +117,9 @@ def test_the_fuzzer_finds_the_deadlocks_of_a_wrong_lock_order(
 
 @pytest.mark.parametrize("wrong", [NoEditLocksScheme, SharedCommandsScheme, NoIssueOrderScheme])
 def test_the_fuzzer_finds_the_violations_of_a_wrong_scheme(wrong: type[RWLockingScheme]) -> None:
-    """A scheme that leaves out a lock lets calls overlap, and one that ignores the issue order
-    lets a call overtake an earlier call of its agent; the run must count them."""
+    """A scheme that leaves out a lock or weakens one to shared lets calls overlap, and one
+    that ignores the issue order lets a call overtake an earlier call of its agent; the run
+    must count them."""
     report = fuzz(wrong, load(FUZZ), SEED, min(SECONDS, 5))
     print(f"\n{report.text()}")
     assert sum(report.ledger.violations.values()) > 0

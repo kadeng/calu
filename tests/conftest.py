@@ -33,6 +33,8 @@ os.environ["CALU_PLACE_FILE"] = "/nonexistent/calu-tests/database.json"
 # many times. Tests use PostgreSQL's default; the one test of the rounds removes this.
 os.environ["CALU_SCRAM_ITERATIONS"] = "4096"
 
+# The whole suite, not only the live tests, copies every variable of `~/.config/calu/.env` into
+# `os.environ` here.
 load_secrets()
 """Checker API keys from `~/.config/calu/.env`, for the live tests."""
 
@@ -112,6 +114,9 @@ async def db_url() -> AsyncIterator[str]:
 
     Needs `CALU_TEST_DSN` (owner connection of the test server, see docker-compose.yml);
     default: the `caludb` service as seen from the host.
+
+    Side effect: sets the server-wide role `calu_admin` to NOLOGIN on the test server before
+    each test, so every database of that server is affected (see the comment in the body).
     """
     base = os.environ.get("CALU_TEST_DSN", "postgresql://calu_owner:calu-dev@127.0.0.1:55432/calu")
     name = f"calu_test_{uuid.uuid4().hex[:12]}"

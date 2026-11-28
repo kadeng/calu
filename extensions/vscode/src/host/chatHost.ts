@@ -579,7 +579,7 @@ export class ChatHost implements Disposable {
    * there, as calu's terminal client does: the project's own setting wins over the global one.
    *
    * @param interactive True if the user asked for a change (a needed password is then asked).
-   * @returns `project`: the session's project if its settings name `honesty.mode`, else `null`
+   * @returns `project`: the session's project if a value of `honesty.mode` is stored for it, else `null`
    *   (the global scope); `mode`: the stored value, or `null` if it is unknown.
    * @throws (rejects) Error if the settings cannot be read.
    */
@@ -645,8 +645,8 @@ export class ChatHost implements Disposable {
         'warning',
         `Honesty mode "${mode}" is stored in ${where}, but this session still reports "${this.chat.state.honesty?.mode ?? 'off'}": ` +
           'it has not read the change. A running session normally reads it within seconds. If it does not, ' +
-          'its settings could not be reloaded (the chat then shows an error line; after an update of calu, ' +
-          'restart `calu serve`). Sessions started from now on use the stored mode.',
+          'the session could not reload its settings. The chat then shows an error line. After an update of calu, ' +
+          'restart `calu serve`. Sessions started from now on use the stored mode.',
       );
     }
   }
@@ -950,6 +950,13 @@ export class ChatHost implements Disposable {
   /**
    * Handle one event of the attached session.
    *
+   * Side effects:
+   *   - Calls `ui.sessionEvent` and dispatches the event to the chat view.
+   *   - On `turn.result`, and on `usage.update` at most every `USAGE_REFRESH_MS`, asks the
+   *     session for its usage (`usage.get`, via `refreshUsage`).
+   *   - Shows a notification for an escalation (unless the notification mode is "off") and, in
+   *     mode "all", for a finished turn, in both cases only while the chat is not visible.
+   *
    * @param method The event's method.
    * @param params The event's params.
    * @returns Nothing.
@@ -973,8 +980,8 @@ export class ChatHost implements Disposable {
   /**
    * React to a lost connection to the session (`shared/serverLoss.ts`). Nothing answers at the
    * session's address and no server runs: say "The calu server stopped" with "Start server" and
-   * "Retry". Nothing answers but a server runs: the session ended; the chat shows the session
-   * list, no notification. Any other loss: offer to attach again; "Attach again" tries the same
+   * "Retry". If the session's address does not answer but a server runs, the session ended.
+   * The chat then shows the session list and no notification. Any other loss: offer to attach again; "Attach again" tries the same
    * session first and shows the session list only if that session is gone.
    *
    * @param message The bridge's explanation.

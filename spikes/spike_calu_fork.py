@@ -14,7 +14,8 @@ Three runs against a throwaway database, all with the rule-based fake checkers (
     3. --resume --fork-before-turn 2   -> asks which files it created; must say alpha only
 
 Needs `docker compose up -d caludb --wait`, a logged-in `claude`, and a directory Claude may
-write in. The sandbox is off, so use a throwaway directory.
+write in. The sandbox is off, so use a throwaway directory. Before the third run the script
+deletes `beta.txt` in that directory, so it must not hold a file of that name that you want.
 """
 
 import argparse

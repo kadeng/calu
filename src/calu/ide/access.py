@@ -1,6 +1,6 @@
 """The database login of `calu ide`, chosen without ever asking on a terminal.
 
-One login serves every request, reading and changing alike: the user login (the role
+Every request, reading or changing, uses the same login: the user login (the role
 `calu_admin`, `calu.logins`, agent/records/PLAN.md D265).
 
     held (`ide.unlock` opened it)           ─► that login

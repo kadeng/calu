@@ -1,9 +1,14 @@
 """The full-screen client with many agents, several open decisions and many sessions.
 
-What a run through `agent/records/notes/test-plan.md` section C corrected: steps that calu holds
-back while a decision is open are shown as held; the row of agent tabs keeps the selected tab in
-view; a decision is named by its escalation id; a session can be named; a client that lost its
-session says what to do next. Scripted sessions and a stand-in for the database only.
+A run through `agent/records/notes/test-plan.md` section C corrected these points:
+
+- Steps that calu holds back while a decision is open are shown as held.
+- The row of agent tabs keeps the selected tab in view.
+- A decision is named by its escalation id.
+- A session can be named.
+- A client that lost its session says what to do next.
+
+The tests use scripted sessions and a stand-in for the database only.
 """
 
 from datetime import UTC, datetime
@@ -184,7 +189,8 @@ def test_the_review_of_a_subagents_result_does_not_become_its_last_tool() -> Non
 # ------------------------------------------------------------------ what the user said
 
 
-def test_under_a_decided_step_stand_the_users_words_not_the_sessions_sentences() -> None:
+def test_a_decided_step_shows_only_the_users_own_words() -> None:
+    """`own_words` drops the session's sentences from a note and keeps what the user wrote."""
     assert own_words("The user denied this step. Note from the user: not yet") == "not yet"
     assert own_words("The user denied this step.") == ""
     answered = (
@@ -345,7 +351,12 @@ async def test_rename_stores_the_name_and_the_status_line_shows_it() -> None:
 
 
 async def test_temporary_rules_are_added_listed_and_removed_with_the_user_login() -> None:
-    """`/rule`, `/rules`, `/rule-remove`: stored through `AdminAccess`, never sent to Claude."""
+    """`/rule`, `/rules` and `/rule-remove` change the rules through `AdminAccess`.
+
+    The test checks the stored rules and the messages of the client. It does not check that
+    nothing was sent to the session. Without the user login, `/rule` names the `calu rule add`
+    command instead.
+    """
     session = FakeSession()
     access = FakeAdmin(session)
     async with running("simple_turn", session=session, admin=access) as run:

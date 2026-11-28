@@ -116,7 +116,8 @@ async def test_a_local_setup_stores_both_logins_under_the_one_user_password(
 ) -> None:
     """D265 (1): the user password is asked once, after its explanation; it protects `user`
     and `db-admin` and is the password `calu_admin` logs in with. `--checker-model` reaches
-    every checker row."""
+    the configuration keys `command_checker.model` and `edit_checker.model`; the test checks
+    those two."""
     started = local_style(monkeypatch, db_url)
     store = CredentialStore(tmp_path / "credentials.json")
     argv = [*docker_flags(tmp_path, db_url), "--checker-model", "anthropic:claude-haiku-4-5"]
@@ -319,7 +320,7 @@ async def test_a_mismatched_new_password_leaves_the_database_alone(
 async def test_project_add_records_the_directory_it_was_given(
     db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """ga3: `calu project add DIR` is what lets `calu run` in DIR find its project."""
+    """`calu project add DIR` is what lets `calu run` in DIR find its project."""
     import socket
 
     from calu.setup import setup
@@ -364,7 +365,8 @@ async def test_as_root_an_empty_user_password_publishes_only_a_generated_one(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """D228 with D265 and D279, as root (the tests' uid stands for it): `--no-password` writes
+    """D228 with D265 and D279, as root (`os.geteuid` returns 0 for the whole process during the
+    test, while the place file's reads use the real uid): `--no-password` writes
     the generated password of `calu_admin` into the login file next to the place file, never
     a typed one and never into the place file itself; a later `--set-password` takes it back:
     the login file is gone and the published one stops working.

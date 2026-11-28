@@ -293,11 +293,12 @@ class SessionStore(Protocol):
     ) -> None:
         """Record that a setting of this running session changed, and who asked for it.
 
-        For the audit log, not for the session's own behaviour: `auto_escalate.set` is the one
-        setting a client may change through the protocol (agent/records/PLAN.md D42), and switching
-        it off weakens the session, so an operator reading the history afterwards must be able to
-        see it (D43). Changes of the project's configuration are logged by database triggers
-        instead; this is for the ones that live in the process.
+        This is for the audit log and does not change the session's behaviour. An operator reading
+        the history afterwards must be able to see a change that weakens the session (D43). The
+        example is `auto_escalate.set`, the one setting a client may change through the protocol
+        (agent/records/PLAN.md D42); switching it off weakens the session. Changes of the
+        project's configuration are logged by database triggers instead; this is for the ones that
+        live in the process.
 
         Args:
             setting: Which setting changed, e.g. "auto_escalate".
@@ -494,8 +495,8 @@ class SessionStore(Protocol):
     async def client_token_ok(self, token_sha256: str) -> bool:
         """Tell whether a hash belongs to a non-revoked client token of this session (D30).
 
-        A session accepts every token an operator minted for it, not only the one it printed,
-        so that a stored token (an editor's ACP adapter, a local command, a remote interface)
+        A session accepts every token an operator minted for it, not only the one it printed.
+        A stored token (an editor's ACP adapter, a local command, a remote interface) then
         survives a restart of the session and can be revoked on its own.
 
         Args:
@@ -583,7 +584,9 @@ class SessionStore(Protocol):
                 step neither ran nor was refused.
             token_sha256: SHA-256 of the token the deciding client authenticated with. The
                 database records the decision only for a non-revoked token of this session.
-                None uses a token hash the store remembers (the first one it saw accepted).
+                None uses the hash of the last token this store minted
+                (`add_client_token`); if it minted none, the hash of the first token it saw
+                accepted (`client_token_ok`).
 
         Returns:
             True if the escalation was open and is now resolved; False if it was already
@@ -1219,9 +1222,9 @@ class DatabaseSessionStore:
         fork continues it under a new row), and the row-level security of migration 0015 lets a
         session read only the rows of sessions that share its own Claude session id. A session
         that is about to read a conversation therefore says which one, by writing that id to
-        its own row -- which is both the key to the policy and a record an operator can see: a
-        session that claimed a conversation it has no business with stands in the database next
-        to the real one, with a different directory.
+        its own row. The policy needs that id, and an operator can see it: a session that claimed a
+        conversation it has no business with stands in the database next to the real one, with
+        a different directory.
 
         An id that is already recorded is left alone, so this never overwrites what Claude Code
         reported.
@@ -1244,11 +1247,9 @@ class DatabaseSessionStore:
     async def load_previous(self, claude_session_id: str) -> tuple[list[TurnRecord], str]:
         """Load the conversation's unfolded turns and its chat summary (see `SessionStore`).
 
-        The state is read from **every** session of the conversation, not from the last one, because
-        a resume splits it (agent/records/PLAN.md D65): the resumed session saves only the turns it
-        runs itself and writes a `chat_summaries` row only when it folds. Reading one session
-        therefore lost the whole earlier conversation after the second resume -- the newest session
-        held turns but no summary, so the checkers started again from nothing.
+        The state is read from every session of the conversation, not only from the last one,
+        because a resume splits it (agent/records/PLAN.md D65): the resumed session saves only the
+        turns it runs itself and writes a `chat_summaries` row only when it folds.
 
         What is read:
 
@@ -1262,11 +1263,13 @@ class DatabaseSessionStore:
         later session stays unmarked in the session that recorded it, so the flag alone is not
         enough.
 
-        Side effect: a non-empty summary is copied into this session's own `chat_summaries`
-        row, with the number of turns it covers, unless the session already has one. That makes
-        the row this session reads (`load_summary`) and the row an operator corrects
-        (`calu summary --edit`, D40) the same one, and the correction then survives the next
-        resume because a tie on `covered_turns` goes to the newer session.
+        Side effects: the conversation's Claude session id is written into this session's
+        `sessions` row unless the row has one already (`_claim_conversation`), also when the
+        conversation has no other session. A non-empty summary is copied into this session's own
+        `chat_summaries` row, with the number of turns it covers, unless the session already has
+        one. That makes the row this session reads (`load_summary`) and the row an operator
+        corrects (`calu summary --edit`, D40) the same one, and the correction then survives the
+        next resume because a tie on `covered_turns` goes to the newer session.
 
         Args:
             claude_session_id: The Claude session id that is resumed.
@@ -1358,13 +1361,13 @@ class DatabaseSessionStore:
         Returns:
             Every stored turn, oldest first, each with its transcript uuids where they were
             recorded: a client finds the turn of a message by `prompt_uuid` (to fork before
-            it). A turn that has not ended is included with `ended_at` None and what its row
-            holds: the inputs and `prompt_uuid` stored when it started (`save_turn` at its
-            first input), no steps and no answer. That is the running turn of a live session
-            (a client tells it from the replayed events by `prompt_uuid`), a turn that waits
-            on a decision while a fork copies the conversation (Claude Code's copy of the
-            transcript holds its prompt, so the fork's record must hold it too), and a turn
-            whose session was cut off.
+            it). A turn that has not ended is included, with `ended_at` None.
+            Its row holds the inputs and `prompt_uuid` stored when it started (`save_turn` at
+            its first input), no steps and no answer. This covers three cases. The first is
+            the running turn of a live session; a client tells it from the replayed events by
+            `prompt_uuid`. The second is a turn that waits on a decision while a fork copies
+            the conversation; Claude Code's copy of the transcript holds its prompt, so the
+            fork's record must hold it too. The third is a turn whose session was cut off.
 
         Raises:
             psycopg.Error: On database errors.
@@ -1453,11 +1456,14 @@ class DatabaseSessionStore:
         """Read the recorded conversation for a replay (see `SessionStore.load_history`).
 
         The turns and the chat summary are those of the whole conversation, the steps are those of
-        its newest session (agent/records/PLAN.md D65). The reason for the split is that turn
-        numbers continue across a resume while a step's `seq` starts again at 1 in every session, so
-        merging steps would hand a client two different steps under one number -- and `seq` is what
-        a client identifies a step by (`events.subscribe {after_seq}`). A replay therefore shows the
-        conversation as a person wrote it, with the tool calls of the run that is being loaded.
+        its newest session (agent/records/PLAN.md D65). Turn numbers continue across a resume,
+        but a step's `seq` starts again at 1 in every session. Merging steps would hand a client
+        two different steps under one number, and `seq` is what a client identifies a step by
+        (`events.subscribe {after_seq}`). A replay therefore shows the conversation as a person
+        wrote it, with the tool calls of the run that is being loaded.
+
+        Side effect: with `claude_session_id`, that conversation is recorded in this session's
+        `sessions` row when the row has none (`_claim_conversation`).
 
         Args:
             claude_session_id: Which conversation; None is this session's own.

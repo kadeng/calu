@@ -89,7 +89,7 @@ def test_calu_web_refuses_a_reachable_address_before_asking_for_a_password(
     The web interface has no login, so binding a reachable address hands everything the `admin`
     credential can do to whoever finds the port. The refusal has to come **before** the
     credential is read, or a user who mistyped `--host` is first asked for a password and then
-    refused -- and `calu web` was the only command no test ran at all.
+    refused.
     """
     from calu import cli
     from calu.credentials import CredentialStore

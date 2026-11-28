@@ -9,8 +9,8 @@
  *       session.state; ide.link
  *     local saves (the IDE's listener)   ──► post { localChanged(paths) }
  *
- * One coroutine takes the work in arrival order, so a remote change is never decided before
- * the notification that precedes it.
+ * A single coroutine takes the work in arrival order. A remote change is therefore never
+ * decided before the notification that precedes it.
  */
 package io.github.kadeng.calu.sync
 

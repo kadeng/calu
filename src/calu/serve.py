@@ -449,8 +449,10 @@ class Server:
         """Bind the relay's port.
 
             --relay-port N  ──► N, or RelayPortTaken
-            (none)          ──► the first free port of relay_ports(projects); each taken one
-                                is printed
+            (none)          ──► the first free port of relay_ports(projects)
+
+        Without `--relay-port`, a taken first port is printed, and so is the port that is
+        taken instead. Later ports that are taken are skipped without a message.
 
         Returns:
             The bound relay (not yet running).
@@ -765,7 +767,9 @@ class Server:
     async def _finish(
         self, db: Db, request_id: int, outcome: str, session_id: str | None, message: str = ""
     ) -> bool:
-        """Write a request's outcome; a database that stays away is logged, not waited for.
+        """Write a request's outcome, waiting at most `FINISH_WAIT_S` seconds for the database.
+
+        A database error, or no answer within that time, is logged and not raised.
 
         Side effect: remembers the outcome for a `relay_start` that waits for it, whether or
         not it was written.

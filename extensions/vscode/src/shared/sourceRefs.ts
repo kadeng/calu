@@ -24,7 +24,7 @@ export const SOURCE_EXTENSIONS = [
 
 /**
  * The pattern of one reference. Group 1 is the path, group 2 the line (or undefined).
- * Before the path there is no word character, `.`, `/`, `\`, `:` or `@` (so no URL, no
+ * Before the path there is no word character, `.`, `/`, `\`, `:`, `@` or `-` (so no URL, no
  * absolute path and no e-mail address matches); after the reference there is no word
  * character, `/` or `\`.
  */

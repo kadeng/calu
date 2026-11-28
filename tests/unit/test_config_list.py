@@ -5,7 +5,10 @@ from calu.configdoc import setting_rows
 
 
 def test_every_setting_is_listed_with_its_origin() -> None:
-    """D128: `calu config get` shows what a scope **stores**, which is `{}` on a fresh install."""
+    """Every setting is listed by `calu config list` with its default when nothing is stored.
+
+    This is D128.
+    """
     table = _configuration_table({}, {}, None)
     leaves = [
         key

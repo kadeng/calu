@@ -15,6 +15,8 @@
 #      (default 56522) for tests that run on the host.
 #   5. Installs the public key for `dev`, then runs `sshbox-install` (calu, setup, project,
 #      scripted server) unless --no-install.
+#      With --reset-project, `sshbox-install` also deletes /home/dev/project in the box and
+#      creates it again, so work in that project is lost.
 #   6. If the desktop container runs: says so if it has no `ssh` client, and copies the private key to its user cua (~/.ssh/
 #      calu_sshbox, mode 600) with a `Host sshbox` entry in ~/.ssh/config and the box's host
 #      key in ~/.ssh/known_hosts.

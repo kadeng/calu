@@ -2,8 +2,8 @@
 
 Every command starts by importing `calu.cli`. The checkers (Pydantic AI with its provider
 SDKs) and the Agent SDK (with `mcp`, Starlette and uvicorn) take about two seconds to import;
-a command that runs no checker and starts no Claude Code must not pay for them. Four reports
-of the test campaign named the wait (`calu --version`, `calu attach`, `calu ide`).
+a command that runs no checker and starts no Claude Code must not pay for them. The test
+campaign reported the wait in four places (`calu --version`, `calu attach`, `calu ide`).
 
 Each case runs in a process of its own, because the test process has imported everything.
 """
@@ -139,12 +139,12 @@ def test_the_lazy_names_of_the_packages_still_resolve() -> None:
 
 @pytest.mark.slow
 def test_calu_version_answers_quickly() -> None:
-    """`calu --version` is faster than a process that only imports what it used to import.
+    """`calu --version` is faster than importing the checker and Agent SDK packages, and under 5 s.
 
     Before the imports were made lazy, `calu --version` imported Pydantic AI with the Mistral
-    and Bedrock models and the Agent SDK (1.9 s on the machine that now needs 0.5 s; those
-    imports alone take 1.5 s there). The comparison holds on a slow or busy machine, where a
-    bound in seconds alone would not; the runs alternate, best of three.
+    and Bedrock models and the Agent SDK. The comparison with a process that imports only
+    those packages holds on a slow or busy machine, where a bound in seconds alone would not.
+    The runs alternate, and the best of three is compared.
     """
     calu = Path(sys.executable).parent / "calu"
     version = [str(calu), "--version"] if calu.exists() else [sys.executable, "-m", "calu"]

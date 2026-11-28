@@ -69,7 +69,11 @@ def status() -> str:
 
 
 def main() -> None:
-    """Run the measurements and print them."""
+    """Run the measurements and print them.
+
+    Writes `/etc/root-only` (the line "secret", mode 600) and a temporary directory holding a
+    symbolic link to it, and removes neither. Run it only in a container, never on a host.
+    """
     secret = Path("/etc/root-only")
     secret.write_text("secret\n")
     secret.chmod(0o600)

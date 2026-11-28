@@ -1,12 +1,13 @@
 /**
- * Which tool calls calu holds back while a decision of the user is open.
+ * Tool calls that calu holds back while a decision of the user is open.
  *
  * The session reports a hold only as a log line, so a client derives it (the same rule as the
  * full-screen terminal client, `calu.tui.model.Model.held`):
  *
  *     an escalation that is no question is open
  *       and a tool call has neither a check nor a result, is not recorded history,
- *       is not a question of the agent, and is not an agent launch whose subagent runs
+ *       is not a question of the agent, is not the call that an open decision waits for,
+ *       and is not an agent launch whose subagent runs
  *     => that call is held
  */
 package io.github.kadeng.calu.logic

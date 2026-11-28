@@ -90,7 +90,7 @@ class ImagesTest {
     }
 
     @Test
-    fun `accepts chat messages with and without images`() {
+    fun `checks which chat messages are sent, with and without images, and refuses the others`() {
         val image = OutgoingImage("aGk=", "image/png")
         assertNull(checkSend("hello", MAIN))
         assertNull(checkSend("hello", "A1"))

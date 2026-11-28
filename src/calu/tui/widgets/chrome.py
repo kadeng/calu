@@ -21,22 +21,27 @@ class Picked(Message):
     """The user clicked something that stands for an agent, a decision or an action.
 
     Attributes:
-        kind: "agent", "decision", "follow", or of a button of the decision card: "card" (a
-            letter of the card), "option" (an option of a question), "answers" (send the
-            answers) or "decline"; "slash" (a line of the command list) or "checker" (a line
-            of the checkers screen's list), with the line's index as the key; "cell" (a cell
-            of the status bar, `StatusLine`), with the cell's name as the key.
-        key: The agent key or the escalation id; for a button of the decision card
-            `<escalation id>:q<question index>:<letter or option index>` (the value is ""
-            for "answers" and "decline"); "" for "follow".
+        kind: One of these:
+
+            - "agent", "decision" or "follow".
+            - "card": a letter of the decision card.
+            - "option": an option of a question on the card.
+            - "answers": the button that sends the answers.
+            - "decline": the button that declines the question.
+            - "slash": a line of the command list; the key is the line's index.
+            - "checker": a line of the checkers screen's list; the key is the line's index.
+            - "cell": a cell of the status bar (`StatusLine`); the key is the cell's name.
+        key: The agent key or the escalation id. For a button of the decision card it is
+            `<escalation id>:q<question index>:<letter or option index>`, and the last part
+            is "" for "answers" and "decline". It is "" for "follow".
     """
 
     def __init__(self, kind: str, key: str = "") -> None:
         """Create the message.
 
         Args:
-            kind: "agent", "decision" or "follow".
-            key: The agent key or the escalation id.
+            kind: One of the kinds the class documents.
+            key: The key the class documents for that kind.
         """
         super().__init__()
         self.kind = kind
@@ -448,10 +453,12 @@ class PanelList(Lines, can_focus=True):
         return found
 
     def show(self, lines: list[Text], targets: dict[int, tuple[str, str]] | None = None) -> None:
-        """Replace the lines and keep the cursor on its entry, or on the nearest one left.
+        """Replace the lines and keep the cursor on its entry.
 
-        Until the user has moved the cursor it stays on the first entry, which is the oldest
-        open decision while one waits.
+        If the cursor's entry is gone, the cursor moves to the first entry of the same kind,
+        or to the first entry of all if there is none of that kind. Until the user has moved
+        the cursor it stays on the first entry, which is the oldest open decision while one
+        waits.
 
         Args:
             lines: The rendered lines.

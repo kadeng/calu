@@ -2,11 +2,11 @@
 
 Each tool name maps to a `Route`:
 
-    Bash                                  -> COMMAND  (command checker) Edit, Write, MultiEdit,
-    NotebookEdit  -> EDIT     (edit checker) AskUserQuestion                       -> QUESTION (the
-    human answers it; agent/records/PLAN.md D35) read-only built-in tools              -> ALLOW
-    (no check) anything else (WebFetch, MCP tools…)  -> `default` (COMMAND unless configured
-    otherwise)
+    Bash                                  -> COMMAND   (command checker)
+    Edit, Write, MultiEdit, NotebookEdit  -> EDIT      (edit checker)
+    AskUserQuestion                       -> QUESTION  (the human answers it; PLAN.md D35)
+    read-only built-in tools              -> ALLOW     (no check)
+    anything else (WebFetch, MCP tools)   -> `default` (COMMAND unless configured otherwise)
 
 The table can be overridden per tool name, for example to escalate all calls of one MCP tool.
 The user's allow and deny lists (`calu.checkers.rules`) are applied before the

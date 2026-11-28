@@ -1,9 +1,13 @@
 """A file the user writes through `calu ide` is the user's, not Claude's.
 
-Three places must agree on that: the session's request `files.user_edit`, the write sets
-(`calu.write_sets`: the file is not part of a command's write set) and the code honesty state
-(`calu.honesty`: the file is unreviewed, like any change made outside calu). The process
-tests at the end cover `calu ide --cwd`.
+Three modules must agree on this:
+
+- The session's request `files.user_edit` tells the others about the edit.
+- The write sets (`calu.write_sets`) leave the file out of a command's write set.
+- The code honesty state (`calu.honesty`) treats the file as unreviewed, like any change made
+  outside calu.
+
+The process tests at the end cover `calu ide --cwd`.
 """
 
 import base64

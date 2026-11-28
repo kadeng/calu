@@ -1,10 +1,14 @@
 """What two reviews of the full-screen client found, each as a test.
 
-The keys of a decision must reach the step they were pressed for and no other; a reply that
-begins with a letter of the card must be typed; nothing of a step may be hidden without the
-card saying so; the layout must follow one resize; the client must come back from a program
-it handed the terminal to; and what it stores with the user login must be compared
-with what the attached session reports.
+The reviews found these requirements:
+
+- The keys of a decision must reach the step they were pressed for and no other.
+- A reply that begins with a letter of the card must be typed.
+- Nothing of a step may be hidden without the card saying so.
+- The layout must follow one resize.
+- The client must come back from a program it handed the terminal to.
+- What the client stores with the user login must be compared with what the attached session
+  reports.
 """
 
 import os
@@ -718,7 +722,13 @@ async def test_running_a_program_keeps_the_interrupt_handler(tmp_path: Path) -> 
 
 
 def test_ctrl_c_in_the_git_program_leaves_the_client_attached(tmp_path: Path) -> None:
-    """The real client on a terminal: f4, an interrupt inside the program, and it is back."""
+    """An interrupt inside the git program does not end the client.
+
+    The test starts the client (`python -m calu.tui`) as a child process on a pseudo-terminal
+    and sets `CALU_GIT_TOOL` to `sleep 30`. It presses f4 and sends ctrl+c while the program
+    has the terminal. The client then writes its own message "back from sleep" (the name of
+    the program), is still running, and ends with exit code 0 on ctrl+d.
+    """
     environment = {
         **os.environ,
         "CALU_GIT_TOOL": "sleep 30",
@@ -843,7 +853,8 @@ async def test_falling_behind_during_the_first_attach_is_not_a_failed_attach() -
                 await anyio.sleep(0.01)
         assert link.error is None and session.connects == 2
         texts = [getattr(block, "text", "") for block in model.blocks]
-        assert len(texts) == len(set(texts)) or texts.count("") > 1, "no event was applied twice"
+        scripted = [text for text in texts if text]
+        assert len(scripted) == len(set(scripted)), "no event was applied twice"
         link.detach()
 
 
@@ -854,7 +865,8 @@ async def test_a_save_that_the_session_does_not_show_is_reported_as_such(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The session is given a moment to re-read its settings first (a session that is only
-    slower than the save is no other database); here that moment is cut to two questions."""
+    slower than the save is no other database). Here the two time limits of that wait
+    (`CATCH_UP_S`, `CATCH_UP_STEP_S`) are cut to 0.02 s each."""
     from calu.tui.screens import checkers
 
     monkeypatch.setattr(checkers, "CATCH_UP_S", 0.02)

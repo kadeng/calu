@@ -421,7 +421,7 @@ def turn_end(cost: float, background_tasks: int = 0, after: float = 1.0) -> list
 
 
 def _opening() -> list[Item]:
-    """Build the start every hand-written scenario shares: prompt, thinking, three steps.
+    """Build the start every hand-written scenario shares: prompt, thinking, a text, three steps.
 
     Returns:
         The events up to the passed test run.
@@ -656,7 +656,7 @@ def stored_history() -> dict[str, Any]:
 
     Returns:
         A `SessionHistoryResult` as a dict: two turns with their inputs and answers, and three
-        stored steps (a read, an edit, a denied command).
+        stored steps (a search, an edit, a denied command).
     """
     return {
         "calu_session_id": "calu-7d41",

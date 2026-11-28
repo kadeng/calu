@@ -234,7 +234,10 @@ def _queue_now(rec: Recorder) -> list[QueuedMessage]:
 
 
 async def test_a_message_queued_during_a_turn_is_held_and_can_be_withdrawn(tmp_path: Path):
-    """D283: calu keeps it until the turn ends; withdrawn, Claude never sees it."""
+    """A message sent during a turn is kept until the turn ends (D283).
+
+    A message that the user withdraws meanwhile is never shown to Claude.
+    """
     session, rec, _ = make_session(
         tmp_path, [[{"sleep": 0.5}, {"text": "first done"}], [{"text": "second done"}]]
     )
@@ -545,7 +548,12 @@ async def test_requests_need_a_running_session(tmp_path: Path):
         await session.interrupt()
 
 
-async def test_changed_settings_take_effect_from_the_next_step(tmp_path: Path):
+async def test_a_reload_keeps_the_claude_settings_of_the_run_and_applies_the_rest(tmp_path: Path):
+    """`apply_settings` keeps the Claude settings of the run and applies the other settings.
+
+    A reload that names another Claude model leaves the model of the run unchanged. A reload
+    that turns the narration off removes the narration from the steps that follow.
+    """
     session, rec, _ = make_session(
         tmp_path,
         [[{"tool": "Bash", "input": {"command": "deploy"}, "result": "ok"}]],
@@ -690,8 +698,11 @@ async def test_an_escalation_nobody_answers_stops_the_session(tmp_path: Path):
 async def test_after_an_escalation_timeout_the_session_is_resumed_and_waits_for_the_user(
     tmp_path: Path,
 ):
-    """D282: the turn and Claude Code end, the same conversation is started again at once,
-    and the user's "continue" goes on from there -- no restart by hand."""
+    """After the timeout the turn and Claude Code end (D282).
+
+    calu starts the same conversation again at once. The user's "continue" goes on from
+    there, without a restart by hand.
+    """
     session, rec, store = make_session(
         tmp_path,
         [[{"tool": "Bash", "input": {"command": "deploy # calu:escalate"}, "result": "never"}]],
@@ -783,7 +794,10 @@ def _runners(tmp_path: Path, dying: int) -> tuple[Callable[[], FakeRunner], list
 
 
 async def test_a_session_claude_code_ended_on_its_own_is_resumed_and_waits(tmp_path: Path):
-    """D282: not only after a timeout -- a run calu did not end is picked up at once."""
+    """A run that Claude Code ended on its own is picked up at once (D282).
+
+    The resume does not wait for a timeout.
+    """
     session, rec, store = make_session(tmp_path, [])
     session.runner_factory, made = _runners(tmp_path, dying=1)
     session.auto_resume = True
@@ -1255,10 +1269,12 @@ def _turn(index: int, text: str) -> TurnRecord:
 
 
 async def test_a_fork_of_a_whole_conversation_keeps_its_turns_under_its_own_id(tmp_path: Path):
-    """D203: `calu run --fork ID` continues a copy. The copy runs under an id calu chose, so
-    the id is known before the first turn, and it stores the turns it inherited: a
-    conversation is read back by its id, so a later resume of the fork would otherwise find
-    only the turns the fork ran itself."""
+    """`calu run --fork ID` continues a copy of a conversation (D203).
+
+    The copy runs under an id calu chose, so the id is known before the first turn. The copy
+    also stores the turns it inherited. A conversation is read back by its id, so without the
+    inherited turns a later resume of the fork would find only the turns the fork ran itself.
+    """
     session, rec, store = make_session(tmp_path, [[{"text": "done"}]])
     store.previous["claude-1"] = ([_turn(1, "first"), _turn(2, "second")], "an earlier summary")
     async with anyio.create_task_group() as tg:
@@ -1726,11 +1742,14 @@ async def test_a_harness_question_leads_with_what_claude_code_asked(tmp_path: Pa
 
 
 async def test_a_message_out_of_the_session_is_checked_but_a_relay_is_not(tmp_path: Path):
-    """D69: `SendMessage` runs unchecked only while it stays inside the session.
+    """Both `SendMessage` calls are checked; the unchecked relay is covered elsewhere (D69).
 
-    Claude Code's `SendMessage` also reaches other sessions on the machine, and their steps no
-    checker of this session sees, so a message to anything calu does not know as its own
-    subagent goes to the command checker like any other unknown action.
+    A message to this session's own subagent is reviewed as a task (route SUBAGENT). Claude
+    Code's `SendMessage` also reaches other sessions on the machine, and no checker of this
+    session sees their steps. A message to anything calu does not know as its own subagent
+    therefore goes to the command checker like any other unknown action (route COMMAND).
+    The relay of the user's words is covered by
+    `test_a_relay_of_the_users_words_to_a_subagent_is_not_reviewed`.
     """
     session, rec, _ = make_session(
         tmp_path,
@@ -2035,7 +2054,10 @@ async def test_a_slow_rule_check_does_not_stop_the_event_loop(
 
 
 async def test_an_image_reaches_claude_with_the_message_and_the_checkers_are_told(tmp_path: Path):
-    """A chat message with an image (D220), with the scripted runner; nothing is started."""
+    """A chat message with an image (D220), with the scripted runner.
+
+    No `claude` process is started.
+    """
     import base64
 
     from calu.protocol.messages import ChatImage, UserInput

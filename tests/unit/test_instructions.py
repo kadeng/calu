@@ -1,4 +1,4 @@
-"""How a checker's prompt is put together from its parts (agent/records/PLAN.md D181)."""
+"""The composition of a checker's prompt from its parts (agent/records/PLAN.md D181)."""
 
 import pytest
 
@@ -106,14 +106,18 @@ a margin of 8 words."""
 def test_the_shipped_instructions_are_short(name: str) -> None:
     """Requirement 38: system part and default together are a few plain rules.
 
-    The command checker's limit is higher by the section on commands outside the sandbox
-    (D255), and every limit by the fixed parts on the checker's role (`ROLE_PART`) and on
-    getting around safeguards (`EVASION_PART`) and on what an answer may contain
-    (`DISCLOSURE_PART`, 2026-11-23), by the sentence on secrets in the summary
-    (`PRIVACY_WORDS`) and by the wording of reminders and suggestions (`SUGGEST_WORDS`), all of
-    which the owner asked for after requirement 38. The command and edit checkers' limits are
-    higher by the section on generated code (`GENERATED_WORDS`), the edit checker's also by
-    the owner's rule against AI slop language (`SLOP_WORDS`).
+    The limit is the base limit plus these allowances. The owner asked for each of them after
+    requirement 38.
+
+    - Every checker: the fixed parts on the checker's role (`ROLE_PART`), on getting around
+      safeguards (`EVASION_PART`) and on what an answer may contain (`DISCLOSURE_PART`,
+      2026-11-23).
+    - Every checker: the sentence on secrets in the summary (`PRIVACY_WORDS`).
+    - Every checker: the wording of reminders and suggestions (`SUGGEST_WORDS`).
+    - The command checker: the section on commands outside the sandbox (D255), and a base
+      limit that is 50 words higher.
+    - The command and edit checkers: the section on generated code (`GENERATED_WORDS`).
+    - The edit checker: the owner's rule against AI slop language (`SLOP_WORDS`).
 
     Args:
         name: The checker type.
@@ -157,8 +161,11 @@ def test_cutting_the_test_triggers_keeps_what_follows_them() -> None:
     assert without_test_triggers("# Test triggers\n\n- x\n") == ""
 
 
-def test_the_narrator_and_the_redaction_instructions_are_untouched() -> None:
+def test_the_narrator_instructions_are_untouched() -> None:
     """Requirement 38: the narrator's instructions change only on purpose.
+
+    The test pins the SHA-256 digest of the narrator's default instructions. It does not
+    check the redaction instructions.
 
     Changed three times since, each at the owner's request: plans to get around a safeguard are
     narrated in full (`EVASION_PART`); secrets and personal data become placeholders; the

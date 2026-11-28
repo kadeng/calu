@@ -270,7 +270,7 @@ def test_a_missing_key_says_what_it_costs_per_role() -> None:
 
 
 def test_no_clock_interval_makes_a_session_look_stale():
-    """sd4: the heartbeat has its own fixed interval, so no clock setting is warned about."""
+    """The heartbeat has its own fixed interval, so no clock setting is warned about."""
     for interval in (0.0, 10.0, STALE_AFTER_S, 10 * STALE_AFTER_S):
         config = Config(clock=ClockConfig(check_interval_s=interval))
         assert preflight.heartbeat_warnings(config) == []
@@ -937,9 +937,13 @@ def test_without_the_sandbox_nothing_of_calu_or_claude_code_asks_for_bubblewrap(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Requirement 42 (3): the refusal to start without bubblewrap applies only with the
-    sandbox on. Claude Code itself starts with `enabled: false, failIfUnavailable: true` and
-    neither bwrap nor socat on PATH (measured, CLI 2.1.319, spikes/RESULTS.md); calu passes
-    `enabled: false` and has no check of its own that refuses."""
+    sandbox on.
+
+    The test checks only calu's own start-up warnings and its settings. With `enabled: false`
+    and neither bwrap nor socat on PATH, calu passes `enabled: false` and has no check of its
+    own that refuses. The test does not run Claude Code. That Claude Code itself starts in this
+    case, with `enabled: false, failIfUnavailable: true`, was measured (CLI 2.1.319,
+    spikes/RESULTS.md, which cites this test by its name)."""
     monkeypatch.setattr(preflight.shutil, "which", lambda name: None)
     off = Config.model_validate({"claude": {"sandbox": {"enabled": False}}})
     assert off.claude.sandbox.settings()["sandbox"]["enabled"] is False

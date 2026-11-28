@@ -16,9 +16,10 @@ for the events after the last number it saw (`events.subscribe`) and gets the cu
 tool call that started it.
 
 A client proves with `initialize` that it may talk to the session (the token that `calu run`
-prints). The configuration, the rules and the checker instructions are not part of this
-protocol: they live in the database and are changed with calu's own commands, which need other
-credentials than a session (agent/records/PLAN.md D6, §5).
+prints). The configuration, the rules and the checker instructions live in the database. This
+protocol has no request that changes them. They are changed with calu's own commands, which
+need other credentials than a session (agent/records/PLAN.md D6, §5). A client can read the
+checker definitions with their instructions through `checkers.get`.
 """
 
 import base64
@@ -241,11 +242,16 @@ class AutoEscalateSetParams(AutoEscalate):
 class PauseSetParams(BaseModel):
     """`pause.set`: pause the session, or end its pause (the owner, 2026-11-26).
 
-    A pause interrupts nothing. The next tool call that needs a check (an edit, a command, a
-    commit, the start of a subagent, of any agent) is checked as usual and, if approved,
-    waits until the pause ends: by `pause.set {paused: false}`, after `minutes`, or when the
-    PreToolUse hook's time is used up. A denied or escalated call is answered at once.
-    Pausing a paused session starts its time again. Result: `PauseInfo`.
+    A pause interrupts nothing. The next tool call of any agent that needs a check is checked
+    as usual. Such calls are edits, commands, commits and the start of a subagent. An approved
+    call then waits until the pause ends. The pause ends in one of three ways:
+
+    - by `pause.set {paused: false}`,
+    - after `minutes`,
+    - when the PreToolUse hook's time is used up.
+
+    A denied or escalated call is answered at once. Pausing a paused session starts its time
+    again. Result: `PauseInfo`.
     """
 
     paused: bool
@@ -627,11 +633,14 @@ class UsagePanelResult(BaseModel):
     of the stream, each with `reported_at`); empty if Claude Code has not reported one yet.
     `claude_usage` is the text of Claude Code's own `/usage` in a session
     without a terminal, read with the control request `get_session_cost`: no model call, no
-    turn, nothing recorded and nothing shown to the checkers. `account_limits` are the plan's
-    limits that Claude Code reads from its account at this request (control request
-    `get_usage`, which Claude Code marks experimental), with `reported_at` set to now; empty
-    for an account without such limits (an API key, Bedrock, Vertex) or when Claude Code does
-    not answer it. `subscription` is the account's plan as Claude Code names it ("pro",
+    turn, nothing recorded and nothing shown to the checkers.
+
+    `account_limits` are the plan's limits. Claude Code reads them from its account at this
+    request, with the control request `get_usage`, which Claude Code marks experimental. Their
+    `reported_at` is set to now. The list is empty for an account without such limits (an API
+    key, Bedrock, Vertex) and when Claude Code does not answer the request.
+
+    `subscription` is the account's plan as Claude Code names it ("pro",
     "max", ...), "" if none or not known. When `get_usage` fails or answers in a shape calu
     does not know, `account_limits` stays empty and `account_limits_problem` says so: the
     client then points to `limits`, the figures reported in this process (D250).

@@ -144,7 +144,9 @@ async def test_a_database_that_holds_other_tables_is_not_taken_over(db_url: str)
 async def test_the_user_login_leaves_rds_iam_to_log_in_with_its_password(db_url: str) -> None:
     """D265 (3): on RDS the user login uses a password, not IAM. A member of `rds_iam` is
     asked for a token there, so `set_user_password` takes `calu_admin` out of the role.
-    Creates the role `rds_iam` on the test server if it is missing, and drops it again."""
+    Side effects on the test server: creates the role `rds_iam` if it is missing, and drops it
+    again; creates the server-wide role `calu_admin` if it is missing and leaves it in place;
+    sets a generated password on `calu_admin`."""
     owner = await connect(db_url)
     created = False
     try:

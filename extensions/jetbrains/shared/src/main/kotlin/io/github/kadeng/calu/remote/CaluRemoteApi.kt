@@ -147,6 +147,10 @@ interface CaluRemoteApi : RemoteApi<Unit> {
      *     syncUploadNow {}             syncShowSkipped {}           setupInterpreter {}
      *     setPermissionMode {mode}
      *
+     * The list is partial. The slash commands also send `honestyTrust`, `honestyReview`,
+     * `forkConversation`, `sideAsk`, `ruleAdd`, `rulesList` and `ruleRemove`; their arguments
+     * are in `chat/ChatActions.kt` and `logic/SlashCommands.kt`.
+     *
      * @param projectId The project.
      * @param action The action's name.
      * @param argsJson Its arguments as JSON object text.

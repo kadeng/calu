@@ -78,8 +78,8 @@ class Dirty:
     """A flag that a notification sets and a worker waits for and then clears.
 
     Several notifications before the worker wakes up count as one: the worker reads the current
-    state of the database anyway. A notification that arrives between `wait` returning and the
-    worker's read is lost, which is harmless for the same reason.
+    state of the database anyway. A notification that arrives after `wait` has returned
+    wakes the next `wait`, so the worker runs one more cycle and reads the same state again.
 
     The flag has two strengths. `set` says "something changed": the worker must act. `hint`
     says "something may have changed" (a reconnect, a subscription that just took effect): the

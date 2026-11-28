@@ -15,18 +15,21 @@ MCP client --http://127.0.0.1:56211/mcp ----> cua-spacesd :3211
 
 ## Start and stop
 
+Run the commands from the repository root. Inside the desktop, the checkout is mounted at
+`/workspace/calu`.
+
 ```bash
-calu/uitest/run.sh              # build the image if missing, start or reuse the container
-calu/uitest/run.sh --rebuild    # rebuild the image first (an existing container keeps the old image)
-calu/uitest/stop.sh             # stop; the container and everything inside it are kept
-calu/uitest/stop.sh --remove    # stop and delete the container (VSCode profile, PyCharm settings)
+uitest/run.sh              # build the image if missing, start or reuse the container
+uitest/run.sh --rebuild    # rebuild the image first (an existing container keeps the old image)
+uitest/stop.sh             # stop; the container and everything inside it are kept
+uitest/stop.sh --remove    # stop and delete the container (VSCode profile, PyCharm settings)
 ```
 
 After a Dockerfile change: `stop.sh --remove`, then `run.sh --rebuild`.
 
 `run.sh` creates the container with `--security-opt seccomp=unconfined`. Docker's default
-seccomp profile blocks user namespaces, and without them bubblewrap, and with it Claude Code's
-sandbox, cannot start (agent/records/PLAN.md D134). The option is fixed when a container is
+seccomp profile blocks user namespaces. Without them, bubblewrap cannot start, and Claude
+Code's sandbox cannot start with it (agent/records/PLAN.md D134). The option is fixed when a container is
 created. To move an existing container over and keep everything in it (calu, Claude Code, the
 IDEs' settings, `~/work`):
 
@@ -40,7 +43,7 @@ mv ~/.claude/settings.json /share/.keyhold/claude-settings.json
 # on the host
 docker stop calu-uitest && docker commit calu-uitest calu-uitest:state
 docker rename calu-uitest calu-uitest-old
-CALU_UITEST_IMAGE=calu-uitest:state calu/uitest/run.sh
+CALU_UITEST_IMAGE=calu-uitest:state uitest/run.sh
 docker network connect --alias calu-uitest calu-uitest-net calu-uitest   # if the network exists
 # in the desktop, as cua: put the key files back, start PostgreSQL
 mv /share/.keyhold/calu.env ~/.config/calu/.env
@@ -68,8 +71,8 @@ writable `/proc/sys`, and the sandbox does not start (the setting is not one cal
 ## Watch the desktop in a browser
 
 ```bash
-uv run --no-project --with cua python calu/uitest/desktop.py viewer-url
-uv run --no-project --with cua python calu/uitest/desktop.py viewer-url --view-only --ttl 3600
+uv run --no-project --with cua python uitest/desktop.py viewer-url
+uv run --no-project --with cua python uitest/desktop.py viewer-url --view-only --ttl 3600
 ```
 
 The command prints `http://127.0.0.1:56211/viewer/#<ticket>`. The page is cua-spacesd's HTML5
@@ -80,7 +83,7 @@ but shows no desktop. There is no VNC server in this image.
 ## The helper: `desktop.py`
 
 ```bash
-D="uv run --no-project --with cua python calu/uitest/desktop.py"
+D="uv run --no-project --with cua python uitest/desktop.py"
 $D screenshot ~/.cache/calu-uitest/share/shot.png   # PNG of the whole desktop (1280x800)
 $D click 640 400                                    # left click at pixel x y
 $D type "hello"                                     # type into the focused window
@@ -307,11 +310,17 @@ together.
 - The scripts touch only the container `calu-uitest`. The database containers
   (`calu-db-postgres-1`, `calu-dev-caludb-1`) are separate and must stay untouched.
 - No `--privileged`, no Docker socket, no host home directory, no `~/.config`, `~/.claude`,
-  `~/.ssh`, and no API keys or tokens in the container. The only secret is the container's own
-  access token. The one exception is a run of `setup-real.sh`, which the owner decides: it
-  holds the API key the owner put into the exchange directory, until `--remove-key`.
-- The repository mount is read-only, but it is the whole checkout: files such as `.env` and
-  `.venv/` in the repository are readable inside the container.
+  `~/.ssh`, and no API keys or tokens from the host in the container. The container holds
+  these secrets of its own:
+  - its access token;
+  - the database password of its own test cluster (the Credentials row of the desktop table);
+  - the private half of the SSH key for the test box, once `sshbox/run.sh` has run (see "The
+    SSH box");
+  - the API key the owner put into the exchange directory, from a run of `setup-real.sh`
+    (which the owner decides) until `--remove-key`.
+- The repository mount is read-only, but it is the whole checkout. Files such as `.env` and
+  `.venv/` in the repository are readable inside the container, and a `.env` file can hold
+  keys. Keep keys out of the checkout.
 - Ports bind to 127.0.0.1 only.
 - Downloads live in Docker images and `~/.cache/calu-uitest/`, `~/.cache/cua`, `~/.cache/uv`.
 
@@ -351,8 +360,8 @@ without passwords; test plan section E). The host needs no sudo for it, and noth
 but the calu checkout (read-only) is mounted.
 
 ```bash
-calu/uitest/rootbox/run.sh              # build if missing, start, install calu inside (root and ada)
-calu/uitest/rootbox/run.sh --rebuild    # after a change to the Dockerfile or the scripts beside it
+uitest/rootbox/run.sh              # build if missing, start, install calu inside (root and ada)
+uitest/rootbox/run.sh --rebuild    # after a change to the Dockerfile or the scripts beside it
 docker exec -it calu-rootbox bash                # a root shell
 docker exec -it -u ada calu-rootbox bash -l      # ada; also bob, carol
 docker exec calu-rootbox rootbox-install         # install calu again after a change to the checkout
@@ -425,13 +434,13 @@ container calu-uitest: ssh sshbox ───────────── sshbox
 ```
 
 ```bash
-calu/uitest/sshbox/run.sh                  # key pair, image, network, container, calu inside, the desktop's key
-calu/uitest/sshbox/run.sh --rebuild        # after a change to the Dockerfile or the scripts beside it
-calu/uitest/sshbox/run.sh --reset-project  # install calu again and create /home/dev/project anew
+uitest/sshbox/run.sh                  # key pair, image, network, container, calu inside, the desktop's key
+uitest/sshbox/run.sh --rebuild        # after a change to the Dockerfile or the scripts beside it
+uitest/sshbox/run.sh --reset-project  # install calu again and create /home/dev/project anew
 docker exec calu-sshbox /usr/local/sbin/sshbox-install    # install calu again after a change to the checkout
 docker exec -u dev calu-sshbox sshbox-server --stop       # stop the scripted servers ("no server answers")
-calu/uitest/sshbox/stop.sh                 # stop; `run.sh` starts it again (its servers start with it)
-calu/uitest/sshbox/stop.sh --remove        # delete the container and the network (the key is kept)
+uitest/sshbox/stop.sh                 # stop; `run.sh` starts it again (its servers start with it)
+uitest/sshbox/stop.sh --remove        # delete the container and the network (the key is kept)
 ```
 
 | Item | Value |

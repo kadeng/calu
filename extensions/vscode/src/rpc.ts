@@ -152,7 +152,7 @@ export class RpcClient {
    *
    * @param chunk Text received from stdout (any split; partial lines are buffered).
    * @returns Nothing. Exceptions thrown by `onEvent` propagate to the caller after the line
-   *   that caused them; later lines of the same chunk are then not processed.
+   *   that caused them; later lines of the same chunk are then discarded and never handled.
    */
   feed(chunk: string): void {
     for (const line of this.splitter.push(chunk)) {

@@ -164,7 +164,7 @@ async def test_taking_a_snapshot_before_prepare_is_an_error(tmp_path: Path):
 async def test_a_file_named_like_pathspec_magic_hides_nothing_from_the_patch(
     tmp_path: Path, magic: str
 ):
-    """wa1: git reads `:!x` after `--` as "exclude x" unless pathspecs are literal.
+    """Git reads a path such as `:!x` after `--` as an exclude pattern unless pathspecs are literal.
 
     A command that creates a file with such a name used to remove the diff of another file from
     the patch the write-set checker sees, with `cut` still False.
@@ -194,7 +194,7 @@ async def test_a_file_named_like_pathspec_magic_hides_nothing_from_the_patch(
 
 
 async def test_a_patch_that_does_not_cover_its_paths_is_an_error(tmp_path: Path, monkeypatch):
-    """wa1: whatever makes git leave a path out, the checker must not get a partial patch."""
+    """Whatever makes git leave a path out, the checker must not get a partial patch."""
     snapshots = store(tmp_path)
     project = snapshots.workspace
     (project / "a.py").write_text("a = 1\n", encoding="utf-8")
@@ -219,7 +219,7 @@ async def test_a_patch_that_does_not_cover_its_paths_is_an_error(tmp_path: Path,
 
 
 async def test_a_gitattributes_entry_cannot_hide_a_files_content_from_the_patch(tmp_path: Path):
-    """wa1, second spelling: `payload.py -diff` would turn the diff into "Binary files differ"."""
+    """A `.gitattributes` line `payload.py -diff` would turn the diff into "Binary files differ"."""
     snapshots = store(tmp_path)
     project = snapshots.workspace
     (project / "payload.py").write_text("safe = 1\n", encoding="utf-8")

@@ -106,6 +106,15 @@ function fakeUi(script: Script): HostUi & SessionsUi {
 
 const ATTACH = { session_id: 's1', events: [], complete: true };
 
+/**
+ * Builds a scripted bridge, a BridgeCore and a ChatHost, starts the host and waits 20 ms for
+ * its first requests to finish. The caller must call `host.dispose()`.
+ *
+ * @param answers Replaces or adds the scripted bridge's answers by method name.
+ * @param script Replaces defaults of the scripted user interface (confirm, inputs).
+ * @param remembered The session id the host remembered from an earlier run, if any.
+ * @returns The bridge, core, view, host, user interface script and the ids the host stored.
+ */
 async function started(answers: Record<string, Answer> = {}, script: Partial<Script> = {}, remembered?: string) {
   const bridge = new ScriptedBridge({
     'ide.initialize': () => ({ bridge_version: '1', protocol_version: undefined, workspace: '/w' }),
@@ -141,7 +150,7 @@ describe('BridgeCore', () => {
     host.dispose();
   });
 
-  it('turns a launch failure into the status "missing" or "error"', async () => {
+  it('turns a launch failure with the code "missing" into the status "missing"', async () => {
     const failing: Launcher = {
       launch: () => {
         throw new LaunchError('missing', 'calu was not found');
@@ -158,7 +167,7 @@ describe('BridgeCore', () => {
     expect(core.status).toBe('missing');
   });
 
-  it('asks the calu user password once; Escape or refused passwords fail with what to do next', async () => {
+  it('asks for the calu user password again after an Escape or a refusal, and gives up after three refusals, saying what to do next', async () => {
     const needs = Object.assign(new Error('calu needs the calu user password (the one chosen at `calu setup`)'), {
       code: -32010,
     });
@@ -206,7 +215,7 @@ describe('BridgeCore', () => {
 });
 
 describe('ChatHost', () => {
-  it('attaches to the workspace session when the bridge runs, and shows its events', async () => {
+  it('attaches to the workspace session when the bridge runs, and reports its session id', async () => {
     const { bridge, view, host } = await started();
     expect(bridge.last('ide.attach')).toMatchObject({ session: null, after_seq: 0 });
     expect(view.state.session.sessionId).toBe('s1');
@@ -216,8 +225,8 @@ describe('ChatHost', () => {
   });
 
   it('attaches to the remembered session again; one the bridge resumed is loaded whole and remembered (D280)', async () => {
-    // The owner, 2026-11-26: after a restart of `calu serve` the chat had to pick its session
-    // by hand. The bridge resumes the named session and answers with the new one.
+    // After a restart of `calu serve`, the chat had to pick its session by hand (D280).
+    // The bridge now resumes the named session and answers with the new one.
     const { bridge, view, host, stored } = await started(
       { 'ide.attach': (p) => (p.session === 'old' ? { session_id: 'new', events: [], complete: true } : ATTACH) },
       {},

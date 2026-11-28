@@ -59,6 +59,10 @@ sleep 14
 def prepare(workspace: Path) -> None:
     """Create the state directory, a file only root may read, the check script and the wrapper.
 
+    Writes outside the workspace: `/var/lib/calu/claude/1000` (owned by the target uid),
+    `/etc/calu/secret` (mode 600) and the wrapper `/usr/local/bin/claude-as-user`. It does not
+    check where it runs, so run it only as root in a container, which `spike_other_uid.sh` does.
+
     Args:
         workspace: The project directory, owned by the target uid.
     """

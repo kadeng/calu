@@ -432,7 +432,8 @@ def panes(src: Sources) -> list[Pane]:
 
     Returns:
         The panes in sidebar order: the checkers, the rule lists, Claude Code, then calu's own
-        sections. Groups and panes without fields are left out.
+        sections. Groups without fields are left out, and so are panes with nothing to show
+        (no groups, facts, links or temporary rules).
     """
     used: set[str] = set()
     found = [
@@ -669,8 +670,9 @@ def parse(kind: Kind, raw: str) -> Any:
         raw: What the browser sent.
 
     Returns:
-        The parsed value; an empty text field becomes None, so that a field can be cleared back
-        to what it inherits. A document ends with exactly one newline; a checker's instructions
+        The parsed value. An empty text field becomes None, so that a field can be cleared back
+        to what it inherits; an empty JSON field becomes `{}` and an empty list field `[]`. A
+        document ends with exactly one newline; a checker's instructions
         have none at their end.
 
     Raises:
@@ -794,9 +796,9 @@ def _checker_panes(src: Sources, used: set[str]) -> list[Pane]:
         title="Overview",
         description=(
             "What the checkers decided so far, in every project. This is the record, not a"
-            " measurement: an escalation a human allowed cost an interruption for nothing, and"
-            " a step a checker approved that a human then denied is a miss. `calu evals`"
-            " measures the checkers against a case set instead."
+            " measurement: an escalation that a human allowed was an interruption that was not"
+            " needed, and a step that a checker approved and a human then denied is a miss."
+            " `calu evals` measures the checkers against a case set instead."
         ),
         facts=[("All steps", line, False) for line in src.step_lines],
     )
@@ -1009,7 +1011,8 @@ def _session_panes(src: Sources, used: set[str]) -> list[Pane]:
     Args:
         src: The sources.
         used: The configuration sections and fields the earlier panes show; whatever the model
-            has beyond them is placed here, so a new setting is never missing from the page.
+            has beyond them is placed here. A setting whose type the form cannot render is
+            left out of the page.
 
     Returns:
         The panes of the "Session" sidebar section, and those of `RULES_SECTIONS`, which

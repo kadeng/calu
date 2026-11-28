@@ -680,8 +680,10 @@ def test_the_lock_space_is_left_empty_after_every_lease_ended() -> None:
 
 
 def test_opposite_orders_of_worktrees_do_not_deadlock() -> None:
-    """Two threads ask for the same two worktrees in opposite orders, 200 times; the scheme
-    takes them in one order, so both always finish (a deadlock would raise LockTimeoutError)."""
+    """Two threads ask for the same two worktrees in opposite orders, 200 times each.
+
+    The scheme takes the worktrees in one order, so both threads always finish. A deadlock
+    would raise `LockTimeoutError`."""
     locking = scheme()
     start = threading.Barrier(2)
 
@@ -1024,9 +1026,10 @@ def test_the_scheme_reports_live_owners_and_open_tickets() -> None:
 
 
 def test_an_edit_outside_waits_only_for_the_commands_that_run() -> None:
-    """Why the global lock comes last (the owner's choice of 2026-11-25): a command that waits
-    for a busy worktree holds nothing, so an edit outside waits for the running command only,
-    not also for the command queued behind it."""
+    """The global lock comes last, by the owner's choice of 2026-11-25.
+
+    A command that waits for a busy worktree holds nothing. So an edit outside waits for the
+    running command only, not also for the command queued behind it."""
     locking = scheme()
     running = locking.run_command_in_worktree("wt1", owner="running")
     queued = Background(lambda: locking.run_command_in_worktree("wt1", owner="queued"))

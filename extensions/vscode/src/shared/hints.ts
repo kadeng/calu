@@ -7,9 +7,12 @@
  *     password not given yet    -> "locked"         button: Unlock (asks the calu user password)
  *     database not reachable    -> "database"       button: Open settings (Setup card)
  *     no session attached and
- *       the server stopped       -> "server-stopped" buttons: Start server, Retry (serverLoss.ts)
- *       none running / no server -> "no-server"     button: Start calu server
- *       otherwise                -> "no-session"    button: New session
+ *       the server stopped       -> "server-stopped" button: Start server (setupCards adds Retry,
+ *                                                   chatModel.ts)
+ *     no session attached and the server not stopped
+ *       ide.start failed with
+ *         -32013 (no server answered) -> "no-server" button: Start calu server
+ *       in every case             -> "no-session"    button: New session
  */
 
 import type { IdeStatusResult } from '../bridgeProtocol';

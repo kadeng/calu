@@ -749,8 +749,8 @@ export function boundInput(input: unknown): Record<string, unknown> {
  * they approve, independent of calu's Markdown rendering).
  *
  * @param input The (bounded) tool input.
- * @returns `[label, text]` pairs: "Command" (Bash `command`), "File" (`file_path`/`path`),
- *   always followed by "Input (JSON)" with the whole input pretty-printed.
+ * @returns `[label, text]` pairs: "Command" (the `command` of any tool), "File" (`file_path`,
+ *   `path` or `notebook_path`), always followed by "Input (JSON)" with the whole input pretty-printed.
  */
 export function literalToolInput(input: Record<string, unknown>): [string, string][] {
   const parts: [string, string][] = [];
@@ -883,8 +883,9 @@ export function parseHonestyResult(p: Record<string, unknown>): HonestyResultVie
 /**
  * Name the chip a tool row shows for the honesty checker's result, if any.
  *
- * Only findings that need a person get a chip; a step whose files are all honest gets none
- * (its details list them). The chip never reads PASS or ALLOW.
+ * A step with a dishonest file gets the chip "dishonest". A step with no dishonest file but an
+ * escalation reason gets "honesty: ask", because a person has to look. A step whose files are
+ * all honest gets no chip (its details list them). The chip never reads PASS or ALLOW.
  *
  * @param honesty The step's honesty result, or `undefined`.
  * @returns `null` for no chip; else the label ("dishonest" or "honesty: ask") and a title
@@ -1389,7 +1390,8 @@ function setPending(state: ViewState, key: string, pending: boolean, answer?: st
 }
 
 /**
- * Drop the transcript: messages, tool calls, escalations, subagents, queue and side questions.
+ * Drop the transcript: messages, tool calls, escalations, subagents, queue and side questions,
+ * and also the held marks, the focus request and the turn count.
  *
  * @param state The current state (not modified).
  * @returns The state with empty lists; bridge, link, session, sessions, hints and settings-like
@@ -1819,9 +1821,9 @@ function reduce(state: ViewState, method: string, p: Record<string, unknown>): V
       if (!old) return state;
       const decided = (['allow', 'deny', 'cancelled'] as const).includes(e.decision) ? e.decision : 'cancelled';
       // calu reports a question closed by an answer as "deny" (the AskUserQuestion call itself
-      // does not run) with the text Claude receives as the note. The card shows it as answered:
-      // also after a replay and when another client answered, where no `ui.decisionPending`
-      // of this view recorded the answer.
+      // does not run) with the text Claude receives as the note. The card shows such a question
+      // as answered. This holds also after a replay, and when another client answered: then no
+      // `ui.decisionPending` of this view recorded the answer.
       const question = old.questions.length > 0;
       const answered = decided !== 'cancelled' && (question || old.answer !== undefined);
       const raw = str(e.note) ? e.note : null;
@@ -1984,10 +1986,10 @@ function pauseOf(p: Record<string, unknown>): ViewState['pause'] {
 /**
  * Rebuild the state from the result of `ide.attach` / `ide.start` (reducer case `ui.attached`).
  *
- *     1. drop the transcript of the session shown before -- unless `resumed` is true: the
- *        host attached again to the session this state shows, asked only for the events after
- *        `lastSeq` and got them without a gap (after a restart of the bridge); the transcript
- *        then stays and the events continue it
+ *     1. drop the transcript of the session shown before, unless `resumed` is true.
+ *        `resumed` means that the host attached again to the session this state shows, asked
+ *        only for the events after `lastSeq` and got them without a gap. This happens after
+ *        a restart of the bridge. The transcript then stays and the events continue it
  *     2. replay `events` (the recorded events of the session, oldest first)  -> transcript
  *     3. apply `snapshot` (authoritative for what is true now):
  *          session state, model, effort, agents, queue, auto-escalation, permission mode,
@@ -2099,13 +2101,13 @@ export const HISTORY_END_TEXT = 'From calu\'s record: messages, steps and answer
  * and the checker's summary; its input and the start of its result are shown if the record
  * holds them. Steps of subagents are rows of Main (the record names no tab).
  *
- * @param state The current state (not modified).
- * @param p The params: `session_id` (the session the history was asked from) and `history`
- *   (the result of `session.history`, untrusted).
  * Side effect on the numbering: `turnBase` becomes the number of turns before the first
  * replayed one, and the user messages of the replayed events are renumbered to the
  * conversation's turn numbers.
  *
+ * @param state The current state (not modified).
+ * @param p The params: `session_id` (the session the history was asked from) and `history`
+ *   (the result of `session.history`, untrusted).
  * @returns The new state; unchanged if another session is shown now or if the history was
  *   already applied (`turnBase` is set). If the record holds nothing the transcript lacks,
  *   only the numbering changes.

@@ -1,4 +1,12 @@
-"""`calu setup` and `calu run` for the local Docker database, without Docker.
+"""`calu setup`, `calu db up` and `calu run`, without Docker and without a database.
+
+The file covers:
+
+- the local Docker database (D205): where it is created, `calu db up`, and the start of a
+  stopped database by `calu run`;
+- the sandbox question of `calu setup` (requirement 42), its options, and the stored sandbox
+  setting, and the warnings about it (`sandbox_setup_notes`);
+- the stored logins of a local database (`user` and `db-admin`).
 
 See agent/records/PLAN.md D205.
 """

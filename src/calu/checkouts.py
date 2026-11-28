@@ -259,8 +259,9 @@ class Checkouts:
         main checkout's repository root; every other worktree git names is one of `others`.
         A worktree whose directory is gone (`prunable`) is kept while git lists it.
 
-        Side effects: replaces `others`. When git cannot be asked (no repository, no git, a
-        timeout), the registry keeps what it had.
+        Side effects: replaces `others` and the top directory of the main checkout's repository
+        (`_top`), which `of` uses for paths outside the session directory. When git cannot be
+        asked (no repository, no git, a timeout), the registry keeps what it had.
 
         Returns:
             True if the list of other checkouts changed.

@@ -406,8 +406,9 @@ class Transcript(ScrollView, can_focus=True):
         """Search the lines of the tab for a text, ignoring case, and show the newest match.
 
         The lines that contain the text get their own background. The search stands on the
-        last match at or above the bottom of the view and scrolls it into view; `search_step`
-        moves it. An empty query ends the search and removes the marks.
+        last match at or above the bottom of the view and scrolls it into view. If no match is
+        at or above the bottom, it stands on the first match. `search_step` moves it. An
+        empty query ends the search and removes the marks.
 
         Args:
             query: The text to look for.

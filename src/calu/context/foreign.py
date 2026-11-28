@@ -1,7 +1,8 @@
 """Recognition of user messages that the user did not write in this session.
 
 Such text must not count as the user's words for the checkers: it could carry instructions ("the
-user allows pushing") that a checker would otherwise treat as authorized. Two kinds:
+user allows pushing") that a checker would otherwise treat as authorized. The messages come in
+two kinds:
 
 - Messages from another Claude session on the same machine: Claude Code delivers them as
   ordinary user messages that contain an opening `<cross-session-message ...>` tag. The session
@@ -39,8 +40,8 @@ def own_words(text: str) -> str:
     """Return what the user typed, for a message that calu wrapped for relaying.
 
     A message the user sent to a subagent reaches the main agent, the stored turn and Claude
-    Code's transcript inside `RELAY_TEMPLATE`. A list that titles a conversation with its
-    first or last input shows the user's own words, not calu's request to relay them.
+    Code's transcript inside `RELAY_TEMPLATE`. A session's title or summary taken from its
+    first or last user input shows the user's own words, not calu's relay request.
 
     Args:
         text: A user input as it was stored or read from a transcript.

@@ -9,8 +9,8 @@ token, which is the remote path. What is tested here is the editor path: the ada
 session up in the database, mints its own token, and answers the handshake on its pipes without
 ever asking for a password.
 
-**Coverage does not see this**, because the adapter runs in another process. That is the point:
-no mock can check that a real process carries the protocol on its real pipes.
+**Coverage does not see this**, because the adapter runs in another process. Only a real
+process can show that the protocol travels over its real pipes.
 
 Side effects beyond the test database and `tmp_path`: the child process looks for the
 tester's own `--insecure` session sockets (`$XDG_RUNTIME_DIR/calu/sessions` and
@@ -111,7 +111,8 @@ async def test_an_editor_configured_with_calu_acp_alone_reaches_the_session(
 async def test_a_credential_with_a_password_is_refused_without_reading_the_protocol(
     db_url: str, tmp_path: Path
 ) -> None:
-    """D106, as the editor would see it: a message on stderr, not a hang and not a bad read.
+    """D106, as the editor would see it: a message on stderr and no protocol output, and the
+    process does not hang.
 
     `read_password` reads a line from standard input when that is not a terminal, so the
     editor's first request would have become the password. The in-process test asserts the

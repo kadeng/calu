@@ -53,7 +53,8 @@ const val CALU_DIFF_TITLE_PREFIX: String = "calu: "
  * VCS diff (`revisionOf`).
  *
  * Without a selection the caret's line is commented. The action is disabled while no session
- * is attached or the editor shows no file of the project.
+ * is attached or no editor is in focus. It stays enabled for an editor that shows no file of the
+ * project; then `actionPerformed` opens a message that says so.
  */
 class CommentAction : DumbAwareAction() {
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT

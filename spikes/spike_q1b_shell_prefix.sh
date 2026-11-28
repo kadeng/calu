@@ -4,10 +4,11 @@
 #
 #   bash spikes/spike_q1b_shell_prefix.sh [model]        (default model: haiku)
 #
-# Claude Code's own sandbox is off here. Run 1 logs the wrapper's argv only (SPIKE_MODE=log) for
-# a foreground and a background command; run 2 executes the commands in bubblewrap
-# (SPIKE_MODE=bwrap) and runs probe.sh. Start it from a plain Linux environment (see
-# spike_q1a_cc_sandbox.sh).
+# Claude Code's own sandbox is off here. The script makes three Claude runs:
+#   1. SPIKE_MODE=log: the wrapper logs its argv only, for a foreground and a background command.
+#   2. SPIKE_MODE=log, the control: probe.sh runs without bubblewrap, for comparison.
+#   3. SPIKE_MODE=bwrap: probe.sh runs in bubblewrap.
+# Start it from a plain Linux environment (see spike_q1a_cc_sandbox.sh).
 set -euo pipefail
 model="${1:-haiku}"
 here="$(cd "$(dirname "$0")" && pwd)"

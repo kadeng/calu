@@ -186,15 +186,15 @@ class FakeAdmin:
         self.saved: list[tuple[str, str]] = []
         """Every `(checker, instructions)` stored, oldest first."""
         self.modes: list[tuple[str, str | None]] = []
+        """Every `(mode, project)` stored, oldest first."""
         self.requests: list[SessionRequest] = []
+        """The sessions that were asked for (`request_session`)."""
         self.renamed: list[tuple[str, str]] = []
         """Every `(session id, name)` stored (`rename_session`), oldest first."""
         self.running: list[herd.SessionRow] = []
         """What `sessions` answers."""
         self.servers: list[Served] = []
         """What `served` answers."""
-        """The sessions that were asked for (`request_session`)."""
-        """Every `(mode, project)` stored, oldest first."""
         self.rules: list[str] = []
         """The temporary rules added, as their lines, oldest first; a removed one is ""."""
         self.fail = ""

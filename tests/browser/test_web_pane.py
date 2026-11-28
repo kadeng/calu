@@ -2,8 +2,9 @@
 
 The pane's script is the committed bundle (`src/calu/web/static/pane/pane.js`). Each test
 serves the pane's routes behind the real `SecurityHeaders` and `TokenGate`, with a bridge per
-browser tab; with no database the bridge starts and answers, and the pane shows that no session
-is attached. One test opens the pane in its own window, one inside an iframe of a page of
+browser tab; with no database the bridge starts and answers, and the pane shows its input field.
+No test checks the text that says no session is attached. One test opens the pane in its own
+window, one inside an iframe of a page of
 another site, which gets no cookie of a sign-in: there the pane asks for the password (D279).
 """
 

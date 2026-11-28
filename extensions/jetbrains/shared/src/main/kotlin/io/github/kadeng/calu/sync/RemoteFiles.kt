@@ -87,15 +87,16 @@ sealed interface FsFailure {
     data class TargetExists(val sha256: String?) : FsFailure
 
     /**
-     * -32036: a chunked upload failed and is over. Decision: tried again with the next change or "Sync now".
+     * -32036: a chunked upload failed and is over. Decision: noted, not queued; tried again with
+     * the next change, the next full comparison or "Sync now".
      *
      * @property reason "unknown-upload", "offset", "size", "sha256" or "too-many-uploads".
      */
     data class UploadFailed(val reason: String) : FsFailure
 
     /**
-     * -32037: the server's operating system refused (permissions, disk full). Decision: shown; the
-     * change stays queued.
+     * -32037: the server's operating system refused (permissions, disk full). Decision: shown;
+     * the change is not queued. The next full comparison or "Sync now" tries it again.
      *
      * @property text the system's message.
      */
@@ -139,7 +140,9 @@ class FsException(val failure: FsFailure, message: String) : Exception(message)
  *
  * @param error the exception of a request.
  * @return the failure: one of the codes -32030 to -32039 by the table of [FsFailure];
- *   `Offline` for a closed connection or a bridge that does not run; `Other` for the rest.
+ *   `Offline` for a closed connection (`RpcClosedException`) or an `IllegalStateException`
+ *   (the supervisor throws it when the bridge does not run; any other code that throws this type
+ *   counts as offline too); `Other` for the rest.
  */
 fun fsFailureOf(error: Throwable): FsFailure {
     if (error is FsException) return error.failure
@@ -389,9 +392,9 @@ class RemoteFileStore(private val call: BridgeCall, limits: RemoteLimits = Remot
                     throw FsException(FsFailure.Other(0, "content_b64 is not base64"), "ide.fs.read $path: the content is not base64")
                 }
                 out.write(piece)
+                if (out.size() > limits.fileBytes) throw FsException(FsFailure.TooLarge(out.size().toLong(), limits.fileBytes), "ide.fs.read $path: more than the per-file limit")
                 if (r.bool("eof")) break
                 if (piece.isEmpty()) throw FsException(FsFailure.Other(0, "empty piece before eof"), "ide.fs.read $path: an empty piece before the end")
-                if (out.size() > limits.fileBytes) throw FsException(FsFailure.TooLarge(out.size().toLong(), limits.fileBytes), "ide.fs.read $path: more than the per-file limit")
             }
             if (!changed) {
                 val bytes = out.toByteArray()

@@ -3,10 +3,12 @@
 agent/records/PLAN.md Q14 asks whether a fork (D36) should also rewind the working tree to its state at the
 turn it forks from. A fork rewinds the *conversation*; the files keep whatever the dropped turn
 wrote. The Agent SDK offers `enable_file_checkpointing=True` plus
-`ClaudeSDKClient.rewind_files(<user message uuid>)`, but the promise only says "tracked files",
-and calu's threat model cares exactly about the difference: Claude edits files with Edit/Write
-*and* writes them with Bash commands, and a half-reverted tree is worse than one nobody
-touched, because it looks consistent and is not.
+`ClaudeSDKClient.rewind_files(<user message uuid>)`. Its documentation only promises to rewind
+"tracked files".
+
+calu needs to know what that covers. Claude edits files with Edit and Write, and it also writes
+them with Bash commands. A half-reverted tree is worse than one nobody touched, because it
+looks consistent and is not.
 
     uv run python spikes/spike_rewind_files.py
 

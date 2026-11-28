@@ -64,7 +64,8 @@ describe('SaveBases', () => {
     const bases = new SaveBases();
     bases.opened(key, 'a\nb\n', false);
     bases.changed(key, 'a mine\nb\n', true);
-    // Claude writes "a\nb claude\n" on disk; VSCode keeps the dirty buffer; the user overwrites.
+    // Claude writes "a\nb claude\n" on disk, but no change event reaches SaveBases. VSCode keeps
+    // the dirty buffer and the user overwrites it, so the base stays the buffer's start.
     expect(save(bases, 'a mine\nb\n')).toEqual({ path: 'doc/a.md', before: 'a\nb\n', after: 'a mine\nb\n' });
   });
 

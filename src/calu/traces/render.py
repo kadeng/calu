@@ -52,8 +52,9 @@ and the writer (`calu.traces.writer`) sets the narration.
 Thinking in the plain form (agent/records/PLAN.md D241). Claude Code returns thinking as a
 summary, which can arrive as streamed fragments (`assistant.delta` with `thinking`) and as one
 or more completed texts of the same message (`assistant.thinking`; a later one rewrites the
-earlier). The renderer keeps one pending thinking block per agent and writes it once, in its
-last completed form (else the fragments streamed so far), when the agent's thinking is over:
+earlier). The renderer keeps one pending thinking block per agent. It writes the block once, in its
+last completed form, or from the fragments streamed so far if no completed form came. It
+does so when the agent's thinking is over:
 
     pending block of agent A is written when    A's text, tool call, check or escalation
                                                 comes; A's thinking of another message
@@ -386,10 +387,12 @@ class TraceRenderer:
     def render(self, event: Event, resolved_by: str = "") -> list[Block]:
         """Return the blocks that `event` adds to the trace.
 
-        Side effects: numbers turns, tool calls and subagents; in the narrated form, adds
-        text to an open block or closes one (`Block.closed`) instead of returning a new one;
-        in the plain form, keeps an agent's thinking until its block is complete (module
-        docstring) and returns it then, before the block that showed the end.
+        Side effects:
+            - Numbers turns, tool calls and subagents.
+            - Narrated form: adds text to the open block of the agent or closes it
+              (`Block.closed`), and returns no new block for that.
+            - Plain form: holds the agent's thinking until its block is complete (module
+              docstring), and returns it then, before the block that ended it.
 
         Args:
             event: An event of the session, in the order the session emitted it.

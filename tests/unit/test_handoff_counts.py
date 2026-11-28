@@ -1,9 +1,8 @@
 """The size claims in `agent/records/HANDOFF.md` have to be roughly true (D122).
 
 `agent/records/HANDOFF.md` is the first document a new session reads, and it states how big the
-project is. Those numbers had drifted by nearly half ("~11.5k of tests" against 16.6k actual) before
-anyone noticed, which is the kind of quiet untruth this project exists to catch -- found in its own
-status document.
+project is. Those numbers had drifted by nearly half ("~11.5k of tests" against 16.6k actual)
+before anyone noticed. This test checks them.
 
 This test is deliberately loose: it fails when a claim is off by more than a quarter, not when
 the project grows by a file. A tight check would fail on every second commit and be removed.

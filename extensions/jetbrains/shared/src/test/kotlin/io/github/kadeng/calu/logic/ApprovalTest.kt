@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/** Tests of what a person approves before the plugin runs a project's calu settings (D279, S4). */
+/** Tests of what a person approves before the plugin runs a project's calu settings (decision D279 in `agent/records/PLAN.md`). */
 class ApprovalTest {
     private val ssh = PluginSettingsDto(mode = "ssh", sshHost = "box", sshDirectory = "/srv/p", sshOptions = "-p 2222")
 

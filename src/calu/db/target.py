@@ -9,8 +9,10 @@
                                                              the user login has a password)
 
 A `Target` is one login of one such database. It is the secret of an entry of the credential
-store (`calu.credentials`), so everything in it is encrypted and authenticated by the entry's
-password: no unauthenticated file decides which database a session trusts, which directory a
+store (`calu.credentials`). An entry with a password is encrypted and authenticated by that
+password. An entry stored without a password (`kdf: "none"`, the choice described in
+`calu.credentials`) is protected only by the mode of its file. In the first case no
+unauthenticated file decides which database a session trusts, which directory a
 container mounts or which port it listens on.
 
 The secret has two forms:
@@ -226,8 +228,9 @@ class Target(_Model):
         """Return the form 2 secret of this target.
 
         Returns:
-            UTF-8 JSON. It contains the password of a password login, so it goes nowhere but
-            into `CredentialStore.save`.
+            UTF-8 JSON. It contains the password of a password login. It is meant for
+            `CredentialStore.save` and, in memory, for building a connection; the caller
+            wipes the buffer afterwards.
         """
         data = self.model_dump(mode="json", by_alias=True, exclude_none=True)
         return json.dumps({"calu_db": FORMAT, **data}, sort_keys=True).encode()

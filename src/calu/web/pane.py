@@ -219,12 +219,12 @@ async def pane_page(request: Request) -> Response:
     The page holds no data; everything arrives over `PANE_RPC_PATH`. `SecurityHeaders` gives it
     the `frame-ancestors` of `web.pane_frame_ancestors`.
 
-    A top-level visit that another web site started (`Sec-Fetch-Dest: document` and
-    `Sec-Fetch-Site: cross-site` or `same-site`, e.g. `window.open` with a `#dir=...&session=...`
-    of its choosing) gets `CONFIRM_PAGE` instead: the pane would connect with the browser's
-    login at once and start its work there (attach, status checks, file watching). A frame in
-    an application that `web.pane_frame_ancestors` allows, an address the person opened or
-    typed, and a link of this interface get the pane.
+    A top-level visit that another web site started gets `CONFIRM_PAGE` instead. Such a visit
+    has `Sec-Fetch-Dest: document` and `Sec-Fetch-Site: cross-site` or `same-site`, for
+    example from `window.open` with a `#dir=...&session=...` of the site's choosing. The pane
+    would connect with the browser's login at once and start its work there: attach, status
+    checks and file watching. A frame in an application that `web.pane_frame_ancestors`
+    allows, an address the person opened or typed, and a link of this interface get the pane.
 
     Args:
         request: The request; its `Sec-Fetch-*` headers are read.

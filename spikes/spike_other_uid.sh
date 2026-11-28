@@ -1,6 +1,8 @@
 #!/bin/sh
-# Runs spikes/spike_other_uid.py as root in a container (D206): the checkout and its virtual
-# environment are mounted read-only at their own paths, so the environment's interpreter works.
+# Runs spikes/spike_other_uid.py as root in a container (D206). The container uses the host
+# network (--network host) and gets ANTHROPIC_API_KEY. The checkout is mounted read-only at its
+# own path. So is the directory three levels above the real interpreter of .venv/bin/python
+# (for a uv-managed Python, the store of Python installs), so that the interpreter works.
 #
 # Usage: spikes/spike_other_uid.sh MODE WORKSPACE
 #   MODE       sdk-user, sdk-user-str, wrapper or launcher

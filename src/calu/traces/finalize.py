@@ -2,8 +2,8 @@
 
 The per-block pass (`calu.traces.writer`) keeps the live file safe on disk at any time. Before
 a commit, the part of each trace file that the commit would add is redacted once more, as a
-whole, so that the agent sees a whole stretch of the session (REQUIREMENTS 45). The part that
-is committed already is never read by the agent and never changed:
+whole, so that the redaction model sees a whole stretch of the session (REQUIREMENTS 45). The
+part that is committed already is never read by the redaction model and never changed:
 
     HEAD:path       ┌───────────── committed ─────────────┐
     file now        ├───────────── committed ─────────────┼──── new since the commit ────┤
@@ -235,7 +235,7 @@ class Outcome:
 
 
 def git(repo: Path, *args: str, data: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
-    """Run a git command in a repository and return what it printed.
+    """Run a git command in a repository and return the finished process.
 
     Args:
         repo: The repository's top-level directory.
@@ -437,11 +437,14 @@ def segments_of(base: str | None, current: str) -> list[Segment]:
         current: The text now.
 
     Returns:
-        The segments in order; joined, their texts are `current`. With `base` a prefix of
-        `current` (the usual case), or no `base`: one kept segment up to the committed end or
-        the last valid marker behind it (`finalized_end`), whichever is later, and one
-        segment to redact with the rest. Otherwise (an edit by hand): `difflib` over the
-        lines; lines `current` shares with `base` are kept, every inserted or replaced run
+        The segments in order; joined, their texts are `current`.
+
+        If `base` is None or a prefix of `current` (the usual case), there are two segments.
+        The first is kept: it ends at the committed end or at the last valid marker behind it
+        (`finalized_end`), whichever is later. The second holds the rest and is redacted.
+
+        Otherwise the file was edited by hand. The function runs `difflib` over the lines.
+        Lines that `current` shares with `base` are kept, and every inserted or replaced run
         of lines is a segment to redact.
 
     Example:
@@ -723,11 +726,12 @@ async def finalize(
         found: Plans computed already (`plans`), or None to compute them now.
 
     Returns:
-        What was done. A file that failed is unchanged and listed in `failures`; the other
-        files are finalized regardless.
+        What was done. A file that failed while it was finalized is unchanged and listed in
+        `failures`; the other files are finalized regardless.
 
     Raises:
-        FinalizeError: If the files cannot be listed (git fails).
+        FinalizeError: If the files cannot be listed (git fails), or, when `found` is None,
+            if a trace file is not UTF-8. No file is changed then.
     """
     todo = (
         list(found)

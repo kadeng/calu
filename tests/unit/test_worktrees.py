@@ -1,8 +1,9 @@
 """Git worktrees in a session (PLAN.md D251, `agent/records/notes/worktree-design.md`).
 
-The cases are numbered as in the design's test plan (U1-U14). Each runs on a real temporary
+The cases are numbered as in the design's test plan (U1-U14). Most run on a real temporary
 git repository; the session cases use the scripted fake runner, fake checker models and the
-in-memory store.
+in-memory store. Three use no repository: the lines that name a checkout for a checker, the
+fixed rule in the change checkers' prompt, and the two built-in evaluation cases of the rule.
 """
 
 import subprocess
@@ -362,12 +363,17 @@ async def test_entering_a_worktree_passes_without_a_checker(repo: Path) -> None:
     assert (ran.tool_name, ran.route) == ("Bash", "command")
 
 
-async def test_u4_a_worktree_a_step_creates_is_no_write_and_no_unreviewed_file(
+async def test_u4_a_worktree_created_by_a_step_is_neither_a_write_nor_unreviewed(
     repo: Path,
 ) -> None:
-    """Live run L1, worktrees not ignored, snapshots on (2026-11-20): the "after" snapshot of
-    EnterWorktree named the new worktree as a written path, its own state watched its root,
-    and the first test run in it escalated as "not a readable regular file"."""
+    """A worktree that a step creates is not a written path and not an unreviewed file.
+
+    The case comes from live run L1 (2026-11-20), with worktrees not ignored and snapshots on:
+
+    - The "after" snapshot of `EnterWorktree` named the new worktree as a written path.
+    - The worktree's own state watched its root.
+    - The first test run in the worktree escalated as "not a readable regular file".
+    """
     from tests.unit.test_honesty_session import run_turns, session_on
 
     session, rec, store = await session_on(

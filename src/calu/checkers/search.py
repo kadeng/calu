@@ -1,15 +1,15 @@
 """Which files a search tool reads when it is pointed at a directory (agent/records/PLAN.md D146).
 
 A `Read` of `.env` names the file, so the read deny list sees it. A `Grep` of the project
-directory names only the directory, and Claude Code's Grep reads every file below it -- hidden
-files included, git-ignored files excluded (measured with CLI 2.1.294, `spikes/RESULTS.md`
-D146) -- so a protected file that is not git-ignored was read with no check at all. This module
-lists the files such a search reads, the way Claude Code does, so that the rules can apply the
-read deny list to each of them.
+directory names only the directory. Claude Code's Grep reads every file below it, hidden files
+included and git-ignored files excluded (measured with CLI 2.1.294, `spikes/RESULTS.md` D146).
+So a protected file that is not git-ignored was read with no check at all. This module lists
+the files such a search reads, the way Claude Code does, so that the rules can apply the read
+deny list to each of them.
 
     Grep(path=D, glob=G)
         D in a git work tree  ->  git ls-files --cached --others --exclude-standard  (under D)
-        otherwise             ->  every file below D, hidden ones included
+        otherwise             ->  every file below D, hidden ones included, except `.git`
         then                  ->  keep the files that G matches (all of them without G)
 
 The listing errs towards too many files: a file listed that the search would skip only makes
@@ -52,9 +52,10 @@ def searched_files(
     (`git_ignore=False`); `rg` and `ag` skip hidden ones unless told otherwise
     (`hidden=False`), D149.
 
-    Side effects: runs `git ls-files` in `directory` (5 s timeout) when `git_ignore` is True,
-    and otherwise -- or outside a git work tree, or when git fails -- walks the directory
-    without following symbolic links.
+    Side effects: when `git_ignore` is True, runs `git check-ignore` and `git ls-files` in
+    `directory`. Each git call is bounded by what is left of the listing's time limit
+    (`TIME_LIMIT_S`). Otherwise, outside a git work tree, or when git fails, it walks the
+    directory without following symbolic links.
 
     Args:
         directory: An absolute directory. A path that is not a directory lists nothing.
@@ -88,11 +89,11 @@ def _listing(
 ) -> tuple[list[str], bool]:
     """List the files below `directory` that a search reads, as relative paths (D146, D168).
 
-    With `git_ignore`, git's own list is used -- but a search given an ignored directory
-    explicitly still reads it (measured with rg: `rg x secrets` reads `secrets/prod.key`), so an
-    ignored directory, or one git cannot list, is walked. An entry of git's list that is itself
-    a directory -- an untracked nested repository (`nested/`) or a submodule's gitlink -- is
-    listed in its own right, because rg descends into it.
+    With `git_ignore`, git's own list is used. An ignored directory, or one git cannot list,
+    is walked instead. The reason is that a search given an ignored directory explicitly still
+    reads it (measured with rg: `rg x secrets` reads `secrets/prod.key`). An entry of git's
+    list that is itself a directory -- an untracked nested repository (`nested/`) or a
+    submodule's gitlink -- is listed in its own right, because rg descends into it.
 
     Args:
         directory: The directory.
@@ -143,6 +144,9 @@ def _listing(
 
 def _walk(directory: Path, deadline: float) -> tuple[list[str], bool]:
     """List every file below `directory`, hidden ones included, without following links.
+
+    The `.git` directory is left out: the files in it are not part of what a search of the
+    work tree reads. Other hidden directories are walked.
 
     Args:
         directory: The directory.

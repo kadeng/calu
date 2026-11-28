@@ -6,10 +6,13 @@ templates and static files. In a source checkout they are simply there, so a mis
 `pyproject.toml` -- or a new data directory nobody declared -- is invisible until someone
 installs the wheel.
 
-These tests fail in the source tree too, but they are the cheap half of the guard: they go
-through `importlib.resources` exactly as the shipped code does, assert every resource the code
-names is present and non-empty, and assert that the set of data directories has not grown
-beyond the ones listed here. A new directory makes `test_no_undeclared_data_directory` fail,
+These tests fail in the source tree too, but they are the cheap half of the guard.
+
+- They use `importlib.resources` exactly as the shipped code does.
+- They check that every resource the code names is present and not empty.
+- They check that the set of data directories has not grown beyond the ones listed here.
+
+A new directory makes `test_no_undeclared_data_directory` fail,
 which is the reminder to check the built wheel (`uv build`, then list the archive).
 """
 

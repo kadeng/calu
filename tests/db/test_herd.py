@@ -226,8 +226,12 @@ async def test_client_tokens_are_minted_checked_and_revoked(db_url: str) -> None
         await owner.close()
 
 
-async def test_a_session_whose_process_is_gone_is_visible_as_such(db_url: str) -> None:
-    """A killed process cannot set its own state, so the herd needs a heartbeat (D56)."""
+async def test_a_session_that_stops_its_heartbeat_is_marked_stale(db_url: str) -> None:
+    """A killed process cannot set its own state, so the herd needs a heartbeat (D56).
+
+    No process ends here: the test moves `last_seen` into the past and checks the `stale`
+    flag that silence sets.
+    """
     owner = await connect(db_url)
     db = Db(owner)
     try:
@@ -521,7 +525,9 @@ async def test_no_escalation_stays_open_for_a_session_that_is_known_to_be_gone(
     A session whose process is gone cannot close its own escalations. Listing the herd closes
     them where the session is known to be gone -- it ended, its process no longer exists on
     this host -- as cancelled and with the reason: nobody decided them (D57). A session that
-    is only silent keeps its question and is marked (D56) until the silence has lasted a day.
+    is only silent keeps its question and is marked (D56) until the silence has lasted a day
+    (`herd.CLOSE_SILENT_AFTER_S`). This test uses a silence of ten minutes and does not reach
+    that limit.
     """
     import os
     import socket
@@ -1061,8 +1067,12 @@ async def test_a_client_with_no_address_finds_the_session_and_mints_its_own_toke
 
 
 async def test_sessions_are_listed_on_a_schema_from_before_session_names(db_url: str, tmp_path):
-    """A newer calu on a database nobody ran `calu setup` on since migration 0036: the
-    sessions are listed without names instead of not at all."""
+    """A newer calu on a database nobody ran `calu setup` on since migration 0036: listing the
+    sessions still works after the `name` column is dropped.
+
+    The test creates no session row, so it checks that the list is empty and that the
+    connection stays usable. It does not check that a session without a name is listed.
+    """
     from calu.setup import setup
 
     owner = await connect(db_url)

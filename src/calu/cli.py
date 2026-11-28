@@ -272,9 +272,11 @@ _typed: dict[str, str] = {}
 that a command that opens both entries (`calu setup`, `calu db migrate`) asks once."""
 
 _admin_place: list[Target] = []
-"""The database the last herd command of this process connected to, without any secret: the
-login of `calu_admin` there with an empty password. The full-screen client is given it, so
-that it can change settings in the database of the session it is attached to."""
+"""The database the last herd command of this process connected to: the login of `calu_admin`
+there. It has an empty password, with one exception. When root's place file gives this
+process the password (an empty user password: D228, D279), the entry is that login with
+that password (`_shared_user`). The full-screen client is given it, so that it can change
+settings in the database of the session it is attached to."""
 
 
 _held: list[Target] = []
@@ -580,9 +582,10 @@ def _user_target(store: CredentialStore, may_ask: bool = True, why: str = "") ->
         nothing                                         ──► CliError: `calu setup`
 
     Side effects: may ask for the user password and keep it in `_typed` until the command
-    ends; may log in once to check a typed password; records where the database is, without
-    a secret, in `_admin_place`, and keeps the login in `_held` while `_hold` is set or the
-    process runs as root, so that later steps of the same command ask nothing.
+    ends; may log in once to check a typed password; records where the database is in
+    `_admin_place` (without a secret, or with the password root's place file publishes);
+    keeps the login in `_held` while `_hold` is set or the process runs as root, so that
+    later steps of the same command ask nothing.
 
     Args:
         store: The credential store.
@@ -1201,10 +1204,15 @@ def _setup_reader() -> tuple[int, int] | None:
 def _setup_server(args: argparse.Namespace, store: CredentialStore) -> Target:
     """Ask for a PostgreSQL server that exists already and check the login.
 
-    Nothing is stored here: the caller saves the login after it has been checked.
+    The caller stores the login after it has been checked.
+
+    Side effects: asks on the terminal; copies a CA file given with `--sslrootcert` into the
+    credential store's directory as `db-ca.pem` (`_keep_ca_file`); connects to the server
+    to check the login.
 
     Args:
-        args: Parsed arguments (`host`, `port`, `dbname`, `user`, `sslmode`, `sslrootcert`).
+        args: Parsed arguments (`host`, `port`, `dbname`, `user`, `sslmode`, `sslrootcert`,
+            `keep_server_auth`).
         store: The credential store, for the directory a CA file is copied into.
 
     Returns:
@@ -1270,9 +1278,9 @@ def _keep_server_auth(args: argparse.Namespace, owner: Target, refused: CliError
     """Ask whether an existing server may keep its own login method (D279).
 
     calu's default for a server on another host is SCRAM with channel binding. A server that
-    exists already is configured by its administrator; calu does not force its default on
-    it, but it does not weaken the login without a person's word either: a machine in the
-    middle could cause the same refusal on purpose.
+    exists already is configured by its administrator, and calu does not impose its own
+    default on it. calu also does not weaken the login without a person's agreement, because
+    a machine in the middle could cause the same refusal on purpose.
 
     Args:
         args: Parsed arguments (`keep_server_auth`).
@@ -2066,11 +2074,11 @@ def _store_logins(
     Side effects: saves both entries under the user password (without encryption for an
     empty one); removes the entries of before D265 that the setup started with; as root,
     writes where the database is to `calu.db.place.PATH`, and, when the user password is
-    empty, the generated password of `calu_admin` to `calu.db.place.login_path()`, readable
-    only by the user who ran `sudo calu setup` (D279; an empty password is the owner's ruling
-    of 2026-11-18). A failure of the place file is
-    reported and does not fail the setup. Prints what was stored and, for an empty
-    password, who can use the login.
+    empty, the generated password of `calu_admin` to `calu.db.place.login_path()`. That file
+    is readable only by the user who ran `sudo calu setup`, or only by root when root ran
+    the setup without sudo (`_setup_reader`; D279; an empty password is the owner's ruling
+    of 2026-11-18). A failure of the place file is reported and does not fail the setup.
+    Prints what was stored and, for an empty password, who can use the login.
 
     Args:
         store: The credential store.
@@ -2241,13 +2249,16 @@ def _workspace_and_prompt(args: argparse.Namespace) -> tuple[Path, str | None]:
 def _check_conversation_choice(args: argparse.Namespace) -> None:
     """Check `--resume`, `--fork` and `--fork-before-turn` of `calu run` and `calu start`.
 
+    This function does not check that `--fork-before-turn` comes with `--resume`. `calu start`
+    checks that itself. `calu run` leaves it to the session start, because there `--continue`
+    can supply the conversation that `--resume` would name.
+
     Args:
         args: Parsed arguments (`resume`, `fork`, `fork_before_turn`).
 
     Raises:
         CliError: If `--fork` comes with `--resume` or with `--fork-before-turn`, if
-            `--fork-before-turn` comes without `--resume` or is below 2, or if `--resume` or
-            `--fork` name no UUID.
+            `--fork-before-turn` is below 2, or if `--resume` or `--fork` name no UUID.
     """
     if args.fork and args.resume:
         raise CliError(
@@ -3459,21 +3470,30 @@ def _find_endpoint(
 ) -> Endpoint:
     """Find the local session a client should connect to and mint a token for it.
 
-    This is the zero-argument path of `calu attach` and `calu acp` (agent/records/PLAN.md D105):
-    instead of the address and the 43-character token that `calu run` printed, the client asks the
-    database which session runs in this directory on this host and mints its own token. The token is
-    minted rather than read because only the hash of a token is stored, so a token printed once
-    cannot be recovered; `calu attach` revokes the one it minted when it ends. Every client first
-    tries the local sockets (`_local_socket_endpoint`: root's own for a root client, the user's
-    `--insecure` ones otherwise), which need neither the database nor a token (D226, D227); a
-    session found in the database that has such a socket is reached through it too
-    (`_local_endpoint`). When no session runs, the newest dormant one of the directory (or
-    the one `hint` names) is resumed through the user's `calu serve` (`_wake_dormant`, D280).
+    This is the zero-argument path of `calu attach` and `calu acp` (agent/records/PLAN.md D105).
+    The client does not need the address and the 43-character token that `calu run` printed.
+    It asks the database which session runs in this directory on this host and mints its own
+    token. Only the hash of a token is stored, so a token printed once cannot be read back.
+    `calu attach` revokes the token it minted when it ends.
 
-    Side effects: on that path also a `session_requests` row and a line on stderr; inserts a
-    `client_tokens` row, unless the session was reached through a
-    local socket; with a local socket, keeps a password-free login in memory
-    (`_hold_password_free`); otherwise those of `_herd_value` (`_admin_place`, `_held`).
+    The lookup has three steps:
+
+    1. Local sockets (`_local_socket_endpoint`): root's own socket for a root client, the
+       user's `--insecure` sockets otherwise. They need neither the database nor a token
+       (D226, D227).
+    2. A running session in the database. When that session has a local socket, the client
+       reaches it through the socket (`_local_endpoint`).
+    3. A dormant session. When no session runs, the newest dormant session of the directory,
+       or the one `hint` names, is resumed through the user's `calu serve` (`_wake_dormant`,
+       D280).
+
+    Side effects:
+
+    - With a local socket (step 1): keeps a password-free login in memory
+      (`_hold_password_free`).
+    - Otherwise: those of `_herd_value` (`_admin_place`, `_held`). Inserts a
+      `client_tokens` row, unless the session is reached through a local socket.
+    - Step 3 also inserts a `session_requests` row and prints a line on stderr.
 
     Args:
         store: The credential store (the user login; with an empty user password
@@ -3634,7 +3654,7 @@ def _revoke(store: CredentialStore, token_id: int, may_ask: bool = True) -> None
             f"session; `calu token revoke {token_id}` revokes it now",
             file=sys.stderr,
         )
-    except (CliError, CredentialError, OSError, psycopg.Error) as exc:
+    except (CliError, CredentialError, TargetError, OSError, psycopg.Error) as exc:
         print(
             f"note: the client token {token_id} could not be revoked ({exc}); "
             f"`calu token revoke {token_id}` does it",
@@ -3665,6 +3685,8 @@ def _herd_value[T](
     Raises:
         NeedsPassword: If the password is needed and `may_ask` is False.
         CliError: As `_user_target`.
+        CredentialError: As `_user_target`.
+        TargetError: As `_user_target`.
         psycopg.Error: On database errors.
     """
     why = (
@@ -3786,7 +3808,8 @@ def _attach(
         # A root client's own login, complete: no dialog asks a password again (D249).
         database = _held[0]
     elif _admin_place:
-        # The user password is asked when a change needs it, and not kept (D213).
+        # The user password is asked when a change needs it, and not kept (D213). A password
+        # that root's place file publishes (D228) comes with the login.
         database = _admin_place[0]
     elif run_as is not None or endpoint.server_uid == 0:
         # A session of root's calu, found through a socket: nothing was asked of a database,
@@ -4366,10 +4389,12 @@ def cmd_acp(args: argparse.Namespace, store: CredentialStore) -> None:
 
     The editor spawns this command and talks ACP on its stdin and stdout; stdout therefore carries
     protocol lines only and every message goes to stderr. With an ADDRESS it needs no database
-    credential: the session authenticates the client with the token it printed. Without one -- which
-    is what an editor is configured with, because it has neither an address nor a token to put in
-    its arguments -- the session running in the editor's project directory is looked up and a token
-    is minted for this adapter (agent/records/PLAN.md D105). That lookup must not ask for a
+    credential: the session authenticates the client with the token it printed.
+
+    Without an ADDRESS, the session running in the editor's project directory is looked up
+    and a token is minted for this adapter (agent/records/PLAN.md D105). This is the normal
+    case, because an editor has neither an address nor a token to put in the arguments it is
+    configured with. That lookup must not ask for a
     password: an editor gives this process no terminal, so this works with an empty user password
     (`calu setup --no-password`); otherwise give the address and the token.
 
@@ -4900,8 +4925,7 @@ def cmd_list_sessions(args: argparse.Namespace, store: CredentialStore) -> None:
         store: The credential store.
 
     Raises:
-        CliError: If `count` is below 1, or if there is no user login
-            is stored.
+        CliError: If `count` is below 1, or if no user login is stored.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
@@ -4999,10 +5023,12 @@ def cmd_escalations(args: argparse.Namespace, store: CredentialStore) -> None:
 def cmd_doctor(args: argparse.Namespace, store: CredentialStore) -> None:
     """Report what is in place and what a session would miss.
 
-    Everything that needs no password is checked first: the programs calu starts, the credential
-    store, the checker keys, the runtime directories and, if a directory was named, the
-    workspace. With `--keys` each checker key that is set is shown to its own provider's free
-    model list, so an expired or revoked key is found before it escalates every step (D131).
+    The report lists the checks that need no password first: the programs calu starts, the
+    credential store, the checker keys, the runtime directories and, if a directory was
+    named, the workspace. With `--db` the user password is asked, when one is needed, before
+    any of these checks runs, and the database findings come last. With `--keys` each
+    checker key that is set is shown to its own provider's free model list, so an expired or
+    revoked key is found before it escalates every step (D131).
     With `--db` the user login is used to ask whether the database answers and whether
     its schema is current, whether a stored checker text is an older shipped one or the
     user's own (`doctor.instruction_findings`), and whether the global settings switch Claude
@@ -5431,14 +5457,14 @@ async def _server_token(db: Db, args: argparse.Namespace) -> str:
 def cmd_evals(args: argparse.Namespace, store: CredentialStore) -> None:
     """Run the checker evaluation and print its report.
 
+    With `--list` or `--export` the cases are only collected: they are printed or written as
+    YAML and no model is called. This is how the labels a herd produced are read, kept and
+    later run again as a fixed set (agent/records/PLAN.md D55).
+
     Args:
         args: Parsed arguments (`files`, `from_db`, `no_builtin`, `model`, `repeat`,
-            `directory`, `project`).
+            `directory`, `project`, `list_cases`, `export`).
         store: The credential store.
-
-    With `--list` or `--export` the cases are only collected: they are printed or written as
-    YAML and no model is called, which is how the labels a herd produced are read, kept and
-    later re-run as a fixed set (agent/records/PLAN.md D55).
 
     Raises:
         CliError: If there is no user login, a case file cannot
@@ -5731,7 +5757,9 @@ def _configuration_table(
 
 
 def _node_at(values: dict[str, Any], key: str) -> Any:
-    """Return the value a dotted key holds, or `KeyError`'s stand-in `None`.
+    """Return the value at a dotted key, or None when the path is not in the values.
+
+    A stored None and a missing path give the same result.
 
     Args:
         values: A (partial) configuration as a dict.
@@ -5796,8 +5824,14 @@ def cmd_config(args: argparse.Namespace, store: CredentialStore) -> None:
     of a list setting and keep the others, starting from the list the scope effectively uses
     (`calu.admin.add_to_setting`).
 
+    `models` takes the model in the place of the key: a model string, `auto` (chosen from
+    the credentials found, `detect_model`) or `default` (no stored model). It points every
+    checker, the narrator and the summarizer of the scope at that model
+    (`calu.admin.set_all_models`). It sets the checkers' effort to `--effort`, or to the
+    effort `auto` detected, and removes a stored effort when there is neither.
+
     Args:
-        args: Parsed arguments (`action`, `key`, `value`, `project`, `changed`).
+        args: Parsed arguments (`action`, `key`, `value`, `project`, `changed`, `effort`).
         store: The credential store.
 
     Raises:
@@ -6209,7 +6243,10 @@ TRUSTED_SHOWN = 50
 
 
 def _os_user() -> str:
-    """Name the person at the terminal, for the record of a certification.
+    """Name the OS user, for the record of a certification.
+
+    The name is what `getpass.getuser` reports: the environment (`LOGNAME`, `USER` and
+    similar) first, then the password database. calu does not verify it.
 
     Returns:
         The OS user name, or "unknown" if the system does not tell it.
@@ -6476,9 +6513,11 @@ def _text_setting(
     scope (`--project` or global); `reset` removes the scope's value, so the next scope down
     (or the shipped text) applies again.
 
-    A save is conflict-safe: after the editor closes, the scope's stored value is read again,
-    and if somebody changed it meanwhile (another terminal, the web interface, an editor
-    extension) nothing is stored and the edited text stays in its file.
+    After the editor closes, the scope's stored value is read again before the save. If
+    somebody changed it while the editor was open (another terminal, the web interface, an
+    editor extension), nothing is stored and the edited text stays in its file. The check
+    and the write are two statements without a lock, so a change between them is not
+    detected.
 
     Args:
         args: Parsed arguments (`action`: "show", "edit" or "reset"; `project`).
@@ -6658,13 +6697,17 @@ def _traces_finalize(args: argparse.Namespace, store: CredentialStore) -> None:
     Without `--staged`: the trace files below `traces.directory` that differ from HEAD are
     finalized on disk (not staged). With `--staged` (the pre-commit hook): the trace files
     the index adds or changes are finalized in the index, and on disk where the file holds
-    the staged text. Settings and credentials are read only if a file has something to
-    redact, so a commit without a new trace part needs neither. The settings are those of the
-    project of the directory; in a git worktree outside the project, those of the project of
-    its main checkout (`settings_directory`).
+    the staged text. With `--staged`, settings and credentials are read only if a staged file
+    has something to redact, so a commit without a new trace part needs neither. Without
+    `--staged`, the settings are always read first, because `traces.directory` says where
+    the trace files are. The settings are those of the project of the directory; in a git
+    worktree outside the project, those of the project of its main checkout
+    (`settings_directory`).
 
-        nothing to finalize                 -> nothing printed, exit 0
-        `traces.final_redaction` off        -> one line, exit 0, files unchanged
+        nothing to finalize, `--staged`     -> nothing printed, exit 0
+        `traces.final_redaction` off        -> one line, exit 0, files unchanged (without
+                                               `--staged` also when nothing changed)
+        nothing to finalize, no `--staged`  -> one line, exit 0
         no settings (no login, no password
         without a terminal, no database)    -> CliError: `FINALIZE_REFUSED` (`--staged`) or
                                                `FINALIZE_FAILED`
@@ -6808,8 +6851,8 @@ def cmd_rules(args: argparse.Namespace, store: CredentialStore) -> None:
         store: The credential store.
 
     Raises:
-        CliError: If an argument is missing or malformed, if there is no `admin` credential, or
-            if the rule does not exist.
+        CliError: If an argument is missing or malformed, if no user login is stored
+            (`calu setup` stores one), or if the rule does not exist.
         CredentialError: On a wrong password.
         admin.AdminError: If the list name or the pattern is refused.
         psycopg.Error: On database errors.
@@ -7885,13 +7928,13 @@ def main(
     Side effects: as root, points calu at `/etc/calu` and `/var/lib/calu`
     (`calu.asuser.use_system_directories`); remembers the arguments for `--sudo`; loads calu's own
     env file (`~/.config/calu/.env`) into the process environment before any command runs, without
-    overwriting what is already set. Every command then sees the same checker keys a session sees:
-    only `calu run` used to read the file, so `calu doctor` reported "none of the known providers
-    has a key" with a key in it, and `calu evals` ran its checkers without one
-    (agent/records/PLAN.md D131). The keys stay hidden from Claude
-    Code: a session (`calu run`, `calu serve`) removes them (`SdkRunner.hidden_env`), and
-    `calu login` starts `claude auth` without them (`claude_login_command`). Other programs
-    calu starts may inherit them (the browser of `calu lightcycles`, for one).
+    overwriting what is already set. Every command therefore sees the same checker keys a
+    session sees (agent/records/PLAN.md D131).
+
+    The keys stay hidden from Claude Code. A session (`calu run`, `calu serve`) removes them
+    (`SdkRunner.hidden_env`), and `calu login` starts `claude auth` without them
+    (`claude_login_command`). Other programs calu starts may inherit them (the browser of
+    `calu lightcycles`, for one).
 
     `calu run` and `calu serve` run through `_logged`: tracebacks go to their log file and
     stderr gets one line per error (D225).
@@ -7966,13 +8009,18 @@ def _logged(
 ) -> int:
     """Run `calu run` or `calu serve` with the log file and one-line errors on stderr (D225).
 
-    Side effects: sets up the log (`calu.logfile.setup`: the log file at
-    `$XDG_STATE_HOME/calu/log/<name>.log` with every record and its traceback, stderr with one
-    line per warning or error), unless the command was given `--sudo` and does not run as
-    root yet: it then replaces itself by `sudo calu ...`, which opens root's log; then
-    everything the command's handler does. An error the
-    command ends with is written to the log file with its traceback and to stderr as one line;
-    Ctrl-C ends the command with one line, too.
+    Side effects:
+
+    - Sets up the log (`calu.logfile.setup`): the log file at
+      `$XDG_STATE_HOME/calu/log/<name>.log` gets every record with its traceback, and stderr
+      gets one line per warning or error. A command that was given `--sudo` and does not run
+      as root yet opens no log. It replaces itself with `sudo calu ...`, which opens root's
+      log.
+    - Loads the variables of calu's env file, among them the checker keys, into
+      `os.environ` (`load_secrets`).
+    - Runs the command's handler, with all of its side effects.
+    - Writes an error the command ends with to the log file with its traceback, and to
+      stderr as one line. Ctrl-C ends the command with one line, too.
 
     Args:
         name: The command's name, which names the log file.

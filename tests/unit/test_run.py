@@ -245,8 +245,7 @@ async def test_read_lines_sends_messages_until_quit(monkeypatch):
 async def test_read_lines_ends_at_end_of_input(monkeypatch):
     monkeypatch.setattr("sys.stdin", io.StringIO("only\n"))
     sent: list[Event] = []
-    # cs5: the caller has to tell a closed stdin from a quit command, because only the
-    # second one means "stop now".
+    # The caller must tell a closed stdin from a quit command: only a quit means "stop now".
     assert await read_lines(lambda text: _collect(sent, text)) == "eof"
     assert sent == ["only"]
 
@@ -310,7 +309,10 @@ anyio.run(main)
 
 def test_the_process_exits_after_a_shutdown_while_stdin_stays_open():
     """Test plan M20: with the loop ended, `calu run` still lived until a line was typed,
-    because the abandoned wait for the stdin line held a (non-daemon) AnyIO worker thread."""
+    because the abandoned wait for the stdin line held a (non-daemon) AnyIO worker thread.
+
+    Starts `PROCESS_EXIT_SCRIPT` in a child Python process with an open pipe as its stdin, and
+    kills the child if it is still alive at the end."""
     import subprocess
     import sys
 

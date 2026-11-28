@@ -15,12 +15,12 @@ So calu compares its own two clocks:
 Boottime rather than `CLOCK_MONOTONIC` is used on purpose: monotonic stops while the machine
 itself is suspended, boottime keeps counting then.
 
-A virtual machine that its host pauses is different: neither clock counts while it is paused,
-and the host sets the wall clock right afterwards. Measured on WSL2 (2026-11-16): after 57 h
-of uptime with the Windows host asleep several times, `CLOCK_BOOTTIME` and `CLOCK_MONOTONIC`
-were equal, and every sleep showed up as a forward jump of its length (hours), sometimes
-followed by a small backward correction of the time synchronisation. A forward jump is
-therefore reported as what it most often is, a pause of the machine.
+A virtual machine that its host pauses is different: neither clock counts while it is paused, and
+the host sets the wall clock right afterwards. Measured on WSL2 (2026-11-16): the machine had been
+up for 57 h and the Windows host had slept several times. `CLOCK_BOOTTIME` and `CLOCK_MONOTONIC`
+were equal. Every sleep showed up as a forward jump of its length, which was hours. Sometimes a
+small backward correction of the time synchronisation followed. A forward jump is therefore
+reported as what it most often is, a pause of the machine.
 
 - A backward jump of more than `max_backward_s` (default 1 s, far above the slew of a
   time-server sync) is reported as tampering: the session escalates its next tool call, so
@@ -101,7 +101,8 @@ class ClockJump:
 class ClockWatch:
     """Samples the two clocks and reports a jump of the wall clock.
 
-    `check` is pure and does the comparison; `run` is the loop that samples. A caller that wants
+    `check` compares the clocks with the last sample and stores the new sample; `run` is the
+    loop that samples. A caller that wants
     no task can call `check` itself.
     """
 

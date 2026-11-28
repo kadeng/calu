@@ -51,7 +51,11 @@ executes project code and a plain `git commit` need a clean state:
     unreviewed files or review required         -> the honesty review runs; then
                                                    clean: the step goes on,
                                                    marks: DENY with them,
-                                                   the review did not run or failed: ESCALATE
+                                                   a problem only a person can settle:
+                                                   ESCALATE,
+                                                   any other problem (the review failed
+                                                   or still runs): DENY with the reason,
+                                                   so that Claude can act on it
 
 Whether a step on the command route executes project code is the answer
 `executes_project_code` of the route's checkers (`_executes`):
@@ -97,11 +101,15 @@ An escalation that appears while an approval is recorded is no error: the step i
 (`last_look`, `wait_again`) and becomes an escalation of its own only when its `HOLD_BUDGET_S`
 is used up, like a step that was held before its check.
 
-Two conditions inside the decision are not exceptions and are answered where they are found,
-also without an approval: a checker that does not answer within `CHECKER_DEADLINE_S` counts as
-an ESCALATE of that checker (`run_checkers`), and a commit whose change calu could not read is
-escalated, or denied where staging first makes it readable (`judge`). A DENY and an ESCALATE
-are never weakened by any of these paths.
+Some conditions inside the decision are not exceptions. The gate answers them where it finds
+them, and none of these answers is an approval:
+
+- A checker that does not answer within `CHECKER_DEADLINE_S` counts as an ESCALATE of that
+  checker (`run_checkers`).
+- A commit whose change calu could not read is escalated. Where staging first makes the change
+  readable, the commit is denied instead (`judge`).
+
+None of these paths weakens a DENY or an ESCALATE.
 
 The gate does not know the session. It gets what it reads through its constructor: the values
 the session may replace while it runs (tool policy, rules, configuration, checkers) as functions
@@ -402,14 +410,19 @@ def combine_decisions(verdicts: list[tuple[str, CheckDecision]]) -> CheckDecisio
     ever answers PASS or ESCALATE (`HonestyAnswer.decision`), so counting it would turn every
     ALLOW into PASS. It can still escalate the step.
 
-    The reason is composed of the reasons of the checkers that produced the winning decision --
-    without the honesty checker's when it does not escalate: its text lists its statuses per
-    file, which are a result of their own (agent/records/PLAN.md D224 part 4) and stay in its own
-    `checker_runs` row -- and every non-empty comment is kept; both name the checker they came
-    from when more than one checker ran, so a denial can be attributed. The summary of the step
-    is taken from the first checker that wrote one, because all of them describe the same step
-    and the route's own checker comes first. An escalated step keeps the first suggested rule
-    of a checker that escalated it; any other decision keeps none.
+    The other fields of the combined decision:
+
+    - Reason: the reasons of the checkers that produced the winning decision.
+    - The honesty checker's reason is left out when it does not escalate. Its text lists its
+      statuses per file. These are a result of their own (agent/records/PLAN.md D224 part 4)
+      and stay in its own `checker_runs` row.
+    - Comments: every non-empty comment of every checker is kept.
+    - When more than one checker ran, each reason and each comment names the checker it came
+      from, so that a denial can be attributed.
+    - Summary: the summary of the first checker that wrote one. All of them describe the same
+      step, and the route's own checker comes first.
+    - Suggested rule: an escalated step keeps the first suggested rule of a checker that
+      escalated it. Any other decision keeps none.
 
     Args:
         verdicts: One (checker name, decision) pair per checker that ran, the route's own
@@ -1326,8 +1339,8 @@ class StepGate:
                 step_summary=summary,
             )
         else:
-            # The owner: a failed review is sent back to the agent with the reason, so that
-            # it can make the code honest before it tries again.
+            # A failed review goes back to Claude with its reason, so that Claude can make
+            # the code honest before it tries again.
             decision = CheckDecision(
                 decision=Decision.DENY,
                 reason=f"{reason} {HONESTY_TRY_AGAIN}",
@@ -1422,7 +1435,7 @@ class StepGate:
             decided: The decision of the checkers or of the rules.
             held: What `_hold` returned before the check.
             step: The tool call.
-            budget: The cancel scope that bounds `_decide`, or None.
+            budget: The cancel scope that bounds `judge`, or None.
             hold_left: Seconds of `HOLD_BUDGET_S` that the hold before the check did not use.
             waits: False for the second check of a command that holds its locks: the step
                 does not wait here, and an open escalation changes nothing. The other cases

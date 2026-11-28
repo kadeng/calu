@@ -1,4 +1,9 @@
-"""`calu ide` in-process against a served fake session: no stdio, no database, no `claude`."""
+"""`calu ide` in-process against a served fake session: no stdio, no database, no `claude`.
+
+The one exception is the last process test. It starts the `calu ide` entry point as a child
+process on pipes, with calu's configuration and state directories moved into the test's
+temporary directory.
+"""
 
 import json
 import os

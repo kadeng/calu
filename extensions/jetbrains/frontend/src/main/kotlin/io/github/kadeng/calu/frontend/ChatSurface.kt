@@ -402,10 +402,11 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
     private fun renderActivity() {
         val s = state
         val attached = isAttached(s)
-        // A turn passes through several states (running, checking, tool_call): the time shown is the turn's,
-        // except while a decision waits, where it is the time waited, counted from the session's own time
-        // for the oldest open step (`waitingSince`), so that a restarted bridge or a reattach does not
-        // start it again.
+        // A turn passes through several states (running, checking, tool_call).
+        // The time shown is the turn's time.
+        // While a decision waits, the time shown is the time waited. It is counted from the session's
+        // own time for the oldest open step (`waitingSince`).
+        // A restarted bridge or a reattach therefore does not start it again.
         val open = io.github.kadeng.calu.logic.decisionsWaiting(s)
         val now = System.currentTimeMillis()
         val since = when {
@@ -620,7 +621,8 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
         if (key == attentionShown) return
         attentionShown = key
         attention.removeAll()
-        // One line, however many wait: the tab chips name the tabs, this line leads to the next one.
+        // The attention line stays one line however many decisions wait. The tab chips name the tabs,
+        // and this line leads to the next one.
         if (others.isNotEmpty()) {
             val n = others.size
             attention.add(JBLabel("$n decision${if (n == 1) " waits" else "s wait"} in ${if (n == 1) "another tab" else "other tabs"}", AllIcons.General.Warning, JBLabel.LEADING).apply {

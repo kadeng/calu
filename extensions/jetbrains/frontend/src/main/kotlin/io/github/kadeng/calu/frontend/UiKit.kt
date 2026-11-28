@@ -284,7 +284,8 @@ fun textArea(text: String, monospaced: Boolean = false): JBTextArea = JBTextArea
 }
 
 /**
- * Make a component and its children react to a left click like a button.
+ * Make a component react to a left click like a button. Its children are not changed: a caller
+ * that wants the children to react too calls this function for each of them.
  *
  * @param component The component; it gets the hand cursor.
  * @param tooltip The tooltip that names what the click does; "" for none.

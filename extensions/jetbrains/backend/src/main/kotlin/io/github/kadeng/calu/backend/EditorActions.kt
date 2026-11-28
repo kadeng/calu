@@ -256,9 +256,9 @@ class EditorActions(private val project: Project) {
 
     /**
      * Store the text of a checker file with `ide.checker.save`, with the version it was read
-     * from as the base. If the stored version differs (error -32016), nothing is stored: a diff
-     * of the stored text against the editor's text is opened, the file's base becomes the stored
-     * version, and the chat says that saving again replaces the stored text.
+     * from as the base. If the stored version differs (error -32016), nothing is stored.
+     * A diff of the stored text against the editor's text is opened, and the file's base becomes
+     * the stored version. The chat says that saving again replaces the stored text.
      *
      * @param file A file opened by `editChecker`.
      * @param text The editor's text.

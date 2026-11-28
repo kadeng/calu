@@ -77,8 +77,11 @@ async def test_the_pane_page_and_its_files_need_no_login_but_nothing_else_does()
 async def test_the_password_opens_the_pane_websocket_and_no_other(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """D279: a frame of another site has neither cookie nor key; the pane sends the password a
-    person typed into it as subprotocol, and a wrong one waits as on the sign-in page."""
+    """A frame of another site has neither cookie nor key (D279).
+
+    The pane sends the password that a person typed into it as the WebSocket subprotocol. A
+    wrong password waits before the refusal, as on the sign-in page.
+    """
     import calu.web.app as web_app
 
     slept: list[float] = []

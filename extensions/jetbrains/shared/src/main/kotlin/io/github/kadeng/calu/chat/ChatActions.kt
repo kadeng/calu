@@ -53,7 +53,7 @@ const val TURN_LOOKUP_LIMIT: Int = 1000
  * @param turn The turn as the view counted it (`UserItem.turn`).
  * @param uuid Claude Code's id of the message (`UserItem.uuid`), or `null`.
  * @return The `index` of the recorded turn whose `prompt_uuid` is `uuid`; `turn` if `uuid` is
- *   `null`, no such turn is recorded or the record cannot be read (logged).
+ *   `null`, no such turn is recorded or the record cannot be read (the failure is not logged).
  */
 suspend fun ChatController.conversationTurn(turn: Int, uuid: String?): Int {
     if (uuid.isNullOrEmpty()) return turn
@@ -250,9 +250,9 @@ suspend fun ChatController.ruleAdd(command: String): Boolean = run("Adding the t
 }
 
 /**
- * Add the temporary rule an escalation card sends with its decision: for this session and one
- * day (`ide.rules.add`), and say in the chat what was stored or why not: the stored rule, a
- * warning if calu answered without one, or (through `run`) the error of a refused rule.
+ * Add the temporary rule that an escalation card sends with its decision (`ide.rules.add`).
+ * The rule holds for this session and one day. The chat says what was stored: the rule, or a
+ * warning if calu answered without one. A refused rule shows its error (through `run`).
  *
  * @param text The rule's text, not blank.
  * @return True if calu answered the request (with or without the rule), false if it refused

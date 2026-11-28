@@ -512,7 +512,8 @@ def excerpt_of(prompt: str) -> str:
         prompt: The prompt of `calu.traces.redact.Redactor.redact`.
 
     Returns:
-        The lines between the first and the last line of the prompt that are a code fence.
+        The lines after the first code fence line of the prompt, up to but without its last
+        line.
     """
     lines = prompt.split("\n")
     opening = next(i for i, line in enumerate(lines) if line.startswith("```"))

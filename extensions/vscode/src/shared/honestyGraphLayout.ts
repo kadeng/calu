@@ -436,8 +436,9 @@ function curve(source: PlacedNode, target: PlacedNode): [Point, Point, Point, Po
 /**
  * Lay out a graph in layers, callers above the units they use (see the module comment).
  *
- * The result depends only on the arguments: the order of the given nodes and edges does not
- * matter, and the same graph gives the same places.
+ * The result depends only on the arguments. The order of the edges and of the nodes with
+ * distinct ids does not matter; of nodes with the same id, the first given counts. The same
+ * graph gives the same places.
  *
  * @param nodes The nodes.
  * @param edges The edges; `source` uses `target`.

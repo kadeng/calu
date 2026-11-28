@@ -21,8 +21,9 @@ CONTEXT_LINES = 3
 """Unchanged lines shown before and after each change."""
 
 WORD_RATIO = 0.4
-"""Two lines are compared word by word only if at least this share of their words agrees;
-below it the whole lines count as replaced."""
+"""Lines are compared word by word only if at least this share of their tokens agrees.
+Tokens are words, runs of spaces and single punctuation marks. Below the share the whole
+lines count as replaced."""
 
 _TOKEN = re.compile(r"\w+|\s+|[^\w\s]")
 
@@ -37,7 +38,8 @@ def word_spans(old: str, new: str) -> tuple[list[tuple[int, int]], list[tuple[in
     Returns:
         `(spans in old, spans in new)`, each a list of `(start, end)` character offsets of
         the stretches only that line has. Both lists are empty when the lines are equal or
-        agree in less than `WORD_RATIO` of their words: then nothing is singled out.
+        agree in less than `WORD_RATIO` of their tokens (words, spaces and punctuation):
+        then nothing is singled out.
 
     Example:
         `word_spans("x = check_step(a)", "x = judge_step(a)")` gives `([(4, 14)], [(4, 14)])`.

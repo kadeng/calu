@@ -12,9 +12,10 @@ The SDK runs Claude Code headless (stream-json over stdin/stdout). This runner
   and everything else Claude Code puts into the conversation are reported as not from the user,
 - reports the effective permission mode, because outside the auto mode the checkers decide
   alone (agent/records/PLAN.md D5, D21),
-- does not start, and makes a Bash step wait for a human, while a settings file of Claude Code
-  holds a sandbox entry beyond calu's configuration and `claude.sandbox.fail_if_unavailable`
-  is set (`calu.preflight.settings_file_sandbox_blockers`),
+- does not start while a settings file of Claude Code holds a sandbox entry beyond calu's
+  configuration and `claude.sandbox.fail_if_unavailable` is set
+  (`calu.preflight.settings_file_sandbox_blockers`),
+- makes a Bash step wait for a human while such an entry exists,
 - calls the event sink for every event and never stops the stream because the sink raised;
   every turn Claude Code ends is reported with a `turn.result` (`_forward`, `_emit`).
 
@@ -126,10 +127,10 @@ CLAUDE_APPEND = (
     "root with the line, e.g. src/app.py:12, or the path alone for a whole file. The user's IDE "
     "turns such references into links."
 )
-"""What calu appends to Claude Code's own system prompt (`--append-system-prompt`). Claude Code's
-prompt itself stays: without `system_prompt` the SDK passes `--system-prompt ""`, which replaced
-it with nothing (measured 2026-11-22 with CLI 2.1.329: 5584 prompt tokens with Claude Code's own
-prompt, 2560 with the empty one)."""
+"""The sentence that calu appends to Claude Code's own system prompt (`--append-system-prompt`).
+Claude Code's prompt itself stays: without `system_prompt` the SDK passes `--system-prompt ""`,
+which replaced it with nothing (measured 2026-11-22 with CLI 2.1.329:
+5584 prompt tokens with Claude Code's own prompt, 2560 with the empty one)."""
 HOOK_TIMEOUT_S = 900
 """Timeout of the PreToolUse hook. The session bounds the checker call inside it
 (`CHECKER_DEADLINE_S`, 840 s) and escalates when that is exceeded, so the hook answers well
@@ -1025,8 +1026,12 @@ class SdkRunner:
                 this id, also for a fork). Not passed for a plain resume, which keeps its id.
 
         Returns:
-            The options for `ClaudeSDKClient`. Side effect: sets `_launch_mode` from
-            `calu.preflight.launch_permission_mode` (reads Claude Code's settings files).
+            The options for `ClaudeSDKClient`.
+
+        Side effects: reads Claude Code's settings files. Sets `_launch_mode` from
+        `calu.preflight.launch_permission_mode` and `_expected_mode` from the launch mode or the
+        settings' mode. Resets `_chosen_mode`, `_switch_pending` and `_switched_to`, so each
+        start begins with fresh mode state (D250).
         """
         self._launch_mode = launch_permission_mode(self.config, self.home, self.workspace)
         chosen = settings_permission_mode(self.config, self.home, self.workspace)
@@ -1049,9 +1054,9 @@ class SdkRunner:
             decides as well (agent/records/PLAN.md D5, D21); where there is no auto mode to defer
             to, PASS becomes "allow" -- or, with `claude.require_auto_mode`, "ask", so that a human
             decides in the classifier's place. ALLOW answers "allow". One case overrides both PASS
-            and ALLOW: a shell command (`SHELL_TOOLS`) is answered "ask" while a settings file holds
-            a sandbox entry beyond calu's configuration (`_sandbox_blockers`, read again for every
-            command), so a human decides whether it runs.
+            and ALLOW. A shell command (`SHELL_TOOLS`) is answered "ask" while a settings file
+            holds a sandbox entry beyond calu's configuration. `_sandbox_blockers` reads the
+            files again for every command. A human then decides whether the command runs.
 
             Side effects: the first mode seen for the calling agent, and every change of it, is
             reported as a `log` event (`_mode_events`); a `main_note` of the verdict (the review
@@ -1220,7 +1225,11 @@ class SdkRunner:
         async def subagent_stop(
             input_data: Any, tool_use_id: str | None, context: Any
         ) -> dict[str, Any]:
-            """SubagentStop hook: review the final result of a background subagent.
+            """SubagentStop hook: review the final result of a subagent that stopped.
+
+            That is a background subagent that the Agent tool started, or a subagent started
+            another way (a Workflow script's `agent()`), which counts as background. A stop
+            during a side question is queued and reviewed when `side_question` has its answer.
 
             A subagent counts as background when its Agent call did not set
             `run_in_background` to false (`runs_in_background`, Claude Code's default), until
@@ -1511,13 +1520,22 @@ class SdkRunner:
             sdk_agent_id: The SDK's id of the agent the mode belongs to; None for the main
                 agent.
 
+        Side effects: records the mode of the agent in `_modes`. For the main agent it also
+        consumes a pending switch (`_switch_pending`, `_switched_to`), so each call answers
+        a switch at most once.
+
         Returns:
-            One `Log` (level "warning" in the fallback case above, else "info") if the mode is
-            new for that agent, else []; for the main agent a `PermissionModeChanged` (with
-            `client` None) before it, which the session passes on to its clients. A subagent
-            whose first mode is the one the main agent runs in gives no event: the line about
-            the main agent already says it, and a run with many subagents would repeat it for
-            each.
+            The events, as a list:
+
+            - nothing if the mode is not new for that agent;
+            - one `Log` if it is new, with level "warning" in the fallback case above and
+              "info" otherwise;
+            - for the main agent, a `PermissionModeChanged` (with `client` None) before the
+              `Log`, which the session passes on to its clients.
+
+            A subagent whose first mode is the one the main agent runs in gives no event: the
+            line about the main agent already says it, and a run with many subagents would
+            repeat it for each.
         """
         if not isinstance(mode, str) or not mode:
             return []
@@ -1708,8 +1726,11 @@ class SdkRunner:
     def _translate(self, msg: object) -> list[Event]:
         """Return the protocol events for one SDK message (possibly none).
 
-        Side effects: updates `agents`, the SDK-id mapping and `session_id`; consumes a
-        pending human text when its replay arrives (`_user_source`).
+        Side effects: updates the bookkeeping of this class that the messages change: `agents`
+        and the SDK-id mapping, `session_id`, the skills and the prompts of agents, the
+        compactions, the interrupt state, `rate_limits`, `background_tasks`, and the permission
+        mode state (through `_mode_events`). It also consumes a pending human text when its
+        replay arrives (`_user_source`).
 
         A user-role text of the main agent becomes `UserInput` with source "user" only if the
         session sent it for a human; every other one (calu's own notes, task notifications,

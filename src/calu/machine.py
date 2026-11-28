@@ -139,8 +139,9 @@ CLIENT_COMMANDS = frozenset({"serve", "run", "web", "ide", "attach", "acp", "sta
 def calu_processes(euid: int, own_pid: int, proc: Path = Path("/proc")) -> list[tuple[int, str]]:
     """Find the calu processes of this machine that use calu's database or files.
 
-    `calu uninstall` refuses while there are any; `calu serve` leaves a database that stops
-    with it running while there are any (PLAN.md D267, D269).
+    `calu uninstall` refuses while there are any. At its end `calu serve` does not stop the
+    local database, even one set to stop with the server, while any of these run (PLAN.md
+    D267, D269).
 
     Args:
         euid: The effective uid of this process: root sees every user's processes, a user

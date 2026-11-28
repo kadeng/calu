@@ -66,9 +66,19 @@ class Installer(private val project: Project) {
             try {
                 val process = ProcessBuilder(argv).redirectErrorStream(true).directory(File(System.getProperty("user.home"))).start()
                 process.outputStream.close()
+                // The timer runs beside the read: a command that keeps its output open is stopped too.
+                val timedOut = java.util.concurrent.atomic.AtomicBoolean(false)
+                val timer = Thread {
+                    if (!process.waitFor(STEP_TIMEOUT_MINUTES, TimeUnit.MINUTES)) {
+                        timedOut.set(true)
+                        process.destroyForcibly()
+                    }
+                }
+                timer.isDaemon = true
+                timer.start()
                 val output = process.inputStream.bufferedReader().readText()
-                val finished = process.waitFor(STEP_TIMEOUT_MINUTES, TimeUnit.MINUTES)
-                if (!finished) process.destroyForcibly()
+                process.waitFor()
+                val finished = !timedOut.get()
                 log.info("[calu] $title: exit ${if (finished) process.exitValue() else -1}\n${output.takeLast(4000)}")
                 (if (finished) process.exitValue() else -1) to output.lines().filter { it.isNotBlank() }.takeLast(6).joinToString("\n")
             } catch (error: java.io.IOException) {

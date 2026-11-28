@@ -13,8 +13,9 @@ What a verdict does (the owner's requirement 51):
     ACCEPT      the call runs                           Claude gets the result
     ANNOTATE    the call runs, Claude gets the note     Claude gets the result and the note
     DENY        the call is refused; Claude gets the    a handed-back report is refused and
-                note as the reason and may write the    Claude gets the note only; possible,
-                task again                              and not what the instructions ask for
+                note as the reason and may write the    Claude gets the note only; a refused
+                task again                              report is possible, although the
+                                                        instructions do not ask for it
     ESCALATE    a person decides                        a person decides (the exception, e.g.
                                                         a secret Claude should not read)
 
@@ -90,15 +91,15 @@ NOTE_IN_SUMMARY = re.compile(r"\n\s*Note:\s*")
 def _note_is_required(schema: dict[str, Any]) -> None:
     """Name `note` as a required key in the schema the model is shown.
 
-    Validation still accepts an answer without it. Seen on 2026-11-27 with the checker model
-    of the owner's installation: with `note` optional, the model answered
-    `{"verdict": "ANNOTATE", "summary": ...}` in three
-    attempts out of three, with its remark at the end of the summary or missing, and the check
-    failed four times in one session.
+    Validation still accepts an answer without it.
 
     Args:
         schema: The JSON schema of `ResultReview`; changed in place.
     """
+    # Seen on 2026-11-27 with the checker model of the owner's installation: with `note`
+    # optional, the model answered {"verdict": "ANNOTATE", "summary": ...} in three attempts out
+    # of three, with its remark at the end of the summary or missing. The check failed four
+    # times in one session.
     required = schema.setdefault("required", [])
     if "note" not in required:
         required.append("note")

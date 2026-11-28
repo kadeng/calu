@@ -59,7 +59,10 @@ def _report(checker: Any, model: str, critical: int) -> Report:
 async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
     db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Both checkers run with their stored instructions and model; misses become the exit code."""
+    """The four built-in checkers run with their stored instructions and model.
+
+    Misses become the exit code.
+    """
     conn = await connect(db_url)
     try:
         await setup(conn, db_url, "test:model")

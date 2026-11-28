@@ -48,7 +48,7 @@ async def run(slow: bool) -> tuple[bool, float, str]:
     async def pre_tool_use(
         input_data: Any, tool_use_id: str | None, context: Any
     ) -> dict[str, Any]:
-        """Answer "allow", after a sleep that exceeds the hook's own timeout.
+        """Answer "allow"; when `slow` is set, sleep first for longer than the hook's timeout.
 
         Args:
             input_data: The hook input.

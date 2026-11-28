@@ -59,7 +59,7 @@ const val SERVER_CHECK_HIDDEN_S: Int = 30
 /** Id of the setup hint of a stopped server. */
 const val SERVER_STOPPED_HINT: String = "server-stopped"
 
-/** The sentence an older bridge sends for a refused connection (it sends no `cause`). */
+/** The sentence an older bridge sends for an unreachable session (it sends no `cause`). */
 private const val UNREACHABLE_TEXT = "nothing answers at the session's address"
 
 /**
@@ -67,7 +67,7 @@ private const val UNREACHABLE_TEXT = "nothing answers at the session's address"
  *
  * @param cause The `cause` member (untrusted; `null` when it is missing).
  * @param message The `message` member (untrusted); used only when `cause` is missing, for a
- *   bridge of an older calu, whose sentence for a refused connection starts with
+ *   bridge of an older calu, whose sentence for an unreachable session starts with
  *   "nothing answers at the session's address".
  * @return One of `LostCause`, or `null` if neither member names one.
  */

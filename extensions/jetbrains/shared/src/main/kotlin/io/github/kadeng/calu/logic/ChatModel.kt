@@ -467,7 +467,9 @@ private val ANY_SCHEME = Regex("^[a-z][a-z0-9+.-]*:", RegexOption.IGNORE_CASE)
  *
  * @param href The link's target (untrusted).
  * @return The trimmed target for http(s) and relative links (the host opens a browser or a
- *   project file); `null` for an empty link, a fragment ("#…") and every other scheme.
+ *   project file); `null` for an empty link, a fragment ("#…") and every other scheme. A text
+ *   that starts with letters and a colon, such as `app.py:12`, counts as a scheme and gives
+ *   `null`; the Markdown converter turns links to a source line into file addresses before.
  */
 fun linkTarget(href: String?): String? {
     val target = href.orEmpty().trim()

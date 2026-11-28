@@ -5,8 +5,15 @@ It wraps three functions after their modules load and appends one JSON line per 
 $CALU_WTL_PROBE_DIR/<pid>.jsonl (only if that directory exists):
 
 - calu.checkers.render.render_step_cut: the step's checkout lines as a checker reads them;
-- calu.session.Session.step_checkouts: which checkouts calu assigned a step to;
-- calu.honesty.HonestyState.snapshot: the honesty state of one checkout when it was asked.
+- calu.session.Session.step_checkouts: which checkouts calu assigned a step to. A record holds
+  the tool name, the agent id, the working directory, the command or file path of the step cut
+  to 200 characters, and the labels of the checkouts;
+- calu.honesty.HonestyState.snapshot: the honesty state of one checkout when it was asked. A
+  record holds the checkout's root, the baseline id, the marks as `path:symbol`, the unreviewed
+  files, the review flags and the excluded paths.
+
+The records hold command text and file paths of the session. `worktrees_l.sh collect` copies
+them to /share/worktrees-l/ with the rest of the evidence.
 
 It changes no return value and swallows its own errors.
 """

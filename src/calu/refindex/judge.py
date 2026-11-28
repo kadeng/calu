@@ -15,17 +15,23 @@ How a question is answered:
 4. If it is unsure and says that the whole file would help, it is shown that file once and
    asked again.
 
-A place stays unclear when the judge is unsure, gives no answer for it, the request fails,
-or the file is too large to show. The judge never turns a failure into a "no".
+A place stays unclear when the judge is unsure, gives no answer for it, or the request
+fails. It also stays unclear when the judge asks for the whole file and the file cannot be
+read or is over `WHOLE_FILE_BYTES`. The judge never turns a failure into a "no".
+
+A file over `WHOLE_FILE_BYTES` is not read at all. The judge then sees only the place's own
+line instead of the lines around it, and its "yes" or "no" rests on that line alone. When the
+unit's own file is over the limit, the judge sees no lines of the unit's definition.
 
 Answers are kept and reused (`JudgeCache`):
 
-- A "yes" or "no" depends only on what the judge was shown. So it is stored under the unit's
-  file and name plus a hash of the shown lines.
+- A "yes" or "no" is stored under a key: the unit's file and name, the place's file and
+  column, and a hash of the lines shown for the place.
 - Line numbers are not part of that hash. Adding lines far above a place does not cause a
   new question.
-- The unit's own documentation is not part of it either. Referrers are asked for exactly
-  when that documentation changed, and the old answers must still count then.
+- The start of the unit's definition, which the judge is also shown, is not part of the key.
+  Referrers are asked for exactly when the unit's documentation changed, and the old
+  answers must still count then. So a kept answer may rest on an older definition.
 - "Unsure" is not stored, so such a place is asked about again next time.
 - By default the answers live in memory for as long as the `MatchJudge` exists. A store that
   outlasts the session can be passed in.
@@ -61,7 +67,8 @@ BATCH_PLACES = 10
 """Most places in one request of round 1."""
 
 WHOLE_FILE_BYTES = 200_000
-"""A file larger than this is not shown whole; its places stay unclear."""
+"""A file larger than this is not read. The judge sees only each place's own line from it,
+and a place whose answer needs the whole file stays unclear."""
 
 Answer = Literal["yes", "no", "unsure"]
 
@@ -253,7 +260,7 @@ class MatchJudge:
             self.cache.put(key, answer)
 
     def _key(self, unit: Unit, place: Place, shown: str) -> str:
-        """Build the cache key of one answer: the unit, and what the judge was shown.
+        """Build the cache key of one answer: the unit, and what the judge was shown for the place.
 
         The shown lines count without their numbers, so that lines added above the place do
         not change the key; which line is the place is part of it. The unit counts by its
@@ -354,8 +361,9 @@ class MatchJudge:
             place: The place.
 
         Returns:
-            The fenced lines, each with its number, the place's line marked with `>>`; the
-            place's own text if the file cannot be read.
+            The fenced lines, each with its number, the place's line marked with `>>`. Only
+            the place's own line (`place.text`) if the file cannot be read, is over
+            `WHOLE_FILE_BYTES`, or does not have the place's line.
         """
         lines = self._lines(place.path)
         if lines is None or not 1 <= place.line <= len(lines):

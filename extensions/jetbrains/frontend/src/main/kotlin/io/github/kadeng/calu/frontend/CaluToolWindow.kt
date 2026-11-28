@@ -18,7 +18,9 @@ import javax.swing.Icon
 
 /**
  * Creates the tool window "calu" (anchored right, see `calu.frontend.xml`): the chat surface
- * and the title actions New session, Checkers, Context, Models, calu settings, Plugin settings.
+ * and the title actions New session, Checkers, Context, Side question, Models, calu settings and
+ * Plugin settings. "Sync now" is a further title action that shows only in the SSH mode, while
+ * file synchronisation is running.
  */
 class CaluToolWindowFactory : ToolWindowFactory, DumbAware {
     override fun shouldBeAvailable(project: Project): Boolean = true

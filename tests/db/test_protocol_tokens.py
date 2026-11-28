@@ -47,7 +47,12 @@ class Running:
 async def running(
     db_url: str, workspace: Path, turns: list[list[dict[str, Any]]]
 ) -> AsyncGenerator[Running]:
-    """Start a session as `calu run` does: server, session row, printed token recorded."""
+    """Start a session as `calu run` does: server, session row, printed token recorded.
+
+    Side effects: starts a protocol server on a loopback port (127.0.0.1, port chosen by the
+    system) and records its address and the token's hash in the database. The session is
+    stopped when the context ends.
+    """
     conn = await connect(db_url)
     try:
         await setup(conn, db_url, "test:model")
@@ -245,7 +250,8 @@ async def test_recording_the_printed_token_twice_is_not_a_revocation(
     db_url: str, tmp_path: Path
 ) -> None:
     """`calu run` and the server may both record the printed token for the first session row.
-    The second insert is refused by the database, and the token stays valid."""
+    Recording it again reports success (`_record_printed` returns True), and the token stays
+    valid and unrevoked."""
     async with running(db_url, tmp_path, [[{"text": "hi"}]]) as run:
         assert await run.server._record_printed(run.server.token_hash) is True
         async with attach(run.server.address, run.token, "attach", Events()) as client:

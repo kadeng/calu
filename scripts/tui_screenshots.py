@@ -6,17 +6,26 @@ SVG (Textual's own export) at 120x36 and 80x24; if a headless Chromium is availa
 Playwright (`scripts/get-browser.sh` installs it without root) each SVG is also rendered to a
 PNG next to it.
 
-The states: a finished turn, an open escalation, a session with subagents and a question, a
-subagent's own tab, a step expanded to its diff, the full-screen detail of an escalation, a
-set of three questions, a side question with its answer, the transcript scrolled up while
-output arrives, the side panel over the transcript on a narrow terminal, the help page, the
-light theme, the first press of an allow, a stopped session with its start card, the diff of an
-edit with two selected lines, the side panel with the focus on a held draft, a search, the
-confirmation before a session is stopped and resumed, the stored history above a turn, the
-screen without colours (`NO_COLOR`), the checkers and their editor, the honesty page, the
-question before a commit is certified, the notice without a git program, a long command and
-an edit on the decision card, the detail of the long command, the list of slash commands, a
-message to a subagent that waits in the queue, and the filtered help.
+The states, in the order of their numbers:
+
+- 01 a finished turn, 02 an open escalation, 03 a session with subagents and a question,
+  04 a subagent's own tab, 05 a step expanded to its diff
+- 06 the full-screen detail of an escalation, 07 a set of three questions, 08 a side question
+  with its answer
+- 09 the transcript scrolled up while output arrives, 10 the side panel over the transcript on
+  a narrow terminal, 11 the help page, 12 the light theme
+- 13 the first press of an allow, 14 a stopped session with its start card, 15 the diff of an
+  edit with two selected lines, 16 the side panel with the focus on a held draft
+- 17 a search, 18 the confirmation before a session is stopped and resumed, 19 the stored
+  history above a turn, 20 the screen without colours (`NO_COLOR`)
+- 21 the checkers, 22 the checker editor, 23 the honesty page, 24 the question before a commit
+  is certified, 25 the notice without a git program
+- 26 a long command and 27 an edit on the decision card, 28 the detail of the long command
+- 29 the list of slash commands, 30 a message to a subagent that waits in the queue, 31 the
+  filtered help, 32 the first press of `w`
+
+Side effect: the state without colours sets `NO_COLOR` in the environment while the app is
+built, and the script restores the earlier value afterwards.
 """
 
 import asyncio
@@ -145,7 +154,8 @@ async def press(pilot: Pilot[None], clock: Clock, key: str) -> None:
     """Press one key as a person does: a moment after the one before.
 
     The clock moves 0.6 s first. The client ignores a deciding key within half a second
-    after the card changed, and a second `a` or `d` faster than a held key repeats.
+    after the card changed. It also ignores a second `a` or `d` pressed sooner than a held key
+    would repeat, because it counts that as the key's auto-repeat.
 
     Args:
         pilot: The pilot of the running app.
@@ -290,8 +300,8 @@ def typed(*parts: str) -> Drive:
     """Build a state that presses keys, where a longer part is typed character by character.
 
     Args:
-        *parts: Key names (`ctrl+f`, `enter`) or texts that start with a space or a slash or
-            hold a space.
+        *parts: A part that starts with `text:` is typed character by character, after that
+            prefix. Any other part is a key name (`ctrl+f`, `enter`).
 
     Returns:
         The drive function.
@@ -513,6 +523,9 @@ STATES: list[tuple[str, str, Drive, str]] = [
 async def shoot(name: str, scenario: str, drive: Drive, theme: str, size: tuple[int, int]) -> str:
     """Run the client through one state and export the screen.
 
+    For the theme "mono" it sets `NO_COLOR` while the app is built and then restores the value
+    that the environment had before.
+
     Args:
         name: The state's name, for the title in the picture.
         scenario: A key of `calu.tui.scenarios.SCENARIOS`.
@@ -533,6 +546,7 @@ async def shoot(name: str, scenario: str, drive: Drive, theme: str, size: tuple[
         items = scenarios.long_session(60)
     session.results["escalation.context"] = CONTEXT
     options = TuiOptions(theme=theme) if theme and theme != "mono" else TuiOptions()
+    previous_no_color = os.environ.get("NO_COLOR")
     if theme == "mono":
         os.environ["NO_COLOR"] = "1"
     try:
@@ -540,7 +554,10 @@ async def shoot(name: str, scenario: str, drive: Drive, theme: str, size: tuple[
             fake_connector(session), options, clock=clock, live=False, admin=FakeAdmin(session)
         )
     finally:
-        os.environ.pop("NO_COLOR", None)
+        if previous_no_color is None:
+            os.environ.pop("NO_COLOR", None)
+        else:
+            os.environ["NO_COLOR"] = previous_no_color
     async with app.run_test(size=size, notifications=False) as pilot:
         await pilot.pause()
         await scenarios.play(session, items, clock.advance)

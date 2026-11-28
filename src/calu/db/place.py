@@ -21,10 +21,10 @@ commands included, can read the password and change calu's settings, other users
 place file of before D279 that still holds the key `admin_password` is read as before, until
 `sudo calu setup` writes it again.
 
-Why a file and not the session's word: a socket in a user's runtime directory can be created
-by any program of that user. A client that sent the user password to whatever database such
-a "session" named would hand the password to that program. Only root can write this file, and
-the client checks that before it reads it.
+A file is used instead of the session's word, because any program of the user can create a
+socket in the user's runtime directory. A client that sent the user password to the database
+named by such a "session" would hand the password to that program. Only root can write this
+file, and the client checks that before it reads it.
 """
 
 import json

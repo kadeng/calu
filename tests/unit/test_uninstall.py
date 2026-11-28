@@ -1,8 +1,11 @@
 """`calu uninstall` (D267): what it plans, what it refuses, what it removes.
 
 Every test works in a temporary directory with a fake docker (`FakeDocker`) and, where
-processes matter, a fake /proc; nothing of the machine running the tests is looked at or
-removed. Nothing is printed except by `cli.main`, whose output is captured.
+processes matter, a fake /proc; nothing of the machine running the tests is removed. Almost
+nothing of the machine is looked at either. The one exception is the test of
+`calu uninstall --dry-run`, which also reads the real root installation directory and the
+running checkout, and removes nothing. Nothing is printed except by `cli.main`, whose output
+is captured.
 """
 
 import os
@@ -166,9 +169,15 @@ def test_the_confirmation_must_be_the_phrase_and_typed_by_hand() -> None:
 
 
 def test_removal_runs_the_database_first_and_reports_each_item(tmp_path: Path) -> None:
-    """The container goes with `docker compose down --volumes`, the database files that the
-    container's user owns go through one run of the postgres image, then the directories;
-    a failure is reported and the other items still go."""
+    """The removal goes in three steps, and each item is reported.
+
+    - The container goes with `docker compose down --volumes`.
+    - The database files that the container's user owns go through one run of the postgres
+      image.
+    - The directories go last.
+
+    A failure is reported, and the other items are still removed.
+    """
     data = tmp_path / "db"
     (data / "pg").mkdir(parents=True)
     (data / "pg" / "PG_VERSION").write_text("18")
@@ -223,7 +232,12 @@ def test_running_calu_processes_are_found_but_not_this_one(tmp_path: Path) -> No
 def test_calu_uninstall_dry_run_lists_and_removes_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`calu uninstall --dry-run` prints the plan and the kept things and touches nothing."""
+    """`calu uninstall --dry-run` prints the plan and the kept things and removes nothing.
+
+    HOME, the XDG variables and the docker runner are faked. The plan still looks at the real
+    root installation directory (`/usr/local/lib/calu`) and at the running checkout, because
+    the test passes neither of them in.
+    """
     home = tmp_path / "home"
     (home / ".config" / "calu").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))

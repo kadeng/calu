@@ -394,7 +394,8 @@ export const REFRESH_DEBOUNCE_MS = 150;
 export const REFRESH_STALE_MS = 30_000;
 
 /**
- * Decides when the view asks for the graph: at most one request waits for its answer, and two
+ * Decides when the view asks for the graph: at most one request waits for its answer, unless
+ * that request has had no answer for `REFRESH_STALE_MS`; then the next one may go. Two
  * requests are at least `REFRESH_GAP_MS` apart.
  *
  *     want() ──(debounce, gap)──► request() ──► answered() ──(a want() came meanwhile)──► again

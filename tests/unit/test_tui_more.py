@@ -563,9 +563,10 @@ async def test_keys_of_the_settings_file_replace_the_default_binding() -> None:
         assert "no binding is called nonsense" in run.line("composer-head")
         before = run.app.model.selected_tab
         await run.press("ctrl+n")
-        assert run.app.model.selected_tab != before
-        await run.press("alt+right")
-        assert run.app.model.selected_tab != "main" or before != "main"
+        after_new_key = run.app.model.selected_tab
+        assert after_new_key != before, "the key of the settings file selects the next agent"
+        await run.press("alt+right")  # the default key of `agent-next`
+        assert run.app.model.selected_tab == after_new_key, "the default key does nothing now"
 
 
 async def test_the_panel_width_comes_from_the_settings() -> None:

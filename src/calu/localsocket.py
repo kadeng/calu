@@ -90,7 +90,9 @@ def bind(path: Path, owner: int = 0) -> socket.socket:
     are missing, removes a socket file left by an earlier process, creates the socket with
     mode 0600. Both directories are checked whether calu created them or found them: an
     existing `/run/calu` that somebody else owns or may write to is refused before anything
-    is removed or bound in it.
+    is removed or bound in it. If the check of the new socket fails after the bind, the
+    listener is closed and the socket file stays in place; a client refuses it by the same
+    check.
 
     Args:
         path: `path_of(session_id)`.
@@ -144,7 +146,8 @@ def _directory_problems(directory: Path, owner: int) -> list[str]:
         owner: The uid that must own it (root; a test passes its own).
 
     Returns:
-        One sentence per finding; empty if the directory can be trusted.
+        A list with one sentence per finding; the list is empty if the directory can be
+        trusted.
     """
     try:
         status = directory.lstat()
@@ -173,7 +176,8 @@ def problems(path: Path, owner: int = 0) -> list[str]:
         owner: The uid that must own it (root; a test passes its own).
 
     Returns:
-        One sentence per finding; empty if the socket can be trusted.
+        A list with one sentence per finding; the list is empty if the socket can be
+        trusted.
     """
     found: list[str] = []
     try:

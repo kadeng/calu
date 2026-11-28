@@ -4,10 +4,10 @@
 
 It is the herd client of agent/records/PLAN.md §6.2: it works on the database, so it sees the
 sessions of every host without a process of its own on them, and it holds the user login, so
-it can also change what steers the checkers. For the live view of one session it is a client of that
-session as well (D34): it mints a client token, connects to the address the session recorded and
-relays the event stream to the browser, so the browser needs no token and the session needs no new
-protocol.
+it can also change what steers the checkers. For the live view of one session it is also a client
+of that session (D34). It mints a client token and connects to the address the session recorded.
+It relays the event stream to the browser, so the browser needs no token and the session needs no
+new protocol.
 
 Pages:
 
@@ -24,11 +24,12 @@ Pages:
                           lists, per scope
     /pane                 the IDE chat view for a browser tab or an iframe (`calu.web.pane`)
 
-**The login is the token `calu web` prints** (`TokenGate`, D161); there are no user accounts
+**The browser signs in with a password** (`TokenGate`): the calu user password, or the web
+password set with `calu web --set-password`. There are no user accounts
 (agent/records/PLAN.md Q4 is open), so the server refuses to bind anything but the loopback
 interface: reach it from another machine through an SSH tunnel
 
-    ssh -L 8800:127.0.0.1:8800 the-host      # then open the printed address at home
+    ssh -L 8800:127.0.0.1:8800 the-host      # then open http://calu.localhost:8800/ at home
 
 or put a TLS proxy with its own authentication in front of it. Everything the pages can do, the
 user login can do, including changing the rules a session is judged by.
@@ -1052,11 +1053,12 @@ class LocalOnly:
 
     The interface serves loopback only -- but a browser on this machine will send requests to
     a loopback address on behalf of **any** site it has open, with the login's cookie where
-    the site is another port of this host name. Without this,
-    a page anywhere could submit "allow" for escalations 1 to 100 (a form POST is sent
-    cross-site without asking, and the ids are small integers), rewrite the settings or the
-    checker instructions, or open the live WebSocket and decide steps through it; a page whose
-    domain re-resolves to 127.0.0.1 (DNS rebinding) could also read everything shown here.
+    the site is another port of this host name. Without this check,
+    a page anywhere could submit "allow" for escalations 1 to 100. A form POST is sent
+    cross-site without asking, and the ids are small integers. Such a page could also rewrite
+    the settings or the checker instructions, or open the live WebSocket and decide steps
+    through it. A page whose domain re-resolves to 127.0.0.1 (DNS rebinding) could also read
+    everything shown here.
 
     Two checks, on every request and WebSocket handshake:
 
@@ -1178,10 +1180,10 @@ class _State:
         self.live_tokens: dict[str, str] = {}
         """Session id -> the token this server uses for its own live view.
 
-        One token per session and per run of the server, not one per browser connection: minting
-        is a database write, and revoking it when a browser disconnects would be a database write
-        in a cancelled teardown path, which is exactly what D19 says not to do (a statement
-        cancelled halfway leaves the connection unusable for everything else). The token is
+        One token per session and per run of the server, not one per browser connection.
+        Minting writes to the database. Revoking on disconnect would write during a cancelled
+        teardown, which D19 forbids: a statement cancelled halfway leaves the connection
+        unusable. The token is
         labelled "calu web (live view)", so `calu token list` shows it and an operator can revoke
         it. A refusal is not an error for the reader: `live_socket` then drops the cached
         token, mints a fresh one and connects again (D110).
@@ -1437,8 +1439,8 @@ async def mint(request: Request, state: _State) -> Response:
 
     The token is shown once, in the answer to this very request, and is kept nowhere: the
     database holds only its hash (D30). The answer is the session page itself and not a
-    redirect to it, so the token is never waiting in this process for a later GET -- a GET
-    needs less than this POST does (`TokenGate`), and the token decides escalations.
+    redirect to it. A redirect would leave the token in this process until a later GET, and the
+    token can decide escalations.
 
     Args:
         request: The request; its form may hold a `label`, of which the first
@@ -1883,7 +1885,9 @@ async def live_socket(websocket: WebSocket, state: _State) -> None:
     Only the requests of `LIVE_METHODS` are forwarded. `shutdown` is not among them: a browser
     should not be able to end the calu process by accident.
 
-    Side effects: mints and revokes a client token; sends messages to the Claude session.
+    Side effects: mints a client token (once per session and server run, kept in
+    `_State.live_tokens`) and drops a cached token that the session refused; sends messages to
+    the Claude session.
 
     A session whose process stopped saying it is there (D56) cannot be reached, and the reader
     is told that rather than being sent to look for a networking problem.
@@ -2133,7 +2137,8 @@ async def _relay(
     Args:
         websocket: The browser's connection.
         row: The session to attach to.
-        token: The client token minted for this connection; "" on a root-owned socket.
+        token: The client token of the session, from `_State.live_tokens` (shared by the
+            connections of this server run); "" on a root-owned socket.
         address: Where to connect instead of `row.address`, or None.
 
     Raises:
@@ -2407,7 +2412,7 @@ async def resolve(request: Request, state: _State) -> Response:
         except temp_rules.RuleError as error:
             rule_message = f"The temporary rule was not added: {error}"
     # Who decided, as `calu resolve` records it: the role and `<os user>@<host>` of this
-    # `calu web` (schema 37), whose login token the browser holds.
+    # `calu web` (schema 37), whose login the browser holds.
     resolved = await herd.resolve(state.db, escalation_id, decision, note, actor=herd.caller())
     log.info("escalation %s %s by the web interface (%s)", escalation_id, decision, resolved)
     # Only a path of this interface: the field travels through the browser, and an address
@@ -2526,8 +2531,12 @@ async def resolve_json(request: Request, state: _State) -> Response:
 
     "Remember this command" adds an **exactly anchored** allow or deny rule for the command line
     that was escalated (`^...$` with every regular-expression character escaped), so it can
-    never match more than the command a human just judged. A broader pattern is a deliberate
-    act and belongs in `calu rules add`.
+    never match more than the command a human just judged. The rule is added only when the
+    `remember` text of the request equals the escalated Bash command that is stored with the
+    escalation; any other text is refused with a warning in the log, and the decision itself is
+    still recorded. A broader pattern is a deliberate act and belongs in `calu rules add`.
+
+    Side effects: records the decision; may add a rule to `command-allow` or `command-deny`.
 
     Args:
         request: The request; its JSON body holds `decision`, `note` and `remember`, or an
@@ -2545,11 +2554,19 @@ async def resolve_json(request: Request, state: _State) -> Response:
     if decision not in ("allow", "deny", "answer"):
         return JSONResponse({"ok": False, "message": "neither allow nor deny"}, status_code=400)
     note = str(answer or body.get("note") or "")
+    command = str(body.get("remember") or "")
+    escalated = ""
+    if command:
+        context = await herd.escalation_context(state.db, escalation_id)
+        tool_input = context.get("tool_input")
+        if context.get("tool_name") == "Bash" and isinstance(tool_input, dict):
+            escalated = str(tool_input.get("command") or "")
     if not await herd.resolve(state.db, escalation_id, decision, note, actor=herd.caller()):
         return JSONResponse({"ok": False, "message": "it is not open any more"}, status_code=400)
     remembered = ""
-    command = str(body.get("remember") or "")
-    if command:
+    if command and command != escalated:
+        log.warning("no rule added for escalation %s: the text is not its command", escalation_id)
+    elif command:
         rule_list = "command-allow" if decision == "allow" else "command-deny"
         pattern = f"^{re.escape(command)}$"
         try:

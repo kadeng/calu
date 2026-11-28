@@ -7,14 +7,17 @@ path outside the workspace is marked as such.
 Two rules hold for everything rendered here (and in `calu.context.turns`, which uses the same
 helpers), because a checker treats calu's own lines and the user's words as authoritative:
 
-1. **Text the agent under review controls cannot produce a line of calu's.** Such text (tool
-   input, tool and agent names, paths, the working directory, summaries and comments written by
-   models that read the agent's text) is shown in exactly one of three forms: inside a code
-   fence that it cannot close (`calu.markdown.fence`), as a single line after a label of calu's
-   (`inline`, `code`), or as a block quote with a prefix on every line. It never starts a line,
-   and `inline` removes the `**` that calu's own labels (`**User:**`, `**Steps:**`) are written
-   with. So a forged "## Turn 4", "**User:**" or "Notes from the user's allow and deny lists:"
-   can appear only as quoted data, never as a line of the record.
+1. **Text the agent under review controls cannot produce a line of calu's.** Such text is tool
+   input, tool and agent names, paths, the working directory, and summaries and comments
+   written by models that read the agent's text. It is shown in exactly one of three forms:
+   - inside a code fence that it cannot close (`calu.markdown.fence`);
+   - as a single line after a label of calu's (`inline`, `code`);
+   - as a block quote with a prefix on every line.
+
+   Such text never starts a line, and `inline` removes the `**` that calu's own labels
+   (`**User:**`, `**Steps:**`) are written with. A forged "## Turn 4", "**User:**" or "Notes
+   from the user's allow and deny lists:" can therefore appear only as quoted data, never as a
+   line of the record.
 2. **A cut is a fact for the decision, not a display detail.** A command, diff or input longer
    than `MAX_CHARS` is cut, the note about it stands outside the fence, and `render_step_cut`
    reports how many characters were left out. `Checker.run` turns an approval of such a step
@@ -62,6 +65,10 @@ def inline(text: str, limit: int | None = 200) -> str:
     separators becomes single spaces, control and format characters (Unicode categories C*)
     are removed, and runs of two or more `*` become one `*`, so the result holds no line break and
     no `**`.
+
+    Only the first `limit * 4 + 16` characters of `text` are read, to bound the work. White
+    space at the start counts against that budget, so a text that begins with more white space
+    than that can give a result shorter than `limit`, or an empty one.
 
     Args:
         text: Any text; the agent under review may have chosen every character of it.
@@ -359,11 +366,11 @@ def render_step_cut(step: Step, workspace: Path) -> RenderedStep:
     """Return a Markdown description of `step` for a checker, and how much of it was cut.
 
     The first lines name the agent, the tool and the working directory. In a project with git
-    worktrees they also name the step's checkout and the other checkouts (`Step.checkout`,
-    D251). A Bash call that runs or may run outside the sandbox gets a "Sandbox:" line
-    (`Step.sandbox`, D255), and a command that names generated files a "Generated:" line
-    (`Step.generated`). The rule notes of the step (`Step.notes`) follow as a list, then the
-    narration of Claude's preceding thinking and text (`Step.narration`) as a block quote.
+    worktrees they also name the step's checkout and the other checkouts (`Step.checkout`).
+    A Bash call that runs or may run outside the sandbox gets a "Sandbox:" line
+    (`Step.sandbox`). A command that names generated files gets a "Generated:" line
+    (`Step.generated`). The rule notes of the step (`Step.notes`) follow as a list. Then comes
+    the narration of Claude's preceding thinking and text (`Step.narration`) as a block quote.
     Bash steps show the command; Edit/Write/MultiEdit steps show a diff against the target file,
     which is read from disk (relative paths resolve against `workspace`), followed for a Python
     file by the definitions the edit changes with their contract after the edit (`_contracts`).

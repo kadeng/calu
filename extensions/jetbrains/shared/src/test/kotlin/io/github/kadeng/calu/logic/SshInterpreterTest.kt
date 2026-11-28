@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import java.io.File
 import java.nio.file.Files
@@ -60,8 +61,9 @@ class SshInterpreterTest {
         try {
             val tools = File(home, "tools").apply { mkdirs() }
             for (name in listOf("ls", "sort", "tail")) {
-                val real = listOf("/bin/$name", "/usr/bin/$name").map(::File).firstOrNull { it.canExecute() } ?: return
-                Files.createSymbolicLink(File(tools, name).toPath(), real.toPath())
+                val real = listOf("/bin/$name", "/usr/bin/$name").map(::File).firstOrNull { it.canExecute() }
+                assumeTrue(real != null, "skipped: needs $name in /bin or /usr/bin")
+                Files.createSymbolicLink(File(tools, name).toPath(), real!!.toPath())
             }
             val bin = File(home, ".local/bin").apply { mkdirs() }
             for (v in listOf("python3.9", "python3.12")) File(bin, v).apply { writeText("#!/bin/sh\n"); setExecutable(true) }

@@ -120,7 +120,8 @@ class ParsedCommand:
     """The result of `parse_command`.
 
     `commands` are the simple commands in source order, each as its words joined by single
-    spaces with quotes removed (e.g. `git commit -m fix x`). Variable assignments before a
+    spaces with quotes removed (e.g. `git commit -m fix x`). A declaration, an `unset`, a test
+    and a standalone assignment keep their raw text, quotes included. Variable assignments before a
     command stay part of it (`FOO=1 make`). `error` is set if the command line has a syntax
     error; `commands` and `paths` then hold only what could be parsed.
     """
@@ -224,7 +225,8 @@ def command_variants(command: str, words: list[str] | None = None) -> list[str]:
     Deny rules are anchored at the start of a command (`^(sudo|su|doas)( |$)`), and three
     ordinary spellings put something else there: a variable assignment (`X=1 sudo ...`), a
     command that runs the next one (`env`, `nohup`, `timeout 5`, `xargs`, ...) and a path
-    (`/usr/bin/sudo`). Each of them used to take a command past the deny list. This strips them
+    (`/usr/bin/sudo`). Without this, each of them would take a command past the deny list. It
+    strips them
     one layer at a time and returns every stage, so a rule written for the plain command matches
     all of them. It is used for the deny list only: an allow rule must match the command as
     written, so the extra forms can only make a step wait for a person, never let one through.
@@ -333,8 +335,9 @@ def _wrapper_options(
 def parse_command(command: str, cwd: Path, home: Path | None = None) -> ParsedCommand:
     """Split a Bash command line into simple commands and the paths they read or write.
 
-    Pure apart from `Path.resolve` (which follows existing symlinks); never raises for any input
-    text.
+    Reads the file system and writes nothing: `Path.resolve` follows existing symlinks, a glob
+    is expanded by listing its directory, and an argument of `git checkout` is checked for
+    being an existing file. Never raises for any input text.
 
     Args:
         command: The command line, possibly with several lines, pipes and substitutions.
@@ -807,7 +810,7 @@ def _normalise(path: Path) -> Path:
         return plain
     try:
         return path.resolve()
-    except OSError, RuntimeError:
+    except OSError, RuntimeError, ValueError:  # ValueError: a NUL character in the path
         return plain
 
 

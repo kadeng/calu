@@ -6,7 +6,7 @@
  *
  *     ┌ header (sticky) ─ title · scope · save status ─ search · "Modified" chip ──────────┐
  *     ├ nav (sticky) ──┬ content ───────────────────────────────────────────────────────────┤
- *     │ Common         │ cards:    Setup · Models · Checkers · Honesty                       │
+ *     │ Common         │ cards:    Setup · Models · Checkers · Honesty · Temporary rules     │
  *     │ All settings   │ sections: one per first key segment, one row per setting          │
  *     └────────────────┴─────────────────────────────────────────────────────────────────────┘
  *
@@ -898,7 +898,7 @@ function renderStatus(): void {
   }
   scopeSelect.value = ui.project ?? '';
 
-  // One state per setting (its row shows it); this text is the summary of all of them. A
+  // Each setting has one state, which its row shows. This text summarises all of them. A
   // refused setting counts until it is saved or its row no longer shows the refusal (the
   // user put the stored value back, or pressed Escape in the field).
   for (const key of [...failedKeys]) {

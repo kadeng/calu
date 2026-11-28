@@ -372,7 +372,7 @@ def limit_text(limit: RateLimit) -> str:
         limit: The limit as Claude Code reported it.
 
     Returns:
-        For example `5-hour limit 82 % used (close to the limit), resets 14:00 UTC`.
+        For example `5-hour limit 82 % used (close to the limit), resets Mon 14:00 UTC`.
     """
     names = {
         "five_hour": "5-hour limit",
@@ -533,12 +533,16 @@ def _agent(agent_id: str | None) -> str:
 def one_line(text: str, limit: int = 300) -> str:
     """Return `text` on one line, cut to `limit` characters.
 
+    Runs of whitespace, line breaks included, become one space. A text longer than `limit` is
+    cut to `limit` characters and then gets " [...]", so the result can be six characters
+    longer than `limit`.
+
     Args:
         text: The text.
-        limit: Maximum number of characters.
+        limit: Number of characters after which the text is cut.
 
     Returns:
-        The shortened single-line text.
+        The single-line text, shortened if it was longer than `limit`.
     """
     joined = " ".join(text.split())
     return joined if len(joined) <= limit else joined[:limit] + " [...]"
@@ -634,10 +638,12 @@ class IdleSignal:
 
     Events only wake a waiting `wait` and supply the two facts the session does not keep: that
     it has worked at all (a latch that is never reset) and how many background tasks the last
-    turn left. A turn that ends while Claude Code still has background tasks running (a
-    background command, a Monitor, a Workflow, a background subagent) does not end the run:
-    Claude Code starts another turn by itself when they finish, and their steps still pass the
-    gate -- ending the run there stopped the session under them (D158).
+    turn left.
+
+    A turn can end while Claude Code still runs background tasks, such as a background
+    command, a Monitor, a Workflow or a background subagent. The run does not end then.
+    Claude Code starts another turn by itself when the tasks finish, and their steps still
+    pass the gate. Ending the run there stopped the session under them (D158).
 
     Two waits are bounded, so that the run ends even when something else went wrong:
 
@@ -709,7 +715,12 @@ class IdleSignal:
     def finished(self) -> bool:
         """Return whether the run has nothing left to wait for, as of now.
 
-        Side effect: prints one line the first time one of the two bounded waits ends the run.
+        Side effects:
+
+        - It notes the session's current state, as an event would (`_note`).
+        - It prints one line the first time one of the two bounded waits ends the run.
+        - It sets `unfinished` when `pickup_timeout_s` ends the run while a message is still
+          queued. The run then exits with a non-zero code.
 
         Returns:
             True if the session stopped or failed, or is idle after having worked with no
@@ -949,16 +960,20 @@ async def run_session(
 ) -> int:
     """Run one session until it ends, and report what happened.
 
-    Side effects: with `options.run_as`, switches the process's file access and the programs
-    it starts to that user for good (`calu.asuser.enter`; the caller has run
-    `calu.asuser.prepare`). Clears the process's "dumpable" flag (`harden_process`; `calu run`
-    has done that already before it read the password, this call covers a caller that embeds the
-    function, and the flag then stays cleared for the rest of that process), opens two database
-    connections, creates a `sessions` row, starts a Claude Code process, prints the session's
-    status to stdout (`Console`) and, with `options.interactive`, reads messages from stdin. A
-    `bytearray` passed as `url` is wiped before Claude Code starts; a copy of the connection
-    string stays in a `ConnectionSource` inside this process until the function returns, so
-    that a lost connection can be reopened (see the module docstring).
+    Side effects:
+
+    - With `options.run_as`, it switches the process's file access and the programs it starts
+      to that user for good (`calu.asuser.enter`). The caller has run `calu.asuser.prepare`.
+    - It clears the process's "dumpable" flag (`harden_process`). `calu run` has done that
+      already before it read the password; this call covers a caller that embeds the
+      function. The flag stays cleared for the rest of the process.
+    - It opens two database connections, creates a `sessions` row and starts a Claude Code
+      process.
+    - It prints the session's status to stdout (`Console`). With `options.interactive`, it
+      reads messages from stdin.
+    - It wipes a `bytearray` passed as `url` before Claude Code starts. A copy of the
+      connection string stays in a `ConnectionSource` inside this process until the function
+      returns, so that a lost connection can be reopened (see the module docstring).
 
     Args:
         url: The user login's connection string (a `bytearray` is wiped by this function).
@@ -969,6 +984,7 @@ async def run_session(
             from the database (tests pass fake models).
         on_serving: Awaited with the WebSocket address and the client token once the protocol
             server listens, in addition to printing them (a supervisor or a test uses it).
+            With `options.quiet`, the token is not printed and only `on_serving` gets it.
         on_event: Awaited with every event of the session, the conversation included, after
             the clients and the console got it (a supervisor or a test uses it); None for none.
 
@@ -1620,7 +1636,10 @@ async def _listen(
     on_serving: Serving | None = None,
     on_ready: Ready | None = None,
 ) -> None:
-    """Serve the protocol and print the address and the token once; never raises.
+    """Serve the protocol and print the address and, unless `options.quiet`, the token once.
+
+    Never raises. A quiet session (one of `calu serve`) prints no token; it hands the token
+    only to `on_serving`.
 
     A session that stays until a client shuts it down (`RunOptions.stay`) would wait for ever
     without a protocol server, so a server that cannot start ends such a session.

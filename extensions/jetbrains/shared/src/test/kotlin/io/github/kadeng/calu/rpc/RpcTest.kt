@@ -19,8 +19,8 @@ import org.junit.jupiter.api.Test
  * Tests of the JSON-RPC client, ported from `extensions/vscode/test/unit/rpc.test.ts`.
  *
  * `RpcClient.request` suspends until its answer arrives. The tests start each request with
- * `async(start = CoroutineStart.UNDISPATCHED)`, which runs the request up to its first suspension
- * in the calling thread: the line is written before the next statement of the test (`feed`,
+ * `async(start = CoroutineStart.UNDISPATCHED)`. That runs the request up to its first suspension
+ * in the calling thread. So the line is written before the next statement of the test (`feed`,
  * `close`) runs.
  */
 class RpcTest {

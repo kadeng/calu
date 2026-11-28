@@ -1,5 +1,6 @@
-// Steps calu holds back while a decision is open (`step.held`, PLAN D237 (6)), the tab bar's
-// folding of finished subagents, and the session dropdown's second line.
+// This file tests three things: the steps calu holds back while a decision is open (`step.held`,
+// PLAN D237 (6)), the folding of finished subagents in the tab bar, and the second line of the
+// session dropdown.
 import { describe, expect, it } from 'vitest';
 import { foldTabs, heldByAgent, otherOpenEscalations, heldTools, sessionMenu, statusBarEntry, tabList, waitingElsewhere, type TabView } from '../../src/shared/chatModel';
 import { applyEvents, initialViewState, type ViewEvent, type ViewState } from '../../src/shared/viewState';

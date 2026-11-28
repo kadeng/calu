@@ -2,6 +2,10 @@
 # Manual check of "calu as root, Claude Code as another user" (D206) with the real Claude Code:
 # runs spikes/smoke_session.py --user 1000 as root in the development image.
 #
+# The container runs as root on the host network (--network host) and gets ANTHROPIC_API_KEY
+# and ANTHROPIC_BASE_URL. The checkout and the directory three levels above the real
+# interpreter of .venv/bin/python are mounted read-only at their own paths.
+#
 # Usage: spikes/smoke_privileged.sh WORKSPACE
 #   WORKSPACE  an empty directory owned by uid 1000; the container mounts it as /work
 # Needs docker, the image calu-dev-dev (docker compose build dev), the test database

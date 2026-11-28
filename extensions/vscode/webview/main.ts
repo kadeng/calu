@@ -296,9 +296,9 @@ function buildSkeleton(): void {
   pauseButton = iconButton('pause', 'Pause', 'togglePause', { class: 'secondary round', 'data-testid': 'input-pause', title: PAUSE_TITLE });
   sendButton = iconButton('send', 'Send', 'send', { class: 'primary round', 'data-testid': 'input-send' });
   const buttons = el('div', 'composer-buttons');
-  // Pause and interrupt come first: pause is there while a session is attached, interrupt
-  // appears only while Claude works, and placed there it moves no other button, so a click
-  // aimed at the side-question button never stops the turn.
+  // Pause and interrupt come first. Pause shows while a session is attached; interrupt shows
+  // only while Claude works. Placed first, interrupt moves no other button, so a click on the
+  // side-question button never stops the turn.
   buttons.append(pauseButton, interruptButton, attachButton, sideButton, sendButton);
   footer.append(footerSlot, buttons);
   composer.append(completionBox, thumbsSlot, input, footer, fileInput);
@@ -325,7 +325,7 @@ function announce(text: string): void {
  * Build the session dropdown's button: state dot, the attached session's name, a badge with the
  * open escalations of other sessions, and a chevron.
  *
- * @returns The button.
+ * @returns The elements of the header slot: the button.
  */
 function buildSessionButton(): HTMLElement[] {
   const label = sessionLabel(view);
@@ -431,7 +431,7 @@ function buildSelect(name: string, testid: string, label: string, options: reado
 
 /**
  * Build the quick row of calu's own features: Checkers, Context, the honesty chip, the switch
- * to the honesty graph and the supervision level.
+ * to the honesty graph, the supervision level and the Claude Code permission-mode selector.
  *
  * @returns The elements of the row.
  */
@@ -648,7 +648,8 @@ function renderHeader(): void {
 
 /**
  * Build the tab bar (`role="tablist"`): Main and one tab per subagent with a status mark, a
- * background mark, the number of open escalations and a dot for unseen output.
+ * background mark, the number of open escalations and a dot for unseen output. Finished
+ * subagents beyond the room of the bar fold into one "N finished" button.
  *
  * @returns The bar, or nothing while the session has no subagent.
  */
@@ -737,9 +738,9 @@ function buildFoldedMenu(): HTMLElement {
 function renderTabs(): void {
   if (ui.tab !== MAIN && !view.agents.some((a) => a.agent_id === ui.tab)) ui.tab = MAIN;
   const focused = document.activeElement instanceof HTMLElement && tabsSlot.contains(document.activeElement);
-  // The visible tab is part of the signature: `tabList` marks it only by leaving out its
-  // "new output" dot, so two tabs without new output gave the same list and the strip kept
-  // the old tab highlighted.
+  // The visible tab is part of the signature. `tabList` marks the visible tab only through its
+  // "new output" dot, so without new output two lists were equal and the strip kept the old
+  // highlight.
   const sig = JSON.stringify([ui.tab, tabList(view, ui.tab, seen)]);
   if (setSection(tabsSlot, sig, buildTabs)) {
     const active = tabsSlot.querySelector<HTMLElement>('[aria-selected="true"]');
@@ -893,6 +894,9 @@ function nearBottom(): boolean {
  *        else                            -> build a new element (an open <details> stays open)
  *
  * The list follows new output only while the user has not scrolled up (`stick`).
+ *
+ * Side effects: stores the scroll position of the tab that was shown and restores the one of
+ * the new tab, sets `stick`, and writes `seen[ui.tab]` so that the new output counts as read.
  *
  * @param hidden True if the setup area or the honesty graph replaces the transcript.
  * @returns Nothing.
@@ -1390,7 +1394,8 @@ function renderComposer(): void {
 }
 
 /**
- * Fit the height of the composer's text field to its content (up to 40 % of the view's height).
+ * Fit the height of the composer's text field to its content (up to 40 % of the view's
+ * height, and at least 80 px).
  *
  * @returns Nothing. Side effect: sets the field's height through the CSSOM.
  */
@@ -1444,7 +1449,8 @@ function storeDraft(): void {
 
 /**
  * After the state changed: if another session is attached now, keep the text written for the
- * previous one and show the draft of the new one.
+ * previous one, show the draft of the new one and drop the images attached to the previous
+ * session's message.
  *
  * @returns Nothing.
  */
@@ -2336,7 +2342,9 @@ function applyFocus(): void {
 }
 
 /**
- * Handle a message from the extension host.
+ * Handle a message from the extension host. The message `reportState` (used by tests) sends
+ * the view state, the UI state, the bell log, the composer text and up to 20000 characters of
+ * the visible transcript back to the host.
  *
  * @param message The message (the host is trusted; the state inside is data from calu).
  * @returns Nothing.

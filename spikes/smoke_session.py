@@ -123,7 +123,18 @@ async def report(url: str) -> None:
 
 
 async def main(args: argparse.Namespace) -> int:
-    """Create a database, run one session in it, report, and drop it again."""
+    """Create a database, run one session in it, report, and drop it again.
+
+    With `--checker-model` it also reads calu's stored credentials (`load_secrets`) and the
+    API keys of the environment (`detect_model`). With `--user` it calls `asuser.prepare`,
+    which creates the state directories of that user.
+
+    Args:
+        args: The parsed command line.
+
+    Returns:
+        The exit code.
+    """
     name = f"calu_smoke_{uuid.uuid4().hex[:8]}"
     admin = await psycopg.AsyncConnection.connect(TEST_SERVER, autocommit=True)
     await admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))

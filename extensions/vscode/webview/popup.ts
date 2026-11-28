@@ -44,8 +44,8 @@ function items(box: HTMLElement): HTMLElement[] {
 }
 
 /**
- * Put the popup inside the window next to its anchor or point. Side effect: sets `left`, `top`
- * and `max-height` through the CSSOM.
+ * Put the popup inside the window next to its anchor or point. Side effect: sets `left` and
+ * `top` through the CSSOM.
  *
  * @param box The popup element (already in the document).
  * @param place Where it belongs.

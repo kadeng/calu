@@ -883,7 +883,12 @@ async def test_without_the_credential_fork_names_the_command_instead() -> None:
 
 
 async def test_with_the_sessions_database_known_nothing_is_read_from_the_store(tmp_path) -> None:
-    """The access logs in as `calu_admin` with a typed password; the store is not opened."""
+    """The access logs in as `calu_admin` with a typed password, and the session's database is used.
+
+    Without a password the access asks for one (`PasswordNeeded`). A typed password makes a
+    connection attempt to 127.0.0.1:1, which nothing answers. That failure is an `AdminFailed`
+    and not a `PasswordNeeded`. The test does not check that the credential store is not read.
+    """
     from calu.setup import USER_ROLE, user_login
 
     place = user_login(Target.parse("host=127.0.0.1 port=1 dbname=calu user=calu_owner"), "")

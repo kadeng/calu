@@ -106,7 +106,9 @@ export class CheckerFileSystem implements vscode.FileSystemProvider, vscode.Text
    *
    * @param uri The file's URI.
    * @returns The instructions as UTF-8.
-   * @throws vscode.FileSystemError FileNotFound if the checker does not exist; Unavailable for
+   * @throws vscode.FileSystemError FileNotFound if the bridge refuses the request with error
+   *   -32602 (`INVALID_PARAMS`). The bridge answers so when no checker has that name, and also
+   *   for any other refused value, which therefore shows as a missing checker. Unavailable for
    *   every other failure (bridge not running, database not reachable).
    */
   async readFile(uri: vscode.Uri): Promise<Uint8Array> {

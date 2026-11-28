@@ -718,7 +718,11 @@ class FileRWLock(RWLock):
 
 
 class FileLockSpace(LockSpace):
-    """The locks of every process that uses one directory (see the module docstring).
+    """The locks of every process in this process table that uses one directory.
+
+    A process table is one boot and one pid namespace. A process in another container or on
+    another boot uses another state file and does not share these locks (see the module
+    docstring).
 
     Attributes:
         directory: The directory, resolved.

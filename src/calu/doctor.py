@@ -10,7 +10,15 @@ database answer and is its schema current.
     calu doctor --user ada    # as root: also what Claude Code would find as that user
     calu doctor --sudo        # the same for you, through sudo
 
-Nothing here changes anything: it reads, and it says what to do about what it finds.
+The checks change no file and no setting. They read, and they say what to do about what they
+find. To find out, some of them start programs or contact services:
+
+- `claude --version`, and `claude sandbox status` in the project directory, as the session's
+  user;
+- bubblewrap once, with the smallest sandbox, to see whether it can build one here;
+- with `--db`, the database, with the user login;
+- with `--keys`, each provider whose checker key is set, with that key, and AWS STS with the
+  credentials boto3 finds.
 """
 
 import json
@@ -110,8 +118,12 @@ def claude_version() -> tuple[bool, str]:
 def tool_findings() -> list[Finding]:
     """Check the programs calu starts or depends on.
 
+    Side effects: starts `claude --version`, and bubblewrap once with the smallest sandbox
+    (`namespace_findings`).
+
     Returns:
-        One finding for `claude`, the two sandbox programs and `git`.
+        One finding for `claude`, the two sandbox programs and `git`; then the finding of
+        `namespace_findings`, when bubblewrap is installed and cannot start a sandbox here.
     """
     answered, detail = claude_version()
     found = [
@@ -203,16 +215,21 @@ def credential_findings(store: CredentialStore) -> list[Finding]:
             protection are read.
 
     Returns:
-        One finding for the user login (`calu.logins.USER`) and one for the database owner's
-        (`calu.logins.DB_ADMIN`); one more when the store holds the user login and still
-        the logins of before D265, which are unused then (without the user login, the user
-        login's advice says what to do with them, `calu.logins.old_logins`); and one when
-        the `user` or `db-admin` entry is stored without a password (an empty user
-        password), which says so even when that is the choice: in a store that root alone
-        can read (`calu.asuser.only_root_writes`) as a plain
-        statement, elsewhere with what it costs. An empty store on a machine whose calu runs
-        as root (a trustworthy place file, `calu.db.place`) gives one line instead: this
-        user needs no credential of their own.
+        The findings about the store:
+
+        - One finding for the user login (`calu.logins.USER`).
+        - One finding for the database owner's login (`calu.logins.DB_ADMIN`).
+        - One more finding when the store holds the user login and also logins of before
+          D265. Those are unused then. Without the user login, the advice of the user login's
+          finding says what to do with them (`calu.logins.old_logins`).
+        - One finding when the `user` or the `db-admin` entry is stored without a password
+          (an empty user password). It reports this also when it is the user's choice. In a
+          store that only root can read and change (`calu.asuser.only_root_writes`), it is a plain
+          statement. Elsewhere it also says what the missing password costs.
+
+        An empty store on a machine whose calu runs as root (a trustworthy place file,
+        `calu.db.place`) gives one finding instead: this user needs no credential of their
+        own.
     """
     names = set(store.names())
     if not names:
@@ -912,8 +929,11 @@ def sandbox_posture(workspace: Path) -> dict[str, Any] | None:
         workspace: The project directory whose settings should be taken into account.
 
     Returns:
-        The parsed JSON, or None if the CLI is missing, failed, timed out or printed something
-        that is not JSON. Never raises.
+        The first line of the CLI's output that starts with "{", parsed as a JSON object,
+        whatever the CLI's exit code. None if the CLI is missing, if `workspace` is not a
+        directory, if the CLI could not be started or
+        timed out, if no line starts with "{", or if that line is not a JSON object. Never
+        raises.
     """
     path = claude_executable()
     if path is None or not workspace.is_dir():

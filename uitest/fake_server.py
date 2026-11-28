@@ -1,10 +1,15 @@
 """A `calu serve` stand-in that plays scripted sessions, for UI tests of the editor plugins.
 
-It runs the real `calu.serve.Server` (the same code path as `calu serve`: it claims the session
-requests of this host and user from the database and runs each session as a task), but every
-session gets a `calu.claude.FakeRunner` in place of Claude Code and rule-based fake models in
-place of the checkers (`calu.testing.fake_models`). So no `claude`, no API key and no network
-are needed, and the VSCode extension's "New session" plays the conversation below.
+It runs the real `calu.serve.Server`, which is the same code path as `calu serve`. The server
+claims the session requests of this host and user from the database and runs each session as a
+task. Every session gets a `calu.claude.FakeRunner` in place of Claude Code, and rule-based
+fake models in place of the checkers (`calu.testing.fake_models`). So no `claude`, no API key
+and no network are needed, and the VSCode extension's "New session" plays the conversation
+below.
+
+The default projects directory is the home directory (`--projects`), so a session can run in
+any project below it. The scripted Edit of `tour` and `graph` really writes `greeter.py` in the
+project of the session. `graph` also writes `callers.py` and commits it with git.
 
 Run it inside the UI-testing desktop, from a checkout that has calu's dependencies::
 
@@ -63,8 +68,12 @@ answered with "Echo: <message>".
                  or enforce.
     graph        for the honesty graph: turn 1 commits `callers.py` (eight callers of
                  `greet`; trust HEAD afterwards), turn 2 changes `greeter.py` for real and
-                 marks the unit `greet` dishonest, turn 3 clears the mark. Needs the honesty
-                 checker enabled and `honesty.mode` track.
+                 marks the unit `greet` dishonest, turn 3 clears the mark. Turn 4 repeats
+                 turn 3. Needs the honesty checker enabled and `honesty.mode` track.
+    tasks        the subagent checker's answers, for requirement 51. One turn with three
+                 subagents: the checker denies the task of the first, so it never starts;
+                 it remarks on the result of the second; it denies the report the third
+                 hands back. Nothing waits for a person.
 
 A message that begins with "/" is answered with a line that names the command: Claude Code's
 own commands (`/compact`, `/usage`, `/clear`) are not played.
@@ -75,12 +84,14 @@ reports a five-hour limit.
 The fake checkers decide by markers in the step (`calu.testing`): the scripted commands carry
 `# calu:allow`, `# calu:deny` or `# calu:escalate` as a shell comment.
 
-What the scripted runner does not play (`calu.claude.fake_runner`): a resumed or forked
-session starts its script from the beginning (the runner has no transcript; the turns the
-session inherits are real rows of the database, so `session.history` returns them and a
-client can show them), a message to a subagent is not acted on (the session asks the main
-agent to relay it, and the script has no answer to that), and a "next" message is taken in
-after the running action, not inside a tool call.
+What the scripted runner does not play (`calu.claude.fake_runner`):
+
+- A resumed or forked session starts its script from the beginning. The runner has no
+  transcript. The turns the session inherits are real rows of the database, so
+  `session.history` returns them and a client can show them.
+- A message to a subagent is not acted on. The session asks the main agent to relay it, and
+  the script has no answer to that.
+- A "next" message is taken in after the running action, not inside a tool call.
 """
 
 from __future__ import annotations
@@ -614,12 +625,13 @@ def graph(workspace: Path) -> FakeScript:
       `greet`. Then an edit that the fake honesty checker calls dishonest for the unit
       `greet` alone.
     - Turn 3 edits `greeter.py` again without the marker, which clears the mark.
+    - Turn 4 plays the same actions as turn 3.
 
     Args:
         workspace: The project directory of the session.
 
     Returns:
-        The script of the three turns.
+        The script of four turns. The last one repeats the third.
     """
     doc = '"""Return the greeting for `name`."""'
     committed = [

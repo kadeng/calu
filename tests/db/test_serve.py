@@ -416,7 +416,8 @@ async def test_the_web_interface_asks_the_server_for_a_session(
     """The buttons of the session page: they write the row `calu start` writes.
 
     Runs the web application in this process against the test database, with a server that
-    uses fake runners; prints nothing.
+    uses fake runners. The server prints one "[serve] started: session ..." line per started
+    session to stdout.
     """
     session_url = await prepare(db_url, tmp_path)
     async with owner_db(db_url) as db:

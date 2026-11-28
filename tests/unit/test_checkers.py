@@ -78,7 +78,12 @@ class TestPolicy:
             assert policy.route(tool) is Route.COMMAND, f"{tool} would run unchecked"
 
     def test_nothing_that_writes_or_runs_is_on_the_allow_list(self):
-        """The allow list is read-only work plus five documented exceptions."""
+        """The allow list is read-only work plus the exceptions named in this test.
+
+        The exceptions are the todo and task tools (`TodoWrite`, `TaskCreate`, `TaskUpdate`),
+        the subagent tools (`Agent`, `Task`, `SendMessage`) and `Skill` and `EnterWorktree`;
+        `READ_ONLY_TOOLS` documents why each one may run unchecked.
+        """
         from calu.checkers.policy import READ_ONLY_TOOLS
 
         allowed_to_write = {
@@ -320,9 +325,14 @@ def test_the_guide_names_every_tool_a_checker_has(tmp_path: Path) -> None:
 
     for name in read_only | extra:
         assert f"`{name}`" in guide, f"the guide does not name the tool {name}"
-    # And the count in the sentence is the count in the code.
-    assert f"exactly {len(read_only | extra)} tools" in guide.replace("five", "5"), (
-        "the guide's tool count and the toolset disagree"
+    # And the counts in the sentence are the counts in the code: three tools for every
+    # checker, two more for the changeset checker.
+    words = {2: "two", 3: "three"}
+    assert f"Every checker has {words[len(read_only)]} tools" in guide, (
+        "the guide's count of the reading tools and the toolset disagree"
+    )
+    assert f"The changeset checker has {words[len(extra)]} more" in guide.replace("\n", " "), (
+        "the guide's count of the changeset checker's extra tools and the toolset disagree"
     )
 
 
@@ -529,7 +539,7 @@ async def test_an_approval_of_a_cut_changeset_becomes_an_escalation(
 
 
 def test_the_target_path_of_an_edit_is_shown_whole_or_counted_as_cut(workspace: Path):
-    """cc2: a checker that approves a write has seen the name of the file it goes to."""
+    """A checker that approves a write has seen the name of the file it goes to."""
     from calu.checkers.render import MAX_PATH_CHARS
 
     long_path = "d/" * 800 + "last-segment.yml"
@@ -660,7 +670,7 @@ def test_user_texts_reads_only_what_calu_rendered_as_user_input() -> None:
     assert user_texts("- [Bash] echo **User:** x") == []
 
 
-async def test_a_plain_checker_s_answer_has_no_field_for_marks(tmp_path: Path) -> None:
+async def test_a_plain_checkers_answer_has_no_field_for_marks(tmp_path: Path) -> None:
     """D224: marks a model writes into another checker's answer never reach the decision."""
     from calu.testing import marking_checker
 

@@ -82,7 +82,8 @@ def choose_intro(local: bool) -> str:
             same password protects.
 
     Returns:
-        Two sentences: what the password is for, and what an empty one means.
+        Three sentences: what the password is for, what else it protects, and what an empty
+        one means.
     """
     also = (
         " It also protects the login of the local database's owner (migrations)."

@@ -1,8 +1,11 @@
 """The full-screen client driven by keys, against a scripted session (`calu.tui.fake`).
 
 Textual's `App.run_test()` runs the real app without a terminal; `Pilot` presses keys. The
-clock is controlled by the test and the app draws every change at once (`live=False`), so
-nothing here depends on timing.
+clock is controlled by the test and the app draws every change at once (`live=False`). Most
+tests therefore do not depend on timing. Three wait for a fixed time instead: the palette test
+(`pilot.pause(0.5)` while the palette filters its entries), the test of the connection state
+(`pilot.pause(0.2)` while the client reconnects), and the test of a long session, which fails
+when 50 steps take 5 s or more.
 """
 
 import time
@@ -64,9 +67,9 @@ class Running:
     async def press(self, *keys: str) -> None:
         """Press keys one after the other and let the app settle.
 
-        The clock moves 0.6 s before each key, as a person's keys are apart: the client
-        ignores a deciding key within half a second after the card changed, and a second
-        `a` or `d` that follows the first faster than a held key repeats.
+        Each key comes 0.6 s after the one before, as a person's keys do. The client ignores
+        a deciding key for half a second after the card changed. It also ignores a second `a`
+        or `d` that follows the first faster than a held key repeats.
         """
         for key in keys:
             self.clock.advance(0.6)
@@ -832,7 +835,9 @@ async def test_pages_show_usage_help_and_the_checkers_context() -> None:
         assert run.session.sent("chat.send")[-1]["text"] == "/context", "Claude Code's"
 
 
-async def test_the_palette_lists_the_commands() -> None:
+async def test_the_palette_runs_a_command_by_name() -> None:
+    """The palette finds "supervision", opens it, and the entry "Confirm edits" sends
+    `auto_escalate.set` with `edits` set. The list of entries itself is not asserted."""
     async with running("simple_turn") as run:
         await run.press("ctrl+p")
         await run.pilot.pause()
@@ -873,7 +878,9 @@ async def test_the_connection_state_is_shown_and_sending_is_off_while_detached()
         assert run.composer == "still here" and "not sent" in run.line("composer-head")
 
 
-async def test_a_long_session_costs_the_same_per_step_as_a_short_one() -> None:
+async def test_fifty_steps_after_two_thousand_stay_under_five_seconds() -> None:
+    """After 2,000 steps the client draws no widget per block, follows the end, and takes 50
+    more steps in under 5 s. The cost of a short session is not measured."""
     session = FakeSession()
     scenarios.preload(session, scenarios.long_session(2000))
     async with running(session=session, size=(120, 36)) as run:

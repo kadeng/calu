@@ -2,9 +2,9 @@
 
 The pages are tested in process (`tests/db/test_web.py`) and in a browser
 (`tests/browser/`). What only a process can show is the command around them: the credential it
-asks for, the server it starts, the port it binds -- and that it **refuses** a non-loopback
-address, which is the only thing between "no login yet" and a herd overview on the open
-network.
+asks for, the server it starts and the port it binds. The process must also refuse a
+non-loopback address, so that the herd overview is never served on the network before a login
+exists.
 """
 
 import os

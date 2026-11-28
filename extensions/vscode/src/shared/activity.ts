@@ -100,9 +100,9 @@ function activity(icon: string, label: string, elapsed: string, active: boolean,
 }
 
 /**
- * Find when the waiting began: the time the session gives for the oldest open escalation
- * (`escalation.request.opened_at`, also in the snapshot of a later attach), so that the
- * "Waiting for you" timer survives a window reload, a bridge restart and a reattach.
+ * Find when the waiting began. Use the time the session gives for the oldest open escalation
+ * (`escalation.request.opened_at`), which the snapshot of a later attach also holds. The
+ * "Waiting for you" timer then survives a window reload, a bridge restart and a reattach.
  *
  * @param openedAt `openedAt` of each open escalation (ISO times from the session; `null` or an
  *   unreadable value is skipped).

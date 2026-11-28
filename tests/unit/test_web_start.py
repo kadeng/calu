@@ -74,9 +74,11 @@ def test_only_https_ssh_and_scp_like_addresses_are_cloned() -> None:
 
 
 def test_a_clone_runs_git_with_only_safe_transports_and_no_prompt(tmp_path: Path) -> None:
-    """The clone gets the repository's name as its folder unless a name is given, runs with
-    https and ssh as the only transports, no terminal prompt and ssh in batch mode; a failed
-    clone is a refusal with git's last line."""
+    """The clone gets the repository's name as its folder unless a name is given.
+
+    It runs with https and ssh as the only transports, with no terminal prompt, and with ssh
+    in batch mode. A failed clone is a refusal that carries git's last line.
+    """
     root = projects_dir(tmp_path)
     seen: list[dict[str, object]] = []
 

@@ -7,8 +7,16 @@ Usage, from the repository root:
 
 `cbm` expects a running container `calu-spike-cbm-try` that holds codebase-memory-mcp and
 has the repository mounted read-only at the same path as on the host.
-Prints, summed over the samples: the search's candidates, the places the fast stage confirmed
-and explained away, and the places left over, split into Python and other files.
+Prints, summed over the samples:
+
+- `candidates`: the places the plain search reports as unclear
+- `confirmed`: the references the combined index confirms
+- `left`: the places still unclear after the fast stage, with `left_py` and `left_other` for
+  Python and other files
+- `problems`: the samples for which the combined index reports a problem
+
+The number of places the fast stage explained away is not printed. The same counts
+(`candidates`, `confirmed`, `left`) are printed per group of samples.
 """
 
 import ast
@@ -27,6 +35,18 @@ sample = json.load(open(root / "spikes/reference-index/sample.json"))
 
 
 def line_now(s):
+    """Find the line where a sample function is defined now.
+
+    The file may have changed since the sample was taken, so the stored line can be stale.
+
+    Args:
+        s: A sample entry with the keys `path` (relative to the repository root) and
+            `qualname` (dotted names of the classes and the function).
+
+    Returns:
+        The line number of the definition, or 0 when the file has no such function.
+    """
+
     def walk(node, prefix):
         for n in getattr(node, "body", []):
             if (
@@ -43,6 +63,14 @@ def line_now(s):
 
 
 async def main(kind):
+    """Measure the plain search and the combined index on every sample and print the sums.
+
+    Starts the fast index, which for `cbm` runs `docker exec` into `calu-spike-cbm-try`, and
+    closes it at the end. Prints the sums over all samples and then the sums per group.
+
+    Args:
+        kind: `lsp` for the language server index, anything else for the `cbm` container.
+    """
     if kind == "lsp":
         from calu.refindex.lsp import lsp_index
 

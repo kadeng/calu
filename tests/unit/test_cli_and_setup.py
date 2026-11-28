@@ -351,10 +351,9 @@ def test_a_credential_without_a_password_is_read_without_a_prompt(
 ) -> None:
     """D104: `--no-password` takes the prompt out of every command that uses the credential.
 
-    The test does not mock the prompt away -- it leaves **nothing** on stdin after the
-    connection string. A command that still asked for a password would read the end of the
-    input and fail, so the assertion that the credential comes back is also the assertion that
-    nothing was asked.
+    The test does not mock the prompt. It leaves nothing on stdin after the connection string.
+    A command that still asked for a password would read the end of the input and fail, so a
+    credential that comes back shows that nothing was asked.
     """
     argv = ["credential", "set", logins.USER, "--no-password"]
     assert run_cli(monkeypatch, store, argv, f"{DSN}\n") == 0
@@ -399,9 +398,14 @@ def test_every_command_sees_the_keys_in_calu_s_own_env_file(
     `calu run` read it -- so `calu doctor` contradicted itself (it listed the file as found two
     lines below) and `calu evals` ran its checkers without the key. The CLI now loads the file
     before any command.
+
+    The test runs the real `calu doctor`, which probes this machine's tools and environment, and
+    reads the process environment. The four provider variables are set first and then removed,
+    so that monkeypatch restores them (and removes what the CLI loads) after the test.
     """
     for name in ("ANTHROPIC_API_KEY", "FIREWORKS_API_KEY", "MISTRAL_API_KEY", "OPENAI_API_KEY"):
-        monkeypatch.delenv(name, raising=False)  # restored, or removed again, after the test
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
     (tmp_path / "calu").mkdir()
     (tmp_path / "calu" / ".env").write_text("FIREWORKS_API_KEY=fw-not-a-real-key\n")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
@@ -481,7 +485,12 @@ class _AdminConn:
 def test_the_user_password_works_on_rds_after_leaving_rds_iam(
     member: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """On RDS a member of rds_iam is asked for a token and its password is ignored."""
+    """Setting the user password sends the verifier, not the password, in one `ALTER ROLE`.
+
+    The verifier is computed with 300000 rounds before that statement. A member of rds_iam is
+    revoked from it first, because RDS asks such a member for a token and ignores its password.
+    The statements go to a fake connection; nothing connects to a database.
+    """
     import asyncio
 
     monkeypatch.delenv("CALU_SCRAM_ITERATIONS")  # the rounds of a real setup (D279)

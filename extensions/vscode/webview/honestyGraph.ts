@@ -141,7 +141,7 @@ export class HonestyGraphView {
   private nodes = new Map<string, GraphNode>();
   /** The placed node of each drawn `<g>`. */
   private placed = new WeakMap<Element, PlacedNode>();
-  /** Counts the changes of graph, ghosts and expanded groups; part of `drawn`. */
+  /** The number of changes to the graph, the ghosts and the expanded groups. It is part of the `drawn` signature. */
   private version = 0;
   /** Signature of what is drawn, so that a render without a change costs one comparison. */
   private drawn = '';
@@ -753,7 +753,8 @@ export class HonestyGraphView {
 
   /**
    * Show the tooltip of a node: its full id, its state in words, its detail text and how
-   * many of its callers the graph leaves out.
+   * many of its callers the graph leaves out. For a group of collapsed callers it shows the
+   * target and the first members of the group instead.
    *
    * @param placed The node.
    * @param x Left edge of the tooltip in the window, before it is moved into the window.

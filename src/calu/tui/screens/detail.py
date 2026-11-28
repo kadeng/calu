@@ -1,9 +1,15 @@
 """The full-screen view of one escalation: everything the checker saw and said.
 
 The decision card shows what a step is and why it was stopped. This screen adds what is needed
-to **judge** it, from `escalation.context`: the step as the checker saw it, the complete diff
-of an edit, each checker run with its model, decision and reason, and the conversation and the
-chat summary as they were when the step was checked. The key that opens it (`w`) closes it
+to **judge** it, from `escalation.context`:
+
+- The step as the checker saw it.
+- The complete diff of an edit.
+- Each checker run with its model, decision and reason.
+- The conversation as it was when the step was checked.
+- The chat summary as it was when the step was checked.
+
+The key that opens it (`w`) closes it
 again; the step can be allowed or denied from here with the same keys as on the card. The
 keys act on the escalation this screen was opened for and on no other. A printable key that
 is no key of this screen returns to the session and is typed into the input.

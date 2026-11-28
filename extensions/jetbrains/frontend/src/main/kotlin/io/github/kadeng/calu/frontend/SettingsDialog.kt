@@ -458,7 +458,6 @@ class CaluSettingsDialog(private val project: Project, private val host: ChatHos
         if (claude.isNotEmpty()) content.add(JBLabel(claude).apply { foreground = UiStyle.dim })
     }
 
-    /** Draw the page "Checkers": one line per checker with "Edit Instructions". */
     /** What `ide.status` found; `null` until the answer arrived. */
     private var findings: List<SetupFinding>? = null
     private var findingsProblem = ""
@@ -539,6 +538,7 @@ class CaluSettingsDialog(private val project: Project, private val host: ChatHos
         })
     }
 
+    /** Draw the page "Checkers": one line per checker with "Edit Instructions". */
     private fun drawCheckers() {
         content.add(heading("Checkers", "The agents that decide about each command and edit. Their instructions are Markdown texts in calu's database."))
         if (checkers.isEmpty()) content.add(JBLabel("calu's database lists no checker.").apply { foreground = UiStyle.dim })

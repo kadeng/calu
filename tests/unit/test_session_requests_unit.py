@@ -68,6 +68,11 @@ class FakeDb:
 async def test_a_claim_that_is_not_answered_in_time_is_expired(
     monkeypatch: pytest.MonkeyPatch, expire: bool | Exception
 ):
+    """A wait for a claim that nobody answers ends with `TimeoutError` after one expiry call.
+
+    The result of the expiry (`True` or `False`) does not matter. An expiry that fails because
+    the function is missing (an older schema) also ends the wait with `TimeoutError`.
+    """
     monkeypatch.setattr(session_requests, "POLL_S", 0.0)
     db = FakeDb(expire)
     with pytest.raises(TimeoutError):

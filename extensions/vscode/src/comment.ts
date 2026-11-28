@@ -170,8 +170,8 @@ export interface CommentCommandResult {
 /**
  * Run the comment command: collect the selection, ask for the text, send `comment.add`.
  *
- * Side effects: shows an input box (via `askText`), sends one request to the attached session, shows an
- * information or error message.
+ * Side effects: shows an input box (via `askText`), sends one request to the attached session,
+ * shows a status bar message on success and an error message on failure.
  *
  * @param bridge The bridge; a session must be attached.
  * @param askText Asks the user for the comment text.

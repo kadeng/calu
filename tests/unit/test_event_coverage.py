@@ -112,7 +112,12 @@ def test_every_advertised_request_has_a_handler() -> None:
 
 
 def test_every_route_is_handled_by_the_session() -> None:
-    """A route the session does not act on would send a step nowhere."""
+    """Every `Route` is named somewhere in the source of `calu.session` or `calu.gate`.
+
+    The test searches the source text for `Route.<NAME>`. It does not show that the name is in
+    a branch that runs, so a mention in a comment passes. A route that neither module names
+    would send a step nowhere.
+    """
     import calu.gate as gate_module
     from calu.checkers.policy import Route
 

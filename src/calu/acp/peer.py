@@ -196,8 +196,12 @@ class Peer:
     async def _dispatch(self, line: str) -> None:
         """Handle one received line: a response to our request, or an inbound message.
 
-        Never raises: a failing handler becomes a JSON-RPC error response, and a malformed line
-        a parse error, so that one bad message does not end the connection.
+        One bad message does not end the connection. A failing handler becomes a JSON-RPC error
+        response, and a malformed line becomes a parse error.
+
+        A failed write of a response is different: the exception of `write_line` propagates.
+        `_dispatch` runs as a task of `serve`, so the exception ends `serve` and with it the
+        peer.
 
         Args:
             line: The received line, without its newline.
@@ -254,7 +258,9 @@ class Peer:
                 )
             return
         if request_id is not None:
-            await self._send({"jsonrpc": "2.0", "id": request_id, "result": result or {}})
+            await self._send(
+                {"jsonrpc": "2.0", "id": request_id, "result": {} if result is None else result}
+            )
             if self.after_response is not None:
                 try:
                     await self.after_response(str(method))

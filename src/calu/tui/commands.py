@@ -426,7 +426,7 @@ CLAUDE_COMMANDS: tuple[Command, ...] = (
     ),
 )
 """Claude Code's commands the completion list offers; each one is sent as chat text, and
-Claude Code runs it without the model (measured through calu, as for the editor plugins).
+Claude Code runs it without the model, as it does for the editor plugins.
 Any other slash word that is not calu's is sent the same way."""
 
 CLAUDE_WORD = re.compile(r"/[\w:.-]+")

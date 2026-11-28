@@ -59,7 +59,8 @@ def paths_of_step(step: Step, workspace: Path) -> set[str]:
         workspace: The project root.
 
     Returns:
-        The relative paths, empty for a step that names no file.
+        The relative paths, empty for a step that names no file. An absolute path outside the
+        workspace is left out.
     """
     found: set[str] = set()
     for key in ("file_path", "notebook_path"):

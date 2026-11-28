@@ -991,8 +991,8 @@ async def test_a_review_without_a_baseline_certifies_head_when_all_of_it_is_veri
     repo: Path,
 ) -> None:
     """Sections 4 and 5: a person asks for a review of a repository without a trusted commit;
-    every file is judged whole, and HEAD is certified with the source "review" because calu
-    finds every content it records verified."""
+    every file is judged whole, and HEAD is certified with the source "review" because every
+    file it records has been verified."""
     seen: list[str] = []
     session, rec, store = await session_on(
         repo, [[]], trusted=False, models={"honesty-review": fake_reviewer(seen=seen)}

@@ -90,8 +90,9 @@ LIVENESS: dict[str, Any] = {
 Without them an idle connection whose peer vanished without a TCP reset (NAT or firewall
 timeout, suspended machine, cut VPN) reports nothing for about two hours, and a connection
 attempt to an unreachable host can block for minutes. `connect_timeout` is in seconds and
-covers the whole login, the client's SCRAM rounds included (D279: about 0.5 s on a CPU without
-SHA instructions; 10 s was too short when the rounds were 3,000,000). A parameter that the
+covers the whole login, the client's SCRAM computation included. That computation takes
+about 0.5 s on a CPU without SHA instructions. With 3,000,000 iterations a limit of 10 s was
+too short (D279). A parameter that the
 connection string sets itself wins over the value here. `tcp_user_timeout` is in milliseconds."""
 
 RECONNECT_FIRST_S = 0.5

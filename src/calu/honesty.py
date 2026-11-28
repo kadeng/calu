@@ -111,7 +111,9 @@ def diff_paths(diff: str) -> set[str]:
 
     Returns:
         The paths, project-relative with forward slashes. Empty when the text has no diff
-        headers.
+        headers. A header that git writes with quotes (a name with special characters, such as
+        non-ASCII letters under the default `core.quotePath`) is not recognised, and its file
+        is left out.
     """
     found: set[str] = set()
     for line in diff.splitlines():
@@ -490,8 +492,9 @@ class ReviewPlan:
     files: tuple[ReviewFile, ...] = ()
     """The files for the reviewer agent, sorted by path."""
     shortcuts: Mapping[str, FileReview] = field(default_factory=dict[str, FileReview])
-    """Files verified without a model: their change against the baseline is whitespace only
-    (`whitespace_only`), or they hold no code (`holds_no_code`, listed in `no_code`)."""
+    """Files verified without a model: their change is whitespace only (`whitespace_only`;
+    the comparison is with the content this session verified last, else with the baseline's),
+    or they hold no code (`holds_no_code`, listed in `no_code`)."""
     no_code: tuple[str, ...] = ()
     """The files of `shortcuts` that are verified because they hold no code unit (plain text,
     data, images: `holds_no_code`), sorted."""
@@ -612,7 +615,7 @@ class HonestySnapshot:
                 before the rest is counted.
 
         Returns:
-            Four to six lines: the heading, the baseline (short id and source, or that there
+            Four to seven lines: the heading, the baseline (short id and source, or that there
             is none), the open marks with their reasons (one line for this step's files, one
             for other files, or one saying there are none), the unreviewed files and their
             number (left out without a baseline), and whether a review is required.
@@ -853,7 +856,7 @@ async def find_baseline(
 
     The search is bounded: only the last `limit` commits (default `BASELINE_SEARCH_LIMIT`,
     5000) are read, in the order of `git rev-list`. A trusted commit further back is not
-    found. One database question is asked for all of them.
+    found. The database is asked one question for all of them.
 
     Args:
         workspace: The project directory.
@@ -976,9 +979,9 @@ def expected_edit(
 
     Returns:
         The expected bytes. None if the tool is another one, the input does not have that
-        shape, the present content is not UTF-8, or a replacement does not apply (its
-        `old_string` does not occur; an empty `old_string` applies only to a missing or empty
-        file).
+        shape, or (for Edit and MultiEdit) the present content is not UTF-8 or a replacement
+        does not apply (its `old_string` does not occur; an empty `old_string` applies only to
+        a missing or empty file). A Write does not read the present content.
     """
     if tool_name == "Write":
         content = tool_input.get("content")
@@ -1198,9 +1201,10 @@ class GeneratedRules:
 
     Both lists are empty by default, so nothing is generated until a person configures it.
     A generated file is not judged for honesty. An honesty review verifies it without a
-    model, and a mark on it is not recorded. An Edit, Write, MultiEdit or NotebookEdit of it
-    or any other tool call or command that modifies them selectively without going through
-    a code-generation tool, command or script is to escalate to a person.
+    model, and a mark on it is not recorded. An Edit, Write, MultiEdit or NotebookEdit of a
+    generated file is to escalate to a person. So is any other tool call or command that
+    modifies generated files selectively without going through a code-generation tool,
+    command or script.
 
     How far the code achieves that:
 
@@ -1215,9 +1219,7 @@ class GeneratedRules:
 
     Not covered: a script or program can write a file without naming it on the command line,
     and a tool can write one without naming it in its input. A content pattern only recognises
-    a file that exists. Nothing compares a generated file before and after a step. Keep these
-    checks as close to the intent above as the code allows when tools, the shell parser or the
-    gate change, and close a gap where that is cheap.
+    a file that exists. Nothing compares a generated file before and after a step.
     """
 
     paths: tuple[re.Pattern[str], ...] = ()
@@ -1643,7 +1645,9 @@ class HonestyState:
     The public methods read git and files synchronously and may be called from several
     threads: each takes the state's lock for its whole call, so a slow `unreviewed()` makes
     other callers wait. Call them from a worker thread, never from the event loop. The
-    attributes may be set by the session between calls.
+    exception is `content_sha256`: it takes no lock, so that a review can hash a file while
+    another call holds the lock. It only reads the file and updates the hash cache with single
+    dictionary operations. The attributes may be set by the session between calls.
     """
 
     def __init__(
@@ -1740,9 +1744,9 @@ class HonestyState:
     def _verified_blobs(self) -> dict[str, TrustSource]:
         """Map the git blob id of every content verified in this session to its source.
 
-        The index may hold such a content after the working file was edited again. One entry
-        per verified edit or reviewed file; it is empty after a restart. Shared by the states
-        of all checkouts.
+        The index may hold such a content after the working file was edited again. Each
+        verified edit or reviewed file gets one entry, and the map is empty after a restart.
+        Shared by the states of all checkouts.
 
         Returns:
             The mapping, which callers change in place.
@@ -2113,6 +2117,9 @@ class HonestyState:
         file is unreviewed until an honesty review reads it. If the path is a symbolic link,
         the file it points at is watched too and nothing is verified.
 
+        A verified edit also removes the units to judge again (`recheck`) of that file: the
+        checkers judged the edit with them named in their note.
+
         A mark the checkers left on the file is separate: a file with an open mark is
         dishonest whatever is recorded here (`record`), and `storable` hands out nothing for
         it. Whether the record counts depends on `sufficient_trust`: with "review" or "user" a
@@ -2198,9 +2205,9 @@ class HonestyState:
         for it, and the stored trust of its present content is to be withdrawn
         (`MarkChanges.withdrawn`). A result without a SHA-256 changes nothing for its file.
         Afterwards a review is required exactly when more than `max_open_marks` marks are
-        open: a review that leaves fewer ends the requirement, so the remaining marks are
-        settled by edits again, and a command under `enforce` is denied with them instead of
-        starting the next review. A review that failed must not be passed here: it verifies
+        open. A review that leaves fewer marks ends the requirement, and edits settle the
+        remaining marks again. Under `enforce`, a command is then denied while marks are open,
+        and no next review starts. A review that failed must not be passed here: it verifies
         nothing.
 
         Args:
@@ -2353,13 +2360,14 @@ class HonestyState:
 
             not a regular file calu can read, larger than
             `REVIEW_READ_BYTES`, or not UTF-8 text          -> skipped
-            no open mark, and the present content is
-            reviewed already:
+            no open mark and no unit to judge again, and
+            the present content is reviewed already:
               without a baseline                            -> not part of the review
                                                                (`verified_already`)
               with a baseline (only the content the index
               holds for the path is not reviewed)           -> skipped
-            no open mark, and the file holds no code
+            no open mark and no unit to judge again, and
+            the file holds no code
             (`holds_no_code`: a plain-text, data or media
             extension, no execute bit, no `#!` or program
             header); for a file that is not UTF-8 or
@@ -2371,8 +2379,10 @@ class HonestyState:
             without marks                                   -> verified without a model;
                                                                its open marks are closed
                                                                (`ReviewPlan.generated`)
-            no open mark, the baseline holds the path as
-            a file, and the change is whitespace only       -> verified without a model
+            no open mark and no unit to judge again, an
+            earlier content is known (the one verified
+            last, else the baseline's), and the change
+            since it is whitespace only                     -> verified without a model
             an open mark, a file larger than
             `SMALL_FILE_BYTES` with an earlier content to
             compare with (below), and every marked symbol
@@ -2652,10 +2662,13 @@ class HonestyState:
         """Apply the marks of all checkers that judged one step (section 3).
 
         The clean marks of every answer are applied first, then the dirty marks of every
-        answer (both via `record`). So a clean mark closes only marks that were open before
-        the step: a file-wide HONEST of the honesty checker (`ALL_SYMBOLS`) does not close the
-        dirty mark another checker opens on the same file in the same step. Applied answer by
-        answer, the route's checker comes first and its fresh mark would be closed at once.
+        answer (both via `record`). A clean mark therefore closes only marks that were open
+        before the step.
+
+        Example: the honesty checker gives a file-wide HONEST (`ALL_SYMBOLS`) and another
+        checker opens a dirty mark on the same file in the same step. The HONEST does not close
+        that new mark. Applied answer by answer, the route's checker would come first and its
+        fresh mark would be closed at once.
 
         Side effects: as `record`, once per answer and kind of mark.
 
@@ -3114,10 +3127,16 @@ class HonestyState:
     def certification(self, commit_id: str, *, rooted: bool = True) -> Certification:
         """Decide whether a commit may be certified as trusted, and with which source.
 
-        calu certifies a commit by what the commit records, not by the working tree: every
-        entry the commit holds must be the one the baseline holds for that path, or a file
-        whose committed content is the content of the working file with that content
-        verified, or a content verified earlier in this session, or empty. A submodule entry
+        calu certifies a commit by what the commit records, not by the working tree. Every
+        entry the commit holds must be one of these:
+
+        - the entry the baseline holds for that path,
+        - a file whose committed content is the content of the working file, with that content
+          verified,
+        - a content verified earlier in this session,
+        - empty.
+
+        A submodule entry
         that the baseline does not hold with the same commit id is never verified. Files the
         commit deletes are not looked at.
 
@@ -3136,11 +3155,12 @@ class HonestyState:
 
         Returns:
             With `problem` "": the commit may be certified with `source`, the weakest among
-            the baseline's source and the sources that verified the changed files (all by
-            honesty review and a baseline of "review" or "user" give "review"; any step check
-            gives "check"). Otherwise `problem` is one sentence: there is no baseline, marks
-            are open, a review is required, git could not list the commit, the commit records
-            no file, or which entries of the commit are not verified.
+            the baseline's source and the sources that verified the changed files. For
+            example, a step check anywhere gives "check", and honesty reviews alone with a
+            baseline of "review" or "user" give "review". Otherwise `problem` is one sentence:
+            there is no baseline, marks are open, a review is required, git could not list the
+            commit, the commit records no file, or which entries of the commit are not
+            verified.
         """
         base_commit = self._base()
         if base_commit is None and rooted:
