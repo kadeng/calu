@@ -171,7 +171,8 @@ def batch_prompt(batch: Sequence[ReviewFile], baseline: str) -> str:
         - "## File N: path";
         - the open marks on it;
         - each unit to judge again (`ReviewFile.recheck`), with the unit it uses and that
-          unit's signature and doc comment before and now;
+          unit's signature and doc comment before and now, or before only when that unit
+          was removed or renamed;
         - whether the whole file follows or its change, and since when (the baseline, or the
           content last verified, as `ReviewFile.against` says);
         - that text in a code fence;
@@ -200,14 +201,22 @@ def batch_prompt(batch: Sequence[ReviewFile], baseline: str) -> str:
             lines.append(f"Recorded as dishonest before this review: {spots}.")
         for unit in file.recheck:
             where = shown(unit.symbol, NOTE_PATH_CHARS) or "the top level of the file"
-            lines.append(
-                f"To judge again: {where}"
-                f" uses {shown(unit.cause, NOTE_PATH_CHARS)}, whose signature or doc comment "
-                "changed. It was judged honest against the old contract. The contract before "
-                "and now:"
-            )
-            lines.append(fence(unit.before, "python"))
-            lines.append(fence(unit.after, "python"))
+            used = shown(unit.cause, NOTE_PATH_CHARS)
+            if unit.after:
+                lines.append(
+                    f"To judge again: {where} uses {used}, whose signature or doc comment "
+                    "changed. It was judged honest against the old contract. The contract "
+                    "before and now:"
+                )
+                lines.append(fence(unit.before, "python"))
+                lines.append(fence(unit.after, "python"))
+            else:
+                lines.append(
+                    f"To judge again: {where} uses {used}, which was removed or renamed. It "
+                    "was judged honest against the old contract, shown here; read the code to "
+                    "see what it calls now:"
+                )
+                lines.append(fence(unit.before, "python"))
         lines.append(
             "The whole file:"
             if file.whole

@@ -68,7 +68,13 @@ One entry per file, by its number:
 - A file may name units "to judge again": they use another unit whose signature or doc
   comment changed, shown before and now. Each of them was honest against the old contract.
   Read it and decide whether its own name and documentation still say what it does now that
-  the unit it uses works as the new contract says. If it does, it needs no finding.
+  the unit it uses works as the new contract says. If it does, it needs no finding. A unit it
+  used may also have been removed or renamed; then only the old contract is shown, and you
+  judge what the code calls now.
+- A function or functor passed to another one: the unit that chooses and passes it must name
+  its side effects. A receiver that only calls what it is given (a sort that calls its
+  comparator, a runner that calls a callback) is honest when its documentation says that it
+  calls the given function; it cannot vouch for what that function does.
 - `needs_whole_file`: only for a file shown as a diff. If the shown lines and a few
   `read_file` calls do not let you judge the change -- e.g. it spreads over the whole file,
   or the documentation that a changed body has to match is far away -- answer

@@ -10,32 +10,38 @@ How it works:
 
 1. At the gate, before an edit runs, `contract_changes` compares the file's text before the
    edit with the text the edit will write. It reports each definition whose signature or doc
-   comment changes. A change of the body alone concerns only that unit, so it is not
-   reported.
+   comment changes, and each definition that the edit removes or renames. A change of the
+   body alone concerns only that unit, so it is not reported.
 2. After the edit succeeded, `find_dependents` asks a reference index (`calu.refindex`)
    which places use the unit. Every place counts, also the ones the index could not decide.
    Judging a unit once too often is cheaper than missing one.
 3. Each place is turned into the unit that contains it (`enclosing`): the function, method
    or class around it, or the top level of the file. A place in an `import` statement is
-   left out: importing a unit does not rely on what it does. The session records those units in
-   the honesty state as units to judge again (`HonestyState.add_recheck`).
+   left out: importing a unit does not rely on what it does. An import under another name,
+   and a top-level assignment of the unit to a name, lead to the units that use that name.
+   The session records those units in the honesty state as units to judge again
+   (`HonestyState.add_recheck`).
+
+Who has to name a side effect of a function that is passed on (the owner, requirement 54):
+the unit that passes it. A receiver such as a sort that calls its comparator stays honest as
+long as its contract says that it calls the function it is given. So only the places that
+name the changed unit matter, and those are what the search finds.
 
 What it does not cover yet:
 
 - Only Python files. Other languages report no contract change.
-- A unit that is removed or renamed: there is no definition with the old name after the edit
-  to compare. Its callers then refer to a name that no longer exists, which running the code
-  shows.
+- A name that reaches the unit through more than one file (`b.py` assigns it, `a.py` imports
+  that name from `b.py`): only the first file is followed.
 - Code in other languages that calls the unit (the owner's decision of 2026-11-27: same
   language first).
 """
 
 import ast
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from calu.checkers.symbols import changed_definitions
+from calu.checkers.symbols import changed_definitions, definition_lines, parsed_definitions
 from calu.refindex import ReferenceIndex, Unit
 
 type DEFINITION = ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
@@ -55,11 +61,11 @@ class ContractChange:
     qualname: str
     """The dotted name in the file, e.g. "Parser.parse"."""
     line: int
-    """The line of the definition after the edit (1-based)."""
+    """The line of the definition after the edit (1-based); 0 if the edit removed it."""
     before: str
     """Its decorators, signature and doc comment before the edit."""
     after: str
-    """The same after the edit."""
+    """The same after the edit; "" if the edit removed or renamed the definition."""
 
     @property
     def cause(self) -> str:
@@ -72,7 +78,11 @@ class ContractChange:
 
 
 def contract_changes(path: str, before: str, after: str) -> list[ContractChange]:
-    """List the definitions of a Python file whose signature or doc comment changes.
+    """List the definitions of a Python file whose name, signature or doc comment changes.
+
+    A definition that exists before the edit and not after it was removed or renamed. It is
+    listed with line 0 and an empty `after`, so that the code that still uses its old name is
+    judged again. Of a removed class only the class is listed, not its methods.
 
     Args:
         path: The file, relative to the project directory.
@@ -80,9 +90,9 @@ def contract_changes(path: str, before: str, after: str) -> list[ContractChange]
         after: The file's text after the edit.
 
     Returns:
-        One entry per such definition, in the order of the file after the edit. [] for a file
-        that is not Python, is too large, or does not parse before or after the edit
-        (`calu.checkers.symbols.changed_definitions`).
+        First the changed definitions in the order of the file after the edit, then the
+        removed ones. [] for a file that is not Python, is too large, or does not parse
+        before or after the edit (`calu.checkers.symbols.changed_definitions`).
     """
     later = changed_definitions(before, after, path)
     earlier = {item.name: item for item in changed_definitions(after, before, path)}
@@ -100,7 +110,46 @@ def contract_changes(path: str, before: str, after: str) -> list[ContractChange]
                 after=_contract(item.header, item.docstring),
             )
         )
+    # A definition that is gone was removed or renamed: the code that still uses the old
+    # name relied on a contract that no longer exists.
+    now = definition_lines(after, path)
+    old = parsed_definitions(before, path)
+    if now is not None and old is not None:
+        lines = before.splitlines()
+        for name, node in old[1].items():
+            if name in now or _inside_gone(name, old[1], now):
+                continue
+            header = lines[node.lineno - 1].strip() if node.lineno <= len(lines) else name
+            found.append(
+                ContractChange(
+                    path=path,
+                    qualname=name,
+                    line=0,
+                    before=_contract(header, ast.get_docstring(node)),
+                    after="",
+                )
+            )
     return found
+
+
+def _inside_gone(name: str, earlier: Mapping[str, object], now: Mapping[str, int]) -> bool:
+    """Tell whether a definition sits inside another definition that is gone as well.
+
+    Args:
+        name: The dotted name of the definition.
+        earlier: The definitions before the edit, by dotted name.
+        now: The definitions after the edit, by dotted name.
+
+    Returns:
+        True if an enclosing definition existed before and is gone now: only the outermost
+        gone definition is reported.
+    """
+    parts = name.split(".")
+    for end in range(1, len(parts)):
+        outer = ".".join(parts[:end])
+        if outer in earlier and outer not in now:
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -129,18 +178,154 @@ async def find_dependents(index: ReferenceIndex, root: Path, change: ContractCha
     Returns:
         The units around every place the index reported, confirmed or unclear, except places
         in an `import` statement. The changed unit itself is left out, unless it uses itself.
+        Three more kinds of use are followed within the file of a place:
+
+        - an import that binds the unit under another name (`import f as quiet`): the units
+          that use that name;
+        - a statement at the top level of a file that assigns the unit, or something that
+          holds it, to a name (`printer = f`, `HANDLERS = {"x": "f"}`): the units that use
+          that name;
+        - for a method with a double-underscore name (`__call__`, `__iter__`), which code
+          calls without naming it: the units that use its class.
     """
-    found = await index.referrers(Unit(change.path, change.qualname, change.line))
+    targets = [Unit(change.path, change.qualname, change.line)]
+    owner = _dunder_owner(change.qualname)
+    if owner:
+        targets.append(Unit(change.path, owner, _definition_line(root, change.path, owner)))
+    places = []
+    complete, problem = True, ""
+    for target in targets:
+        found = await index.referrers(target)
+        places.extend((*found.referrers, *found.unclear))
+        complete = complete and found.complete
+        problem = problem or found.problem
     trees: dict[str, ast.Module | None] = {}
     units: set[tuple[str, str]] = set()
-    for place in (*found.referrers, *found.unclear):
+    name = change.qualname.rsplit(".", 1)[-1]
+    for place in places:
         if place.path not in trees:
             trees[place.path] = _parse(root, place.path)
         tree = trees[place.path]
-        if tree is not None and _in_import(tree, place.line):
+        if tree is None:
+            units.add((place.path, ""))
             continue
-        units.add((place.path, enclosing(tree, place.line)))
-    return Dependents(tuple(sorted(units)), complete=found.complete, problem=found.problem)
+        if _in_import(tree, place.line):
+            aliases = _aliases(tree, place.line, name)
+            units.update((place.path, unit) for unit in _users(tree, aliases))
+            continue
+        unit = enclosing(tree, place.line)
+        units.add((place.path, unit))
+        if unit == "":
+            assigned = _assigned(tree, place.line)
+            units.update((place.path, user) for user in _users(tree, assigned))
+    return Dependents(tuple(sorted(units)), complete=complete, problem=problem)
+
+
+def _dunder_owner(qualname: str) -> str:
+    """Name the class of a method that code calls without naming it.
+
+    Args:
+        qualname: The dotted name of the changed unit.
+
+    Returns:
+        The class's dotted name for a method such as `Cls.__call__`; "" for anything else,
+        including `__init__`, which a call of the class names anyway.
+    """
+    owner, _, last = qualname.rpartition(".")
+    if owner and last.startswith("__") and last.endswith("__") and last != "__init__":
+        return owner
+    return ""
+
+
+def _definition_line(root: Path, path: str, qualname: str) -> int:
+    """Find the line of a definition in a file of the project.
+
+    Args:
+        root: The project directory.
+        path: The file, relative to it.
+        qualname: The dotted name.
+
+    Returns:
+        The 1-based line of its `def` or `class`; 0 if the file does not define it.
+    """
+    try:
+        text = (root / path).read_text("utf-8", errors="replace")
+    except OSError:
+        return 0
+    return (definition_lines(text, path) or {}).get(qualname, 0)
+
+
+def _aliases(tree: ast.Module, line: int, name: str) -> set[str]:
+    """List the names under which an import statement binds a unit.
+
+    Args:
+        tree: The parsed file.
+        line: A line of the import statement.
+        name: The unit's bare name.
+
+    Returns:
+        The `as` names of the statement's entries that import `name`; empty if it imports
+        it under its own name.
+    """
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        if not node.lineno <= line <= (node.end_lineno or node.lineno):
+            continue
+        for alias in node.names:
+            if alias.asname and alias.name.rsplit(".", 1)[-1] == name:
+                found.add(alias.asname)
+    return found
+
+
+def _assigned(tree: ast.Module, line: int) -> set[str]:
+    """List the names a top-level assignment binds, for the statement around a line.
+
+    Args:
+        tree: The parsed file.
+        line: A line at the top level of the file.
+
+    Returns:
+        The names the statement assigns (`a = ...`, `a: T = ...`, `a, b = ...`); empty if
+        the statement around the line is no assignment.
+    """
+    for node in tree.body:
+        if not node.lineno <= line <= (node.end_lineno or node.lineno):
+            continue
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            targets = [node.target]
+        else:
+            return set()
+        return {
+            leaf.id
+            for target in targets
+            for leaf in ast.walk(target)
+            if isinstance(leaf, ast.Name)
+        }
+    return set()
+
+
+def _users(tree: ast.Module, names: set[str]) -> set[str]:
+    """Name the units of a file that read one of some names.
+
+    Args:
+        tree: The parsed file.
+        names: Bare names bound in the file.
+
+    Returns:
+        The dotted name of the unit around each read of one of the names ("" for the top
+        level of the file).
+    """
+    if not names:
+        return set()
+    return {
+        enclosing(tree, node.lineno)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and node.id in names and isinstance(node.ctx, ast.Load)
+    }
 
 
 def enclosing(tree: ast.Module | None, line: int) -> str:

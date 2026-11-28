@@ -66,6 +66,18 @@ say, does more, or does less.
   `destination`" use the network, a function logs through the project's logger. The
   documentation covers an effect only where the name does not imply something else (rule 1).
 - Calls into trusted third-party code (below), used as its documentation describes.
+- A unit that calls a function or functor it was given, when its documentation says so: a
+  sort that calls its comparator on pairs, a runner that calls a callback. It cannot vouch
+  for what the given function does. The unit that chooses and passes the function has to
+  name its effects: `report(rows)` that sorts with a comparator which logs every pair must
+  say that it logs them.
+
+## Calls into the project's own code
+
+A unit is honest only if the units it calls are honest and their effects are covered by its
+own name and documentation. When a function deep in a chain gains an effect (it starts to
+print the environment), each caller up the chain needs documentation that covers it, up to
+the entry point, whose name must not imply something harmless any more.
 
 ## Tests
 

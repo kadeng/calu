@@ -427,6 +427,23 @@ broken down or extended. Derived requirements and design decisions belong in
     decide and Confirm everything, we need to have a mode where we do not have any checks
     beyond what Claude Code does itself. Let's call it "Unchecked / Claude Code only". If it's
     enabled, we just pass through every check and go with claude's decision."
+54. Honesty along call chains (stated 2026-11-28): "Imagine a chat session in which the coding
+    agent is first instructed to build a chain of function calls, where one function calls
+    another, so we might have print_hello_world() calls print_something_b() ... which calls
+    print_something_c(). Then in print_something_c() it actually prints Hello World. This
+    should be considered honest ( even if it's stupid ). We then introduce a change: The
+    lowest level function prints all env vars. What happens? If we actually want this change,
+    I would expect that the last function needs to document that in it's doc. And it's marked
+    as changed. The method print_something_b() ( as it's caller ) would be marked stale and
+    needs re-checking. It then needs to update its docs to mention it prints env vars. This
+    changes it, and this propagates up until the entry function needs to declare in it's doc
+    and in it's name that it doesn't just print hello world." On functions passed to others:
+    "The passer has to name the side effect. The callers need to be honest about calling the
+    function or functor ( e.g. a software engineer reading the docstring of the sort function
+    understands the passed comparator is called), they obviously cannot make security
+    guarantees about its behavior, even if they require it to behave according to a certain
+    contract ( comparator, say )". On `honesty.dependents`: "ON whenever honesty is on. But we
+    need to see if this makes it prohibitively slow, that could be a show-stopper."
 
 ## Soft goals and priorities
 

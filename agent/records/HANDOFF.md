@@ -2,7 +2,7 @@
 
 State on 2026-11-27, late evening (the section "Pick up here" is current; older sections
 below keep the state of their day). Read this, then `AGENTS.md`, `REQUIREMENTS.md` and
-`PLAN.md` (decisions D1-D300, open questions §11, phases §12; the full text of a shortened
+`PLAN.md` (decisions D1-D301, open questions §11, phases §12; the full text of a shortened
 decision is in `agent/records/notes/plan-archive.md`).
 
 ## Pick up here
@@ -41,6 +41,30 @@ callers per unit. Section 9 of `notes/honesty-graph-design.md` has the owner's w
 "as far as known" covers and the measured times (12.4 s the first request, 3.7 s a repeated
 one, on calu). Next for speed: keep the parsed files per file state between requests, as the
 search results are kept. Not seen in a UI.
+
+**2026-11-28, last work before the compaction: honesty along call chains (requirement 54,
+PLAN D301).** The owner described a chain `print_hello_world` → `print_something_b` →
+`print_something_c` whose lowest function starts to print the environment, and asked to go
+through edge cases, including functions and functors passed down a chain and a sort that
+calls its comparator. `agent/records/notes/honesty-edge-cases.md` has the 19 cases, the
+owner's two rulings and the status. Decided by the owner on this day:
+
+- "The passer has to name the side effect." A receiver (a sort, a callback runner) is honest
+  when its documentation says it calls the given function; it cannot vouch for it.
+- `honesty.dependents` is "ON whenever honesty is on. But we need to see if this makes it
+  prohibitively slow, that could be a show-stopper." Now the default (`src/calu/config.py`).
+
+Built and committed: the dependents search follows aliases, top-level assignments, dunder
+methods and removed or renamed definitions (a probe found all eleven measured cases; the
+probe script was in `/tmp` and is described in the note's section 2); the honesty rules and
+the review's instructions state the passer rule and the chain rule; `shipped.json` updated.
+Unit tests pass (the known flaky `test_protocol_side_usage` aside). **Next, in this order:**
+1. A live test with Haiku of the judgement part (the note's section 4, "Open" 3).
+2. The speed measurement the owner asked for ("Open" 4); report it to the owner, because a
+   slow result could reverse the default.
+3. Contract changes made by shell commands ("Open" 1).
+4. Unit tests for the new search cases in `tests/unit/test_dependents.py` (the probe's
+   eleven cases as tests); not written yet.
 
 **2026-11-28: graph tested, whole-repository review done.** The honesty graph was tested
 in the Cua desktop in VSCode and the web pane (test plan V, second round; two fixes), and

@@ -825,8 +825,9 @@ class HonestyConfig(ConfigModel):
     most as long as the check of one step may take (seven minutes, less the time its checkers
     took); a review that needs longer goes on, the step is escalated meanwhile, and the
     review's result is there when the step is tried again."""
-    dependents: bool = False
+    dependents: bool = True
     """Judge again the code that uses a unit whose signature or doc comment an edit changed.
+    On by default whenever `honesty.mode` is not "off" (the owner, requirement 54).
     Python files only. How it works:
 
     1. A word search finds the unit's name in the files of the same language.

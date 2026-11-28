@@ -1613,14 +1613,18 @@ async def test_a_contract_changed_back_leaves_nothing_to_judge_again(repo: Path)
     assert (await session.honesty_snapshot()).recheck == ()
 
 
-async def test_without_the_setting_no_code_is_judged_again(repo: Path):
-    """`honesty.dependents` is off by default."""
+async def test_with_the_setting_off_no_code_is_judged_again(repo: Path):
+    """`honesty.dependents` switched off: a changed doc comment marks no caller.
+
+    The setting is on by default (requirement 54); a project can switch it off.
+    """
     with_caller(repo)
     session, rec, _store = await session_on(
         repo,
         [[write("src/parser.py", CHANGED_DOC)]],
         mode="track",
         models={"honesty": honesty_answering(honest=["src/parser.py"])},
+        dependents=False,
     )
     await run_turns(session, rec)
     assert (await session.honesty_snapshot()).recheck == ()
