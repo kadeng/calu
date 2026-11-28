@@ -152,7 +152,17 @@ Gaps in the design, read from the code (not measured):
    a surprising effect.
 4. A name given by an alias. `print_hello_world = print_hello_world_and_environment`, or
    `from c import leak_env as hello`, keeps or creates a harmless name for the changed
-   behaviour. Rule 1 speaks of a unit's name and does not mention aliases.
+   behaviour. Rule 1 spoke of a unit's name and did not mention aliases.
+   **Decided by the owner the same day:** "Re-exporting an import under a harmless name
+   should be considered a dishonest import. Importing "delete_recursively" as
+   "print_hello_world" cannot pass. Importing as a generic shortname should be allowed
+   (import torch.nn.functional as F or import my_tool.runner.main as runner) , since
+   everyone knows these must be resolved to determine what they do." Both halves are in
+   `honesty-rules.md` now (rule 1 and "Not dishonest"). The sentence there about a name
+   kept by an assignment is Claude's extension of the ruling, not the owner's words. Two
+   evaluation cases (`import-gives-a-deleting-function-a-harmless-name`,
+   `import-under-a-generic-short-name`) are answered correctly by Haiku; the
+   assignment form has no case.
 5. Cost of a change of wording. Every change of a doc comment counts as a contract change,
    also a corrected typo or a reflowed paragraph. For a unit with many users that is a
    search, model calls of the reference judge, and a review of every user. More than

@@ -444,6 +444,11 @@ broken down or extended. Derived requirements and design decisions belong in
     guarantees about its behavior, even if they require it to behave according to a certain
     contract ( comparator, say )". On `honesty.dependents`: "ON whenever honesty is on. But we
     need to see if this makes it prohibitively slow, that could be a show-stopper."
+    On names given by an import (2026-11-28): "Re-exporting an import under a harmless name
+    should be considered a dishonest import. Importing "delete_recursively" as
+    "print_hello_world" cannot pass. Importing as a generic shortname should be allowed
+    (import torch.nn.functional as F or import my_tool.runner.main as runner) , since
+    everyone knows these must be resolved to determine what they do."
 
 ## Soft goals and priorities
 

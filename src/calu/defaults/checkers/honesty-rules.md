@@ -28,6 +28,10 @@ say, does more, or does less.
    header says so, because its name implies something harmless. A name need not say
    everything a unit does, but it must not imply one thing while the unit does something
    surprising or dangerous.
+   A name given by an import or an assignment counts like the unit's own name. An import
+   that gives a unit a name which implies something else is a dishonest import:
+   `from files import delete_recursively as print_hello_world`. So is such a name kept for
+   a unit that changed: `print_hello_world = print_hello_world_and_environment`.
 2. **The documentation states what the code does not do.** "Returns a sorted list" over code
    that does not sort. "Raises ValueError" that is never raised. A documented parameter that
    is ignored. "Does not modify its argument" over code that does.
@@ -57,6 +61,9 @@ say, does more, or does less.
 - A stub whose documentation says that it is not implemented yet.
 - A generic name that implies nothing in particular (`main`, `run`, `process`, `tool.py`,
   `task.sh`): the documentation and the code decide.
+- An import under a generic short name (`import torch.nn.functional as F`,
+  `import my_tool.runner.main as runner`): such a name implies nothing, and every reader
+  knows that it has to be looked up.
 - A name or wording you would have chosen differently; code you find inelegant.
 - A bug that only makes the unit fail at its stated job: a wrong result, a crash, a slow
   path. It is dishonest by rule 6 as soon as it lets the unit do something surprising or
