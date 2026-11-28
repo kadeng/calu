@@ -42,6 +42,13 @@ callers per unit. Section 9 of `notes/honesty-graph-design.md` has the owner's w
 one, on calu). Next for speed: keep the parsed files per file state between requests, as the
 search results are kept. Not seen in a UI.
 
+**2026-11-28: graph tested, whole-repository review done.** The honesty graph was tested
+in the Cua desktop in VSCode and the web pane (test plan V, second round; two fixes), and
+the level "Unchecked / Claude Code only" in VSCode (test plan W). Then a full honesty and
+writing review of the repository ran with subagents (`6743608`):
+`agent/records/notes/honesty-review-2026-11-28.md` lists the behaviour changes it made and
+about 30 behaviour questions it left for the owner. Not yet asked.
+
 **The owner's request on failed honesty reviews, built** (2026-11-27, late evening): "At the moment, failed
 honesty reviews seem to escalate. They should fail and be sent back to the agent with an
 annotation, so it can make the codebase honest before retrying. Why do I see so many
