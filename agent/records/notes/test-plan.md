@@ -1429,3 +1429,19 @@ Cua desktop, VSCode, scripted server, `scenario: tour`.
 | Back to "Checkers decide" | ok |
 | The empty chat still says "Checkers review its commands and edits" while the level is unchecked | open (wording; not changed) |
 | A rule of the deny list with the level unchecked | not tried in the UI; unit test `test_a_deny_rule_still_asks_a_person` |
+
+### X. Everything after the whole-repository honesty review (2026-11-28)
+
+The review of `6743608` changed docstrings, documents and a few behaviours in 336 files.
+Run afterwards, on that commit:
+
+| Layer | Result |
+|---|---|
+| Python unit tests, database tests | 3,023 and 313 passed (7 root tests skipped, as always outside the root box) |
+| Browser layer (`pytest -m browser`) | 52 passed |
+| VSCode extension: unit tests, type check | 394 passed |
+| VSCode extension: integration tests in a real VSCode (`scripts/test-in-docker.sh`) | 8 passed |
+| PyCharm plugin: `gradle check` | passed (529 tests, 2 skipped) |
+| Cua desktop, VSCode: the resume of a session after `calu serve` restarted, `scenario: tour` (deny, an escalation allowed, subagents, a question), `scenario: graph` with the settled node | ok (`screenshots/vscode-tour-after-review.png`) |
+| Cua desktop, web pane: the session list after the server restarted, `scenario: tour` with an escalation denied with a note, the question answered | ok (`screenshots/web-tour-after-review.png`) |
+| PyCharm in the desktop | n/a: it waits for the JetBrains user agreement, which only the owner may accept |
