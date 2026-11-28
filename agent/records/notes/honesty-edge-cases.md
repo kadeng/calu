@@ -113,3 +113,49 @@ Open:
    show-stopper"): measure the time an edit that changes a doc comment waits for the search
    and the reference judge, on calu itself and on a small project, with the judge on and off.
    `honesty.dependents_timeout_s` (120 s) bounds it today; that bound may be far too long.
+
+## 5. A second look on 2026-11-28 (after the compaction): more cases, measured
+
+Measured the same way as section 2 (word search, no model), with 16 more small projects.
+Nothing in this section is built or decided; the questions are for the owner.
+
+Found (ok): a pytest fixture used by parameter name; a property; an inherited method that
+the subclass does not override; a chain inside one file; a method called on `self`;
+`__enter__` through its class; `partial(f)` at the top level; a function stored on an
+instance in `__init__` (the storing method is found, not the method that calls it). A change
+of the body alone reports no contract change, as designed.
+
+Missed:
+
+| # | Case | What happens today |
+|---|---|---|
+| 20 | Decorator: `logged` changes its contract, `@logged def greet()` | the file's top level is judged again, not `greet`. A decorator line lies before the `def` line, so `enclosing` does not count it to the function |
+| 21 | Constructor: `Conn.__init__` changes its contract, used as `Conn()` | nothing is found. `_dunder_owner` leaves `__init__` out, and the search for the word `__init__` does not find `Conn()` |
+| 22 | Code at the top level of a module, and the module's doc comment | no contract change is reported: only functions, methods and classes are compared. Code that runs at import reaches every importer, and import lines are left out on purpose |
+| 23 | A re-export under another name through a second file (`pkg/__init__.py`: `from pkg.c import f as hello`; `a.py`: `from pkg import hello`) | nothing in `a.py` is found (the known gap, "Open" 2) |
+| 24 | A class attribute holds the function (`handler = staticmethod(f)`), a method calls `self.handler()` | the class is judged again, not the method |
+| 25 | An entry in `pyproject.toml` (`[project.scripts]`), a shell script that runs the function | not found: the search stays within the language of the changed unit |
+
+Gaps in the design, read from the code (not measured):
+
+1. A checked edit of a file removes every "to judge again" entry of that file
+   (`HonestyState.record_edit`). The checker of that edit is told only the names ("X (uses
+   Y)"), not Y's contract before and now, which only the review shows. An edit of another
+   function in the same file can so settle an entry that nobody judged.
+2. A new call. When an edit adds a call to an existing, honestly documented unit with a side
+   effect, nothing gives the honesty checker that unit's contract; its instructions tell it to
+   look the unit up when its name "does not tell you what it does". `calu.callees` could list
+   the contracts of the units an edited unit calls, without a model.
+3. Documentation that points at the callee ("prints what `c` prints", "see `c`"). If the
+   reviewer accepts it, the caller's contract does not change and the chain stops there; the
+   entry point keeps its harmless name. The rules do not say whether such a reference covers
+   a surprising effect.
+4. A name given by an alias. `print_hello_world = print_hello_world_and_environment`, or
+   `from c import leak_env as hello`, keeps or creates a harmless name for the changed
+   behaviour. Rule 1 speaks of a unit's name and does not mention aliases.
+5. Cost of a change of wording. Every change of a doc comment counts as a contract change,
+   also a corrected typo or a reflowed paragraph. For a unit with many users that is a
+   search, model calls of the reference judge, and a review of every user. More than
+   `review_max_files` (300) files to review escalate to a person.
+6. A file renamed or deleted (`git mv hello_world.py ...`): every unit of the old path is
+   gone; belongs to "Open" 1 (shell commands).
